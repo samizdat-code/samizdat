@@ -120,17 +120,21 @@
 ;; --- the project ---------------------------------------------------------------
 
 (defn source-paths
-  "The project's MAIN source paths: deps.edn `:paths`, or the policy's
-  `:fallback-paths`. Never an alias's `:extra-paths` — those are tests and
-  tooling, not the domain language."
-  [root {:keys [fallback-paths]}]
+  "The project's source paths for its vocabulary: deps.edn `:paths` (or the
+  policy's `:fallback-paths`) and the `:extra-paths` of each alias the policy
+  names in `:aliases`. Tests and tooling under other aliases are not the
+  domain language; a dev alias is where the project's own REPL helpers live
+  (karamazov-xn0h.8), so the shipped policy names :dev."
+  [root {:keys [fallback-paths aliases]}]
   (let [f (io/file root "deps.edn")
-        declared (when (.exists f)
-                   (try (:paths (edn/read-string (slurp f))) (catch Throwable _ nil)))]
-    (mapv (fn [path]
-            (let [pf (io/file path)]
-              (str (if (.isAbsolute pf) pf (io/file root path)))))
-          (or (seq declared) fallback-paths))))
+        d (when (.exists f) (try (edn/read-string (slurp f)) (catch Throwable _ nil)))
+        main (or (seq (:paths d)) fallback-paths)
+        extra (mapcat #(get-in d [:aliases (keyword (name %)) :extra-paths]) aliases)]
+    (->> (concat main extra)
+         distinct
+         (mapv (fn [path]
+                 (let [pf (io/file path)]
+                   (str (if (.isAbsolute pf) pf (io/file root path)))))))))
 
 (defn- source-files [dir {:keys [extensions max-files]}]
   (when (fs/directory? dir)

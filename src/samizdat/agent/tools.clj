@@ -76,6 +76,7 @@
             [samizdat.agent.tools.battery]
             [samizdat.agent.tools.policy]
             [samizdat.agent.tools.prompts]
+            [samizdat.agent.tools.propose]
             [samizdat.agent.tools.skills]
             [samizdat.agent.tools.introspect]
             [samizdat.agent.tools.lsp]

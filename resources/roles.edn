@@ -54,7 +54,7 @@
   ;; `intervene` needs no :denied carve-out any more: an explicit surface
   ;; excludes by absence, which is what made the sentinel need one.
   :tools #{"thesis" "branch_theses" "done" "give_up"
-           "plan" "eval" "doc" "complete" "manual"
+           "plan" "eval" "doc" "complete" "manual" "propose_cell"
            "read_file" "read_digest" "grep" "glob" "lsp" "write_file" "edit_file" "patch"
            "shell" "websearch" "webfetch" "skill"
            "task" "split"

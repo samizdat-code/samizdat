@@ -76,6 +76,8 @@
             [samizdat.procedure]
             [samizdat.prompt]
             [samizdat.repl.guard]
+            [samizdat.bridge]
+            [samizdat.callable]
             [samizdat.repl]
             [samizdat.repl.route]
             [samizdat.replay]

@@ -144,7 +144,7 @@
    ;; is why :env matters here — image/start! scrubs before spawning, because
    ;; the rule above says output redaction alone is not enough for a tool that
    ;; spawns.
-   "eval"        {:reach :in-process     :also "tools/repl scrubbed wrapper; repl.image/start! scrub-env before spawn (project image)"}
+   "eval"        {:reach :in-process     :also "tools/repl scrubbed wrapper; repl.image/start! scrub-env before spawn (project image); a bridge call (tool/<name>, a callable cell) runs through tools/run-tool like a turn's"}
    "shell"       {:reach :spawns-process :also "policy/run-shell: scrub-env before spawn"}
 
    ;; The two READ tools. Wider than the write tools by one deliberate step:
@@ -240,9 +240,15 @@
    "reload_cells" {:reach :harness-only}
    "manifest"    {:reach :spawns-process :also "heldout/check-edit: git archive + a jolt child, both under secrets/scrubbed-process-env"}
    "policy"      {:reach :spawns-process :also "heldout/check-edit: git archive + a jolt child, both under secrets/scrubbed-process-env"}
-   ;; Writes only inside the project's .samizdat/, and only a text the
-   ;; harness shipped or already stored — never one the model composed.
+   ;; Writes only inside the project's .samizdat/: a text the harness
+   ;; shipped or already stored, or one a branch proposed (propose_cell) —
+   ;; model-composed, which is why taking it needs trust (security.flow) and
+   ;; why it is checked like any cell edit before it is written.
    "adopt"       {:reach :harness-only}
+   ;; Loads the candidate in the SCI cell sandbox (registry restored after)
+   ;; and runs its examples, whose only way to a tool is the branch's gated
+   ;; path; writes adoption.edn's offer list, nothing that runs.
+   "propose_cell" {:reach :harness-only}
    "prompt"      {:reach :harness-only}
    "manual"      {:reach :harness-only}
    "introspect"  {:reach :harness-only}

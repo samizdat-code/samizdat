@@ -148,6 +148,9 @@
             [samizdat.repl-confinement-test]
             [samizdat.repl-project-test]
             [samizdat.vocabulary-test]
+            [samizdat.bridge-test]
+            [samizdat.callable-test]
+            [samizdat.propose-test]
             [samizdat.retire-test]
             [samizdat.schemacheck-test]
             [samizdat.repl-guard-test]
@@ -384,6 +387,9 @@
     samizdat.repl-confinement-test
     samizdat.repl-project-test
     samizdat.vocabulary-test
+    samizdat.bridge-test
+    samizdat.callable-test
+    samizdat.propose-test
     samizdat.retire-test
     samizdat.schemacheck-test
     samizdat.repl-guard-test

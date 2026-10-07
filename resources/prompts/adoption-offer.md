@@ -4,9 +4,10 @@ This project's workflow is its own: nothing below has been applied. Each is
 something the project has not answered yet — a role the shipped workflow has
 and this project lacks (new), a shipped template that changed since this
 project saw it (updated), or a version this project stored before its
-workflow lived in files (pending).
+workflow lived in files (pending), or a callable cell a branch proposed
+(proposed).
 
-{% for o in offers %}- {{o.kind}} `{{o.name}}` — {{o.offer}}{% if o.edited %}, and this project edited its own copy too{% endif %}{% if o.version %} (stored v{{o.version}}){% endif %}
+{% for o in offers %}- {{o.kind}} `{{o.name}}` — {{o.offer}}{% if o.by %} by branch {{o.by}}{% endif %}{% if o.edited %}, and this project edited its own copy too{% endif %}{% if o.version %} (stored v{{o.version}}){% endif %}{% if o.rationale %}: {{o.rationale}}{% endif %}
 {% endfor %}
 Decide each one for THIS project. `adopt show` puts the offered text beside
 the project's own; `adopt take` installs it, checked like any edit, and

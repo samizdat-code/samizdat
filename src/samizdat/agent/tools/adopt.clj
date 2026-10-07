@@ -40,7 +40,8 @@
 
 (defn- offer-ctx [o]
   {:kind (name (:kind o)) :name (:name o) :offer (name (:offer o))
-   :edited (:edited? o) :version (:version o) :path (:path o)})
+   :edited (:edited? o) :version (:version o) :path (:path o)
+   :rationale (:rationale o) :by (:by o)})
 
 (defn- current-text [o]
   (some-> (userspace/project-path (:kind o) (:name o))

@@ -317,6 +317,13 @@
     samizdat.userspace
     {:vars [offers prescription-mass rejections]}
 
+    ;; A callable cell's one way to a tool (karamazov-xn0h.8): the runner the
+    ;; calling branch bound, which is the gated tool path — the cell gets the
+    ;; branch's own access and nothing more, and none outside a call.
+    samizdat.callable
+    {:vars [tool]
+     :effects #{:fs}}
+
     ;; Compiled manifests (under this same list), role prompt text, and a role's
     ;; provider settings.
     samizdat.workflow

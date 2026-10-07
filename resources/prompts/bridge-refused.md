@@ -1,0 +1,1 @@
+`{{op}}` cannot be called from eval. From eval you can call {% for t in tools %}`tool/{{t}}`{% if not forloop.last %}, {% endif %}{% endfor %}; anything else is a tool call of its own, made outside eval.

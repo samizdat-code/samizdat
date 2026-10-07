@@ -74,6 +74,20 @@
   (let [idx (vocab/index (project!) policy)]
     (is (= ["shop.cart" "shop.orders"] (mapv :ns idx)))))
 
+(deftest a-dev-alias-is-where-project-helpers-live
+  ;; Decided for karamazov-xn0h.8: REPL helpers that call project code go in
+  ;; the project's dev/ source, so the aliases the policy names count too.
+  (let [root (project!)]
+    (fs/create-dirs (str root "/dev/shop"))
+    (spit (str root "/deps.edn")
+          (pr-str {:paths ["src"] :aliases {:dev {:extra-paths ["dev"]}
+                                            :test {:extra-paths ["test"]}}}))
+    (spit (str root "/dev/shop/repl.clj") "(ns shop.repl)\n(defn seed-orders [n] n)\n")
+    (is (= ["shop.cart" "shop.orders" "shop.repl"]
+           (mapv :ns (vocab/index root policy))))
+    (is (= ["shop.cart" "shop.orders"]
+           (mapv :ns (vocab/index root (assoc policy :aliases [])))))))
+
 (deftest the-block-names-the-vocabulary-and-stays-in-budget
   (let [root (project!)
         {:keys [block namespaces]} (vocab/block root policy)]

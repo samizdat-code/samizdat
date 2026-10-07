@@ -186,7 +186,7 @@
     (catch Throwable e
       (str "validate: the loop no longer compiles — " (or (ex-message e) (str e))))))
 
-(defn- unearned-marks
+(defn unearned-marks
   "The refusal for a body whose :pure / :effects marks its cells' bodies do
   not earn (cells/effect-problems against gates.edn :effect-symbols), or nil
   when every mark is covered.

@@ -54,6 +54,7 @@
             [samizdat.agent.roles :as roles]
             [samizdat.prompt :as prompt]
             [samizdat.vocabulary :as vocabulary]
+            [samizdat.callable :as callable]
             [samizdat.manifests :as manifests]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]
@@ -305,6 +306,11 @@
         repl? (boolean (roles/may-use? (or role (:role branch)) "eval"
                                        (config/eval-mode root)))
         entries (if root (filterv (comp seq :publics) (vocabulary/index root vp)) [])
+        ;; The project's kept cells, when eval can call them (xn0h.8).
+        bp (route/bridge-policy)
+        callables (when (and repl? (:enabled? bp) (:cells? bp)) (callable/cells))
+        cell-name (fn [{:keys [id]}] (str (namespace id) "/" (name id)))
+        first-line (fn [s] (some-> s str str/split-lines first str/trim))
         render (fn [m] (prompt/render "manual-project" (assoc m :repl repl?)))]
     (if-not wanted
       (base/ok branch
@@ -312,6 +318,9 @@
                          (remove str/blank?
                                  [(when repl? (session-section ctx))
                                   (render {:listing true
+                                           :cells (mapv (fn [c] {:name (cell-name c)
+                                                                 :doc (first-line (:doc c))})
+                                                        callables)
                                            :none (empty? entries)
                                            :namespaces (map (fn [e] {:ns (:ns e) :doc (:doc e)
                                                                      :count (count (:publics e))})
@@ -319,8 +328,12 @@
                                            :more (let [m (- (count entries) max-namespaces)]
                                                    (when (pos? m) m))})])))
       (let [{:keys [namespace var ns]} (vocabulary/lookup entries wanted)
-            own (when (and repl? (not namespace) (not var)) (session-def ctx wanted))]
+            kept (some #(when (= wanted (cell-name %)) %) callables)
+            own (when (and repl? (not namespace) (not var) (not kept)) (session-def ctx wanted))]
         (cond
+          kept (base/ok branch (render {:cell true :name (cell-name kept) :doc (:doc kept)
+                                        :input (some-> (:input kept) pr-str)
+                                        :output (some-> (:output kept) pr-str)}))
           namespace (base/ok branch (render (assoc namespace :namespace true)))
           var (base/ok branch (render (assoc var :var true :ns ns)))
           own (base/ok branch (render (assoc own :var true

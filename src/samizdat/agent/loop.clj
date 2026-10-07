@@ -149,6 +149,10 @@
                :self-hosting (userspace/self-hosting?)
                :repl (not= :off image)
                :harness-image (= :harness image)
+               ;; Tools callable from inside an eval (karamazov-xn0h.7):
+               ;; only where the bridge serves them, the project image.
+               :bridge-tools (let [{:keys [enabled? tools]} (gates/threshold :eval-bridge)]
+                               (when (and enabled? (= :project image)) (seq (sort tools))))
                ;; From the config FILES rather than the merged run config,
                ;; which prompt assembly is not handed. Both layers — a
                ;; machine-wide reference tree is a real thing to declare

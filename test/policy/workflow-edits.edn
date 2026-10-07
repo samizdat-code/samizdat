@@ -10,4 +10,5 @@
   {:tool "manifest" :args {:action "diff" :name "loop"} :expect :allow}
   {:tool "manifest" :args {:action "patch" :name "loop"} :expect :ask :gaps [:trust]}
   {:tool "adopt" :args {:action "take" :kind "prompt" :name "critic"} :expect :ask :gaps [:trust]}
+  {:tool "propose_cell" :args {:name "lex"} :expect :ask :gaps [:trust]}
   {:tool "policy" :args {:action "list"} :expect :allow}]}

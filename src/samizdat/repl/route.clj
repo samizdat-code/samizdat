@@ -45,6 +45,9 @@
             [clojure.tools.logging :as log]
             [samizdat.config :as config]
             [samizdat.approval :as approval]
+            [samizdat.bridge :as bridge]
+            [samizdat.callable :as callable]
+            [samizdat.agent.gates :as gates]
             [samizdat.prompt :as prompt]
             [samizdat.repl :as repl]
             [samizdat.repl.guard :as guard]
@@ -235,6 +238,30 @@
                     (second a)))
         nil))))
 
+(defn bridge-policy
+  "gates.edn :eval-bridge — whether tools are callable from eval, which, and
+  how long a call may wait (karamazov-xn0h.7)."
+  []
+  (gates/threshold :eval-bridge))
+
+(defn- bridge-for
+  "The bridge options for this eval's image calls, installing the bridge in
+  `im` first: `ctx`'s :bridge as the request handler when the policy is on
+  and the caller supplied one, else nil — and with nil no request is ever
+  answered, so a call fails at its own timeout."
+  [im ctx]
+  (let [{:keys [enabled? tools cells? call-timeout-ms poll-ms]} (bridge-policy)
+        handler (:bridge ctx)]
+    (when (and enabled? handler)
+      (let [r (image/install-bridge! im tools
+                                     (when cells? (map :id (callable/cells)))
+                                     {:timeout-ms call-timeout-ms
+                                      :timeout-message (prompt/render "bridge-timeout"
+                                                                      {:ms call-timeout-ms})})]
+        (if (:ok r)
+          {:on-request handler :poll-ms poll-ms}
+          (do (log/warn "eval bridge did not install:" (:error r)) nil))))))
+
 (defn- eval-project
   "Evaluate `code` in the project image `im`, one top-level form at a time,
   the way repl/eval-code does in the harness image (karamazov-xn0h.3).
@@ -250,7 +277,7 @@
   nothing the model wanted (karamazov-xn0h.6). Checked before the first form
   runs, on every form that reads in the harness; one that only reads after
   an earlier form ran (`::alias/kw`) is not visible to it."
-  [im root sandboxed? code session timeout]
+  [im root sandboxed? code session timeout bridge]
   (let [forms (try (repl/top-level-forms code) (catch Throwable _ nil))
         refused (when forms (repl/refusal (repl/readable-ahead forms) :project))
         where (some-> session str)]
@@ -273,7 +300,10 @@
         (loop [i 0 outs [] in session]
           (let [{:keys [text line]} (nth forms i)
                 left (max 1 (- deadline (System/currentTimeMillis)))
-                r (image/eval-in im (strict text) in {:timeout-ms left})
+                eval-id (when bridge (str (random-uuid)))
+                r (image/eval-in im (cond->> (strict text) bridge (bridge/wrap eval-id))
+                                 in (merge {:timeout-ms left}
+                                           (when bridge (assoc bridge :bridge-eval eval-id))))
                 outs (conj outs (str (:out r)))
                 at {:index (inc i) :count n :line line :completed i}]
             (cond
@@ -361,7 +391,8 @@
                                            (System/getProperty "os.name")
                                            (some? (fs/which "bwrap")))]
           (if-let [im (image-for! root backend)]
-            (eval-project im root (not= :none backend) code session timeout)
+            (eval-project im root (not= :none backend) code session timeout
+                          (bridge-for im ctx))
             {:ok false :error-type "image-down"
              :error (prompt/render "image-down" {})}))))))
 

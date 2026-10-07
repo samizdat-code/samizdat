@@ -1,4 +1,10 @@
-{% if listing %}## The project's namespaces
+{% if listing %}{% if cells %}## This project's callable cells
+
+Helpers earlier runs proposed and the supervisor kept. Call them from `eval` by these names with one map of arguments; `manual` with a name gives the whole doc and the schemas its arguments and result are held to.
+{% for c in cells %}
+- `{{c.name}}`{% if c.doc %} — {{c.doc}}{% endif %}{% endfor %}
+
+{% endif %}## The project's namespaces
 
 The project's own code, by namespace, with how many public functions and macros each has.{% if repl %} Each can be required and exercised from `eval`.{% endif %} `manual` with a namespace's name lists them; with `ns/name`, one var's whole docstring.
 {% for n in namespaces %}
@@ -11,5 +17,11 @@ This project has no Clojure namespaces under its source paths.{% endif %}
 {% endif %}{% if var %}{{ns}}/{{name}}{% for a in arglists %} {{a}}{% endfor %}{% if macro %} (macro){% endif %}
 
 {% if docstring %}{{docstring}}{% else %}(no docstring){% endif %}
+{% endif %}{% if cell %}{{name}} (callable cell)
+
+{{doc}}
+{% if input %}
+arguments: {{input}}{% endif %}{% if output %}
+result:    {{output}}{% endif %}
 {% endif %}{% if miss %}`{{wanted}}` is not one of this project's namespaces, a public var in one, or a def in your session. The namespaces are: {{namespaces}}. Call `manual` with no arguments for the whole list{% if repl %}, or `doc` for any loaded var whether the project defines it or not{% endif %}.
 {% endif %}

@@ -227,7 +227,10 @@
                     {:id cell-id})))
   (validate-effects-declaration! cell-id opts)
   (let [schema-keys #{:input :output}
-        opt-keys    #{:doc :requires :async? :pure :effects}
+        ;; :callable and :examples are samizdat's (karamazov-xn0h.8): a
+        ;; library cell a branch may call from eval, and the examples its
+        ;; proposal is checked against.
+        opt-keys    #{:doc :requires :async? :pure :effects :callable :examples}
         raw-schema  (let [s (select-keys opts schema-keys)]
                       (when (seq s) s))
         schema      raw-schema
@@ -237,6 +240,8 @@
                       (:requires extra) (assoc :requires (:requires extra))
                       (:async? extra) (assoc :async? (:async? extra))
                       (:pure extra) (assoc :pure true)
-                      (:effects extra) (assoc :effects (vec (:effects extra))))]
+                      (:effects extra) (assoc :effects (vec (:effects extra)))
+                      (:callable extra) (assoc :callable true)
+                      (:examples extra) (assoc :examples (vec (:examples extra))))]
     (.addMethod cell-spec cell-id (constantly spec))
     spec))

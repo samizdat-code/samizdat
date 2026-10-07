@@ -39,12 +39,15 @@
   rather than leaving it silently unhandled."
   (:require [clojure.string :as str]
             [samizdat.agent.source :as source]
+            [samizdat.bridge :as bridge]
+            [samizdat.callable :as callable]
             [samizdat.agent.tools.base :as base]
             [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
             [samizdat.repl :as repl]
             [samizdat.repl.route :as route]
-            [samizdat.security.secrets :as secrets]))
+            [samizdat.security.secrets :as secrets]
+            [samizdat.store.journal :as journal]))
 
 (defn- scrubbed
   "A model-bound eval payload with known secret values and credential-shaped
@@ -62,6 +65,67 @@
             hint))
         (try (lexicon/wordlist :eval-hints) (catch Throwable _ nil))))
 
+(defn- gated
+  "Run tool `op` with `args` for `ctx`'s branch the way a turn's call runs —
+  phase refusals, then the gated run-tool (exposure, flow, approval,
+  redaction) — if gates.edn :eval-bridge lists it, and a refusal naming the
+  ones it does list if not. Journaled as an :eval-call on the turn that made
+  it; not a turn of its own, so it moves no turn counter and no storm
+  streak."
+  [{:keys [branch conn run-id turn] :as ctx} op args]
+  (let [allowed (set (:tools (route/bridge-policy)))
+        call (assoc ctx :tool-name op :args (if (map? args) args {}))
+        r (if-not (contains? allowed op)
+            {:category :mechanics
+             :result (prompt/render "bridge-refused" {:op op :tools (sort allowed)})}
+            (or (base/phase-refusal call)
+                ((requiring-resolve 'samizdat.agent.tools/run-tool) call)))]
+    (when (and conn run-id)
+      (try (journal/note! conn run-id :eval-call
+                          {:branch-id (:id branch) :turn turn
+                           :data {:tool op :category (name (or (:category r) :unknown))
+                                  :chars (count (str (:result r)))}})
+           (catch Throwable _ nil)))
+    r))
+
+(defn tool-runner
+  "What a callable cell's `callable/tool` calls on `ctx`'s behalf: the gated
+  path above, returning the result text or throwing the refusal or failure,
+  so it fails the cell the way it fails an eval (karamazov-xn0h.8). The
+  eval bridge hands it to a cell a branch calls; propose_cell runs a
+  proposal's examples with it."
+  [ctx]
+  (fn [op args]
+    (let [a (bridge/answer (gated ctx (str op) args))]
+      (if (contains? a :error)
+        (throw (ex-info (:error a) {:bridge/op op}))
+        (:value a)))))
+
+(defn- bridge-handler
+  "What answers a call the eval's code makes through the bridge
+  (karamazov-xn0h.7): a tool through `gated`, or — a \"cell\" request — a
+  callable cell (karamazov-xn0h.8) whose own tool calls take that same path
+  and no other. nil when the bridge is off."
+  [{:keys [branch conn run-id turn] :as ctx}]
+  (let [{:keys [enabled? cells?]} (route/bridge-policy)
+        runner (tool-runner ctx)]
+    (when enabled?
+      (fn [{:keys [op args]}]
+        (let [op (str op)]
+          (if (and (= "cell" op) cells?)
+            (let [id (:id args)
+                  r (callable/invoke! (if (keyword? id) id (keyword (str id)))
+                                      (:args args) runner)]
+              (when (and conn run-id)
+                (try (journal/note! conn run-id :eval-call
+                                    {:branch-id (:id branch) :turn turn
+                                     :data {:tool (str "cell " id)
+                                            :category (if (:error r) "failure" "success")
+                                            :chars (count (pr-str (or (:value r) (:error r))))}})
+                     (catch Throwable _ nil)))
+              r)
+            (bridge/answer (gated ctx op args))))))))
+
 (defn- eval-vetted
   "Evaluate source that has already passed the syntax gate. `note` is the
   repair sentence when the harness closed a truncation, so the model is told
@@ -75,7 +139,7 @@
         ;; below is unchanged: route/eval-for answers in the same shape
         ;; repl/eval-code always did, so the redaction boundary, the syntax
         ;; gate and the timeout flag all still apply exactly as they did.
-        r (route/eval-for ctx code session timeout)]
+        r (route/eval-for (assoc ctx :bridge (bridge-handler ctx)) code session timeout)]
     (if (:ok r)
       (base/ok branch (scrubbed (str prefix "=> " (:value r)
                                      (when (seq (:out r)) (str "\n" (:out r))))))

@@ -251,3 +251,45 @@
       (is (= #{"loop" "turn"} (set (map :name (filter #(= :manifest (:kind %)) (:adopted r))))))
       (is (empty? (:refused r)) (pr-str (:refused r))))
     (is (= (us/template :manifest "loop") (slurp (file root "manifests/loop.edn"))))))
+
+;; --- a branch's proposal (karamazov-xn0h.8) -----------------------------------
+;;
+;; The implementor does not write a callable cell into the workflow; it
+;; proposes one, and the supervisor takes or declines it like any offer. That
+;; is the review step.
+
+(def ^:private lex-cell
+  "(ns cells.lex (:require [mycelium.cell :as cell]))
+(cell/defcell :lex/double {:doc \"Doubles n.\" :callable true :pure true :requires []
+                           :input [:map [:n :int]]}
+  (fn [_ {:keys [n]}] {:n (* 2 n)}))
+")
+
+(deftest a-proposed-cell-waits-for-the-supervisor
+  (with-project [root c nil nil]
+    (let [r (us/propose! :cell "lex" lex-cell "doubling recurs in this project" "B2")]
+      (is (:proposed r) (pr-str r))
+      (is (not (.exists (file root "cells/lex.clj"))) "nothing is written by proposing")
+      (let [o (offer :cell "lex")]
+        (is (= :proposed (:offer o)))
+        (is (= "doubling recurs in this project" (:rationale o)))
+        (is (= "B2" (:by o)))
+        (is (= lex-cell (us/offer-text o))))
+      (testing "taking it installs it, checked, and it is no longer on offer"
+        (is (:adopted (us/adopt! :cell "lex" "reviewed: small and pure")))
+        (is (= lex-cell (slurp (file root "cells/lex.clj"))))
+        (is (nil? (offer :cell "lex")))))))
+
+(deftest a-declined-proposal-is-not-offered-again
+  (with-project [root c nil nil]
+    (us/propose! :cell "lex" lex-cell "why not" "B1")
+    (is (some? (us/decline! :cell "lex" "duplicates an existing helper")))
+    (is (nil? (offer :cell "lex")))
+    (is (not (.exists (file root "cells/lex.clj"))))
+    (is (some #(= "duplicates an existing helper" (:reason %)) (:declined (adoption root))))))
+
+(deftest a-proposal-that-does-not-load-is-refused-at-once
+  (with-project [root c nil nil]
+    (let [r (us/propose! :cell "lex" "(ns cells.lex) (this does not (load" "x" "B1")]
+      (is (:problem r))
+      (is (nil? (offer :cell "lex"))))))

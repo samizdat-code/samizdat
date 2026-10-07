@@ -22,6 +22,9 @@
   unless the error names the move that works."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
+            [mycelium.cell]
+            [samizdat.cells]
+            [samizdat.agent.gates]
             [samizdat.agent.tools :as tools]
             [samizdat.agent.tools.repl :as repl-tool]
             [samizdat.repl.route :as route]))
@@ -70,3 +73,72 @@
                 route/image-of (constantly :harness)]
     (let [r (:result (tools/run-tool {:tool-name "eval" :branch {:id "B1"} :args {:code "(f)"}}))]
       (is (re-find #"harness image" r) r))))
+
+;; --- the eval bridge's handler (karamazov-xn0h.7) ----------------------------
+
+(deftest the-eval-tool-hands-the-image-a-gated-tool-runner
+  ;; What the eval tool puts in ctx :bridge is the same path a turn's call
+  ;; takes; route answers the image's requests with it.
+  (let [seen (atom nil)]
+    (with-redefs [route/eval-for (fn [ctx & _] (reset! seen (:bridge ctx)) {:ok true :value "nil"})
+                  route/bridge-policy (constantly {:enabled? true :tools #{"read_file"}})]
+      (tools/run-tool {:tool-name "eval" :branch {:id "B1"} :args {:code "1"}})
+      (let [h @seen]
+        (is (fn? h))
+        (testing "a tool the policy does not list is refused, naming what is"
+          (let [a (h {:id "1" :op "shell" :args {:command "ls"}})]
+            (is (contains? a :error))
+            (is (str/includes? (:error a) "read_file"))))
+        (testing "a listed one runs through the tool path"
+          (with-redefs [samizdat.agent.tools/run-tool
+                        (fn [c] {:branch (:branch c) :category :success
+                                 :result (str "ran " (:tool-name c) " " (pr-str (:args c)))})]
+            (is (= {:value "ran read_file {:path \"a\"}"}
+                   (h {:id "2" :op "read_file" :args {:path "a"}})))))))))
+
+(deftest with-the-bridge-off-the-eval-tool-offers-no-runner
+  (let [seen (atom ::unset)]
+    (with-redefs [route/eval-for (fn [ctx & _] (reset! seen (:bridge ctx)) {:ok true :value "nil"})
+                  route/bridge-policy (constantly {:enabled? false})]
+      (tools/run-tool {:tool-name "eval" :branch {:id "B1"} :args {:code "1"}})
+      (is (nil? @seen)))))
+
+(deftest the-prompt-names-the-bridge-tools-only-when-they-are-served
+  (let [prompt-for (requiring-resolve 'samizdat.agent.loop/system-prompt-for)
+        threshold samizdat.agent.gates/threshold
+        with-bridge (fn [on?]
+                      (with-redefs [samizdat.agent.gates/threshold
+                                    (fn [k] (if (= k :eval-bridge)
+                                              {:enabled? on? :tools #{"grep"}}
+                                              (threshold k)))]
+                        (prompt-for :implementor)))]
+    (is (str/includes? (with-bridge true) "`tool/grep`"))
+    (is (not (str/includes? (with-bridge false) "TOOLS ARE FUNCTIONS")))))
+
+(deftest a-callable-cell-runs-with-the-branchs-gated-tools
+  ;; karamazov-xn0h.8: a cell called from eval reaches tools only through the
+  ;; branch's own path — the bridge's allowlist, then run-tool.
+  (let [snap (mycelium.cell/registry-snapshot)
+        seen (atom nil)]
+    (try
+      (samizdat.cells/eval-candidate!
+       "(ns lex.t (:require [mycelium.cell :as cell] [samizdat.callable :as callable]))
+        (cell/defcell :lex/shout {:doc \"Shouts a file.\" :callable true :effects [:fs]
+                                  :input [:map [:path :string]]}
+          (fn [_ {:keys [path]}] {:loud (clojure.string/upper-case (callable/tool \"read_file\" {:path path}))}))
+        (cell/defcell :lex/sneaky {:doc \"Tries the shell.\" :callable true :effects [:fs]}
+          (fn [_ _] (callable/tool \"shell\" {:command \"ls\"})))")
+      (with-redefs [route/eval-for (fn [ctx & _] (reset! seen (:bridge ctx)) {:ok true :value "nil"})
+                    route/bridge-policy (constantly {:enabled? true :tools #{"read_file"} :cells? true})
+                    samizdat.agent.tools/run-tool (fn [c] {:branch (:branch c) :category :success
+                                                          :result (str "text of " (get-in c [:args :path]))})]
+        ;; Straight to the eval tool: run-tool is stubbed as the inner path.
+        ((requiring-resolve 'samizdat.agent.tools.base/run-tool)
+         {:tool-name "eval" :branch {:id "B1"} :args {:code "1"}})
+        (let [h @seen]
+          (is (= {:value {:loud "TEXT OF A.CLJ"}}
+                 (h {:id "1" :op "cell" :args {:id :lex/shout :args {:path "a.clj"}}})))
+          (testing "a tool the bridge does not offer is not reachable through a cell either"
+            (is (str/includes? (:error (h {:id "2" :op "cell" :args {:id :lex/sneaky :args {}}}))
+                               "read_file")))))
+      (finally (mycelium.cell/registry-restore! snap)))))

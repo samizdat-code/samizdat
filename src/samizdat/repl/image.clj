@@ -51,6 +51,7 @@
             [jolt.process :as process]
             [nrepl.transport :as transport]
             [samizdat.agent.gates :as gates]
+            [samizdat.bridge :as bridge]
             [samizdat.cancel :as cancel]
             [samizdat.prompt :as prompt]
             [samizdat.security.confine :as confine]
@@ -175,7 +176,9 @@
              ;; No shared transport: eval-in connects per call, because a
              ;; shared one crossed concurrent branches' replies and let a
              ;; timed-out eval poison every later one.
-             :sessions (atom #{})})
+             :sessions (atom #{})
+             ;; What the eval bridge was last installed with (install-bridge!).
+             :bridge (atom nil)})
         (let [exit (when-not (process/alive? proc)
                      (try (.exitValue ^java.lang.Process (:proc proc)) (catch Exception _ nil)))]
           (try (process/destroy-tree proc) (catch Exception _ nil))
@@ -256,6 +259,48 @@
             (update :out #(str/join "" %))
             (update :err #(str/join "" %)))
         (recur acc)))))
+
+(declare eval-in)
+
+(defn- serve-bridge!
+  "While eval `eval-id` runs, collect the bridge requests it queues every
+  `poll-ms`, answer each with `on-request`, and deliver the answer — on
+  connections of their own, since the eval's is parked in recv
+  (karamazov-xn0h.7). Returns the function that stops it; stopping takes one
+  last look, so a request queued just before the eval ended is not left
+  waiting."
+  [im eval-id on-request poll-ms]
+  (let [stop (atom false)
+        serve-once (fn []
+                     (let [r (eval-in im (bridge/take-source eval-id))]
+                       (doseq [{:keys [id] :as q} (bridge/requests (:value r))]
+                         (let [a (try (on-request q)
+                                      (catch Throwable e {:error (or (ex-message e) (str e))}))]
+                           (eval-in im (bridge/deliver-source id a))))))
+        worker (future
+                 (loop []
+                   (when-not @stop
+                     (try (serve-once) (catch Throwable e (log/warn "eval bridge:" (ex-message e))))
+                     (Thread/sleep poll-ms)
+                     (recur))))]
+    (fn []
+      (reset! stop true)
+      (try @worker (catch Throwable _ nil))
+      nil)))
+
+(defn install-bridge!
+  "Install the eval bridge in the image with `tools` callable from the `tool`
+  namespace and each callable cell id in `cells` from its own
+  (samizdat.bridge/install-source). Installed again only when that set
+  changed since the last install — a cell adopted mid-run reaches the next
+  eval. Returns the eval result."
+  [{:keys [bridge] :as im} tools cells config]
+  (let [sig [(set tools) (set cells)]]
+    (if (and bridge (= sig @bridge))
+      {:ok true}
+      (let [r (eval-in im (bridge/install-source tools cells 'tool config))]
+        (when (and bridge (:ok r)) (reset! bridge sig))
+        r))))
 
 (defn- ensure-session!
   "Make `ns-sym` exist in the image, once, with clojure.core referred into it.
@@ -355,7 +400,7 @@
   carries a receive timeout so an abandoned reader dies on its own."
   ([im code] (eval-in im code nil))
   ([im code session] (eval-in im code session nil))
-  ([{:keys [port] :as im} code session {:keys [timeout-ms grace-ms]}]
+  ([{:keys [port] :as im} code session {:keys [timeout-ms grace-ms on-request bridge-eval poll-ms]}]
    (let [grace-ms (or grace-ms (gates/threshold :image-interrupt-grace-ms))
          t (try (transport/connect "127.0.0.1" port
                                    (when timeout-ms
@@ -367,7 +412,12 @@
         :error (prompt/render "image-down" {:detail "the connection was refused"})}
        (try
          (ensure-session! (assoc im :transport t) session)
-         (let [sid (when timeout-ms (clone! im))]
+         (let [sid (when timeout-ms (clone! im))
+               ;; The bridge is served for exactly as long as this eval runs.
+               stop-bridge (when on-request
+                             (serve-bridge! im bridge-eval on-request
+                                           (or poll-ms (:poll-ms (gates/threshold :eval-bridge)))))]
+          (try
            (transport/send t (cond-> {"op" "eval" "code" (str code)}
                                session (assoc "ns" (str session))
                                sid (assoc "session" sid)))
@@ -394,7 +444,8 @@
                        (if (= :ok tag2)
                          {:ok false :error-type "timeout" :timeout? true :interrupted? true
                           :error (:err r2) :out (:out r2)}
-                         {:ok false :error-type "timeout" :timeout? true :stuck? true})))))))
+                         {:ok false :error-type "timeout" :timeout? true :stuck? true}))))))
+           (finally (when stop-bridge (stop-bridge)))))
          (catch Exception e
            {:ok false
             :error (prompt/render "image-down" {:detail (ex-message e)})

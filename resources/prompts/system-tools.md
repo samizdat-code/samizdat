@@ -69,6 +69,23 @@ eval({code, timeout_ms?})
     (`jolt -M:test`) — that is a child process and its exit code is the point.
     In eval, call the test namespaces directly (`(clojure.test/run-tests
     'flight.mechanics-test)`) rather than the runner that wraps them.
+{% if bridge-tools %}    TOOLS ARE FUNCTIONS INSIDE EVAL TOO: {% for t in bridge-tools %}`tool/{{t}}`{% if not forloop.last %}, {% endif %}{% endfor %}.
+    Each takes the map of arguments the tool takes and returns its result
+    text, so one eval can search, read, and keep only what matters:
+      (let [hits (tool/grep {:pattern "defn place-order"})]
+        (->> (clojure.string/split-lines hits) (take 5)))
+    A call is checked exactly as the tool call would be, and a refusal or a
+    failure throws where the call was made. Only the eval's final value
+    comes back to you, so return the part you need, not every result.
+{% endif %}propose_cell({name, body, rationale})
+    Offer a helper worth keeping beyond this run as a callable cell: a
+    `(cell/defcell :lex/name {:doc … :callable true :pure true :requires []
+    :input … :output … :examples [{:in … :out …}]} (fn [_ args] …))`, whose
+    only way to a tool is `(callable/tool "grep" {…})`. It is checked — it
+    loads, its :pure/:effects mark covers what it calls, its examples hold —
+    and then the supervisor reviews it; once taken, every later run calls it
+    from eval as `lex/name`. Helpers that call the project's own code belong
+    in its dev/ source instead. `rationale` says why later runs need it.
 doc({symbol})
     The arglists and docstring of a var, e.g. doc({symbol: "samizdat.lisp/balance"}).
 complete({prefix})

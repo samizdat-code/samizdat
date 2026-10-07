@@ -14,6 +14,7 @@
             [samizdat.agent.tools :as tools]
             [samizdat.agent.state :as state]
             [jolt.fs :as fs]
+            [samizdat.callable]
             [samizdat.manual :as manual]
             [samizdat.repl.route :as route]))
 
@@ -192,3 +193,21 @@
     (let [r (:result (run {}))]
       (is (str/includes? r "## The tape") "the curated surface, still")
       (is (str/includes? r "helper") "and what it defined"))))
+
+(deftest callable-cells-are-in-the-manual-when-eval-can-call-them
+  ;; karamazov-xn0h.8: what a branch can call from eval includes the cells
+  ;; the project kept.
+  (with-redefs [samizdat.callable/cells (constantly [{:id :lex/line-count
+                                                      :doc "How many lines a file has.\nMore."
+                                                      :input [:map [:path :string]]}])
+                route/bridge-policy (constantly {:enabled? true :cells? true :tools #{}})]
+    (let [r (:result (run-as :implementor (project!) {}))]
+      (is (str/includes? r "lex/line-count"))
+      (is (str/includes? r "How many lines a file has.")))
+    (let [r (:result (run-as :implementor (project!) {:name "lex/line-count"}))]
+      (is (str/includes? r "[:map [:path :string]]"))
+      (is (str/includes? r "More.") "the whole doc")))
+  (testing "not with the bridge off: it could not be called"
+    (with-redefs [samizdat.callable/cells (constantly [{:id :lex/line-count :doc "x"}])
+                  route/bridge-policy (constantly {:enabled? false})]
+      (is (not (str/includes? (:result (run-as :implementor (project!) {})) "lex/line-count"))))))

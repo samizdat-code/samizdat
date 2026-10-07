@@ -112,7 +112,12 @@
            ;; propose-grant writes nothing: a person decides it, and sees the
            ;; call when they do (tools/policy).
            "policy" {:trust :trusted :read-actions #{"list" "show" "versions" "propose-grant"}}
-           "adopt" {:trust :trusted :read-actions #{"list" "show"}}}
+           "adopt" {:trust :trusted :read-actions #{"list" "show"}}
+           ;; Puts branch-written code on the supervisor's offer list, which
+           ;; `adopt take` turns into workflow (karamazov-xn0h.8). After web
+           ;; content that text may carry it, so offering it needs trust as
+           ;; much as saving a cell does.
+           "propose_cell" {:trust :trusted}}
    ;; Not sort (-o), uniq (an output file), tree (-o) or rg (--pre runs a
    ;; command): each can write or run something.
    :read-only-heads #{"ls" "cat" "head" "tail" "wc" "grep" "find" "pwd" "file"

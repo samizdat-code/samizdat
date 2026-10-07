@@ -915,14 +915,24 @@
                               b (some-> (conn) (store/load-version kind name version) :body)]
                         :when (and b (not= b ft))]
                     {:offer :pending :kind kind :name name :version version
-                     :path (or own (template-path kind name))})]
-      (vec (concat (remove nil? shipped) pending)))))
+                     :path (or own (template-path kind name))})
+          ;; A branch's proposal (karamazov-xn0h.8): text it wrote and
+          ;; checked, waiting for the supervisor. Kept in adoption.edn, not
+          ;; the store — a stored version would read as the project's own.
+          proposed (for [{:keys [kind name rationale by]} (:proposals a)]
+                     {:offer :proposed :kind kind :name name
+                      :rationale rationale :by by
+                      :path (or (role-path kind name pm) (template-path kind name))
+                      :edited? (some? (role-path kind name pm))})]
+      (vec (concat (remove nil? shipped) pending proposed)))))
 
 (defn offer-text
   "The text an offer would install."
   [{:keys [offer kind name version]}]
-  (if (= :pending offer)
-    (some-> (conn) (store/load-version kind name version) :body)
+  (case offer
+    :pending (some-> (conn) (store/load-version kind name version) :body)
+    :proposed (some #(when (and (= kind (:kind %)) (= (str name) (:name %))) (:text %))
+                    (:proposals (adoption)))
     (template kind name)))
 
 (defn- find-offer [kind name]
@@ -932,11 +942,40 @@
   "Record that `o` has been answered, so it is not offered again."
   [{:keys [offer kind name version]} a]
   (save-adoption!
-   (if (= :pending offer)
+   (case offer
+     :pending
      (update a :pending (fn [ps] (vec (remove #(and (= kind (:kind %)) (= name (:name %))
                                                     (= version (:version %)))
                                               ps))))
+     :proposed
+     (update a :proposals (fn [ps] (vec (remove #(and (= kind (:kind %)) (= (str name) (:name %)))
+                                                ps))))
      (assoc-in a [:seen (offer-key kind name)] (hash (template kind name))))))
+
+(defn propose!
+  "Put `text` on offer as `kind`/`name` for the supervisor, with the
+  proposer's `rationale` and who made it (`by`) — a branch's way into the
+  workflow, with a review between it and anything that runs
+  (karamazov-xn0h.8). Checked like any edit first, so what is on offer
+  loads; a newer proposal for the same role replaces an older one.
+
+  Returns {:proposed offer}, {:problem p} when the text does not pass, or
+  {:unbound true} outside file mode."
+  [kind name text rationale by]
+  (cond
+    (not (files?)) {:unbound true}
+    :else
+    (if-let [p (check kind (str name) text)]
+      {:problem p}
+      (let [a (adoption)
+            entry {:kind kind :name (str name) :text (str text)
+                   :rationale (str rationale) :by (some-> by str)}]
+        (save-adoption!
+         (update a :proposals
+                 (fn [ps] (conj (vec (remove #(and (= kind (:kind %)) (= (str name) (:name %))) ps))
+                                entry))))
+        (log/info "userspace: proposed" (clojure.core/name kind) name "by" by)
+        {:proposed (find-offer kind (str name))}))))
 
 (defn adopt!
   "Take the offer for `kind`/`name`: its text is checked like any edit, then

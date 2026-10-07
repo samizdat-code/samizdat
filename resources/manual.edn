@@ -443,6 +443,16 @@
     :summary "A branch's eval session copied for a forked child, in whichever image holds the defs, macros included."}
    {:name samizdat.repl/top-level-forms
     :summary "Code split into its top-level forms with their lines — the unit an eval runs and reports a failure against, in both images."}
+   {:name samizdat.repl.route/bridge-policy
+    :summary "gates.edn :eval-bridge: whether tools are callable as tool/<name> from inside a project-image eval, which ones, and how long a call waits. Off by default; an arena arm."}
+   {:name samizdat.bridge/install-source
+    :summary "The eval bridge as the image runs it: a call queues its request and waits; the harness polls the running eval for its own requests, runs each through the gated tool path, and delivers the answer. Inbound only — the image cannot reach the harness."}
+   {:name samizdat.callable/cells
+    :summary "The callable cells registered now: library cells marked :callable, which a branch calls from eval as ns/name through the bridge."}
+   {:name samizdat.callable/invoke!
+    :summary "Run a callable cell on its arguments with tools reached only through the runner given — its :input checked before, its :output after."}
+   {:name samizdat.userspace/propose!
+    :summary "Put a branch's checked text on offer to the supervisor (adoption.edn :proposals), written nowhere until `adopt take`; how propose_cell reaches the workflow."}
    {:name samizdat.repl.route/release!
     :summary "Stop the project image for a root. The next eval starts a fresh one, losing everything defined at the REPL."}
    {:name samizdat.security.sandbox/seatbelt-profile

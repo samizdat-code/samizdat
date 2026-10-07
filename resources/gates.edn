@@ -208,7 +208,8 @@
  {:value {:fs   [slurp spit clojure.java.io java.nio.file.Files
                  samizdat.agent.files
                  samizdat.agent.skills/discover samizdat.agent.skills/load-skill
-                 samizdat.agent.loop/tool-step samizdat.agent.beam/advance-all]
+                 samizdat.agent.loop/tool-step samizdat.agent.beam/advance-all
+                 samizdat.callable/tool]
           :net  [samizdat.llm.client
                  samizdat.agent.webfetch samizdat.agent.websearch
                  samizdat.agent.infer/ab samizdat.agent.infer/trampoline
@@ -2802,11 +2803,12 @@
           :max-files 400 :max-file-chars 200000
           :extensions [".clj" ".cljc"]
           :fallback-paths ["src"]
+          :aliases [:dev]
           :kinds {"defn" "fn" "defmacro" "macro" "defmulti" "multi"
                   "defprotocol" "protocol" "defrecord" "record" "deftype" "type"
                   "def" "var" "defonce" "var"}}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-xn0h.2"]
+  :provenance ["karamazov-xn0h.2" "karamazov-xn0h.8"]
   :doc "THE PROJECT'S OWN VOCABULARY IN THE OPENING (samizdat.vocabulary;
         prompts/vocabulary.md is the prose; problem.md places it after the
         problem, beside the orient block).
@@ -2832,9 +2834,13 @@
         :max-files / :max-file-chars   the walk's bounds.
         :extensions              which files are source.
         :fallback-paths          the source paths when deps.edn declares
-                                 none. Only :paths count, never an alias's
-                                 :extra-paths: tests and dev tooling are
-                                 not the domain language.
+                                 none.
+        :aliases                 the aliases whose :extra-paths count as
+                                 well. :dev, because a project's REPL
+                                 helpers live there (karamazov-xn0h.8 put
+                                 them in the project's dev/ source rather
+                                 than a samizdat-side prelude); tests do
+                                 not, and are not the domain language.
         :kinds                   defining heads that are vocabulary, and the
                                  word each is shown with. A head not listed
                                  is not shown; `-` suffixed heads and
@@ -2862,6 +2868,44 @@
 
         A docstring's first line is cut at :vocabulary :doc-chars, the same
         cut the opening uses, so one var reads the same in both."}
+
+ :eval-bridge
+ {:value {:enabled? false
+          :tools #{"read_file" "read_digest" "grep" "glob" "lsp" "doc" "recall"}
+          :cells? true
+          :call-timeout-ms 60000 :poll-ms 50}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-xn0h.7" "karamazov-xn0h.8"]
+  :doc "TOOLS CALLABLE AS FUNCTIONS FROM INSIDE AN EVAL in the project image:
+        (tool/grep {:pattern \"x\"}) returns the tool's result text to the
+        form, which can bind, filter and combine it before anything reaches
+        the model (samizdat.bridge; arrodes composes its tools this way).
+        Each call runs through the same path a turn's call does — phase
+        refusals, role surface, exposure and flow, approval — and is
+        journaled as an :eval-call note on the turn that made it; it is not
+        a turn of its own.
+
+        OFF BY DEFAULT: an arena arm, not a settled win. On vs off is the
+        comparison; the :eval-call notes say how often a branch used it.
+
+        :tools            what may be asked for at all. Stage 1 is reads
+                          only: a write inside an eval batch is harder to
+                          review and to replay, and shell stays a turn so
+                          each process is seen on its own.
+        :cells?           whether callable cells (karamazov-xn0h.8) are
+                          functions in the image too: :lex/line-count is
+                          lex/line-count. A cell's own tool calls are held
+                          to :tools and the same path.
+        :call-timeout-ms  how long one call waits for the harness in the
+                          image. The eval's own deadline still bounds the
+                          whole form.
+        :poll-ms          how often the harness asks a running eval for
+                          the calls it has queued: the image cannot reach
+                          the harness, so the harness has to ask, and this
+                          is the latency a call pays before it starts.
+
+        The set is read when an image installs the bridge (its first eval
+        with the bridge on); a changed set reaches the next image."}
 
  :instructions
  {:value {:enabled? true

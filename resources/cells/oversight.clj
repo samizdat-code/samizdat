@@ -492,7 +492,11 @@
                                                                :name (:name o)
                                                                :offer (clojure.core/name (:offer o))
                                                                :edited (:edited? o)
-                                                               :version (:version o)})
+                                                               :version (:version o)
+                                                               ;; A branch's proposal says
+                                                               ;; who and why (xn0h.8).
+                                                               :rationale (:rationale o)
+                                                               :by (:by o)})
                                                             os)}))
                                   :rejected (when-let [rs (seq (:oversight/rejected data))]
                                               (prompt/render

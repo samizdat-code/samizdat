@@ -1,8 +1,9 @@
 {% if listing %}{% if offers %}On offer to this project — nothing here is applied until you take it:
 {% for o in offers %}
-  {{o.kind}} {{o.name}}  {{o.offer}}{% if o.edited %} (this project edited its copy too){% endif %}{% if o.version %} v{{o.version}}{% endif %}  {{o.path}}{% endfor %}
+  {{o.kind}} {{o.name}}  {{o.offer}}{% if o.by %} by {{o.by}}{% endif %}{% if o.edited %} (this project edited its copy too){% endif %}{% if o.version %} v{{o.version}}{% endif %}  {{o.path}}{% if o.rationale %}
+    why: {{o.rationale}}{% endif %}{% endfor %}
 
-new: a role the shipped workflow has and this project does not. updated: the shipped template changed since this project saw it. pending: a version this project stored before its workflow lived in files. `adopt show` one before you decide; take what helps this project, decline the rest with the reason.{% else %}Nothing on offer: this project has answered every template it has been shown.{% endif %}{% endif %}{% if showing %}{{kind}} {{name}} ({{offer}}{% if edited %}; this project edited its copy too{% endif %}) — offered text:
+new: a role the shipped workflow has and this project does not. updated: the shipped template changed since this project saw it. pending: a version this project stored before its workflow lived in files. proposed: a callable cell a branch wrote and offered, already checked to load, earn its marks and pass its examples — review whether it is worth every later run calling. `adopt show` one before you decide; take what helps this project, decline the rest with the reason.{% else %}Nothing on offer: this project has answered every template it has been shown.{% endif %}{% endif %}{% if showing %}{{kind}} {{name}} ({{offer}}{% if by %} by {{by}}{% endif %}{% if edited %}; this project edited its copy too{% endif %}){% if rationale %} — why: {{rationale}}{% endif %} — offered text:
 
 {{text}}{% if current %}
 

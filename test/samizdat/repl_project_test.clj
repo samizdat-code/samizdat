@@ -14,6 +14,7 @@
             [clojure.test :refer [deftest testing is use-fixtures]]
             [jolt.fs :as fs]
             [samizdat.repl :as repl]
+            [samizdat.callable]
             [samizdat.repl.route :as route]))
 
 (def ^:private root
@@ -116,3 +117,69 @@
       (is (nil? (route/session-defs {:root (str (fs/create-temp-dir)) :role :implementor
                                      :repl-session s}
                                     60 100))))))
+
+;; --- the eval bridge (karamazov-xn0h.7) --------------------------------------
+
+(defn- bridged
+  ([session handler code] (bridged session handler code []))
+  ([session handler code cells]
+   (with-redefs [route/bridge-policy (constantly {:enabled? true :tools #{"read_file" "grep"}
+                                                  :cells? true :call-timeout-ms 5000})
+                 samizdat.callable/cells (constantly (mapv (fn [id] {:id id}) cells))]
+     (route/eval-for (assoc (ctx session) :bridge handler) code session 15000))))
+
+(deftest a-tool-called-from-eval-comes-back-as-a-value
+  (let [s (repl/new-session)
+        seen (atom [])
+        r (bridged s (fn [frame] (swap! seen conj (select-keys frame [:op :args]))
+                       {:value (str "read " (get-in frame [:args :path]))})
+                   "(println \"before\") (let [t (tool/read_file {:path \"a.clj\"})] (str t \"!\"))")]
+    (is (:ok r) (:error r))
+    (is (= "\"read a.clj!\"" (:value r)))
+    (is (= [{:op "read_file" :args {:path "a.clj"}}] @seen))
+    (is (= "before\n" (:out r)) "the request is not output")))
+
+(deftest a-refused-call-fails-the-form-that-made-it
+  (let [s (repl/new-session)
+        r (bridged s (fn [_] {:error "not in this phase"}) "(tool/grep {:pattern \"x\"})")]
+    (is (false? (:ok r)))
+    (is (str/includes? (:error r) "not in this phase"))))
+
+(deftest with-the-bridge-off-there-is-no-tool-namespace
+  (let [s (repl/new-session)
+        r (with-redefs [route/bridge-policy (constantly {:enabled? false})]
+            (ev s "(tool/grep {:pattern \"x\"})"))]
+    (is (false? (:ok r)))))
+
+(deftest concurrent-branches-each-answer-their-own-calls
+  ;; Two branches share an image; each eval's poller must take only the
+  ;; requests its own eval queued, or a call runs with the wrong branch.
+  (let [a (repl/new-session) b (repl/new-session)
+        code "(do (Thread/sleep 200) (tool/grep {:pattern \"x\"}))"
+        fa (future (bridged a (fn [_] (Thread/sleep 100) {:value "from-a"}) code))
+        fb (future (bridged b (fn [_] {:value "from-b"}) code))]
+    (is (= "\"from-a\"" (:value @fa)) (pr-str @fa))
+    (is (= "\"from-b\"" (:value @fb)) (pr-str @fb))))
+
+(deftest end-to-end-a-real-read-through-the-bridge
+  ;; The eval tool, the project image and the tool path, none stubbed: the
+  ;; read happens through read_file and its text comes back into the form.
+  (with-redefs [route/bridge-policy (constantly {:enabled? true :tools #{"read_file"}
+                                                 :call-timeout-ms 10000 :poll-ms 20})]
+    (let [run-tool (requiring-resolve 'samizdat.agent.tools/run-tool)
+          new-branch (requiring-resolve 'samizdat.agent.state/new-branch)
+          s (repl/new-session)
+          r (run-tool {:tool-name "eval" :root @root :role :implementor
+                       :branch (assoc (new-branch {:id "B1" :problem "p"}) :repl-session s)
+                       :args {:code "(clojure.string/includes? (tool/read_file {:path \"src/demo/core.clj\"}) \"greet\")"}})]
+      (is (str/includes? (str (:result r)) "=> true") (:result r)))))
+
+(deftest a-callable-cell-is-a-function-in-the-image
+  ;; karamazov-xn0h.8: :lex/line-count is lex/line-count from eval, and the
+  ;; request names the cell and carries the arguments.
+  (let [s (repl/new-session)
+        seen (atom nil)
+        r (bridged s (fn [q] (reset! seen (select-keys q [:op :args])) {:value {:lines 2}})
+                   "(:lines (lex/line-count {:path \"a.clj\"}))" [:lex/line-count])]
+    (is (= "2" (:value r)) (pr-str r))
+    (is (= {:op "cell" :args {:id :lex/line-count :args {:path "a.clj"}}} @seen))))
