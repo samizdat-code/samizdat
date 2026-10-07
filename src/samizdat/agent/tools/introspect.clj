@@ -51,7 +51,9 @@
             [samizdat.security.sandbox :as sandbox]
             [samizdat.manual :as manual]
             [samizdat.agent.gates :as gates]
+            [samizdat.agent.roles :as roles]
             [samizdat.prompt :as prompt]
+            [samizdat.vocabulary :as vocabulary]
             [samizdat.manifests :as manifests]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]
@@ -273,36 +275,97 @@
                                                        :top-names top-names})}))
                     (prompt/render "drift" {:no-db true}))))))
 
+(defn- session-section
+  "What the role's eval session has defined, rendered, or nil when it has no
+  session or its image is not running (karamazov-xn0h.1, arrodes'
+  `workspace`)."
+  [ctx]
+  (let [{:keys [max-session-defs]} (gates/threshold :manual-live)
+        {:keys [doc-chars]} (gates/threshold :vocabulary)]
+    (when-let [{:keys [defs total]} (route/session-defs ctx max-session-defs doc-chars)]
+      (prompt/render "manual-session"
+                     {:defs defs
+                      :more (let [m (- (or total 0) (count defs))] (when (pos? m) m))}))))
+
+(defn- session-def
+  "The session def named `wanted`, or nil."
+  [ctx wanted]
+  (let [{:keys [doc-chars]} (gates/threshold :vocabulary)]
+    (some #(when (= wanted (:name %)) %)
+          (:defs (route/session-defs ctx Integer/MAX_VALUE doc-chars)))))
+
+(defn- project-manual
+  "The manual for a role whose eval is NOT the harness image: its session and
+  the project's own vocabulary, which is what that image can call. The
+  curated manual.edn lists harness vars and told every role to call them
+  from eval — under :project none of them are loaded there."
+  [{:keys [branch root role] :as ctx} wanted]
+  (let [vp (gates/threshold :vocabulary)
+        {:keys [max-namespaces]} (gates/threshold :manual-live)
+        repl? (boolean (roles/may-use? (or role (:role branch)) "eval"
+                                       (config/eval-mode root)))
+        entries (if root (filterv (comp seq :publics) (vocabulary/index root vp)) [])
+        render (fn [m] (prompt/render "manual-project" (assoc m :repl repl?)))]
+    (if-not wanted
+      (base/ok branch
+               (str/join "\n\n"
+                         (remove str/blank?
+                                 [(when repl? (session-section ctx))
+                                  (render {:listing true
+                                           :none (empty? entries)
+                                           :namespaces (map (fn [e] {:ns (:ns e) :doc (:doc e)
+                                                                     :count (count (:publics e))})
+                                                            (take max-namespaces entries))
+                                           :more (let [m (- (count entries) max-namespaces)]
+                                                   (when (pos? m) m))})])))
+      (let [{:keys [namespace var ns]} (vocabulary/lookup entries wanted)
+            own (when (and repl? (not namespace) (not var)) (session-def ctx wanted))]
+        (cond
+          namespace (base/ok branch (render (assoc namespace :namespace true)))
+          var (base/ok branch (render (assoc var :var true :ns ns)))
+          own (base/ok branch (render (assoc own :var true
+                                             :ns (str (route/session-of ctx))
+                                             :docstring (:doc own))))
+          :else (base/malformed branch
+                                (render {:miss true :wanted wanted
+                                         :namespaces (str/join ", " (map :ns entries))})))))))
+
 (defmethod base/run-tool "manual" [{:keys [branch] :as ctx}]
-  ;; The harness's own command surface, for a branch developing at the REPL
-  ;; inside it. Curated in resources/manual.edn (LR-6), so what the agent is
-  ;; told it can do is editable at runtime — including by the agent.
+  ;; WHICH SURFACE depends on which image the role evaluates in. The
+  ;; supervisor's is the harness, so its manual is the curated list of the
+  ;; harness's own command surface (LR-6, resources/manual.edn) plus what it
+  ;; has defined. Every other role's is the project image, so its manual is
+  ;; what IS callable there: its session and the project's vocabulary
+  ;; (karamazov-xn0h.1).
   ;;
   ;; With a `name` argument, the full docstring for that one entry; without,
   ;; the whole surface as summaries. A name that is not in the manual says so
   ;; and lists the groups, rather than returning nothing.
   (let [wanted (some-> (base/arg ctx :name) str str/trim not-empty)]
-    (try
-      (if wanted
-        (if-let [e (manual/find-entry wanted)]
-          (base/ok branch (str (:name e) " " (pr-str (:arglists e)) "\n\n"
-                               (:summary e) "\n\n"
-                               (or (:doc e) "(no docstring)")))
-          (base/malformed
-           branch
-           (str "`" wanted "` is not in the manual. Groups: "
-                (str/join ", " (map :group (manual/groups)))
-                ". Call `manual` with no arguments for the whole surface, or"
-                " `doc` for any var whether it is curated or not.")))
-        (base/ok branch
-                 (str "=== THE HARNESS'S OWN COMMAND SURFACE ===\n"
-                      "Call these from `eval`. `manual` with a `name` gives one"
-                      " entry's full docstring.\n\n"
-                      (manual/render))))
-      (catch Throwable e
-        ;; A broken manual.edn is a real failure and must say so: a manual that
-        ;; renders nothing reads as "there is nothing here".
-        (base/malformed branch
-                        (str "the manual could not be compiled — resources/manual.edn"
-                             " names something that does not resolve: "
-                             (ex-message e)))))))
+    (if (not= :harness (route/image-of ctx))
+      (project-manual ctx wanted)
+      (try
+        (if wanted
+          (if-let [e (manual/find-entry wanted)]
+            (base/ok branch (str (:name e) " " (pr-str (:arglists e)) "\n\n"
+                                 (:summary e) "\n\n"
+                                 (or (:doc e) "(no docstring)")))
+            (base/malformed
+             branch
+             (str "`" wanted "` is not in the manual. Groups: "
+                  (str/join ", " (map :group (manual/groups)))
+                  ". Call `manual` with no arguments for the whole surface, or"
+                  " `doc` for any var whether it is curated or not.")))
+          (base/ok branch
+                   (str "=== THE HARNESS'S OWN COMMAND SURFACE ===\n"
+                        "Call these from `eval`. `manual` with a `name` gives one"
+                        " entry's full docstring.\n\n"
+                        (manual/render)
+                        (some->> (session-section ctx) (str "\n\n")))))
+        (catch Throwable e
+          ;; A broken manual.edn is a real failure and must say so: a manual that
+          ;; renders nothing reads as "there is nothing here".
+          (base/malformed branch
+                          (str "the manual could not be compiled — resources/manual.edn"
+                               " names something that does not resolve: "
+                               (ex-message e))))))))

@@ -170,8 +170,8 @@
                     :exec (exec-attempt? error)})))
 
 (defn- legible
-  "`r` with a sandbox refusal reworded, and `:where` naming the image either
-  way so a failure can never be mistaken for the wrong process."
+  "`r` with a sandbox refusal reworded, so a denial cannot read as a defect
+  in the form that produced it."
   [r root sandboxed?]
   (if-let [d (and (not (:ok r)) (denial (:error r) root sandboxed?))]
     (assoc r :error d :policy-refusal? true)
@@ -186,6 +186,124 @@
   [ctx]
   (config/eval-image (config/eval-mode (:root ctx))
                      (or (:role ctx) (get-in ctx [:branch :role]))))
+
+(defn- timed-out
+  "The answer for an eval `r` that hit its deadline in the project image.
+
+  Bounded by the image itself (RFC-013): at the deadline the image is asked
+  to interrupt the eval, which stops even a tight loop at the next engine
+  tick, and the image survives with its defs. Only an eval that does not
+  answer the interrupt — blocked in a foreign call the interrupt cannot
+  reach — costs the image, since leaving it would hand the next eval a busy
+  image."
+  [r root timeout]
+  (if (:interrupted? r)
+    (log/warn "project image eval timed out after" timeout
+              "ms — interrupted, image kept")
+    (do (release! root)
+        (log/warn "project image eval timed out after" timeout
+                  "ms and did not answer the interrupt — image restarted")))
+  {:ok false :error-type "timeout" :timeout? true
+   :error (prompt/render "image-timeout" {:ms timeout})})
+
+(defn- strict
+  "Form text that evaluates with unresolved symbols refused.
+
+  jolt's nREPL binds `*allow-unresolved-vars*` true around every eval (a name
+  may arrive in a later one), so in the image a typo came back as a SUCCESS
+  whose value was `#object[clojure.lang.Var$Unbound …]` — a wrong answer that
+  looks like an answer, where the harness image says `Unable to resolve
+  symbol` as JVM Clojure does. The form is read by the image in the session's
+  namespace, as before, and only its evaluation is rebound."
+  [text]
+  (str "(binding [clojure.core/*allow-unresolved-vars* false] (eval (quote "
+       text "\n)))"))
+
+(defn- ns-switch
+  "The namespace form `text` moves evaluation into — `(ns x …)` or
+  `(in-ns 'x)` — or nil. Sent whole, the image carried such a switch to the
+  forms after it; sent one form at a time with the session's `ns` key, the
+  rest of the batch would land back in the session, so the switch is carried
+  here."
+  [text]
+  (let [form (try (read-string text) (catch Throwable _ nil))]
+    (when (seq? form)
+      (case (some-> (first form) name)
+        "ns" (when (symbol? (second form)) (second form))
+        "in-ns" (let [a (second form)]
+                  (when (and (seq? a) (= 'quote (first a)) (symbol? (second a)))
+                    (second a)))
+        nil))))
+
+(defn- eval-project
+  "Evaluate `code` in the project image `im`, one top-level form at a time,
+  the way repl/eval-code does in the harness image (karamazov-xn0h.3).
+
+  Handed the whole text, the image's nREPL went on evaluating the forms after
+  one that failed — measured: `(/ 1 0) (def after 2)` defined `after` — and
+  the failure said nothing of which form broke. One form per exchange stops
+  at the failure, says which form it was and how many ran before it, and
+  shares one deadline across the batch.
+
+  THE EXIT GUARD, here too. An exit in this image is not the harness going
+  down, but it is every def of the run going with it and a restart, for
+  nothing the model wanted (karamazov-xn0h.6). Checked before the first form
+  runs, on every form that reads in the harness; one that only reads after
+  an earlier form ran (`::alias/kw`) is not visible to it."
+  [im root sandboxed? code session timeout]
+  (let [forms (try (repl/top-level-forms code) (catch Throwable _ nil))
+        refused (when forms (repl/refusal (repl/readable-ahead forms) :project))
+        where (some-> session str)]
+    (cond
+      refused
+      {:ok false :error-type "process-exit" :policy-refusal? true
+       :error (ex-message refused)}
+
+      ;; Text the splitter cannot parse goes whole, and the image's own
+      ;; reader says what is wrong with it.
+      (empty? forms)
+      (let [r (image/eval-in im code session {:timeout-ms timeout})]
+        (if (:timeout? r)
+          (timed-out r root timeout)
+          (cond-> (legible r root sandboxed?) where (assoc :where where))))
+
+      :else
+      (let [deadline (+ (System/currentTimeMillis) timeout)
+            n (count forms)]
+        (loop [i 0 outs [] in session]
+          (let [{:keys [text line]} (nth forms i)
+                left (max 1 (- deadline (System/currentTimeMillis)))
+                r (image/eval-in im (strict text) in {:timeout-ms left})
+                outs (conj outs (str (:out r)))
+                at {:index (inc i) :count n :line line :completed i}]
+            (cond
+              (:timeout? r)
+              (assoc (timed-out r root timeout) :form at :out (str/join outs))
+
+              (not (:ok r))
+              (cond-> (assoc (legible r root sandboxed?) :form at :out (str/join outs))
+                where (assoc :where where))
+
+              (= (inc i) n)
+              (assoc r :out (str/join outs))
+
+              :else (recur (inc i) outs (or (ns-switch text) in)))))))))
+
+(defn fork-session
+  "A new eval session carrying `parent`'s defs, in whichever image holds them.
+
+  The beam forks a branch's session so a child can call what its inherited
+  transcript shows it defining. repl/fork-session copies the HARNESS
+  namespace; under :project the defs live in the image, so the child started
+  empty there while its transcript said otherwise (karamazov-xn0h.4). Both
+  are copied: the harness copy is what the supervisor's image reads, the
+  image copy what every other role's does. No image for `root` yet means no
+  defs in one to copy."
+  [root parent]
+  (let [child (repl/fork-session parent)]
+    (when-let [im (and parent (get @images root))]
+      (image/fork-ns! im parent child))
+    child))
 
 (defn eval-for
   "Evaluate `code` for `ctx`, in whichever image its role and the operator's
@@ -243,26 +361,7 @@
                                            (System/getProperty "os.name")
                                            (some? (fs/which "bwrap")))]
           (if-let [im (image-for! root backend)]
-          ;; Bounded by the image itself (RFC-013): at the deadline the image
-          ;; is asked to interrupt the eval, which stops even a tight loop at
-          ;; the next engine tick, and the image survives with its defs. Only
-          ;; an eval that does not answer the interrupt — blocked in a
-          ;; foreign call the interrupt cannot reach — costs the image, since
-          ;; leaving it would hand the next eval a busy image.
-          (let [r (image/eval-in im code session {:timeout-ms timeout})]
-            (cond
-              (and (:timeout? r) (:interrupted? r))
-              (do (log/warn "project image eval timed out after" timeout
-                            "ms — interrupted, image kept")
-                  {:ok false :error-type "timeout" :timeout? true
-                   :error (prompt/render "image-timeout" {:ms timeout})})
-              (:timeout? r)
-              (do (release! root)
-                  (log/warn "project image eval timed out after" timeout
-                            "ms and did not answer the interrupt — image restarted")
-                  {:ok false :error-type "timeout" :timeout? true
-                   :error (prompt/render "image-timeout" {:ms timeout})})
-              :else (legible r root (not= :none backend))))
+            (eval-project im root (not= :none backend) code session timeout)
             {:ok false :error-type "image-down"
              :error (prompt/render "image-down" {})}))))))
 
@@ -274,33 +373,61 @@
 ;; been handed samizdat's, plausibly and silently. Whatever image an eval lands
 ;; in is the one these have to describe.
 
+(defn session-of
+  "The eval session `ctx` evaluates in: the branch's, else the run's — the
+  same choice the eval tool makes, so `doc` describes what `eval` sees."
+  [ctx]
+  (or (get-in ctx [:branch :repl-session]) (:repl-session ctx)))
+
+(defn session-defs
+  "What `ctx`'s eval session has defined, from the image it lives in, as
+  repl/session-defs-form describes — or nil when there is no session, or
+  its image has not been started. Asking never starts one: a role that only
+  reads the manual has no business paying for a process."
+  [ctx limit doc-chars]
+  (when-let [s (session-of ctx)]
+    (case (image-of ctx)
+      :harness (repl/session-defs s limit doc-chars)
+      :project (when-let [im (get @images (:root ctx))]
+                 (let [r (image/eval-in im (str "(" (pr-str repl/session-defs-form) " '" s
+                                                " " limit " " doc-chars ")"))]
+                   (when (:ok r)
+                     (try (read-string (str (:value r))) (catch Exception _ nil)))))
+      nil)))
+
 (defn- read-value
-  "Evaluate `form` in `ctx`'s image and read the printed value back, or nil."
+  "Evaluate `form` in `ctx`'s image and session and read the printed value
+  back, or nil."
   [ctx form]
-  (let [r (eval-for ctx form nil nil)]
+  (let [r (eval-for ctx form (session-of ctx) nil)]
     (when (:ok r)
       (try (read-string (str (:value r))) (catch Exception _ nil)))))
 
 (defn doc-for
+  "The docstring and arglists of `sym` as `ctx`'s eval would resolve it — so
+  a def the model made in its own session is found, not just a qualified
+  project var (karamazov-xn0h.5)."
   [ctx sym]
   (if (= :harness (image-of ctx))
-    (repl/doc-sym sym)
+    (repl/doc-sym sym (session-of ctx))
     ;; The tool pr-strs :arglists itself, so this hands back the DATA rather
     ;; than a string of it — otherwise the model reads a quoted quote.
     (or (read-value ctx (str "(if-let [v (resolve (symbol " (pr-str (str sym)) "))]"
                              " (let [m (meta v)]"
-                             "   {:name (str (:name m)) :arglists (:arglists m)"
+                             "   {:name (str (:ns m) \"/\" (:name m)) :arglists (:arglists m)"
                              "    :doc (str (:doc m))})"
                              " {:not-found true})"))
         {:not-found true})))
 
 (defn complete-for
+  "Names containing `prefix`: qualified ones across every loaded namespace,
+  and the session's own defs bare, as they are called from it."
   [ctx prefix]
   (if (= :harness (image-of ctx))
-    (repl/complete prefix)
-    (or (read-value ctx (str "(->> (all-ns)"
-                             " (mapcat (fn [n] (map #(str (ns-name n) \"/\" %)"
-                             "                      (keys (ns-publics n)))))"
+    (repl/complete prefix (session-of ctx))
+    (or (read-value ctx (str "(->> (concat (map str (keys (ns-interns *ns*)))"
+                             "   (mapcat (fn [n] (map #(str (ns-name n) \"/\" %)"
+                             "                        (keys (ns-publics n)))) (all-ns)))"
                              " (filter #(clojure.string/includes? % " (pr-str (str prefix)) "))"
-                             " sort (take 50) vec"))
+                             " distinct sort (take 50) vec)"))
         [])))

@@ -63,6 +63,7 @@
             [samizdat.repl.route :as route]
             [samizdat.session :as session]
             [samizdat.userspace :as userspace]
+            [samizdat.vocabulary :as vocabulary]
             [samizdat.agent.state :as state]
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
@@ -352,7 +353,14 @@
         ;; The project's root instruction file ahead of the orient block
         ;; (karamazov-d5wo.4): one opening, on the row, so a resume reopens
         ;; on both.
-        opening (instr/opening-context root (:block orient)
+        ;; The project's own vocabulary beside it (karamazov-xn0h.2): its
+        ;; public functions and macros, so a change can be written in the
+        ;; language the code already speaks. Once per run, on the row with
+        ;; the rest of the opening.
+        vocab (vocabulary/block root (gates/threshold :vocabulary))
+        opening (instr/opening-context root
+                                       (not-empty (str/join "\n\n" (keep (comp not-empty str :block)
+                                                                          [orient vocab])))
                                        (gates/threshold :instructions))
         run-id (runs/start-run! conn {:problem problem
                                       ;; The alias, so a resume resolves the
@@ -375,6 +383,12 @@
                                 {:data {:names (:names orient)
                                         :found (:found orient)
                                         :chars (count (str (:block orient)))}})
+                 (catch Throwable _ nil)))
+        ;; The vocabulary arm's own note, read the same way.
+        _ (when vocab
+            (try (journal/note! conn run-id :vocabulary
+                                {:data (assoc (select-keys vocab [:namespaces :omitted :brief?])
+                                              :chars (count (str (:block vocab))))})
                  (catch Throwable _ nil)))
         ;; The role the manifest names, as the beam gives its branches
         ;; (answer.edn's :answerer): its tools, its prompt, its surface.

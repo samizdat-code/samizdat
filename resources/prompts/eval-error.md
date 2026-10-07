@@ -1,4 +1,4 @@
-This ran in **the live image**, in the run's own eval session `{{where}}` — not from your files on disk. The two can disagree, and telling them apart is usually the whole diagnosis:
+This ran in **{% if harness %}the live harness image{% else %}the project's image, a separate process rooted at the project{% endif %}**, in the run's own eval session `{{where}}` — not from your files on disk. The two can disagree, and telling them apart is usually the whole diagnosis:
 
 - **The session holds state your files do not.** A `require` that failed halfway leaves the namespace half-loaded, and every later call against it fails while the file is perfectly correct. Re-loading is the fix: `(require 'the.ns :reload)`.
 - **Your files hold changes the session does not.** An edit is not live until the namespace is re-required, so an eval can keep exercising the version from before your last three edits.

@@ -76,6 +76,7 @@
             [samizdat.procedure]
             [samizdat.prompt]
             [samizdat.repl.guard]
+            [samizdat.repl]
             [samizdat.repl.route]
             [samizdat.replay]
             [samizdat.security.confine]
@@ -102,4 +103,5 @@
             [samizdat.symbolic.dispatch]
             [samizdat.tape]
             [samizdat.userspace]
+            [samizdat.vocabulary]
             [samizdat.workflow]))

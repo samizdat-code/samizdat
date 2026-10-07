@@ -39,6 +39,8 @@
             [clojure.string :as str]
             [clojure.tools.logging :as log]
             [jolt.host :as host]
+            [rewrite-clj.node :as n]
+            [rewrite-clj.parser :as p]
             [samizdat.prompt :as prompt]
             [samizdat.repl.guard :as guard]))
 
@@ -172,9 +174,12 @@
   (let [child (new-session)]
     (when-let [pns (and parent (find-ns parent))]
       (let [cns (find-ns child)]
+        ;; The var's metadata rides on the symbol: a macro interned as its
+        ;; bare value lost :macro and the child called it as a function. An
+        ;; unbound var (a `declare` never filled) has no value to copy.
         (doseq [[sym v] (ns-interns pns)]
-          (when (var? v)
-            (intern cns sym @v)))))
+          (when (and (var? v) (bound? v))
+            (intern cns (with-meta sym (meta v)) @v)))))
     child))
 
 (defn close-session
@@ -186,6 +191,90 @@
   (when (find-ns session)
     (remove-ns session))
   nil)
+
+(defn top-level-forms
+  "The top-level forms of `code` as `[{:text :line}]`, in order, 1-based
+  lines. Comments and `#_` evaluate nothing, so they are not forms here.
+
+  THE UNIT AN EVAL FAILURE IS REPORTED AGAINST, in both images. A batch that
+  failed with a bare message left the model unable to tell which form broke
+  or whether the ones before it ran — they did, defs and effects included —
+  and it re-ran the whole batch (arrodes reports form, phase and line;
+  karamazov-xn0h.3). Throws on text that does not parse; callers hold vetted
+  source."
+  [code]
+  (->> (n/children (p/parse-string-all (str code)))
+       (remove #(or (n/whitespace-or-comment? %) (= :uneval (n/tag %))))
+       (mapv (fn [nd] {:text (n/string nd) :line (:row (meta nd))}))))
+
+(defn refusal
+  "Why `forms` (read forms) must not run in a process the caller cares about,
+  as the ex-info to throw, or nil. `:image` is :harness or :project — the
+  same call ends a different process, and the sentence says which."
+  [forms image]
+  (let [ctx {:harness (= :harness image) :project (= :project image)}]
+    (cond
+      (guard/terminating-form? forms)
+      (ex-info (prompt/render "eval-terminates-process"
+                              (assoc ctx
+                                     :calls (str/join " and " (guard/offending forms))
+                                     :rule (name :process-exit)))
+               {:samizdat/refused :process-exit})
+
+      ;; The route the symbol check cannot see: the exit is inside the
+      ;; callee, one file away, in code the agent wrote itself.
+      (guard/entry-point-call? forms)
+      (ex-info (prompt/render "eval-calls-main"
+                              (assoc ctx
+                                     :call (str/join " and " (guard/main-calls forms))
+                                     :rule (name :entry-point-call)))
+               {:samizdat/refused :entry-point}))))
+
+(defn readable-ahead
+  "Every form of `forms` (from `top-level-forms`) that reads now, in order.
+
+  The refusal checks the batch BEFORE THE FIRST FORM RUNS (karamazov-1xx): a
+  partial eval that then kills the process is the worst of both. A form that
+  only reads once an earlier one has run — `::alias/kw` after the require
+  that makes the alias — is skipped here and checked at its own turn."
+  [forms]
+  (keep #(try (read-string (:text %)) (catch Throwable _ nil)) forms))
+
+(def session-defs-form
+  "A function of `[ns-sym limit doc-chars]` listing a session's own defs —
+  `{:defs [{:name :kind :macro :arglists :doc :type}] :total n}` — as a FORM,
+  so the harness image evaluates it and the project image is sent it printed:
+  one definition for both (karamazov-xn0h.1, arrodes' `workspace`). Values are
+  named by type, never printed or realised: a def can hold a lazy sequence or
+  an open resource."
+  '(fn [ns-sym limit doc-chars]
+     (require 'clojure.string)
+     (when-let [n (find-ns ns-sym)]
+       (let [vs (sort-by (comp str key) (ns-interns n))]
+         {:total (count vs)
+          :defs (mapv (fn [[s v]]
+                        (let [m (meta v)
+                              x (when (bound? v) @v)
+                              line (some-> (:doc m) clojure.string/split-lines first
+                                           clojure.string/trim not-empty)]
+                          (cond-> {:name (str s)
+                                   :kind (cond (:macro m) "macro" (fn? x) "fn" :else "value")}
+                            (:macro m) (assoc :macro true)
+                            (:arglists m) (assoc :arglists (mapv pr-str (:arglists m)))
+                            line (assoc :doc (if (> (count line) doc-chars)
+                                               (str (subs line 0 doc-chars) "…")
+                                               line))
+                            (not (or (:macro m) (fn? x)))
+                            (assoc :type (if (nil? x) "nil" (str (type x)))))))
+                      (take limit vs))}))))
+
+(def ^:private session-defs-fn (delay (eval session-defs-form)))
+
+(defn session-defs
+  "`session`'s own defs in this (the harness) image, as session-defs-form
+  describes, or nil when the session has no namespace here."
+  [session limit doc-chars]
+  (when session (@session-defs-fn session limit doc-chars)))
 
 (def ^:private default-session (delay (new-session)))
 
@@ -235,34 +324,36 @@
          ;; the agent's features stays loaded after they are put back; what
          ;; does not survive is the ability to break every later read.
          features (__reader-features)
+         ;; The form running now, so a failure can say which one it was and
+         ;; how many before it completed (karamazov-xn0h.3).
+         at (volatile! nil)
          body (fn []
                (try
                  (let [value (binding [*ns* ns* *out* out]
-                               (let [forms (read-string (str "[" code "\n]"))]
+                               (let [forms (top-level-forms code)
+                                     n (count forms)]
                                  ;; REFUSED BEFORE THE FIRST FORM RUNS, not per
                                  ;; form: the forms share a process, so form 1
                                  ;; having already run does not make form 2's
                                  ;; exit survivable — and a partial eval that
                                  ;; then kills the server is the worst of both
                                  ;; (karamazov-1xx).
-                                 (when (guard/terminating-form? forms)
-                                   (throw (ex-info (prompt/render
-                                                    "eval-terminates-process"
-                                                    {:calls (str/join " and "
-                                                                      (guard/offending forms))
-                                                     :rule (name :process-exit)})
-                                                   {:samizdat/refused :process-exit})))
-                                 ;; And the route the symbol check cannot see:
-                                 ;; the exit is inside the callee, one file
-                                 ;; away, in code the agent wrote itself.
-                                 (when (guard/entry-point-call? forms)
-                                   (throw (ex-info (prompt/render
-                                                    "eval-calls-main"
-                                                    {:call (str/join " and "
-                                                                     (guard/main-calls forms))
-                                                     :rule (name :entry-point-call)})
-                                                   {:samizdat/refused :entry-point})))
-                                 (reduce (fn [_ form] (eval form)) nil forms)))]
+                                 (when-let [e (refusal (readable-ahead forms) :harness)]
+                                   (throw e))
+                                 ;; ONE FORM AT A TIME, each read after the one
+                                 ;; before it ran, as a REPL reads: an alias a
+                                 ;; require just made is readable in the next
+                                 ;; form. A form unreadable in the pass above is
+                                 ;; checked here, at its own turn.
+                                 (reduce (fn [_ [i {:keys [text line]}]]
+                                           (vreset! at {:index (inc i) :count n
+                                                        :line line :completed i})
+                                           (let [form (read-string text)]
+                                             (when-let [e (refusal [form] :harness)]
+                                               (throw e))
+                                             (eval form)))
+                                         nil
+                                         (map-indexed vector forms))))]
                    {:ok true :value (pr-str value) :out (str out)})
                  (catch Throwable e
                    {:ok false
@@ -296,6 +387,7 @@
                     ;; so a branch reads it as a defect in its own code and
                     ;; goes looking in the file.
                     :where (str ns*)
+                    :form @at
                     :out (str out)})
                  (finally
                    (try (__reader-features-set! features)
@@ -316,47 +408,54 @@
        :err (throw result)))))
 
 (defn- resolve-sym
-  "Resolve a fully-qualified or core symbol string to its var, or nil."
-  [sym-str]
+  "Resolve a symbol string to its var, or nil: qualified ones by namespace,
+  bare ones in `session` when given (so a session's own def is found) and
+  clojure.core otherwise."
+  [sym-str session]
   (try
     (let [s (symbol sym-str)]
       (if (namespace s)
         (when-let [ns* (find-ns (symbol (namespace s)))]
           (ns-resolve ns* (symbol (name s))))
-        (ns-resolve 'clojure.core s)))
+        (or (some-> session find-ns (ns-resolve s))
+            (ns-resolve 'clojure.core s))))
     (catch Throwable _ nil)))
 
 (defn doc-sym
   "The docstring and arglists of a symbol, for the agent inspecting code.
   jolt strips core-var metadata, so this is most useful on the project's own
-  vars (which carry their docstrings). Returns {:not-found true} when unknown."
-  [sym-str]
-  (if-let [v (resolve-sym sym-str)]
-    (let [m (meta v)]
-      {:name (str (:ns m) "/" (:name m))
-       :arglists (:arglists m)
-       :doc (or (:doc m) "(no docstring — jolt strips core-var metadata)")})
-    {:not-found true :symbol sym-str}))
+  vars (which carry their docstrings). Returns {:not-found true} when unknown.
+  With `session`, a bare name resolves there first."
+  ([sym-str] (doc-sym sym-str nil))
+  ([sym-str session]
+   (if-let [v (resolve-sym sym-str session)]
+     (let [m (meta v)]
+       {:name (str (:ns m) "/" (:name m))
+        :arglists (:arglists m)
+        :doc (or (:doc m) "(no docstring — jolt strips core-var metadata)")})
+     {:not-found true :symbol sym-str})))
 
 (defn complete
   "Public symbols whose name starts with `prefix`. A qualified prefix
   (`samizdat.lisp/b`) completes within that namespace; a bare prefix
-  (`redu`) completes across clojure.core. Returns a sorted vector of strings."
-  [prefix]
-  (let [p (str prefix)]
-    (if-let [slash (str/index-of p "/")]
-      (let [ns-part (subs p 0 slash)
-            name-part (subs p (inc slash))]
-        (if-let [ns* (find-ns (symbol ns-part))]
-          (->> (ns-publics ns*)
-               keys
-               (map name)
-               (filter #(str/starts-with? % name-part))
-               (map #(str ns-part "/" %))
-               sort vec)
-          []))
-      (->> (ns-publics 'clojure.core)
-           keys
-           (map name)
-           (filter #(str/starts-with? % p))
-           sort vec))))
+  (`redu`) completes across clojure.core and, with `session`, the session's
+  own defs. Returns a sorted vector of strings."
+  ([prefix] (complete prefix nil))
+  ([prefix session]
+   (let [p (str prefix)]
+     (if-let [slash (str/index-of p "/")]
+       (let [ns-part (subs p 0 slash)
+             name-part (subs p (inc slash))]
+         (if-let [ns* (find-ns (symbol ns-part))]
+           (->> (ns-publics ns*)
+                keys
+                (map name)
+                (filter #(str/starts-with? % name-part))
+                (map #(str ns-part "/" %))
+                sort vec)
+           []))
+       (->> (concat (keys (ns-publics 'clojure.core))
+                    (some-> session find-ns ns-interns keys))
+            (map name)
+            (filter #(str/starts-with? % p))
+            distinct sort vec)))))

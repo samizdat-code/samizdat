@@ -5,8 +5,9 @@ description: REPL-driven development in the live jolt image — prototype in eva
 
 # REPL-driven development
 
-You work against a live jolt image: `eval` runs Clojure in the same process the
-harness runs in, and defs persist across evals within your run. That is a
+You work against a live jolt image: `eval` runs Clojure in a running process
+(`introspect` says which one — the project's own image for most roles, the
+harness's for the supervisor), and defs persist across evals within your run. That is a
 powerful way to develop — but it is a way to *develop*, not the deliverable. The
 deliverable is the **edited file on disk**. An eval is scratch: it disappears
 when the run ends, it does not show up in the diff, and a reviewer reading the

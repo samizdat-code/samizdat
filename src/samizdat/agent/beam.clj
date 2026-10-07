@@ -82,6 +82,7 @@
             [samizdat.lexicon :as lexicon]
             [samizdat.symbolic :as sym]
             [samizdat.util :as util]
+            [samizdat.vocabulary :as vocabulary]
             [samizdat.agent.oversight :as oversight]
             [samizdat.agent.live :as live]
             [samizdat.repl :as repl]
@@ -162,10 +163,12 @@
         ;; One eval namespace per BRANCH. A child forks its parent's, so the
         ;; conversation it inherits stays true — it can call what it can read
         ;; itself defining — while anything either defines afterwards stays
-        ;; its own. dispose-branch-engines! closes it when the branch ends.
+        ;; its own. Through route, so the copy is made in the image the defs
+        ;; live in (karamazov-xn0h.4). dispose-branch-engines! closes it when
+        ;; the branch ends.
         b (assoc (seed-branch ctx parent id thesis turn)
                  :repl-session (if parent
-                                 (repl/fork-session (:repl-session parent))
+                                 (route/fork-session (:root ctx) (:repl-session parent))
                                  (repl/new-session)))]
     ;; The suffix on the row is what seed-branch opened on — or, for an
     ;; inheriting child, what its parent's system message already carries.
@@ -1112,7 +1115,14 @@
         ;; The project's root instruction file ahead of the orient block
         ;; (karamazov-d5wo.4): one opening, on the row, so a resume reopens
         ;; on both.
-        opening (instr/opening-context root (:block orient)
+        ;; The project's own vocabulary beside it (karamazov-xn0h.2): its
+        ;; public functions and macros, so a change can be written in the
+        ;; language the code already speaks. Once per run, on the row with
+        ;; the rest of the opening.
+        vocab (vocabulary/block root (gates/threshold :vocabulary))
+        opening (instr/opening-context root
+                                       (not-empty (str/join "\n\n" (keep (comp not-empty str :block)
+                                                                          [orient vocab])))
                                        (gates/threshold :instructions))
         ;; THE ROW FIRST, then the caller, then everything that costs a model
         ;; call (karamazov-5fyo). api.control/start-run! blocks until on-start
@@ -1222,6 +1232,12 @@
                                 {:data {:names (:names orient)
                                         :found (:found orient)
                                         :chars (count (str (:block orient)))}})
+                 (catch Throwable _ nil)))
+        ;; The vocabulary arm's own note, read the same way.
+        _ (when vocab
+            (try (journal/note! conn run-id :vocabulary
+                                {:data (assoc (select-keys vocab [:namespaces :omitted :brief?])
+                                              :chars (count (str (:block vocab))))})
                  (catch Throwable _ nil)))
         ;; Seeded before any branch opens, so the first context block a
         ;; branch ever sees can already carry inherited lemmas.

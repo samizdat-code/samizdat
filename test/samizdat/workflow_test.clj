@@ -43,6 +43,7 @@
             [samizdat.store.userspace :as us]
             [samizdat.userspace :as userspace]
             [samizdat.workflow :as workflow]
+            [jolt.fs]
             [mycelium.workflow :as wf]))
 
 ;; The loop cells now live in resources and load at runtime — nothing
@@ -233,6 +234,30 @@
                 "the same journal, row for row and in order")
             (is (= (run-row c1 (:run-id r1)) (run-row c2 (:run-id r2)))
                 "and the same run row")))))))
+
+(deftest both-drivers-open-on-the-projects-vocabulary
+  ;; karamazov-xn0h.2: the project's public names reach the opening the run
+  ;; row keeps, from either driver, and the arm is journaled so the arena
+  ;; can compare it against its control.
+  (let [root (str (jolt.fs/create-temp-dir))]
+    (jolt.fs/create-dirs (str root "/src/shop"))
+    (spit (str root "/deps.edn") (pr-str {:paths ["src"]}))
+    (spit (str root "/src/shop/orders.clj")
+          "(ns shop.orders)\n(defn place-order \"Places it.\" [cart] cart)\n")
+    (doseq [driver [workflow/run! beam/run!]]
+      (with-db [c]
+        (with-redefs [llm/chat (scripted
+                                (fence {:name "thesis"
+                                        :args {:goal "solve the problem"
+                                               :technique "direct"}})
+                                (fence {:name "done"
+                                        :args {:answer "the problem is solved directly"}}))]
+          (let [r (driver {:conn c :config {:run {:root root :beam-width 1}} :beam-width 1
+                           :llm-adapter :a :llm-config {:max-tokens 16384}
+                           :problem "solve the problem" :max-turns 10})]
+            (is (str/includes? (str (:opening_context (runs/get-run c (:run-id r))))
+                               "place-order"))
+            (is (some #(= "vocabulary" (:kind %)) (journal/events-since c (:run-id r) 0)))))))))
 
 (deftest a-non-iterating-manifest-forces-beam-width-1
   ;; team/feature/decompose are whole-run workflows: one pass is the branch's

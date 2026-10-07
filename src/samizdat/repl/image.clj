@@ -402,6 +402,22 @@
          (finally
            (try (transport/close t) (catch Exception _ nil))))))))
 
+(defn fork-ns!
+  "Copy `parent`'s defs into a new namespace `child` in the image — the image
+  half of repl/fork-session, for a forked branch whose defs live here
+  (karamazov-xn0h.4). Copied, not shared, with each var's metadata so a macro
+  stays a macro. A parent the image never saw leaves nothing to copy."
+  [im parent child]
+  (let [r (eval-in im (str "(when-let [p (find-ns '" parent ")]"
+                           " (let [c (create-ns '" child ")]"
+                           "  (binding [*ns* c] (refer-clojure))"
+                           "  (doseq [[s v] (ns-interns p)]"
+                           "   (when (bound? v) (intern c (with-meta s (meta v)) @v)))"
+                           "  :forked))"))]
+    (when (and (:ok r) (= ":forked" (:value r)))
+      (some-> (:sessions im) (swap! conj child)))
+    r))
+
 (defn alive?
   [{:keys [proc]}]
   (boolean (try (some-> proc process/alive?) (catch Exception _ false))))

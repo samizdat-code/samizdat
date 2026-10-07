@@ -86,6 +86,15 @@
                                        ;; is one jolt users meet by habit.
                                        (when-let [h (eval-hint (:error r))]
                                          (str "\n\n" (prompt/render "eval-hint" {:hint h})))
+                                       ;; WHICH FORM, in a batch: the ones
+                                       ;; before it ran and their effects
+                                       ;; stand, so the move is to fix that
+                                       ;; form, not to re-run the batch
+                                       ;; (karamazov-xn0h.3).
+                                       (when-let [{:keys [count completed] :as f} (:form r)]
+                                         (when (> count 1)
+                                           (str "\n\n" (prompt/render "eval-form-failed"
+                                                                      (assoc f :one-before (= 1 completed))))))
                                        ;; WHERE it ran, every time it fails.
                                        ;; A branch that cannot tell a stale
                                        ;; session from a broken file reads
@@ -98,7 +107,8 @@
                                        (when (:where r)
                                          (str "\n\n"
                                               (prompt/render "eval-error"
-                                                             {:where (:where r)}))))))
+                                                             {:where (:where r)
+                                                              :harness (= :harness (route/image-of ctx))}))))))
              ;; Same flag run-shell carries: a timed-out eval burned its
              ;; whole budget, and the loop weights it accordingly.
              :timeout? (= "timeout" (:error-type r))))))

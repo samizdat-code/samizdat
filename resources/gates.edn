@@ -2796,6 +2796,73 @@
         Not capability-tunable: it is the opening, decided before any
         branch has a tier."}
 
+ :vocabulary
+ {:value {:enabled? true
+          :max-chars 4000 :doc-chars 100
+          :max-files 400 :max-file-chars 200000
+          :extensions [".clj" ".cljc"]
+          :fallback-paths ["src"]
+          :kinds {"defn" "fn" "defmacro" "macro" "defmulti" "multi"
+                  "defprotocol" "protocol" "defrecord" "record" "deftype" "type"
+                  "def" "var" "defonce" "var"}}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-xn0h.2"]
+  :doc "THE PROJECT'S OWN VOCABULARY IN THE OPENING (samizdat.vocabulary;
+        prompts/vocabulary.md is the prose; problem.md places it after the
+        problem, beside the orient block).
+
+        WHY. A project written as a language for its domain — its macros and
+        helpers — is only followed by a change that knows the language
+        exists. A model that sees the change site but not the vocabulary
+        writes generic code beside it, which is the failure the arrodes
+        review (2026-10-07) and the Lisp-as-domain-language argument both
+        name. A public name, its arguments and its first doc line is the
+        cheapest view of that language: the whole of it, at no read.
+
+        AN ARENA ARM, like :orient-inject: :enabled? off is the control, and
+        the :vocabulary note the driver journals per run (namespaces,
+        omitted, chars) beside turns-to-first-write is how they compare.
+
+        :max-chars               the block's budget. Whole namespaces drop
+                                 from the end (alphabetical) past it, and
+                                 the block says how many; `manual` lists
+                                 every one. Paid once per branch, then
+                                 cached in the prefix.
+        :doc-chars               a docstring's first line, cut here.
+        :max-files / :max-file-chars   the walk's bounds.
+        :extensions              which files are source.
+        :fallback-paths          the source paths when deps.edn declares
+                                 none. Only :paths count, never an alias's
+                                 :extra-paths: tests and dev tooling are
+                                 not the domain language.
+        :kinds                   defining heads that are vocabulary, and the
+                                 word each is shown with. A head not listed
+                                 is not shown; `-` suffixed heads and
+                                 ^:private names never are.
+
+        Not capability-tunable: it is the opening, decided before any
+        branch has a tier."}
+
+ :manual-live
+ {:value {:max-session-defs 60 :max-namespaces 150}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-xn0h.1"]
+  :doc "HOW MUCH OF THE LIVE SURFACE `manual` SHOWS (samizdat.agent.tools.
+        introspect; prompts/manual-session.md and manual-project.md are the
+        prose). The curated manual.edn is the harness's surface, which only
+        the supervisor's eval can call; every other role's manual is built
+        from what its own image and project hold (arrodes' help/workspace,
+        2026-10-07 review).
+
+        :max-session-defs   the session's own defs listed, sorted by name;
+                            the rest are counted.
+        :max-namespaces     the project's namespaces listed with no name
+                            asked for; the rest are counted, and each is
+                            still reachable by name.
+
+        A docstring's first line is cut at :vocabulary :doc-chars, the same
+        cut the opening uses, so one var reads the same in both."}
+
  :instructions
  {:value {:enabled? true
           :file-names ["AGENTS.md" "CLAUDE.md"]

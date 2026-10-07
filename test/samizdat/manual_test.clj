@@ -13,7 +13,9 @@
             [clojure.test :refer [deftest is testing]]
             [samizdat.agent.tools :as tools]
             [samizdat.agent.state :as state]
-            [samizdat.manual :as manual]))
+            [jolt.fs :as fs]
+            [samizdat.manual :as manual]
+            [samizdat.repl.route :as route]))
 
 (deftest every-curated-entry-resolves
   ;; This is the whole point. The manual is editable at runtime, so a stale
@@ -65,8 +67,12 @@
 
 ;; --- the tool ----------------------------------------------------------------
 
-(defn- run [args]
+(defn- run
+  "The tool as the SUPERVISOR calls it — the role whose eval is the harness
+  image, which is the surface the curated manual describes."
+  [args]
   (tools/run-tool {:branch (state/new-branch {:id "B1" :problem "p"})
+                   :role :supervisor
                    :tool-name "manual"
                    :args args}))
 
@@ -115,3 +121,74 @@
              (vec (remove required named))))
     (is (str/includes? (pr-str core-form) "samizdat.capabilities")
         "and samizdat.core requires it, so both `jolt serve` and the binary load them")))
+
+;; --- from the image the role evaluates in (karamazov-xn0h.1) -----------------
+;;
+;; The curated list is the HARNESS's surface. An implementor's eval runs in
+;; the project image, where none of it is loaded, and it was told "call these
+;; from eval" all the same. arrodes builds discovery from what is live; here
+;; that is the session's own defs and the project's vocabulary.
+
+(defn- project! []
+  (let [root (str (fs/create-temp-dir))]
+    (fs/create-dirs (str root "/src/shop"))
+    (spit (str root "/deps.edn") (pr-str {:paths ["src"]}))
+    (spit (str root "/src/shop/orders.clj")
+          (str "(ns shop.orders \"Orders.\")\n"
+               "(defn place-order\n  \"Places the order.\n\n  Charges the card first.\"\n  [cart]\n  cart)\n"
+               "(defmacro with-order [[s id] & body] `(let [~s ~id] ~@body))\n"))
+    root))
+
+(defn- run-as [role root args]
+  (tools/run-tool {:branch (state/new-branch {:id "B1" :problem "p"})
+                   :role role :root root
+                   :tool-name "manual"
+                   :args args}))
+
+(def ^:private own-defs
+  [{:name "helper" :kind "fn" :arglists ["[n]"] :doc "Doubles."}
+   {:name "orders" :kind "value" :type "clojure.lang.PersistentVector"}])
+
+(deftest an-implementor-sees-its-session-and-its-project
+  (with-redefs [route/session-defs (fn [& _] {:defs own-defs :total 2})]
+    (let [r (:result (run-as :implementor (project!) {}))]
+      (is (str/includes? r "helper") r)
+      (is (str/includes? r "Doubles."))
+      (is (str/includes? r "shop.orders") "the project's namespaces")
+      (is (not (str/includes? r "samizdat.agent.infer"))
+          "and not harness vars its image cannot call"))))
+
+(deftest a-namespace-name-lists-its-vocabulary
+  (let [r (:result (run-as :implementor (project!) {:name "shop.orders"}))]
+    (is (str/includes? r "place-order"))
+    (is (str/includes? r "[cart]"))
+    (is (str/includes? r "macro"))))
+
+(deftest a-var-name-gives-its-whole-docstring
+  (let [r (:result (run-as :implementor (project!) {:name "shop.orders/place-order"}))]
+    (is (str/includes? r "[cart]"))
+    (is (str/includes? r "Charges the card first.") "past the first line")))
+
+(deftest a-session-def-is-found-by-its-bare-name
+  (with-redefs [route/session-defs (fn [& _] {:defs own-defs :total 2})]
+    (let [r (:result (run-as :implementor (project!) {:name "helper"}))]
+      (is (str/includes? r "Doubles."))
+      (is (str/includes? r "[n]")))))
+
+(deftest an-unknown-project-name-says-what-there-is
+  (let [r (run-as :implementor (project!) {:name "shop.nope"})]
+    (is (= :mechanics (:category r)))
+    (is (str/includes? (:result r) "shop.orders"))))
+
+(deftest a-role-without-eval-still-reads-the-project
+  ;; The answerer has manual and no eval: its manual is the vocabulary, and
+  ;; asking must not start an image it will never use.
+  (with-redefs [route/image-for! (fn [& _] (throw (ex-info "started an image" {})))]
+    (let [r (:result (run-as :answerer (project!) {}))]
+      (is (str/includes? r "shop.orders")))))
+
+(deftest the-supervisor-also-sees-its-session
+  (with-redefs [route/session-defs (fn [& _] {:defs own-defs :total 2})]
+    (let [r (:result (run {}))]
+      (is (str/includes? r "## The tape") "the curated surface, still")
+      (is (str/includes? r "helper") "and what it defined"))))

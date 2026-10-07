@@ -292,7 +292,11 @@
    {:name samizdat.agent.orient/definitions
     :summary "Where each name is defined under the root: path, line and a snippet, by a bounded walk and the :definition-patterns. A named file is shown from its top."}
    {:name samizdat.agent.orient/block
-    :summary "The rendered opening block for a problem under a root, with the names taken and those found — computed once per run by the driver, kept on the run row, off with :orient-inject :enabled? false (the arena's control arm)."}]}
+    :summary "The rendered opening block for a problem under a root, with the names taken and those found — computed once per run by the driver, kept on the run row, off with :orient-inject :enabled? false (the arena's control arm)."}
+   {:name samizdat.vocabulary/index
+    :summary "Every namespace under a project's deps.edn :paths with its public functions and macros — name, kind, arglists, first doc line — read from source, not the image. What `manual` lists for a role whose eval is the project image."}
+   {:name samizdat.vocabulary/block
+    :summary "The project's vocabulary as an opening block within gates.edn :vocabulary :max-chars: full detail, then names only, then whole namespaces dropped and counted. Once per run, on the run row; :enabled? false is the control arm."}]}
 
  {:group "Reads through the shell"
   :entries
@@ -433,6 +437,12 @@
     :summary "What the project image may not read, and the only directory it may exec from. Not tunable at runtime — it is the confinement."}
    {:name samizdat.config/eval-image
     :summary "The rule itself: :project for every role but the supervisor, unless the operator set :eval :mode in .samizdat/config.edn."}
+   {:name samizdat.repl.route/session-defs
+    :summary "What a role's eval session has defined, from the image it lives in — name, kind, arglists, first doc line, a value's type — without realising any value or starting an image."}
+   {:name samizdat.repl.route/fork-session
+    :summary "A branch's eval session copied for a forked child, in whichever image holds the defs, macros included."}
+   {:name samizdat.repl/top-level-forms
+    :summary "Code split into its top-level forms with their lines — the unit an eval runs and reports a failure against, in both images."}
    {:name samizdat.repl.route/release!
     :summary "Stop the project image for a root. The next eval starts a fresh one, losing everything defined at the REPL."}
    {:name samizdat.security.sandbox/seatbelt-profile

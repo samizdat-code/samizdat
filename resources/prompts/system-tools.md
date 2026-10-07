@@ -57,11 +57,15 @@ eval({code, timeout_ms?})
     require and exercise the project's own namespaces here too.
     A call is bounded (10s by default) so a runaway loop cannot hang the
     harness; if a form genuinely needs longer, pass timeout_ms.
-    LIVE means you share this process. The timeout covers a slow form, not a
+{% if harness-image %}    LIVE means you share this process. The timeout covers a slow form, not a
     form that ends the process: calling a `-main`, or anything that reaches
     `System/exit`, kills the harness mid-run and takes every other branch with
     it. A project's test runner almost always exits at the end, which is right
-    for a subprocess and fatal here. Run the project's suite with the shell
+    for a subprocess and fatal here.{% else %}    The image holds every def this run makes. The timeout covers a slow form,
+    not a form that ends the process: calling a `-main`, or anything that
+    reaches `System/exit`, ends the image and loses all of them. A project's
+    test runner almost always exits at the end, which is right for a
+    subprocess and refused here.{% endif %} Run the project's suite with the shell
     (`jolt -M:test`) — that is a child process and its exit code is the point.
     In eval, call the test namespaces directly (`(clojure.test/run-tests
     'flight.mechanics-test)`) rather than the runner that wraps them.
@@ -71,13 +75,20 @@ complete({prefix})
     Symbols starting with a prefix — a qualified prefix ("samizdat.lisp/b")
     completes within that namespace, a bare one ("redu") across the core.
 manual({name?})
-    The harness's OWN command surface: the functions worth calling from eval,
-    grouped, one curated line each. `doc` and `complete` answer questions
-    about a name you already have; this is how you find out which names are
-    worth having. With a name (manual({name: "samizdat.agent.infer/bounce"}))
-    you get that one entry's full docstring.
+{% if harness-image %}    The harness's OWN command surface: the functions worth calling from eval,
+    grouped, one curated line each, and what your eval session has defined.
+    `doc` and `complete` answer questions about a name you already have; this
+    is how you find out which names are worth having. With a name
+    (manual({name: "samizdat.agent.infer/bounce"})) you get that one entry's
+    full docstring.
     The list itself is resources/manual.edn — data, not code. If you build a
-    capability worth other runs knowing about, add it there.
+    capability worth other runs knowing about, add it there.{% else %}    What you can build with: {% if repl %}what your eval session has defined, and {% endif %}the
+    project's own namespaces with how many public functions and macros each
+    has. With a namespace's name (manual({name: "shop.orders"})) you get its
+    functions and macros with their arguments; with `ns/name`, one var's whole
+    docstring{% if repl %}; with a bare name, one of your session's defs{% endif %}. `doc` and `complete` answer
+    questions about a name you already have; this is how you find the names
+    worth having.{% endif %}
 ```
 
 ### Doing work

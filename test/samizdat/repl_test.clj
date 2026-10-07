@@ -61,6 +61,46 @@
       (repl/eval-code "(defn scratch-double [n] (* 2 n))" sess)
       (is (= "20" (:value (repl/eval-code "(scratch-double 10)" sess)))))))
 
+(deftest top-level-forms-split-with-their-lines
+  ;; What a failure is reported against: the form, by position and line.
+  ;; Comments and #_ evaluate nothing, so they are not forms here.
+  (is (= [{:text "(def a 1)" :line 1}
+          {:text "(def b 2)" :line 3}
+          {:text "(+ a b)" :line 4}]
+         (repl/top-level-forms "(def a 1)\n\n(def b 2) ; c\n#_(skipped)(+ a b)")))
+  (is (= [] (repl/top-level-forms "  ; only a comment\n"))))
+
+(deftest a-failing-form-says-which-and-what-already-ran
+  ;; arrodes reports the failing form, its line, and that earlier forms took
+  ;; effect; a bare message left the model re-running the whole batch.
+  (let [s (repl/new-session)
+        r (repl/eval-code "(def before-fail 1)\n(/ 1 0)\n(def after-fail 2)" s)]
+    (is (false? (:ok r)))
+    (is (= {:index 2 :count 3 :line 2 :completed 1} (:form r)))
+    (is (= "1" (:value (repl/eval-code "before-fail" s)))
+        "the form before the failure ran and its def stands")
+    (is (false? (:ok (repl/eval-code "after-fail" s)))
+        "the form after the failure never ran")))
+
+(deftest each-form-is-read-after-the-one-before-it-ran
+  ;; A REPL reads a form after evaluating the previous one, so an alias a
+  ;; require just made is readable in the next form. Reading the whole batch
+  ;; first refused `::alias/kw` that any REPL accepts.
+  (let [s (repl/new-session)
+        r (repl/eval-code "(require '[clojure.string :as sx]) ::sx/k" s)]
+    (is (:ok r) (:error r))
+    (is (= ":clojure.string/k" (:value r)))))
+
+(deftest a-fork-keeps-its-parents-macros
+  ;; Interning the value alone drops :macro, so a forked branch saw its
+  ;; parent's macro as a function and called it with forms as arguments.
+  (let [p (repl/new-session)]
+    (repl/eval-code "(defmacro twice [x] `(do ~x ~x))" p)
+    (let [c (repl/fork-session p)
+          r (repl/eval-code "(let [n (atom 0)] (twice (swap! n inc)) @n)" c)]
+      (is (:ok r) (:error r))
+      (is (= "2" (:value r))))))
+
 (deftest sessions-are-isolated
   (let [a (repl/new-session) b (repl/new-session)]
     (repl/eval-code "(def only-in-a 1)" a)
@@ -148,3 +188,12 @@
     (testing "including when the eval throws mid-way, which is the live case"
       (repl/eval-code "(__reader-features-set! [\"only\"]) (throw (ex-info \"boom\" {}))")
       (is (= before (__reader-features))))))
+
+(deftest the-session-lists-its-own-defs
+  (let [s (repl/new-session)]
+    (repl/eval-code "(defn helper \"Doubles.\" [n] (* 2 n)) (def xs [1 2])" s)
+    (let [{:keys [defs total]} (repl/session-defs s 60 100)]
+      (is (= 2 total))
+      (is (= #{"helper" "xs"} (set (map :name defs))))
+      (is (= "Doubles." (:doc (first (filter #(= "helper" (:name %)) defs))))))
+    (is (nil? (repl/session-defs nil 60 100)))))
