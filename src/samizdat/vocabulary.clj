@@ -145,6 +145,26 @@
          sort
          (take max-files))))
 
+(def ^:private parsed
+  "Each source file's entry by path, with the size, modification time and
+  policy it was read under. Every run opening builds the block, and parsing
+  is most of its cost: samizdat's own 235 namespaces took 10 s a run, so a
+  test suite opening dozens of runs on one tree went past CI's limit. A file
+  is read again only once it has changed, and its new entry replaces the
+  old, so the cache holds one entry per file ever indexed."
+  (atom {}))
+
+(defn- file-entry [f policy]
+  (let [file (io/file f)
+        stamp [(.length file) (.lastModified file) (select-keys policy [:kinds :doc-chars])]
+        hit (get @parsed f)]
+    (if (= stamp (:stamp hit))
+      (:entry hit)
+      (let [e (some-> (try (slurp f) (catch Throwable _ nil))
+                      (namespace-entry policy))]
+        (swap! parsed assoc f {:stamp stamp :entry e})
+        e))))
+
 (defn index
   "Every namespace under `root`'s main source paths with its public
   vocabulary, sorted by namespace name. Files over `:max-file-chars` and
@@ -155,8 +175,7 @@
        (keep (fn [f]
                (when (<= (or (try (fs/size f) (catch Throwable _ nil)) Long/MAX_VALUE)
                          max-file-chars)
-                 (some-> (try (slurp f) (catch Throwable _ nil))
-                         (namespace-entry policy)))))
+                 (file-entry f policy))))
        (sort-by :ns)
        vec))
 
@@ -197,15 +216,25 @@
                                      {:namespaces (take k entries)
                                       :brief brief?
                                       :omitted (when (pos? omitted) omitted)
-                                      :many-omitted (> omitted 1)})))]
-     (loop [k total]
-       (when (pos? k)
-         (let [block (rendered k)]
-           (cond
-             (<= (count block) max-chars)
-             {:block block :namespaces k :omitted (- total k) :brief? brief?}
-
-             drop? (recur (dec k)))))))))
+                                      :many-omitted (> omitted 1)})))
+         fit (fn [k]
+               (let [block (rendered k)]
+                 (when (<= (count block) max-chars)
+                   {:block block :namespaces k :omitted (- total k) :brief? brief?})))]
+     ;; All of them first: only that block lacks the "…and n more" line, so
+     ;; it can be shorter than one with fewer. Below it each namespace adds
+     ;; more than the line's count loses, so the size grows with k and the
+     ;; most that fit is a binary search rather than one render per drop.
+     (when (pos? total)
+       (or (fit total)
+           (when drop?
+             (loop [lo 1 hi (dec total) best nil]
+               (if (> lo hi)
+                 best
+                 (let [mid (quot (+ lo hi) 2)]
+                   (if-let [r (fit mid)]
+                     (recur (inc mid) hi r)
+                     (recur lo (dec mid) best)))))))))))
 
 (defn block
   "The opening's vocabulary block for the project at `root`, as

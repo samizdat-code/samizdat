@@ -8,6 +8,7 @@
             [clojure.test :refer [deftest testing is]]
             [jolt.fs :as fs]
             [samizdat.agent.gates :as gates]
+            [samizdat.prompt]
             [samizdat.vocabulary :as vocab]))
 
 (def ^:private src
@@ -40,6 +41,8 @@
 ")
 
 (def ^:private policy (gates/threshold :vocabulary))
+
+(def ^:private prompt-render samizdat.prompt/render)
 
 (deftest a-namespace-reads-as-its-public-names
   (let [{:keys [ns doc publics]} (vocab/namespace-entry src policy)]
@@ -122,3 +125,49 @@
       (is (nil? (vocab/block root (assoc policy :enabled? false)))))
     (testing "a project with no Clojure source has no block"
       (is (nil? (vocab/block (str (fs/create-temp-dir)) policy))))))
+
+(deftest an-unchanged-file-is-not-read-again
+  ;; Every run opening builds the block, and on samizdat's own tree reading
+  ;; 235 namespaces took 10 s a run: the suite, which opens dozens of runs on
+  ;; the repository, went past CI's limit. A file is parsed again only when
+  ;; its size or modification time says it changed.
+  (let [root (project!)
+        parsed (atom [])
+        parse vocab/namespace-entry]
+    (with-redefs [vocab/namespace-entry (fn [text p] (swap! parsed conj text) (parse text p))]
+      (let [first-idx (vocab/index root policy)
+            n (count @parsed)]
+        (is (pos? n))
+        (is (= first-idx (vocab/index root policy)))
+        (is (= n (count @parsed)) "nothing changed, nothing was read")
+        (spit (str root "/src/shop/cart.clj")
+              "(ns shop.cart)\n(defn checkout [cart card] cart)\n(defn refund [cart] cart)\n")
+        (is (some #{"refund"} (map :name (:publics (first (vocab/index root policy))))))
+        (is (= (inc n) (count @parsed)) "only the edited file")))))
+
+(deftest the-block-is-the-most-namespaces-that-fit
+  ;; Fitting the budget searches for how many namespaces fit rather than
+  ;; dropping one at a time: 235 namespaces meant some 470 renders.
+  (let [entries (vec (for [i (range 60)]
+                       {:ns (format "big.ns%02d" i)
+                        :publics [{:name (str "f" i) :kind "fn" :arglists ["[x]"]}]}))
+        renders (atom 0)
+        render prompt-render
+        one (count (:block (vocab/render (vec (take 1 entries))
+                                         (assoc policy :max-chars 1000000) :brief)))]
+    (doseq [budget [(+ one 200) (* 3 one) (* 8 one)]]
+      (let [p (assoc policy :max-chars budget)
+            {:keys [namespaces block brief?]} (vocab/render entries p)
+            size (fn [k] (let [o (- 60 k)]
+                           (count (prompt-render "vocabulary"
+                                                 {:namespaces (take k entries) :brief brief?
+                                                  :omitted (when (pos? o) o)
+                                                  :many-omitted (> o 1)}))))]
+        (is (<= (count block) budget))
+        (is (pos? namespaces))
+        (when (< namespaces 60)
+          (is (> (size (inc namespaces)) budget)
+              (str "one more namespace would have fit at " budget)))))
+    (with-redefs [samizdat.prompt/render (fn [& a] (swap! renders inc) (apply render a))]
+      (vocab/render entries (assoc policy :max-chars (+ one 200))))
+    (is (< @renders 30) (str @renders " renders"))))
