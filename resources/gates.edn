@@ -2875,7 +2875,7 @@
           :cells? true
           :call-timeout-ms 60000 :poll-ms 50}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-xn0h.7" "karamazov-xn0h.8"]
+  :provenance ["karamazov-xn0h.7" "karamazov-xn0h.8" "karamazov-xn0h.9"]
   :doc "TOOLS CALLABLE AS FUNCTIONS FROM INSIDE AN EVAL in the project image:
         (tool/grep {:pattern \"x\"}) returns the tool's result text to the
         form, which can bind, filter and combine it before anything reaches
