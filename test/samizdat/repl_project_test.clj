@@ -161,6 +161,24 @@
     (is (= "\"from-a\"" (:value @fa)) (pr-str @fa))
     (is (= "\"from-b\"" (:value @fb)) (pr-str @fb))))
 
+(deftest a-poll-the-image-cannot-answer-does-not-outlive-the-eval
+  ;; karamazov-xn0h.9: an eval wedged in a foreign call left the image unable
+  ;; to answer the bridge's poll; the poll had no deadline and stopping the
+  ;; poller waited on it, so the eval's own timeout never returned and the
+  ;; branch hung for good. A poll that never answers stands in for that image.
+  (let [s (repl/new-session)
+        t0 (System/currentTimeMillis)
+        r (with-redefs [samizdat.bridge/take-source (constantly "(Thread/sleep 600000)")
+                        route/bridge-policy (constantly {:enabled? true :tools #{"grep"}
+                                                         :cells? false :call-timeout-ms 5000
+                                                         :poll-ms 50})]
+            (deref (future (route/eval-for (assoc (ctx s) :bridge (fn [_] {:value "x"}))
+                                           "(loop [] (recur))" s 3000))
+                   60000 ::hung))]
+    (is (not= ::hung r) "the eval never came back")
+    (is (:timeout? r) (pr-str r))
+    (is (< (- (System/currentTimeMillis) t0) 30000))))
+
 (deftest end-to-end-a-real-read-through-the-bridge
   ;; The eval tool, the project image and the tool path, none stubbed: the
   ;; read happens through read_file and its text comes back into the form.

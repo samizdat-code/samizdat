@@ -259,7 +259,7 @@
                                       :timeout-message (prompt/render "bridge-timeout"
                                                                       {:ms call-timeout-ms})})]
         (if (:ok r)
-          {:on-request handler :poll-ms poll-ms}
+          {:on-request handler :poll-ms poll-ms :call-timeout-ms call-timeout-ms}
           (do (log/warn "eval bridge did not install:" (:error r)) nil))))))
 
 (defn- eval-project

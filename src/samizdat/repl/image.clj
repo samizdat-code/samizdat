@@ -250,6 +250,10 @@
   [t]
   (loop [acc {:value nil :out [] :err []}]
     (let [m (transport/recv t)
+          ;; nil is a closed connection or an elapsed receive timeout; another
+          ;; recv would answer nil again, forever (karamazov-xn0h.9).
+          _ (when (nil? m)
+              (throw (ex-info "the image stopped answering before the eval finished" {})))
           acc (cond-> acc
                 (get m "value") (assoc :value (get m "value"))
                 (get m "out") (update :out conj (get m "out"))
@@ -268,24 +272,33 @@
   connections of their own, since the eval's is parked in recv
   (karamazov-xn0h.7). Returns the function that stops it; stopping takes one
   last look, so a request queued just before the eval ended is not left
-  waiting."
-  [im eval-id on-request poll-ms]
+  waiting.
+
+  EVERY WAIT IS BOUNDED by `call-ms` (karamazov-xn0h.9). An eval wedged in a
+  foreign call leaves the image unable to answer a poll; unbounded, the poll
+  never returned, the stop waited on it, and the eval's own deadline could
+  never come back — the branch hung for good. A stop after a timed-out eval
+  (`last-look?` false) does not wait at all: what that eval queued is moot."
+  [im eval-id on-request poll-ms call-ms]
   (let [stop (atom false)
+        opts {:recv-timeout-ms call-ms}
         serve-once (fn []
-                     (let [r (eval-in im (bridge/take-source eval-id))]
+                     (let [r (eval-in im (bridge/take-source eval-id) nil opts)]
                        (doseq [{:keys [id] :as q} (bridge/requests (:value r))]
                          (let [a (try (on-request q)
                                       (catch Throwable e {:error (or (ex-message e) (str e))}))]
-                           (eval-in im (bridge/deliver-source id a))))))
+                           (eval-in im (bridge/deliver-source id a) nil opts)))))
         worker (future
                  (loop []
                    (when-not @stop
                      (try (serve-once) (catch Throwable e (log/warn "eval bridge:" (ex-message e))))
                      (Thread/sleep poll-ms)
                      (recur))))]
-    (fn []
+    (fn [last-look?]
       (reset! stop true)
-      (try @worker (catch Throwable _ nil))
+      (if last-look?
+        (try (deref worker call-ms nil) (catch Throwable _ nil))
+        (future-cancel worker))
       nil)))
 
 (defn install-bridge!
@@ -400,12 +413,17 @@
   carries a receive timeout so an abandoned reader dies on its own."
   ([im code] (eval-in im code nil))
   ([im code session] (eval-in im code session nil))
-  ([{:keys [port] :as im} code session {:keys [timeout-ms grace-ms on-request bridge-eval poll-ms]}]
+  ([{:keys [port] :as im} code session {:keys [timeout-ms grace-ms on-request bridge-eval
+                                                poll-ms call-timeout-ms recv-timeout-ms]}]
    (let [grace-ms (or grace-ms (gates/threshold :image-interrupt-grace-ms))
+         ;; `recv-timeout-ms` alone bounds the read without the interrupt
+         ;; machinery: the bridge's own polls, which must not outlive an
+         ;; image that has stopped answering.
+         recv-ms (cond timeout-ms (+ timeout-ms grace-ms 1000)
+                       recv-timeout-ms recv-timeout-ms)
          t (try (transport/connect "127.0.0.1" port
-                                   (when timeout-ms
-                                     {:recv-timeout-secs
-                                      (int (Math/ceil (/ (+ timeout-ms grace-ms 1000) 1000.0)))}))
+                                   (when recv-ms
+                                     {:recv-timeout-secs (int (Math/ceil (/ recv-ms 1000.0)))}))
                 (catch Exception _ nil))]
      (if-not t
        {:ok false :error-type "image-down"
@@ -414,9 +432,12 @@
          (ensure-session! (assoc im :transport t) session)
          (let [sid (when timeout-ms (clone! im))
                ;; The bridge is served for exactly as long as this eval runs.
+               policy (when on-request (gates/threshold :eval-bridge))
                stop-bridge (when on-request
                              (serve-bridge! im bridge-eval on-request
-                                           (or poll-ms (:poll-ms (gates/threshold :eval-bridge)))))]
+                                            (or poll-ms (:poll-ms policy))
+                                            (or call-timeout-ms (:call-timeout-ms policy))))
+               timed-out (volatile! false)]
           (try
            (transport/send t (cond-> {"op" "eval" "code" (str code)}
                                session (assoc "ns" (str session))
@@ -434,7 +455,8 @@
                              (throw e)))]
                (if (not= ::timeout r1)
                  (let [[tag r] r1] (if (= :ok tag) (finish r) (throw r)))
-                 (do (interrupt! im sid)
+                 (do (vreset! timed-out true)
+                     (interrupt! im sid)
                      ;; Stage two: the grace for the aborted eval's reply. Past
                      ;; it the reader is cancelled — nrepl's recv is
                      ;; interruptible from v0.1.2, so the thread comes back
@@ -445,7 +467,7 @@
                          {:ok false :error-type "timeout" :timeout? true :interrupted? true
                           :error (:err r2) :out (:out r2)}
                          {:ok false :error-type "timeout" :timeout? true :stuck? true}))))))
-           (finally (when stop-bridge (stop-bridge)))))
+           (finally (when stop-bridge (stop-bridge (not @timed-out))))))
          (catch Exception e
            {:ok false
             :error (prompt/render "image-down" {:detail (ex-message e)})
