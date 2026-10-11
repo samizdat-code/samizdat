@@ -246,23 +246,35 @@
 
   The value and the `done` status arrive in the SAME message, so a loop that
   returns on `done` before reading the message it saw it in loses the answer
-  every time — which is what the first version of this did."
-  [t]
-  (loop [acc {:value nil :out [] :err []}]
-    (let [m (transport/recv t)
-          ;; nil is a closed connection or an elapsed receive timeout; another
-          ;; recv would answer nil again, forever (karamazov-xn0h.9).
-          _ (when (nil? m)
-              (throw (ex-info "the image stopped answering before the eval finished" {})))
-          acc (cond-> acc
-                (get m "value") (assoc :value (get m "value"))
-                (get m "out") (update :out conj (get m "out"))
-                (get m "err") (update :err conj (get m "err")))]
-      (if (some #{"done"} (get m "status"))
-        (-> acc
-            (update :out #(str/join "" %))
-            (update :err #(str/join "" %)))
-        (recur acc)))))
+  every time — which is what the first version of this did.
+
+  A nil from recv is not always the end. A closed connection or an elapsed
+  receive timeout answers nil, and so, on Linux, does one read a poll error
+  or an EINTR cut short, with the connection still open. So a nil is read
+  again, and only nils that outlast the transport's receive deadline since
+  the last message are the image gone (karamazov-xn0h.9: taking the first
+  one for that reported a timed-out eval as image-down). Without a deadline
+  the read is retried for as long as the caller waits."
+  [{:keys [recv-timeout-ms] :as t}]
+  (loop [acc {:value nil :out [] :err []}
+         quiet-since nil]
+    (let [asked (System/currentTimeMillis)
+          m (transport/recv t)]
+      (if (nil? m)
+        (let [since (or quiet-since asked)]
+          (when (and recv-timeout-ms (>= (- (System/currentTimeMillis) since) recv-timeout-ms))
+            (throw (ex-info "the image stopped answering before the eval finished" {})))
+          (Thread/sleep 10)
+          (recur acc since))
+        (let [acc (cond-> acc
+                    (get m "value") (assoc :value (get m "value"))
+                    (get m "out") (update :out conj (get m "out"))
+                    (get m "err") (update :err conj (get m "err")))]
+          (if (some #{"done"} (get m "status"))
+            (-> acc
+                (update :out #(str/join "" %))
+                (update :err #(str/join "" %)))
+            (recur acc nil)))))))
 
 (declare eval-in)
 

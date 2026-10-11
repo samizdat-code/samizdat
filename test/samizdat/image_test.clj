@@ -27,6 +27,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
             [jolt.fs :as fs]
+            [nrepl.transport]
             [samizdat.repl.image :as image]
             [samizdat.repl.route :as route]
             [samizdat.security.sandbox :as sandbox]))
@@ -212,6 +213,21 @@
       (is (= "42" (:value (route/eval-for ctx "(+ 40 2)" nil 25000)))
           "the image never recovered from a timed-out eval")
       (finally (route/release! root)))))
+
+(deftest a-read-that-comes-back-empty-is-tried-again
+  ;; On Linux a poll error or an EINTR makes one recv answer nil mid-eval, with
+  ;; the connection still open. Taking that nil for a dead image reported a
+  ;; timed-out eval as image-down before its budget was up (CI, after
+  ;; karamazov-xn0h.13). Only nils that outlast the receive deadline are.
+  (let [msgs (atom [nil nil {"out" "hi"} nil {"value" "3" "status" ["done"]}])]
+    (with-redefs [nrepl.transport/recv (fn [_] (let [m (first @msgs)] (swap! msgs rest) m))]
+      (is (= {:value "3" :out "hi" :err ""}
+             (#'image/collect {:recv-timeout-ms 1000})))))
+  (testing "a read that stays empty past the deadline is the image gone"
+    (with-redefs [nrepl.transport/recv (fn [_] nil)]
+      (let [t0 (System/currentTimeMillis)]
+        (is (thrown? Exception (#'image/collect {:recv-timeout-ms 300})))
+        (is (< (- (System/currentTimeMillis) t0) 5000))))))
 
 (deftest a-child-that-dies-fails-fast-and-is-tried-again
   ;; karamazov-69p0 / tetz: a start that failed waited out the whole connect
