@@ -2885,8 +2885,14 @@
         journaled as an :eval-call note on the turn that made it; it is not
         a turn of its own.
 
-        OFF BY DEFAULT: an arena arm, not a settled win. On vs off is the
-        comparison; the :eval-call notes say how often a branch used it.
+        OFF BY DEFAULT, MEASURED (karamazov-xn0h.9, 2026-10-11): the xn0h9
+        arms on horizon-fade, GLM-5.3 n=2 and DeepSeek flash n=1. Branches
+        bridged about one eval in ten, and those calls were 2-3% of the
+        tool-result text a branch read; turns, tokens and acceptance did
+        not move. Used, it batched several reads into one eval and printed
+        each whole — fewer turns, no filtering — so the composition it was
+        built for did not happen. Writes through it (stage 2) were not built
+        on that result.
 
         :tools            what may be asked for at all. Stage 1 is reads
                           only: a write inside an eval batch is harder to

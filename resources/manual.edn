@@ -444,7 +444,7 @@
    {:name samizdat.repl/top-level-forms
     :summary "Code split into its top-level forms with their lines — the unit an eval runs and reports a failure against, in both images."}
    {:name samizdat.repl.route/bridge-policy
-    :summary "gates.edn :eval-bridge: whether tools are callable as tool/<name> from inside a project-image eval, which ones, and how long a call waits. Off by default; an arena arm."}
+    :summary "gates.edn :eval-bridge: whether tools are callable as tool/<name> from inside a project-image eval, which ones, and how long a call waits. Off by default: measured in karamazov-xn0h.9, it changed neither cost nor outcome."}
    {:name samizdat.bridge/install-source
     :summary "The eval bridge as the image runs it: a call queues its request and waits; the harness polls the running eval for its own requests, runs each through the gated tool path, and delivers the answer. Inbound only — the image cannot reach the harness."}
    {:name samizdat.callable/cells

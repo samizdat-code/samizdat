@@ -5,13 +5,14 @@
 ;;
 ;; karamazov-fp21.4, one factor per sweep so the pairs read cleanly:
 ;;
-;;   ARENA_LLM='{:provider :local}' ARENA_ARMS=fp21-force \
+;;   ARENA_PROVIDER=bonsai ARENA_ARMS=fp21-force \
 ;;     jolt -A:dev -m samizdat.dev.arena rows-force.edn 1 fast-low-endless
-;;   ARENA_LLM='{:provider :local}' ARENA_ARMS=fp21-orient \
+;;   ARENA_PROVIDER=bonsai ARENA_ARMS=fp21-orient \
 ;;     jolt -A:dev -m samizdat.dev.arena rows-orient.edn 1 fast-low-endless
 ;;
-;; ARENA_LLM overrides the subject's own provider (endless-flight pins :glm);
-;; the grammar arm is a llama.cpp knob, so the sweep must run on one. Then
+;; ARENA_PROVIDER names the provider alias the run uses (ARENA_LLM's
+;; :provider was silently ignored before 2026-10-11); the grammar arm is a
+;; llama.cpp knob, so the sweep must run on one. Then
 ;; dev/arena-readout.sh over the recordings.
 
 {:fp21-force
@@ -22,4 +23,23 @@
  :fp21-orient
  [{:name :orient-on}
   {:name :orient-off
-   :setup (samizdat.dev.arena/flip-gate! [:orient-inject :enabled?] false)}]}
+   :setup (samizdat.dev.arena/flip-gate! [:orient-inject :enabled?] false)}]
+
+;; karamazov-xn0h.9: the eval bridge and the vocabulary block, 2x2. The
+;; first arm is the shipped default (bridge off, vocabulary on). Amnesiac so
+;; every run stands alone and arms can run as parallel sweeps:
+;;
+;;   ARENA_PROVIDER=glm ARENA_ARMS=xn0h9 ARENA_ONLY=bridge-on ARENA_BASE_PORT=4100 \
+;;     ARENA_WORK=... ARENA_RECORDINGS=... \
+;;     jolt -A:dev -m samizdat.dev.arena rows-bridge-on.edn 1 horizon-fade
+;;
+;; Then dev/xn0h9-readout.sh over the recordings.
+:xn0h9
+[{:name :baseline :memory? false}
+ {:name :bridge-on :memory? false
+  :setup (samizdat.dev.arena/flip-gate! [:eval-bridge :enabled?] true)}
+ {:name :vocab-off :memory? false
+  :setup (samizdat.dev.arena/flip-gate! [:vocabulary :enabled?] false)}
+ {:name :bridge-on-vocab-off :memory? false
+  :setup (do (samizdat.dev.arena/flip-gate! [:eval-bridge :enabled?] true)
+             (samizdat.dev.arena/flip-gate! [:vocabulary :enabled?] false))}]}

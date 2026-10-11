@@ -764,7 +764,15 @@
                                  :http {:port (:http-port in)}
                                  ;; The sweep's provider, when it named one
                                  ;; (ARENA_LLM); overrides beat both files.
-                                 :llm (or (:llm in) {})})
+                                 :llm (or (:llm in) {})
+                                 ;; ARENA_PROVIDER: the alias the run's own
+                                 ;; model comes from. An :llm :provider
+                                 ;; override cannot do this — base-url and
+                                 ;; key are resolved from :roles :default
+                                 ;; before it is merged, so it was ignored.
+                                 :roles (if-let [p (:provider in)]
+                                          {:default (keyword p)}
+                                          {})})
                  (try
                    (session/reset!)
                    (when-let [f (:setup in)] (eval f))
@@ -909,9 +917,11 @@
                           ;; sweep about a local-endpoint knob has to say
                           ;; so, and an arm's :setup runs too late — the
                           ;; adapter is built at system/start!. ARENA_LLM
-                          ;; is an EDN map merged as the :llm override,
-                          ;; e.g. ARENA_LLM='{:provider :local}'.
+                          ;; is an EDN map merged as the :llm override
+                          ;; (knobs, not the provider: that is
+                          ;; ARENA_PROVIDER=glm).
                           :llm (some-> (System/getenv "ARENA_LLM") edn/read-string)
+                          :provider (System/getenv "ARENA_PROVIDER")
                           :setup (:setup arm)}))
       (let [pb (doto (ProcessBuilder.
                       ^java.util.List
@@ -1415,7 +1425,15 @@
       (when-not chosen
         (throw (ex-info (str "ARENA_ARMS=" nm " names no arm set")
                         {:known (keys sets)})))
-      chosen)
+      ;; ARENA_ONLY=<arm>[,<arm>] keeps those arms of the set, so each arm
+      ;; can run as its own sweep process, side by side.
+      (if-let [only (some-> (System/getenv "ARENA_ONLY") (str/split #",") (->> (map keyword) set))]
+        (let [kept (filterv #(only (:name %)) chosen)]
+          (when (empty? kept)
+            (throw (ex-info (str "ARENA_ONLY names no arm of " nm)
+                            {:known (map :name chosen)})))
+          kept)
+        chosen))
     [{:name :baseline}]))
 
 (defn -main
@@ -1432,7 +1450,8 @@
   Trailing arguments name tasks to run, so a budget change can be proved on
   one task before nine runs are committed to it.
 
-  ARENA_WORK and ARENA_RECORDINGS override the scratch and keep directories.
+  ARENA_WORK and ARENA_RECORDINGS override the scratch and keep directories;
+  ARENA_BASE_PORT the first child port (ports step by one per run, mod 90).
   The recordings are the point of the sweep — they are what seeds the battery
   (karamazov-ylte.4) — and the default lands them under the platform temp
   directory, which macOS eventually sweeps. A sweep whose evidence expires is
@@ -1444,7 +1463,10 @@
                             :task-ids (mapv keyword task-ids)
                             :out (or out "arena-rows.edn")
                             :work (or (System/getenv "ARENA_WORK") (str tmp "/arena"))
-                            :base-port 3990
+                            ;; ARENA_BASE_PORT so two sweeps can run side
+                            ;; by side without their children colliding.
+                            :base-port (or (some-> (System/getenv "ARENA_BASE_PORT") parse-long)
+                                           3990)
                             :beam-width 1
                             :recordings (or (System/getenv "ARENA_RECORDINGS")
                                             (str tmp "/arena-recordings"))

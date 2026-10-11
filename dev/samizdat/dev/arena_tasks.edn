@@ -27,8 +27,11 @@
 ;; karamazov-ksl is right that an exercise is the point; what changed is that
 ;; it now names the wall and says that reporting it is the answer.
 
-{:subject {:repo "/Users/yogthos/src/raylib-examples/endless-flight"
-           :sha "e4afef0"
+{:subject {:repo "/Users/yogthos/src/jlt-commons/raylib-examples/endless-flight"
+           ;; e4afef0 plus only the paths and raylib requires the move to
+           ;; jlt-commons broke (branch arena-fixture-e4afef0); the tree the
+           ;; tasks describe is otherwise unchanged, suite 63/1221 green.
+           :sha "cf5703d"
            :verify-cmd "jolt -M:test"
            :baseline-suite "63 tests, 1221 assertions, 0 failures"}
 
