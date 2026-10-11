@@ -120,11 +120,13 @@
         ;; boot (measured 2026-09-06, warm cache). The checkout at
         ;; ~/src/jlt-commons/ebb is ours to change; pin a full sha here.
         ;; v0.1.3 carries the fix for a cancelled ap spinning forever
-        ;; (ebb PR #7, found by the supervisor stream here).
+        ;; (ebb PR #7, found by the supervisor stream here); v0.1.4 builds
+        ;; timer deadlines on jolt 0.8.21's monotonic clock, without which
+        ;; sleep and timeout never fire and no eval budget holds.
         jlt-commons/ebb
         {:git/url "https://github.com/jlt-commons/ebb"
-         :git/tag "v0.1.3"
-         :git/sha "5f6a4f3adcfcb8cace4cbb691c7be6cb0d15724b"}
+         :git/tag "v0.1.4"
+         :git/sha "15f6f7c0ee8b54a862e9f981b5867fab23459498"}
 
         ;; SCI: cells and the policy tables' :when forms are evaluated in an
         ;; SCI context that sees only the allowlist in samizdat.sandbox.sci,
