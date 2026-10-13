@@ -223,6 +223,7 @@
    :propose-cell "prompts/propose-cell.md"
    :grant-proposal "prompts/grant-proposal.md"
    :harness-eval-effects "prompts/harness-eval-effects.md"
+   :harness-eval-relative-path "prompts/harness-eval-relative-path.md"
    :split-decision "prompts/split-decision.md"
    :split-tool "prompts/split-tool.md"
    :stale-write "prompts/stale-write.md"

@@ -114,6 +114,33 @@
            {:kind k :call (str (first x))
             :target (first (filter string? (rest x)))}))))
 
+(def ^:private file-calls
+  "Calls whose first argument is a filesystem path, beyond the writers above.
+  Anything under `fs` / `jolt.fs` counts too (see `relative-paths`)."
+  '#{slurp load-file io/file clojure.java.io/file io/reader clojure.java.io/reader
+     io/writer clojure.java.io/writer io/input-stream clojure.java.io/input-stream
+     io/output-stream clojure.java.io/output-stream})
+
+(defn- file-call? [head]
+  (or ((:write effect-calls) head)
+      (file-calls head)
+      (#{"fs" "jolt.fs"} (namespace head))))
+
+(defn relative-paths
+  "The relative literal paths `form` hands to file calls as their first
+  argument — definition bodies left out, as for effects (karamazov-jk2y). A
+  relative path resolves against the harness's working directory, which is
+  not the project's unless the harness was started there. Only the first
+  argument: `(spit f \"text\")`'s second is content. A URL is not a path."
+  [form]
+  (vec (for [x (executed-subforms form)
+             :when (and (seq? x) (symbol? (first x)) (file-call? (first x)))
+             :let [p (second x)]
+             :when (and (string? p)
+                        (not (str/starts-with? p "/"))
+                        (not (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" p)))]
+         p)))
+
 (defn- call?
   [x]
   (and (seq? x) (symbol? (first x))))

@@ -146,9 +146,56 @@
   (is (empty? (guard/effects '(->> (samizdat.store.journal/turns conn "R") (take 3))))
       "reading the run is the supervisor's job"))
 
+(deftest the-relative-paths-a-form-hands-to-files-are-read
+  ;; karamazov-jk2y: the paths that resolve against the harness's cwd.
+  (is (= ["notes.txt" "README.md" "out/x.edn"]
+         (guard/relative-paths '(do (spit "notes.txt" "x")
+                                    (slurp "README.md")
+                                    (clojure.java.io/copy src (io/file "out/x.edn"))))))
+  (is (= ["build"] (guard/relative-paths '(fs/delete-tree "build"))))
+  (is (empty? (guard/relative-paths '(spit "/tmp/abs.txt" "notes.txt")))
+      "an absolute path is fine, and the content is not a path")
+  (is (empty? (guard/relative-paths '(slurp "https://x.example/a"))))
+  (is (empty? (guard/relative-paths '(io/file root "notes.txt")))
+      "a path under a root the code names")
+  (is (empty? (guard/relative-paths '(io/resource "prompts/system.md")))
+      "the classpath is not the cwd")
+  (is (empty? (guard/relative-paths '(defn later [] (slurp "x"))))
+      "defining a thing that reads is not reading"))
+
+(deftest a-relative-path-from-the-harness-is-refused-when-the-project-is-elsewhere
+  ;; karamazov-jk2y, run 582980ef: the supervisor wrote manual backups with
+  ;; relative paths from eval, and they landed in the samizdat checkout. The
+  ;; harness cannot chdir per branch, so the path is refused with the root it
+  ;; should have been under — before any approval, yolo included, since
+  ;; allowing it puts the file somewhere nobody asked for.
+  (let [ran (atom 0)
+        here (System/getProperty "user.dir")
+        elsewhere {:root "/tmp/elsewhere-project" :role :supervisor :run-id "R"}]
+    (with-redefs [samizdat.repl/eval-code (fn [& _] (swap! ran inc) {:ok true :value "nil"})
+                  samizdat.approval/policy (constantly {:mode :yolo})]
+      (testing "refused before it runs, naming the path and the root"
+        (let [r (samizdat.repl.route/eval-for elsewhere "(spit \"manual-backup.edn\" \"x\")" nil 1000)]
+          (is (not (:ok r)))
+          (is (= "relative-path" (:error-type r)))
+          (is (str/includes? (str (:error r)) "manual-backup.edn"))
+          (is (str/includes? (str (:error r)) "elsewhere-project"))
+          (is (zero? @ran))))
+      (testing "a read too: it answers from the wrong tree, plausibly"
+        (is (= "relative-path" (:error-type (samizdat.repl.route/eval-for
+                                             elsewhere "(slurp \"README.md\")" nil 1000)))))
+      (testing "an absolute path runs"
+        (is (:ok (samizdat.repl.route/eval-for
+                  elsewhere "(spit \"/tmp/elsewhere-project/m.edn\" \"x\")" nil 1000))))
+      (testing "with the harness started from the project root, a relative path is the project's"
+        (is (:ok (samizdat.repl.route/eval-for (assoc elsewhere :root here)
+                                               "(slurp \"README.md\")" nil 1000)))))))
+
 (deftest a-harness-eval-with-effects-is-a-persons-call
   (let [ran (atom 0)
-        ctx {:root "/tmp" :role :supervisor :run-id "R"}]
+        ;; The harness's own directory, so the relative path below is the
+        ;; project's and only the effects decide.
+        ctx {:root (System/getProperty "user.dir") :role :supervisor :run-id "R"}]
     (with-redefs [samizdat.repl/eval-code (fn [& _] (swap! ran inc) {:ok true :value "nil"})]
       (testing "under refuse it does not run, and says what to use"
         (with-redefs [samizdat.approval/policy (constantly {:mode :refuse})]

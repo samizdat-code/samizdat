@@ -66,6 +66,16 @@
   []
   (str (.getCanonicalFile (io/file "."))))
 
+(defn off-root
+  "`{:root :cwd}`, both canonical, when `root` is not the directory the harness
+  runs in — so a relative path in a harness `eval` is not the project's — or
+  nil."
+  [root]
+  (let [root* (str (.getCanonicalFile (io/file root)))
+        here (cwd)]
+    (when (not= root* here)
+      {:root root* :cwd here})))
+
 (defn warn-if-not-cwd!
   "Say so, loudly, when the run root is not the directory the harness is
   running in. Returns the mismatch as data, or nil.
@@ -80,15 +90,15 @@
   A wrong answer that looks right is the worst failure this seam has, and the
   fix is not in code: run the harness FROM the project root. The warning names
   both directories so the operator can, because nothing else in the process
-  will ever notice."
+  will ever notice. A supervisor's eval that hands a file call a relative
+  path is refused while this holds (route/eval-for, karamazov-jk2y): the
+  warning reached only the server log, where no branch reads it."
   [root]
-  (let [root* (str (.getCanonicalFile (io/file root)))
-        here (cwd)]
-    (when (not= root* here)
-      (log/warn "run root is not the working directory —"
-                "`eval` requires from" root* "but resolves relative FILE paths against" here
-                "— start the harness from the project root, or use absolute paths in eval")
-      {:root root* :cwd here})))
+  (when-let [{:keys [root cwd] :as off} (off-root root)]
+    (log/warn "run root is not the working directory —"
+              "`eval` requires from" root "but resolves relative FILE paths against" cwd
+              "— start the harness from the project root, or use absolute paths in eval")
+    off))
 
 (defn declared-roots
   "The absolute source roots `root` declares, resolved.

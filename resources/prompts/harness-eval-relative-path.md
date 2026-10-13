@@ -1,0 +1,2 @@
+Not run: {{paths}} would resolve against the harness's own directory, {{cwd}}, not the project's. This eval runs inside the harness, which cannot change directory for one branch, so a relative path here reads or writes the harness's tree.
+Use an absolute path under the project root, {{root}} — `(io/file "{{root}}" "…")` — or the `read_file` / `write_file` / `edit_file` tools, which resolve against the project root for you.

@@ -353,14 +353,28 @@
                   :error (prompt/render "kernel-write-refused"
                                         {:rule (name (:rule hit))
                                          :on (str (:on hit))})}
+                 ;; WHERE ITS FILES ARE, before what it does (karamazov-jk2y):
+                 ;; this process's cwd is the harness's, and nothing here can
+                 ;; move it per branch, so with the project elsewhere a
+                 ;; relative path reads or writes the harness's tree. No
+                 ;; person's answer makes that the project's file, so this
+                 ;; comes before the approval below, yolo included.
+                 (let [form (try (read-string (str "(do " code "\n)"))
+                                 (catch Exception _ nil))
+                       off (some-> root str not-empty repl/off-root)
+                       rel (when off (guard/relative-paths form))]
+                   (if (seq rel)
+                     {:ok false :error-type "relative-path" :policy-refusal? true
+                      :error (prompt/render "harness-eval-relative-path"
+                                            {:paths (str/join ", " (distinct rel))
+                                             :root (:root off) :cwd (:cwd off)})}
                  ;; WHAT IT WOULD DO OUTSIDE ITSELF, read first
                  ;; (karamazov-0e2c.21, after xi's scan-code): a process, a
                  ;; write, a request from inside the harness skips every
                  ;; check the shell and file tools make. A person decides it
                  ;; under :block, yolo lets it, :refuse sends it to the tools
                  ;; that are checked.
-                 (let [effs (guard/effects (try (read-string (str "(do " code "\n)"))
-                                                (catch Exception _ nil)))]
+                 (let [effs (guard/effects form)]
                    (if (empty? effs)
                      (repl/eval-code code session timeout)
                      (let [listed (str/join "\n" (map #(str (name (:kind %)) ": " (:call %)
@@ -373,7 +387,7 @@
                          {:ok false :error-type "harness-effects" :policy-refusal? true
                           :error (prompt/render "harness-eval-effects"
                                                 {:effects listed
-                                                 :unanswered (:timed-out d)})})))))
+                                                 :unanswered (:timed-out d)})})))))))
       ;; NO ROOT, NO IMAGE. Confinement is defined relative to the project, so
       ;; a ctx that never said which project cannot be confined to it: the
       ;; profile came out with no writable project root and the subprocess
