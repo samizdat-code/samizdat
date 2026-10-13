@@ -58,13 +58,40 @@
     (is (= "/work/proj" (:project-root spec)))
     (is (some #{"/tmp/shell-1"} (:scratch-paths spec)))
     (testing "the caches a build writes, and the operator's additions"
-      (is (some #{"/home/dev/.jolt"} (:writable spec)))
       (is (some #{"/home/dev/.cargo"} (:writable spec)))
       (is (some #{"/opt/cache"} (:writable spec))))
+    (testing "not the caches the harness itself loads code from (karamazov-1gbh)"
+      (doseq [h ["/home/dev/.jolt" "/home/dev/.m2" "/home/dev/.gitlibs"
+                 ;; user deps.edn: every jolt start merges it, the harness's too
+                 "/home/dev/.clojure"]]
+        (is (not-any? #(or (= h %) (str/starts-with? h (str % "/"))) (:writable spec)) h)))
+    (testing "the project's own confined caches instead, named outright: they
+              need not be under a build cache (the test runner moves them)"
+      (is (some #{(confine/confined-home "/home/dev" "/work/proj")} (:writable spec))))
     (testing "not $HOME itself"
       (is (not (some #{"/home/dev"} (:writable spec)))))
     (is (= [3985 7888] (:deny-ports spec)))
     (is (some #{"/home/dev/.ssh"} (:deny-read spec)))))
+
+(deftest a-confined-process-gets-its-own-jolt-and-maven-caches
+  ;; karamazov-1gbh: ~/.jolt and ~/.m2 hold the source, jars and compiled code
+  ;; the harness runs unconfined; a shell that could write them could plant
+  ;; code in the next harness start.
+  (let [prev @@#'confine/confined-base]
+    ;; The default location; the test runner moves it to a temp dir.
+    (confine/set-confined-base! nil)
+    (try
+      (let [a (confine/confined-home "/home/dev" "/work/a")
+            env (confine/confined-env "/home/dev" "/work/a")]
+        (is (= a (confine/confined-home "/home/dev" "/work/a")) "stable for a project")
+        (is (not= a (confine/confined-home "/home/dev" "/work/b")) "one per project")
+        (is (str/starts-with? a "/home/dev/.cache/"))
+        (doseq [k ["JOLT_CACHE_DIR" "JOLT_GITLIBS_DIR" "JOLT_MAVEN_REPOSITORY"
+                   "JOLT_BUILD_CACHE_DIR" "JOLT_RUNTIME_CACHE_DIR"
+                   ;; tools.deps' own gitlibs, which jolt also resolves from
+                   "GITLIBS"]]
+          (is (str/starts-with? (str (get env k)) (str a "/")) k)))
+      (finally (confine/set-confined-base! prev)))))
 
 (deftest the-shell-setting-is-read-strictly
   (is (= :auto (:sandbox (config/shell-settings {}))))
@@ -107,6 +134,29 @@
       ;; `shell-init: error retrieving current directory` twice on its end.
       (is (not (str/includes? (str (:err r)) "getcwd")) (str r))
       (is (= root dir) "the shell starts in the project, not where the harness was started"))))
+
+(deftest a-sandboxed-command-builds-in-its-own-caches-and-not-the-harnesss
+  (when (str/starts-with? (str (System/getProperty "os.name")) "Mac OS X")
+    (let [home (str (fs/create-temp-dir))
+          root (str (fs/create-temp-dir))
+          _ (doseq [d [".jolt/gitlibs" ".m2/repository" ".gitlibs/libs" ".clojure"]]
+              (fs/create-dirs (str home "/" d)))
+          {:keys [argv env dir]} (confine/shell-command
+                                  {:backend :seatbelt :root root :home home
+                                   :command (str "touch \"$JOLT_GITLIBS_DIR/ok\" && echo own-ok; "
+                                                 "touch " home "/.jolt/gitlibs/planted || echo jolt-denied; "
+                                                 "touch " home "/.m2/repository/planted || echo m2-denied; "
+                                                 "touch " home "/.gitlibs/libs/planted || echo gitlibs-denied; "
+                                                 "touch " home "/.clojure/deps.edn || echo user-deps-denied")
+                                   :env {"PATH" "/usr/bin:/bin" "HOME" home}})
+          r (apply proc/run {:env env :dir dir :timeout-ms 30000} argv)]
+      (is (str/includes? (:out r) "own-ok") (str r))
+      (is (str/includes? (:out r) "jolt-denied") (str r))
+      (is (str/includes? (:out r) "m2-denied") (str r))
+      (is (str/includes? (:out r) "gitlibs-denied") (str r))
+      (is (str/includes? (:out r) "user-deps-denied") (str r))
+      (is (not (fs/exists? (str home "/.jolt/gitlibs/planted"))))
+      (fs/delete-tree home))))
 
 (deftest the-workflow-is-protected-in-both-specs
   (is (= ["/work/proj/.samizdat"] (confine/protected "/work/proj")))

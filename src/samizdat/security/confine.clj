@@ -58,16 +58,66 @@
                 ;; denies, so self-hosting reads itself fine.
                 [harness-root]))))
 
+(defn harness-caches
+  "The trees under `home` the HARNESS loads code from: jolt's gitlibs, AOT
+  cache and build caches, the Maven repository its jars come from (selmer,
+  malli, rewrite-clj and the rest), tools.deps' ~/.gitlibs, which jolt also
+  resolves a git dep from, and ~/.clojure, whose deps.edn every jolt start
+  merges in. Readable from a confined
+  process, never writable (karamazov-1gbh): a shell that could edit a
+  dependency's source, swap a jar or plant a compiled fasl there would have
+  its code run by the next harness start, outside every sandbox. Confined
+  processes build in `confined-home` instead."
+  [home]
+  (when home
+    (mapv #(str home "/" %) [".jolt" ".m2" ".gitlibs" ".clojure"])))
+
 (defn build-caches
   "The trees a build writes under `home` — dependency caches and toolchain
-  state. Writable from the shell, because `jolt -M:test`, `cargo build` and
-  `go test` fail without them; not $HOME as a whole."
+  state. Writable from the shell, because `cargo build`, `go test` and `npm`
+  fail without them; not $HOME as a whole, and not `harness-caches`. A JVM
+  build that needs ~/.m2 gets it only from the operator's `:shell
+  :writable`, which hands the shell the harness's jars."
   [home]
   (when home
     (mapv #(str home "/" %)
-          [".jolt" ".cache" ".m2" ".gitlibs" ".cpcache" ".clojure" ".lein"
+          [".cache" ".cpcache" ".lein"
            ".cargo" ".rustup" "go" ".npm" ".yarn" ".pnpm-store" ".gradle"
            ".local/share" "Library/Caches"])))
+
+(defonce ^:private confined-base
+  ;; Where every project's confined caches go, when not under ~/.cache. The
+  ;; test runner points it at a temp dir: each test project is a fresh temp
+  ;; root, and each would otherwise leave its fetched dependencies behind.
+  (atom nil))
+
+(defn set-confined-base!
+  "Put every project's confined caches under `dir` (nil: ~/.cache)."
+  [dir]
+  (reset! confined-base dir))
+
+(defn confined-home
+  "Where the confined processes working on `root` keep jolt's caches and a
+  Maven repository: under ~/.cache, one directory per project, so a fetch or
+  a compile in the shell lands somewhere only confined processes read."
+  [home root]
+  (let [canon (str (.getCanonicalFile (io/file (str root))))
+        tag (-> (.getName (io/file canon)) (str/replace #"[^A-Za-z0-9._-]" "_"))]
+    ;; jolt's `hash` is stable across processes (infer/request-digest), so
+    ;; the next run of the same project finds the same directory.
+    (str (or @confined-base (str home "/.cache/samizdat/confined")) "/" tag "-"
+         (str/replace (str (hash canon)) "-" "n"))))
+
+(defn confined-env
+  "The environment that points jolt's caches at `confined-home`."
+  [home root]
+  (let [d (confined-home home root)]
+    {"JOLT_CACHE_DIR" (str d "/aot-cache")
+     "JOLT_GITLIBS_DIR" (str d "/gitlibs")
+     "JOLT_MAVEN_REPOSITORY" (str d "/m2")
+     "JOLT_BUILD_CACHE_DIR" (str d "/build-cache")
+     "JOLT_RUNTIME_CACHE_DIR" (str d "/runtime-cache")
+     "GITLIBS" (str d "/gitlibs")}))
 
 (defn protected
   "The trees under the project root nothing the agent spawns may write: its
@@ -90,7 +140,9 @@
    ;; /tmp as well as the shell's own scratch: tools write there by name.
    ;; The profile is NOT under either — see `shell-command`.
    :scratch-paths (vec (remove nil? [scratch "/tmp"]))
-   :writable (vec (concat (build-caches home) (:writable settings)))
+   :writable (vec (concat (build-caches home)
+                          (when home [(confined-home home root)])
+                          (:writable settings)))
    :deny-read (secret-regions home harness-root)
    :deny-ports (vec ports)
    :protect (protected root)})
@@ -167,13 +219,17 @@
                               :ports ports
                               :settings settings})
             spec (merge spec (sandbox/deny-read-kinds (:deny-read spec)))
-            profile (str (io/file profile-dir "shell.sb"))]
-        (when (= :seatbelt backend)
-          (let [text (sandbox/seatbelt-shell-profile spec)]
-            (when-not (= text (try (slurp profile) (catch Throwable _ nil)))
-              (spit profile text))))
+            profile (str (io/file profile-dir "shell.sb"))
+            _ (when (= :seatbelt backend)
+                (let [text (sandbox/seatbelt-shell-profile spec)]
+                  (when-not (= text (try (slurp profile) (catch Throwable _ nil)))
+                    (spit profile text))))
+            cenv (confined-env (or home (System/getenv "HOME")) root)]
+        ;; Made here, by the harness: jolt makes what it fetches into, but a
+        ;; tool that writes straight to one would fail on a missing parent.
+        (doseq [d (vals cenv)] (try (fs/create-dirs d) (catch Throwable _ nil)))
         {:argv (sandbox/wrap-shell backend {:profile profile :spec spec} bash)
-         :env (when env (assoc env "TMPDIR" scratch))
+         :env (when env (merge env cenv {"TMPDIR" scratch}))
          :dir root
          :spec spec
          :profile profile}))))

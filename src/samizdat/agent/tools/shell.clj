@@ -41,12 +41,14 @@
     (base/malformed branch m)
     ;; What the shell may read without asking: the project, the reference
     ;; roots the operator declared — read_file's boundary — and the build
-    ;; caches, where a dependency's source is and which the shell can write
-    ;; anyway (karamazov-3vu1.3).
-    (let [r (policy/run-shell (assoc ctx :read-roots
+    ;; caches, where a dependency's source is (karamazov-3vu1.3) — the
+    ;; harness's own among them, readable though not writable (karamazov-1gbh).
+    (let [home (System/getenv "HOME")
+          r (policy/run-shell (assoc ctx :read-roots
                                      (concat [(or (:root ctx) ".")]
                                              (files/ctx-reference-roots ctx)
-                                             (confine/build-caches (System/getenv "HOME")))))]
+                                             (confine/build-caches home)
+                                             (confine/harness-caches home))))]
       (assoc r :branch branch
              ;; A policy refusal is journalled as declined, like a phase
              ;; refusal, so the record can tell it from a command that ran

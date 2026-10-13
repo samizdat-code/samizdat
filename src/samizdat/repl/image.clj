@@ -53,10 +53,13 @@
             [samizdat.agent.gates :as gates]
             [samizdat.bridge :as bridge]
             [samizdat.cancel :as cancel]
+            [samizdat.engine.proc :as proc]
             [samizdat.prompt :as prompt]
             [samizdat.security.confine :as confine]
+            [samizdat.security.listen :as listen]
             [samizdat.security.sandbox :as sandbox]
-            [samizdat.security.secrets :as secrets]))
+            [samizdat.security.secrets :as secrets]
+            [samizdat.util :as util]))
 
 (defn connect-timeout-ms
   "How long to wait for the image's nREPL port to answer. gates.edn
@@ -143,9 +146,32 @@
          (str log)]
         argv))
 
+(defn- tail-of-text [text n]
+  (->> (str text) str/split-lines (take-last n) (str/join "\n")))
+
 (defn- tail-of [f n]
-  (try (->> (slurp f) str/split-lines (take-last n) (str/join "\n"))
+  (try (tail-of-text (slurp f) n)
        (catch Exception _ "")))
+
+(defn- fetch-deps!
+  "Fetch the image's dependencies into the project's confined caches, under
+  the SHELL's confinement (karamazov-1gbh). The image has no network, and
+  builds only from what is already there; the harness does not resolve a
+  deps.edn the agent writes outside a sandbox either. Logs a failure and
+  carries on: the start that follows says what is missing."
+  [root backend env]
+  (let [{:keys [argv env dir]} (confine/shell-command
+                                {:backend backend :root root :env env
+                                 :ports (listen/ports)
+                                 :command (str "jolt -Sdeps " (util/sh-quote nrepl-sdeps) " -P")})
+        r (apply proc/run {:env env :dir dir
+                           :timeout-ms (:fetch-ms (gates/threshold :image-start))}
+                 argv)]
+    (when-not (= 0 (:exit r))
+      (log/warn "fetching the project image's dependencies did not finish cleanly"
+                (if (:timeout r) "(timed out)" (str "(exit " (:exit r) ")"))
+                (tail-of-text (str (:out r) "\n" (:err r))
+                              (:image-log-lines (gates/threshold :image-start)))))))
 
 (defn start!
   "Start a project image at `root` and return it, or nil when it could not be
@@ -161,13 +187,20 @@
         profile-dir (str (fs/create-temp-dir))
         profile (str (io/file profile-dir "image.profile"))
         port (free-port)
+        ;; Its own jolt caches, not the harness's (karamazov-1gbh): the image
+        ;; reads its dependencies from them and writes only its AOT cache.
+        cenv (confine/confined-env (System/getenv "HOME") root)
+        _ (doseq [d (vals cenv)] (try (fs/create-dirs d) (catch Throwable _ nil)))
+        env (merge (secrets/scrub-env (into {} (System/getenv))) cenv)
         ;; The deny list classified for bwrap, which hides a directory and a
         ;; file differently and cannot mount over a path that is not there;
         ;; seatbelt reads the plain list and ignores the classification.
         spec (merge sandbox-spec
-                    {:project-root root :scratch-paths [scratch]
+                    {:project-root root
+                     :scratch-paths [scratch (get cenv "JOLT_CACHE_DIR")]
                      :protect (confine/protected root)}
                     (sandbox/deny-read-kinds (:deny-read sandbox-spec)))]
+    (fetch-deps! root backend env)
     (sandbox/write-profile! backend profile spec)
     (loop [attempt 1 port port]
     (let [argv (watched-argv (spawn-argv backend {:profile profile :spec spec} port)
@@ -181,9 +214,7 @@
           ;; the supervisor it now spawns, and inheriting the harness's
           ;; environment would have handed the model every provider key inside
           ;; a process that can also write files into the project.
-          proc (process/process argv {:dir (str root)
-                                      :env (secrets/scrub-env
-                                            (into {} (System/getenv)))})]
+          proc (process/process argv {:dir (str root) :env env})]
       (if (await-port! port (connect-timeout-ms) proc)
         (do (log/info "project image up on" port "rooted at" root
                       (if (= :none backend) "(unsandboxed)" (str "under " (name backend))))

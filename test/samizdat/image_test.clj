@@ -31,6 +31,7 @@
             [nrepl.transport]
             [samizdat.repl.image :as image]
             [samizdat.repl.route :as route]
+            [samizdat.security.confine :as confine]
             [samizdat.security.sandbox :as sandbox]))
 
 ;; --- pure -------------------------------------------------------------------
@@ -137,6 +138,17 @@
                                                " (catch Throwable _ :DENIED))"))]
                   (is (= ":DENIED" (:value r))))
                 (finally (.close listener))))))
+
+          (testing "it builds from the project's confined caches, not the harness's (karamazov-1gbh)"
+            (let [cenv (confine/confined-env home root)]
+              (doseq [k ["JOLT_GITLIBS_DIR" "JOLT_CACHE_DIR" "JOLT_MAVEN_REPOSITORY" "GITLIBS"]]
+                (is (= (pr-str (get cenv k))
+                       (:value (image/eval-in im (str "(System/getenv \"" k "\")"))))
+                    k)))
+            (let [planted (str home "/.jolt/SAMIZDAT-IMAGE-TEST-PLANT")]
+              (image/eval-in im (str "(try (spit \"" planted "\" \"x\") (catch Throwable _ nil))"))
+              (is (not (.exists (java.io.File. planted))) "the image wrote into ~/.jolt")
+              (.delete (java.io.File. planted))))
 
           (testing "and it cannot read the harness's own source"
             ;; The first move of the observed escape.

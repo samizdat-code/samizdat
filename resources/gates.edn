@@ -360,14 +360,18 @@
         cache and reads on every request."}
 
  :image-start
- {:value {:attempts 2 :image-log-lines 20}
-  :provenance ["karamazov-69p0" "karamazov-tetz"]
+ {:value {:attempts 2 :image-log-lines 20 :fetch-ms 120000}
+  :provenance ["karamazov-69p0" "karamazov-tetz" "karamazov-1gbh"]
   :kind :policy :capability-tunable? false
   :doc "How a project image is started. :attempts — tries, each on a fresh
         port, before the eval fails: the free-port gap is a real race and a
         load spike is not a reason to fail an eval. :image-log-lines — how
         much of the child's own output a failed start logs, so a failure
-        says why rather than only where its profile is."}
+        says why rather than only where its profile is. :fetch-ms — how long
+        the image's dependencies may take to fetch into the project's
+        confined caches before it starts: the image has no network, so it
+        builds only from what is already there. A warm fetch is well under
+        a second; a cold one clones and downloads."}
 
  :image-connect-ms
  {:value 20000 :kind :threshold :capability-tunable? true

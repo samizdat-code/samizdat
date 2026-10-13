@@ -22,6 +22,8 @@
   Also callable from a connected editor as (samizdat.test-runner/run) so the
   suite runs against the live process without paying startup again."
   (:require [clojure.test :as t]
+            [jolt.fs]
+            [samizdat.security.confine]
             [maestro.core-test]
             [mycelium.cell-test]
             [mycelium.coercion-test]
@@ -452,7 +454,15 @@
     samizdat.gui-newrun-test])
 
 (defn run []
-  (apply t/run-tests namespaces))
+  ;; Each test project is a fresh temp root with its own confined caches
+  ;; (karamazov-1gbh); keep them out of ~/.cache and drop them afterwards.
+  (let [base (str (jolt.fs/create-temp-dir))]
+    (samizdat.security.confine/set-confined-base! base)
+    (try
+      (apply t/run-tests namespaces)
+      (finally
+        (samizdat.security.confine/set-confined-base! nil)
+        (try (jolt.fs/delete-tree base) (catch Throwable _ nil))))))
 
 (defn -main [& _]
   (let [{:keys [fail error] :as summary} (run)]
