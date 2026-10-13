@@ -25,11 +25,13 @@
         ;; interrupt flag checked between them), so a cancelled provider call
         ;; returns within a slice rather than after the socket timeout
         ;; (RFC-013, karamazov-3cll.10). v0.1.0 needs jolt 0.8.16, the floor
-        ;; above already.
+        ;; above already. v0.1.3: `:as :stream` returns at the headers and
+        ;; reads the body as it arrives (karamazov-vosh), so a provider can
+        ;; bound the gap between chunks rather than the whole response.
         jolt-lang/http-client
         {:git/url "https://github.com/jolt-lang/http-client"
-         :git/tag "v0.1.0"
-         :git/sha "d99af98cc97dcb2e4afc3eee142166585a26b859"}
+         :git/tag "v0.1.3"
+         :git/sha "7ea9bbd3b176b4567b4c94d7177d67c5f06109f7"}
 
         ;; the HTTP server: HTTP/1.1 over BSD sockets through jolt.ffi, with a
         ;; worker pool (a long request no longer holds /health) and channel
