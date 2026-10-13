@@ -412,9 +412,15 @@
   child processes. The network is not confined on Linux (see the bwrap
   section): the harness ports stay reachable there, and RFC-003 says so."
   [{:keys [writable] :as spec}]
+  ;; Only the build caches the host has. bwrap refuses to bind a missing
+  ;; source and the command fails with it, so one absent ~/.cpcache stopped
+  ;; every shell command; a cache that does not exist stays read-only, as an
+  ;; uninstalled tool's would be.
   (let [argv (bwrap-argv (-> spec
                              (dissoc :seccomp-fd)
-                             (update :scratch-paths #(concat % writable))))]
+                             (update :scratch-paths
+                                     #(concat % (filter (fn [p] (.exists (io/file (str p))))
+                                                        writable)))))]
     ;; bwrap-argv ends in --chdir <root> --; the shell's command cds itself.
     (into (subvec argv 0 (- (count argv) 3)) ["--"])))
 

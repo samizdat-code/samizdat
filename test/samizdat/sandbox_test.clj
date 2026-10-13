@@ -331,13 +331,18 @@
 (deftest bwrap-confines-the-shell-without-the-image-filter
   ;; The shell has to make child processes — that is what a shell is — so it
   ;; gets the image's mounts without the seccomp filter that refuses them.
-  (let [argv (sandbox/bwrap-shell-argv {:project-root "/work/proj"
+  (let [cache (str (fs/create-temp-dir))
+        argv (sandbox/bwrap-shell-argv {:project-root "/work/proj"
                                         :scratch-paths ["/tmp/s"]
-                                        :writable ["/home/dev/.jolt"]
+                                        :writable [cache "/home/dev/.cpcache-absent"]
                                         :deny-dirs ["/home/dev/.ssh"]
                                         :deny-files ["/home/dev/.netrc"]})]
     (is (= ["bwrap" "--ro-bind" "/" "/"] (subvec argv 0 4)))
-    (is (run-of argv ["--bind" "/home/dev/.jolt" "/home/dev/.jolt"]))
+    (is (run-of argv ["--bind" cache cache]))
+    (testing "a build cache the host does not have is not bound: bwrap refuses
+              a missing source and the whole command fails (linux CI, no
+              ~/.cpcache)"
+      (is (not (some #{"/home/dev/.cpcache-absent"} argv))))
     (is (run-of argv ["--tmpfs" "/home/dev/.ssh"]))
     (is (not (some #{"--seccomp"} argv)))
     (is (= "--" (peek argv)))))
