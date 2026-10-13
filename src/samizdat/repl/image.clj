@@ -117,14 +117,31 @@
         (< (System/currentTimeMillis) end)
         (do (Thread/sleep 100) (recur))))))
 
-(defn- logged-argv
+(defn- watched-argv
   "`argv` with the child's stdout and stderr sent to `log`. They were pipes
   nobody read (jolt.process's default), so a child that printed enough while
   starting — a cold cache's warnings — could fill one and stall before it
   bound its port (karamazov-69p0). The redirect is made by a shell OUTSIDE the
-  sandbox wrapper, so the confinement profile is not touched."
+  sandbox wrapper, so the confinement profile is not touched.
+
+  The same shell ties the image's life to the harness's (karamazov-jikg). A
+  harness killed without running `stop!` — SIGKILL, the arena's clock kill —
+  left its images up for hours, reparented to init. The harness holds the
+  shell's stdin pipe and never writes to it; the kernel closes it however the
+  harness dies, and on the watcher's EOF the image and its children are
+  killed. Process ids, not a process group: dash turns `set -m` off without a
+  tty. bwrap's --die-with-parent covered only Linux, and only while bwrap was
+  the direct child. An image that exits on its own still ends the shell with
+  its status, which is how `await-port!` sees a child that died."
   [argv log]
-  (into ["sh" "-c" "exec \"$@\" >>\"$0\" 2>&1" (str log)] argv))
+  (into ["sh" "-c"
+         (str "exec 3<&0; "
+              "\"$@\" >>\"$0\" 2>&1 </dev/null 3<&- & c=$!; "
+              "{ cat >/dev/null; pkill -TERM -P $c; kill -TERM $c; sleep 2; kill -KILL $c; } "
+              "<&3 >/dev/null 2>&1 & w=$!; "
+              "exec 3<&-; wait $c; s=$?; pkill -TERM -P $w 2>/dev/null; kill -TERM $w 2>/dev/null; exit $s")
+         (str log)]
+        argv))
 
 (defn- tail-of [f n]
   (try (->> (slurp f) str/split-lines (take-last n) (str/join "\n"))
@@ -153,7 +170,7 @@
                     (sandbox/deny-read-kinds (:deny-read sandbox-spec)))]
     (sandbox/write-profile! backend profile spec)
     (loop [attempt 1 port port]
-    (let [argv (logged-argv (spawn-argv backend {:profile profile :spec spec} port)
+    (let [argv (watched-argv (spawn-argv backend {:profile profile :spec spec} port)
                             (io/file scratch "image.log"))
           ;; THE CHILD SEES ONLY A SCRUBBED ENVIRONMENT, the same one the shell
           ;; tool's subprocess gets. boundary-test's security map records the

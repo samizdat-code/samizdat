@@ -27,6 +27,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
             [jolt.fs :as fs]
+            [jolt.process :as process]
             [nrepl.transport]
             [samizdat.repl.image :as image]
             [samizdat.repl.route :as route]
@@ -164,6 +165,46 @@
         (is (not (.exists (java.io.File. ^String (:profile im))))))
       (testing "stopping twice is not an error"
         (is (nil? (image/stop! im)))))))
+
+(defn- pid-alive? [pid]
+  (zero? (:exit (process/sh ["kill" "-0" pid]))))
+
+(defn- await-file [path ms]
+  (let [end (+ (System/currentTimeMillis) ms)]
+    (loop []
+      (let [s (try (str/trim (slurp path)) (catch Exception _ ""))]
+        (cond (seq s) s
+              (< (System/currentTimeMillis) end) (do (Thread/sleep 50) (recur)))))))
+
+(deftest an-image-goes-when-the-harness-that-started-it-is-killed
+  ;; karamazov-jikg: a harness killed without running stop! (SIGKILL, the
+  ;; arena's clock kill) left its images up for hours. The harness holds the
+  ;; image's stdin; dying closes it, whatever the signal. Here a separate
+  ;; process holds that pipe and is SIGKILLed, so nothing in this test runs a
+  ;; teardown for it.
+  (let [dir (str (fs/create-temp-dir))
+        holder (str dir "/holder.pid")
+        child (str dir "/child.pid")
+        argv (#'image/watched-argv ["sh" "-c" (str "echo $$ >" child "; exec sleep 600")]
+                                   (str dir "/image.log"))
+        proc (process/process (into ["sh" "-c" (str "sh -c 'echo $$ >" holder "; exec sleep 600' | \"$@\"")
+                                     "sh"]
+                                    argv))]
+    (try
+      (let [hp (await-file holder 5000)
+            cp (await-file child 5000)]
+        (is (and hp cp) "both processes started")
+        (when (and hp cp)
+          (is (pid-alive? cp))
+          (process/sh ["kill" "-9" hp])
+          (let [end (+ (System/currentTimeMillis) 5000)]
+            (while (and (pid-alive? cp) (< (System/currentTimeMillis) end))
+              (Thread/sleep 50)))
+          (is (not (pid-alive? cp)) "the image outlived the process holding its stdin")
+          (when (pid-alive? cp) (process/sh ["kill" "-9" cp]))))
+      (finally
+        (try (process/destroy-tree proc) (catch Exception _ nil))
+        (fs/delete-tree dir)))))
 
 (deftest stopping-nothing-is-not-an-error
   ;; start! returns nil on failure and callers tear down in a finally, so this
