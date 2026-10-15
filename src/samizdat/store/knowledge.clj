@@ -1146,14 +1146,17 @@
         (<= (count candidate) cap) (recur (conj kept l) more)
         :else kept))))
 
-(defn breadcrumb-index
-  "A bounded index of kept memories as a string, or nil when there are
-  none. One line per memory — id, kind, ~70-char preview — so the index
-  is cheap enough to sit in every turn's context while full text is
-  fetched on demand by id (stub-and-expand). A non-blank query ranks the
-  rows via recall; a blank query falls back to the most recent. The
-  whole string is hard-capped so it never becomes a content dump."
-  ([conn query] (breadcrumb-index conn query {}))
+(defn breadcrumb
+  "The breadcrumb index as {:text :ids}, or nil when there are no memories:
+  `text` the bounded index a branch reads, `ids` the rows whose lines made
+  it in. One line per memory — id, kind, ~70-char preview — so the index is
+  cheap enough to sit in every turn's context while full text is fetched on
+  demand by id (stub-and-expand). A non-blank query ranks the rows via
+  recall; a blank query falls back to the standing set. The whole string is
+  hard-capped so it never becomes a content dump; the ids are the rows that
+  survived the cap, which is what the branch was actually shown
+  (karamazov-4dn8.1)."
+  ([conn query] (breadcrumb conn query {}))
   ([conn query {:keys [rows cap] :or {rows 8 cap 700}}]
    (let [picked (if (str/blank? query)
                   ;; `standing`, not `recent`. With no claim to rank against,
@@ -1170,4 +1173,12 @@
                   ;; recalls it and takes its label.
                   (remove :flow (recall conn query rows)))]
      (when (seq picked)
-       (str/join "\n" (cons preamble (fit-lines preamble cap (map index-line picked))))))))
+       (let [lines (fit-lines preamble cap (map index-line picked))]
+         {:text (str/join "\n" (cons preamble lines))
+          :ids (mapv :id (take (count lines) picked))})))))
+
+(defn breadcrumb-index
+  "The breadcrumb index as a string, or nil when there are none. See
+  `breadcrumb`, which also says which rows made it in."
+  ([conn query] (:text (breadcrumb conn query)))
+  ([conn query opts] (:text (breadcrumb conn query opts))))

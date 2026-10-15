@@ -1347,7 +1347,7 @@
       (runs/finish-run! c r1 :completed "answer")
       (Thread/sleep 5)
       (let [r2 (runs/start-run! c {:problem "p"})
-            block (#'branch-loop/learned-block c r2)]
+            block (:text (#'branch-loop/learned-block c r2))]
         (is (string? block) "the block appears although nothing was learned")
         (is (re-find #"disk I/O" block) "and names the failure in its own words")
         (is (re-find #"project" block) "and which half"))

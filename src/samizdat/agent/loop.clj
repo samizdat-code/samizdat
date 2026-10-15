@@ -296,7 +296,8 @@
                                      files)})))))
 
 (defn- learned-block
-  "What the previous run learned about this project, rendered — or nil.
+  "What the previous run learned about this project, as {:text :ids} — the
+  block rendered and the rows in it — or nil.
 
   nil on a first run, an empty store, or a store that learned nothing since,
   so the block simply does not appear rather than announcing its own absence.
@@ -314,11 +315,12 @@
     (let [rows (seq (knowledge/learned-since conn (:started_at prev)))
           errors (seq (:errors (journal/last-note conn (:id prev) :distilled)))]
       (when (or rows errors)
-        (prompt/render "learned-since"
-                       {:run (str (:id prev))
-                        :memories (when rows
-                                    (str/join "\n" (map #(str "- " (:content %)) rows)))
-                        :errors (vec errors)})))))
+        {:text (prompt/render "learned-since"
+                              {:run (str (:id prev))
+                               :memories (when rows
+                                           (str/join "\n" (map #(str "- " (:content %)) rows)))
+                               :errors (vec errors)})
+         :ids (mapv :id rows)}))))
 
 (defn ledger-block
   "The run's ledger as a branch reads it: a claim made by a branch that had
@@ -375,7 +377,22 @@
       (journal/note! conn run-id :shared-artifact-hit
                      {:branch-id (:id branch)
                       :data {:claim (:claim a) :source-branch (:branch_id a)}}))
-    (let [;; NAMED, so the turn can say what each part cost (karamazov-2rqb.3).
+    (let [;; WHICH MEMORIES THIS BRANCH IS SHOWN, journaled the first time
+          ;; each enters its context (karamazov-4dn8.1), by the same dedup as
+          ;; the shared artifacts above. Without it only an explicit recall
+          ;; left a record, and these two blocks are where nearly every
+          ;; memory reaches a branch.
+          crumb (knowledge/breadcrumb conn last-claim)
+          learned (when-not (:learned-shown? branch) (learned-block conn run-id))
+          shown (or (:memories-shown branch) #{})
+          new-crumb (vec (remove shown (:ids crumb)))
+          new-learned (vec (remove (into shown new-crumb) (:ids learned)))
+          _ (doseq [[via ids] [["breadcrumb" new-crumb] ["learned" new-learned]]
+                    :when (seq ids)]
+              (journal/note! conn run-id :exposed
+                             {:branch-id (:id branch) :turn (:current-turn branch)
+                              :data {:via via :ids ids}}))
+          ;; NAMED, so the turn can say what each part cost (karamazov-2rqb.3).
           ;; These pairs are what `keep identity` used to be handed as bare
           ;; strings; the order is the order the branch reads them in, and a
           ;; renderer that answered nil drops out here exactly as before.
@@ -408,7 +425,7 @@
                    ;; previews only, relevance-ranked by the branch's
                    ;; last-claim, recent when blank. nil on an empty store, so
                    ;; the remove drops it.
-                   [:memories (knowledge/breadcrumb-index conn last-claim)]
+                   [:memories (:text crumb)]
                    ;; WHAT THE LAST RUN LEARNED, once (karamazov-ei6t.9).
                    ;; The breadcrumb index above answers a question the model
                    ;; thought to ask, ranked against its own last claim; this
@@ -422,8 +439,7 @@
                    ;; standing tax by turn 40. Ported from lemmalog's context
                    ;; assembler, which opens with a "new in memory since last
                    ;; turn" section for the same reason.
-                   [:learned (when-not (:learned-shown? branch)
-                               (learned-block conn run-id))]
+                   [:learned (:text learned)]
                    ;; Unread mail from other branches on this run, a bounded
                    ;; preview; nil when the inbox is empty. Surfacing does not
                    ;; consume — the message tool's inbox action marks read.
@@ -448,6 +464,7 @@
        ;; is where the run-wide average comes from (karamazov-o4wm.6).
        :branch (-> branch
                    (assoc :learned-shown? true)
+                   (update :memories-shown (fnil into #{}) (concat new-crumb new-learned))
                    (update :shared-served (fnil into #{}) (map :id fresh))
                    (assoc :context-sizes
                           (mapv (fn [[k v]] [k (count v)]) parts)))})))
