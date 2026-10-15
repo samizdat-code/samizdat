@@ -61,6 +61,18 @@
          " -> [" category "] "
          (clip (str/replace (str result) #"\s+" " ") result-chars))))
 
+(defn source-lines
+  "The turns memory `row` was written from, one turn-line each: its source
+  branch's turns in its run between source_turn_from and source_turn_to.
+  Empty when the row records no source (karamazov-4dn8.3)."
+  [conn {:keys [run_id source_branch source_turn_from source_turn_to]}]
+  (if (and run_id source_branch source_turn_from source_turn_to)
+    (into []
+          (comp (filter #(<= source_turn_from (:turn %) source_turn_to))
+                (map turn-line))
+          (journal/branch-turns conn run_id source_branch))
+    []))
+
 (defn build-prompt
   "The user message handed to the reflector.
 
@@ -119,7 +131,7 @@
   corroborated that description rather than correcting it, and the same run
   flagged the memory it had just agreed with as WRONG. A standing fact
   corroborates; a description restates."
-  [conn {:keys [run-id shown]} sections]
+  [conn {:keys [run-id shown source]} sections]
   (let [written
         (vec (for [[section lines] sections
                    :let [kind (section->kind section)]
@@ -143,7 +155,7 @@
                    {:id (or restated (:id existing)) :kind kind :repeat? true})
                  {:id (knowledge/remember! conn {:content line :kind kind
                                                  :run-id run-id :pattern-key key
-                                                 :confidence 0.7})
+                                                 :confidence 0.7 :source source})
                   :kind kind :repeat? false})))]
     (doseq [{:keys [id]} (corrections sections)]
       ;; The implementor is the only role positioned to notice that a memory it
@@ -185,7 +197,11 @@
                                         :model (:model llm-config)
                                         :usage (:usage answer)})
           sections (parse-sections (:content answer))
-          written (record! conn {:run-id run-id :shown (set shown)} sections)]
+          ;; Every line came from this branch's turns (karamazov-4dn8.3).
+          source (let [ts (keep :turn turns)]
+                   (when (seq ts)
+                     {:branch (:id branch) :from (reduce min ts) :to (reduce max ts)}))
+          written (record! conn {:run-id run-id :shown (set shown) :source source} sections)]
       (journal/note! conn run-id :task-reflection
                      {:branch-id (:id branch)
                       :data {:sections (keys sections) :written (count written)}})

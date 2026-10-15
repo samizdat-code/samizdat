@@ -104,7 +104,7 @@
   "Insert a fact and return its id. Kind defaults to 'note' — the column
   exists so later kinds (decisions, gotchas, references) need no migration."
   [conn {:keys [content kind salience confidence run-id pinned pattern-key
-                cause supersedes lineage-id flow]}]
+                cause supersedes lineage-id flow source]}]
   (when (str/blank? (str content))
     (throw (ex-info "a memory needs content" {})))
   (let [kind (or kind "note")
@@ -140,12 +140,16 @@
                    ["INSERT INTO knowledge (id, content, kind, created_at,
                                              salience, confidence, run_id, pinned,
                                              last_run_id, pattern_key,
-                                             lineage_id, current, cause, supersedes, flow)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)"
+                                             lineage_id, current, cause, supersedes, flow,
+                                             source_branch, source_turn_from, source_turn_to)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)"
                                 id (str content) kind now
                                 salience confidence run-id (if pinned 1 0)
                                 run-id pattern-key
-                                (or lineage-id id) cause supersedes flow]))
+                                (or lineage-id id) cause supersedes flow
+                                ;; Where it came from (v40): the branch and
+                                ;; the turns it was written from.
+                                (some-> (:branch source) str) (:from source) (:to source)]))
                 1
                 (catch Exception e
                   ;; Only a UNIQUE collision is an id problem; anything else
@@ -393,7 +397,7 @@
   version, so `history` still answers how often this project has been
   described, and a reader citing an old id still finds the row it cited."
   ([conn id content] (restate! conn id content {}))
-  ([conn id content {:keys [reason cause]}]
+  ([conn id content {:keys [reason cause source]}]
    (let [row (get-by-id conn id)]
      (when (and row (not= (str content) (str (:content row))))
        (let [lineage (or (:lineage_id row) id)
@@ -406,7 +410,13 @@
                                      :pattern-key (:pattern_key row)
                                      :lineage-id lineage
                                      :supersedes id
-                                     :cause cause})]
+                                     :cause cause
+                                     ;; A new wording comes from the same
+                                     ;; place unless the caller says where.
+                                     :source (or source
+                                                 {:branch (:source_branch row)
+                                                  :from (:source_turn_from row)
+                                                  :to (:source_turn_to row)})})]
          (db/with-writer
            ;; THE RECORD MOVES WITH THE LINEAGE. Rewriting in place kept the
            ;; use count and corroborations for free; a new row starts at zero,
@@ -835,7 +845,7 @@
   fact."
   [conn {:keys [run-id]}]
   (let [rows (db/fetch conn
-                       ["SELECT tool_name, args, result, category FROM turns
+                       ["SELECT branch_id, turn, tool_name, args, result, category FROM turns
                           WHERE run_id = ? AND tool_name = ? ORDER BY turn"
                         run-id "shell"])
         command-of (fn [r] (try (some-> (json/read-str (str (:args r)) :key-fn keyword)
@@ -847,20 +857,23 @@
                              (cond
                                (= "success" (:category r))
                                (let [cmd (or (not-empty (normalise-command cmd)) cmd)]
-                                 {:key (str "cmd-works:" cmd) :content (fact :cmd-works cmd)})
+                                 {:key (str "cmd-works:" cmd) :content (fact :cmd-works cmd)
+                                  :source {:branch (:branch_id r) :from (:turn r) :to (:turn r)}})
 
                                (re-find (re-pattern (lexicon/wordlist :shell-refusal))
                                         (str (:result r)))
-                               {:key (str "cmd-refused:" cmd) :content (fact :cmd-refused cmd)}))))
-                   distinct)]
+                               {:key (str "cmd-refused:" cmd) :content (fact :cmd-refused cmd)
+                                :source {:branch (:branch_id r) :from (:turn r) :to (:turn r)}}))))
+                   ;; One fact per key, sourced to the first turn that showed it.
+                   (reduce (fn [acc f] (if (some #(= (:key f) (:key %)) acc) acc (conj acc f))) []))]
     (vec
-     (for [{:keys [key content]} facts
+     (for [{:keys [key content source]} facts
            :let [existing (by-pattern conn key)]]
        (if existing
          (do (corroborate! conn (:id existing) run-id)
              {:id (:id existing) :fact key :repeat? true})
          {:id (remember! conn {:content content :kind "semantic" :run-id run-id
-                               :pattern-key key :confidence 0.8})
+                               :pattern-key key :confidence 0.8 :source source})
           :fact key :repeat? false})))))
 
 (defn record-workflow-outcome!

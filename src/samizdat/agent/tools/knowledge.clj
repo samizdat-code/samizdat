@@ -106,7 +106,9 @@
                                    why))
                         ;; What this branch had read goes with it, into later
                         ;; runs too.
-                        :flow (flow/carried ctx)})]
+                        :flow (flow/carried ctx)
+                        ;; And where it was written from (karamazov-4dn8.3).
+                        :source {:branch (:id branch) :from (:turn ctx) :to (:turn ctx)}})]
           (base/ok branch (msg {:remembered true :id id :kind kind
                                 :content content}))))))))
 
