@@ -20,6 +20,7 @@
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [samizdat.agent.reflect :as reflect]
+            [samizdat.claims :as claims]
             [samizdat.lexicon :as lexicon]
             [samizdat.llm.client :as llm]
             [samizdat.prompt :as prompt]
@@ -57,16 +58,56 @@
           (str/blank? body) nil
           :else {:verdict verdict :text body})))))
 
+(defn- tokens
+  "The distinctive words of `text`: identifiers, paths, commands and numbers
+  of at least `min-token` characters, lower-cased."
+  [text min-token]
+  (into #{}
+        (comp (map str/lower-case)
+              (map #(str/replace % #"[.,;:)]+$" ""))
+              (filter #(>= (count %) min-token)))
+        (re-seq #"[A-Za-z0-9_./:-]+" (str text))))
+
+(defn grounded
+  "Whether `revised` (a rewording of `old`) is supported by its `source`
+  turns rather than lifted from the new branch's `outcome` turns
+  (karamazov-4dn8.5). {:ok? true}, or {:ok? false :why :contradicted|:leaked
+  :tokens} — :contradicted when the source record contradicts it
+  (samizdat.claims), :leaked when more than `max-leaked` of the words it
+  adds appear in the outcome and nowhere in the source. ReHarness measures
+  exactly this leakage (0.8-2.1%); a revision that copies the later session's
+  answer is the later session's memory, not a corrected old one.
+
+  Only catches what it encodes. A rewording that adds no new words passes,
+  and the lineage keeps the old wording either way."
+  [old revised source outcome {:keys [min-token max-leaked]}]
+  (let [turn-text (fn [ts] (str/join " " (map #(str (:args %) " " (:result %)) ts)))
+        hits (claims/contradicted-by-record revised source (distinct (keep :tool_name source)))
+        added (remove (tokens old min-token) (tokens revised min-token))
+        in-source (tokens (turn-text source) min-token)
+        in-outcome (tokens (turn-text outcome) min-token)
+        leaked (vec (sort (filter #(and (in-outcome %) (not (in-source %))) added)))]
+    (cond
+      (seq hits) {:ok? false :why :contradicted :tokens (mapv :tool hits)}
+      (> (count leaked) max-leaked) {:ok? false :why :leaked :tokens leaked}
+      :else {:ok? true})))
+
 (defn- clip [s n] (if (> (count s) n) (str (subs s 0 n) "…") s))
 
-(defn- outcome-lines
+(defn- outcome-turns
   "What this branch did after it was first shown the memory: its turns from
-  that turn on, at most `n`, as the reflector sees turns."
+  that turn on, at most `n`."
   [conn run-id branch-id from n]
   (->> (journal/branch-turns conn run-id branch-id)
        (filter #(>= (or (:turn %) 0) (or from 0)))
        (take-last n)
-       (mapv reflect/turn-line)))
+       vec))
+
+(defn- source-turns
+  "The turns memory `row` was written from."
+  [conn {:keys [run_id source_branch source_turn_from source_turn_to]}]
+  (filterv #(<= source_turn_from (:turn %) source_turn_to)
+           (journal/branch-turns conn run_id source_branch)))
 
 (defn- ask
   [{:keys [conn run-id llm-adapter llm-config]} branch {:keys [row exposed]} policy]
@@ -79,9 +120,10 @@
                                                     :source (reflect/source-lines conn row)
                                                     :status (some-> (:status branch) name)
                                                     :answer (some-> (:final-answer branch) str (clip (:answer-chars policy)))
-                                                    :outcome (outcome-lines conn run-id (:id branch)
-                                                                            (:turn exposed)
-                                                                            (:feedback-turns policy))})}]
+                                                    :outcome (mapv reflect/turn-line
+                                                                   (outcome-turns conn run-id (:id branch)
+                                                                                  (:turn exposed)
+                                                                                  (:feedback-turns policy)))})}]
                          {:temperature 0.0})]
     (journal/record-side-call! conn run-id {:branch-id (:id branch) :kind :revision
                                             :model (:model llm-config) :usage (:usage answer)})
@@ -107,12 +149,24 @@
   [{:keys [conn run-id] :as ctx} branch policy]
   (try
     (reduce
-     (fn [acc {:keys [row] :as c}]
+     (fn [acc {:keys [row exposed] :as c}]
        (let [answer (ask ctx branch c policy)
              parsed (parse-verdict (:content answer))
-             new-id (apply! conn run-id branch row parsed)
-             result {:id (:id row) :verdict (some-> (:verdict parsed) name)
-                     :new-id (when (= :revise (:verdict parsed)) new-id)}]
+             ;; A rewording has to come from the source, not the outcome
+             ;; (karamazov-4dn8.5); one that does not is refused and the
+             ;; memory stays as it was.
+             check (when (and (= :revise (:verdict parsed)) (:grounding policy))
+                     (grounded (:content row) (:text parsed)
+                               (source-turns conn row)
+                               (outcome-turns conn run-id (:id branch) (:turn exposed)
+                                              (:feedback-turns policy))
+                               (:grounding policy)))
+             refused? (and check (not (:ok? check)))
+             new-id (when-not refused? (apply! conn run-id branch row parsed))
+             result (cond-> {:id (:id row)
+                             :verdict (if refused? "refused" (some-> (:verdict parsed) name))
+                             :new-id (when (and (not refused?) (= :revise (:verdict parsed))) new-id)}
+                      refused? (assoc :why (name (:why check)) :tokens (:tokens check)))]
          (journal/note! conn run-id :memory-revised
                         {:branch-id (:id branch)
                          :data (assoc result :tokens (get-in answer [:usage :total-tokens]))})

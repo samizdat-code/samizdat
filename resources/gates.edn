@@ -1996,9 +1996,10 @@
           :outcomes ["done"]
           :max-per-branch 3
           :feedback-turns 8
-          :answer-chars 400}
+          :answer-chars 400
+          :grounding {:min-token 4 :max-leaked 0}}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-4dn8.4" "karamazov-4dn8.7" "arXiv 2610.12668"]
+  :provenance ["karamazov-4dn8.4" "karamazov-4dn8.5" "karamazov-4dn8.7" "arXiv 2610.12668"]
   :doc "BACKWARD REVISION of the memories a branch was shown, after it ends:
         each is put back beside the turns it was written from, with this
         branch's outcome as feedback only, and kept, rewritten (through
@@ -2016,7 +2017,13 @@
                          branch first saw them.
         :feedback-turns  how many of the branch's turns after it first saw a
                          memory the reviser is shown as the outcome.
-        :answer-chars    how much of the branch's final answer goes with it."}
+        :answer-chars    how much of the branch's final answer goes with it.
+        :grounding       the check a rewording must pass before it lands
+                         (karamazov-4dn8.5): not contradicted by its own
+                         source turns, and at most :max-leaked of the words
+                         it adds (of :min-token characters or more) found in
+                         the outcome but nowhere in the source. A refused
+                         revision is journaled with why and changes nothing."}
 
  :memory
  {:value

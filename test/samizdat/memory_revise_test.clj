@@ -108,3 +108,32 @@
     (run {:enabled? true :outcomes ["done"] :max-per-branch 3 :feedback-turns 4 :answer-chars 100} :done)
     (is (= 1 @calls))
     (is (= 1 (:current (knowledge/get-by-id c mem))))))
+
+;; --- grounding (karamazov-4dn8.5) --------------------------------------------
+
+(def ^:private grounding {:min-token 4 :max-leaked 0})
+
+(deftest a-revision-must-come-from-the-source-not-the-outcome
+  (let [source [{:turn 3 :tool_name "shell" :args "{\"command\":\"jolt bin\"}"
+                 :result "wrote ./app" :category "success"}]
+        outcome [{:turn 5 :tool_name "shell" :args "{\"command\":\"jolt uberjar\"}"
+                  :result "unknown task uberjar; try ./scripts/package.sh" :category "failure"}]
+        check #(revise/grounded "build the binary with jolt bin" % source outcome grounding)]
+    (is (:ok? (check "build the binary with jolt bin, which writes ./app"))
+        "every new word is in the source")
+    (let [r (check "build the binary with ./scripts/package.sh")]
+      (is (not (:ok? r)) "the outcome's own advice is leakage, not grounding")
+      (is (= :leaked (:why r)))
+      (is (some #{"./scripts/package.sh"} (:tokens r))))
+    (let [r (check "shell does not work in this project")]
+      (is (not (:ok? r)))
+      (is (= :contradicted (:why r)) "its own source shows shell working"))))
+
+(deftest a-refused-revision-leaves-the-memory-as-it-was
+  (let [{:keys [c r2 mem]} (fixture)]
+    (with-redefs [samizdat.llm.client/chat (fn [& _] {:content "REVISE: the binary build gave up"})]
+      (revise/revise! {:conn c :run-id r2} {:id "B1" :status :done}
+                      (assoc policy :grounding grounding)))
+    (is (= 1 (:current (knowledge/get-by-id c mem))))
+    (is (= "refused" (:verdict (first (journal/notes c r2 :memory-revised)))))
+    (is (= "leaked" (:why (first (journal/notes c r2 :memory-revised)))))))
