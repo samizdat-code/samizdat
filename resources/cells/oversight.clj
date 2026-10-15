@@ -8,6 +8,7 @@
             [clojure.tools.logging :as log]
             [mycelium.cell :as cell]
             [samizdat.agent.loop :as turn]
+            [samizdat.agent.roles :as roles]
             [samizdat.agent.state :as state]
             [samizdat.agent.telemetry :as telemetry]
             [samizdat.agent.gates :as gates]
@@ -113,6 +114,31 @@
                sent-back-green?
                (seq offers))))
 
+(defn idle-by-branch
+  "Turns since its own last write, for each branch whose role can write.
+
+  PURE over the run's turn rows. The count is PER BRANCH (karamazov-rz7t.1):
+  over the whole run, one branch writing reset the count for another that
+  was stalled, and the supervisor's own turns — it never writes — raised the
+  number that woke it. A branch whose role cannot write (the supervisor, a
+  reviewer) is not idle for not writing, so `writer?` leaves it out."
+  [turns writes writer?]
+  (reduce (fn [acc {:keys [branch_id tool_name]}]
+            (let [b (str branch_id)]
+              (if-not (writer? b)
+                acc
+                (assoc acc b (if (contains? writes (str tool_name)) 0 (inc (get acc b 0)))))))
+          {} turns))
+
+(defn- idle-news
+  "One branch's idle turns that are NEW since the last look: a stall the last
+  pass already saw wakes the next only after another floor's worth; one it
+  did not see, or a new one after a write reset the count, counts whole."
+  [idle p-idle idle-floor]
+  (if (and p-idle (>= p-idle idle-floor) (>= idle p-idle))
+    (- idle p-idle)
+    idle))
+
 (defn since-last-look
   "The signals worth-a-look? judges, reduced to what is NEW since the last
   pass that spent a model call (karamazov-na2k.16).
@@ -126,24 +152,27 @@
   last look that cost something.
 
   - unmet: the firings since, not the total.
-  - idle: a stall the last pass already saw wakes the next only after another
-    floor's worth of idle turns; one it did not see, or a new one after a
-    write reset the count, counts whole.
+  - idle: judged per branch (`:idle-by-branch`, karamazov-rz7t.1) and the
+    largest news wins, so a second branch stalling wakes the supervisor while
+    a longer stall it already read does not. Without a per-branch reading,
+    the run-level `:idle` is judged the same way.
   - errors and refusals: the entries past the ones already read. Both lists
     come from the journal in order, so the count is a position.
   - the round's flags (at the cap, nothing shipped, green work sent back):
     once per round, the round being how many :route notes there are.
   - offers are already once per run."
-  [{:keys [unmet idle errors refused round at-cap? nothing-shipped?
+  [{:keys [unmet idle idle-by-branch errors refused round at-cap? nothing-shipped?
            sent-back-green? offers]}
    prev {:keys [idle-floor]}]
-  (let [idle (or idle 0)
-        p-idle (or (:idle prev) 0)
-        new-round? (or (nil? prev) (not= round (:round prev)))]
+  (let [new-round? (or (nil? prev) (not= round (:round prev)))
+        ;; A note round-trips through JSON, so the branch ids come back as
+        ;; keywords; compare them by name.
+        p-by (into {} (map (fn [[k v]] [(name k) v])) (:idle-by-branch prev))]
     {:unmet-gates (- (or unmet 0) (if prev (or (:unmet prev) 0) 0))
-     :idle-turns (if (and prev (>= p-idle idle-floor) (>= idle p-idle))
-                   (- idle p-idle)
-                   idle)
+     :idle-turns (if (seq idle-by-branch)
+                   (reduce max 0 (map (fn [[b n]] (idle-news n (get p-by (name b)) idle-floor))
+                                      idle-by-branch))
+                   (idle-news (or idle 0) (when prev (or (:idle prev) 0)) idle-floor))
      :errors (seq (drop (if prev (or (:errors prev) 0) 0) errors))
      :refused (seq (drop (if prev (or (:refused prev) 0) 0) refused))
      :at-cap? (and at-cap? new-round?)
@@ -231,7 +260,8 @@
    :output [:per-transition
             {:reason [:map [:oversight/turns :any] [:oversight/firings :any]
                       [:oversight/findings :any] [:oversight/unmet :any]
-                      [:oversight/idle :any] [:oversight/round :any]
+                      [:oversight/idle :any] [:oversight/idle-by-branch :any]
+                      [:oversight/round :any]
                       [:oversight/crashes :any] [:oversight/results :any]
                       [:oversight/self-graded :any]
                       [:oversight/refused :any]
@@ -248,8 +278,15 @@
              ;; most reliable distress signal — every stalled run in this
              ;; project's history shows it.
              writes (gates/tool-vocab :file-write)
-             since (count (take-while #(not (contains? writes (str (:tool_name %))))
-                                      (reverse turns)))
+             ;; Idle PER BRANCH, and only for branches whose role can write
+             ;; (karamazov-rz7t.1). A branch with no row, or a role the table
+             ;; does not name, is unrestricted and so counts.
+             role-of (into {} (map (juxt :id :role)) (runs/branches conn run-id))
+             writer? (fn [b]
+                       (let [r (get role-of b)]
+                         (or (nil? r) (some #(roles/may-use? r %) writes))))
+             by-branch (idle-by-branch turns writes writer?)
+             since (reduce max 0 (vals by-branch))
              findings (session/findings (session/run-window run-id))
              ;; THE ROUND, off the journal. The feature loop's stage used to
              ;; hand a supervisor of its own the round's facts in a data map;
@@ -304,7 +341,7 @@
              idle-floor (gates/threshold :oversight-idle-floor)
              ;; What a pass that spends a call records, so the next gather
              ;; can tell new evidence from evidence already read.
-             signals {:unmet unmet :idle since
+             signals {:unmet unmet :idle since :idle-by-branch by-branch
                       :errors (count errors) :refused (count refusals)
                       :round (count (journal/notes conn run-id :route))}]
          (assoc data
@@ -313,6 +350,7 @@
                 :oversight/findings findings
                 :oversight/unmet unmet
                 :oversight/idle since
+                :oversight/idle-by-branch by-branch
                 :oversight/round round
                 :oversight/results results
                 :oversight/self-graded self-graded

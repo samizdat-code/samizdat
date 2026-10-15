@@ -117,8 +117,10 @@
 
  :oversight-idle-floor
  {:value 25 :kind :threshold :capability-tunable? true
-  :doc "Turns a run may go without writing a file before the supervisor stream
-        looks at it.
+  :doc "Turns a branch may go without writing a file before the supervisor
+        stream looks at it. Counted per branch, and only for branches whose
+        role can write (karamazov-rz7t.1): the supervisor's own turns are not
+        a stall, and one branch writing does not clear another's.
 
         Set well above :orient-turns (60 is the gate that speaks TO the branch;
         this is the threshold at which the harness starts examining ITSELF).

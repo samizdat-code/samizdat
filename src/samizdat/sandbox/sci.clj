@@ -136,6 +136,11 @@
     samizdat.agent.gates
     {:vars [threshold tool-vocab]}
 
+    ;; Which tools a role may call, read from the role table. Pure lookup; the
+    ;; supervisor's gather asks it which branches can write (karamazov-rz7t.1).
+    samizdat.agent.roles
+    {:vars [may-use?]}
+
     ;; Fixed git subcommands (stash create, write-tree, diff, ls-files) in `root`,
     ;; under the scrubbed environment. No caller-chosen command; a baseline that
     ;; looks like an option is refused (gitdiff/rev?).
@@ -300,7 +305,7 @@
     ;; Run and branch rows, through the store's own functions. get-branch replaced
     ;; a raw SELECT in cells/board.clj.
     samizdat.store.runs
-    {:vars [close-branch! extend-budget! finish-run! get-branch nth-recent-start open-branch!]
+    {:vars [branches close-branch! extend-budget! finish-run! get-branch nth-recent-start open-branch!]
      :effects #{:db}}
 
     ;; The task board, through its own functions.

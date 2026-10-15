@@ -1086,3 +1086,37 @@
         (is (str/includes? t "sz-1"))
         (is (str/includes? t "streams large files")))
       (finally (samizdat.store.db/close c)))))
+
+(deftest idle-is-counted-per-writing-branch
+  ;; karamazov-rz7t.1. Idle used to be turns since ANY write across the whole
+  ;; run: the supervisor's own turns counted (it never writes, so its
+  ;; investigation raised the number that woke it), and one branch writing
+  ;; reset the count for a different branch that was stalled.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        turn! (fn [b n tool]
+                (journal/record-turn! conn rid {:branch-id b :turn n :tool-name tool
+                                                :result "x" :category :neutral}))]
+    (runs/open-branch! conn rid {:branch-id "SUP" :role :supervisor})
+    (runs/open-branch! conn rid {:branch-id "T0" :role :implementor})
+    (runs/open-branch! conn rid {:branch-id "T1" :role :implementor})
+    (turn! "T1" 1 "write_file")
+    (doseq [n (range 2 12)] (turn! "T1" n "read_file"))
+    (doseq [n (range 1 41)] (turn! "SUP" n "fetch_turn"))
+    (turn! "T0" 1 "read_file")
+    (turn! "T0" 2 "write_file")
+    (let [g (gather-now conn rid)]
+      (is (= 10 (:oversight/idle g))
+          "T1's ten turns since its own write; SUP's 40 and T0's fresh write change nothing")
+      (is (= {"T0" 0 "T1" 10} (:oversight/idle-by-branch g))))
+    (testing "a stall on a second branch wakes the supervisor even while the
+              first one's stall, already read, is longer"
+      (let [g1 (gather-now conn rid)]
+        (doseq [n (range 12 40)] (turn! "T1" n "read_file"))
+        (let [g2 (gather-now conn rid)]
+          (is (true? (:oversight/worth-a-look? g2)) "T1 at 38, never seen")
+          (spent-pass! conn rid g2)
+          (doseq [n (range 3 30)] (turn! "T0" n "read_file"))
+          (is (true? (:oversight/worth-a-look? (gather-now conn rid)))
+              "T0 newly at 27 counts whole although T1 is longer")
+          (is (some? g1)))))))
