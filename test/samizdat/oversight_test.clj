@@ -1148,3 +1148,49 @@
       (is (not (str/includes? (str prob) "T1 slipped once")))
       (is (not (str/includes? (str prob) "the supervisor's own slip")))
       (is (not (re-find #"- SUP:" (str prob)))))))
+
+;; --- the brief as a delta (karamazov-rz7t.4) --------------------------------
+
+(deftest a-section-is-visible-while-the-brief-that-showed-it-is-in-context
+  (let [visible @(cells/cell-var 'cells.oversight 'visible-sections)
+        select @(cells/cell-var 'cells.oversight 'select-sections)
+        b {:messages [{:role "system"} {:role "user" :brief 1} {:role "user" :brief 2}]
+           :brief-shown {1 {:catalog 11 :learned 22} 2 {:learned 33}}}]
+    (is (= {:catalog 11 :learned 33} (visible b)) "the newer showing wins")
+    (is (= {:catalog 11 :learned 22}
+           (visible (assoc b :messages [{:role "user" :brief 1}
+                                        {:role "system" :compaction? true}])))
+        "a brief folded away is no longer visible; the older showing is")
+    (is (= {} (visible (assoc b :messages [{:role "system" :compaction? true}]))))
+    (testing "a section is shown when it is new or changed, and not otherwise"
+      (let [[shown hashes] (select {:catalog "same" :learned "new" :drift nil}
+                                   {:catalog (hash "same") :learned (hash "old")})]
+        (is (= {:catalog nil :learned "new" :drift nil} shown))
+        (is (= {:learned (hash "new")} hashes))))))
+
+(deftest a-second-pass-over-an-unchanged-run-is-only-what-changed
+  (cells/load-cells!)
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        ctx {:conn conn :run-id rid :config {}}
+        seen (atom [])
+        pass (fn [carry]
+               (let [g (cond-> (gather-now conn rid) carry (assoc :oversight/carry carry))]
+                 (with-redefs [myc/run-compiled (fn [_ _ data]
+                                                  (swap! seen conj (:content (last (get-in data [:branch :messages]))))
+                                                  {:branch (assoc (:branch data) :final-answer "ok")})]
+                   ((:handler (cell/get-cell! :oversight/reason)) ctx g))))
+        b1 (:oversight/branch (pass nil))
+        _ (pass b1)
+        [first-brief second-brief] @seen]
+    (is (str/includes? first-brief "Decide one of four things"))
+    (is (str/includes? first-brief "Workflows available"))
+    (is (not (str/includes? second-brief "Decide one of four things"))
+        "the instructions are still in its context")
+    (is (not (str/includes? second-brief "Workflows available")))
+    (is (str/includes? second-brief "Per branch") "the run's position is always new")
+    (is (< (count second-brief) (/ (count first-brief) 2)))
+    (testing "after a fold took the first brief away, it is shown again"
+      (let [folded (update b1 :messages (fn [ms] (vec (remove :brief ms))))]
+        (pass folded)
+        (is (str/includes? (last @seen) "Workflows available"))))))

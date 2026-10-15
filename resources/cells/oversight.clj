@@ -411,6 +411,48 @@
               (assoc :status :active :advisory? true))
     brief (update :messages (fnil conj []) {:role "user" :content brief})))
 
+(def ^:private delta-sections
+  "The brief's sections that are shown once and then only when they change.
+  The digest and the since-last-look block are not among them: the run's
+  position is the news of every pass."
+  [:learned :candidates :drift :offers :rejected :refused :retire :reviews
+   :inconclusive :prune :catalog])
+
+(defn visible-sections
+  "{section hash} for what the carried branch can still see: the sections
+  recorded against each brief message still among its messages, the newest
+  showing of a section winning. A brief compaction folded away is gone from
+  here as it is from the context."
+  [branch]
+  (let [live (set (keep :brief (:messages branch)))]
+    (reduce (fn [m id] (merge m (get-in branch [:brief-shown id])))
+            {}
+            (sort (filter live (keys (:brief-shown branch)))))))
+
+(defn select-sections
+  "[shown hashes]: `sections` with every value the branch can already see
+  (same hash in `visible`) set to nil, and {section hash} for the ones shown."
+  [sections visible]
+  (reduce-kv (fn [[shown hashes] k v]
+               (let [h (some-> v hash)]
+                 (if (and (some? v) (not= h (get visible k)))
+                   [(assoc shown k v) (assoc hashes k h)]
+                   [(assoc shown k nil) hashes])))
+             [{} {}]
+             sections))
+
+(defn mark-brief
+  "`branch` with its last message — this pass's brief — tagged `id`, and the
+  sections it showed recorded against that id. Entries whose brief has left
+  the messages are dropped."
+  [branch id hashes]
+  (let [ms (vec (:messages branch))
+        ms (cond-> ms (seq ms) (update (dec (count ms)) assoc :brief id))
+        live (set (keep :brief ms))]
+    (-> branch
+        (assoc :messages ms)
+        (update :brief-shown #(select-keys (assoc % id hashes) live)))))
+
 (cell/defcell :oversight/reason
   {:doc "One turn of the supervisor ROLE, in the stream's OWN branch.
 
@@ -506,7 +548,9 @@
                                     :errors (mapv crash-line (:oversight/crashes data))}
                                    (:oversight/turns data)
                                    (:oversight/firings data))
-             prob (prompt/render "oversight-pass"
+             ;; Everything a brief can carry. Which of it this pass shows is
+             ;; decided below: only what the supervisor cannot already see.
+             full (identity
                                  {:digest dig
                                   :since (not-empty (str live))
                                   :learned (seq (knowledge/standing conn))
@@ -643,6 +687,22 @@
                                            (when (seq ps)
                                              (prompt/render "pruning" {:edits ps})))
                                   :catalog (safely :catalog #(wf/render-catalog conn) "")})
+             ;; THE BRIEF IS A DELTA (karamazov-rz7t.4). Every pass used to
+             ;; append the whole brief to the carried branch, so the
+             ;; supervisor's context was the sum of every brief it was ever
+             ;; sent. A section the branch can still see, unchanged, is left
+             ;; out — and the instructions with it — while the run's position
+             ;; is new every pass. "Can still see" is read off the messages,
+             ;; so a brief compaction folded away is shown again.
+             carry (:oversight/carry data)
+             [shown hashes] (select-sections
+                             (assoc (select-keys full delta-sections)
+                                    :instructions "instructions")
+                             (visible-sections carry))
+             prob (prompt/render "oversight-pass"
+                                 (merge full (dissoc shown :instructions)
+                                        {:again (nil? (:instructions shown))}))
+             brief-id (inc (reduce max 0 (keys (:brief-shown carry))))
              ;; ONE branch for the run, carried by the stream. Opened once;
              ;; re-opening an existing id is a no-op that returns the row.
              bid "SUP"
@@ -653,11 +713,12 @@
              ;; run-scoped resources every driver provides, and the carry is
              ;; this pass's value. Putting it in ctx would have meant claiming
              ;; the beam driver provides it, which it does not.
-             b (or (some-> (:oversight/carry data) (resume-branch prob))
-                   (assoc (state/new-branch
-                           {:id bid :problem prob
-                            :messages (turn/initial-messages prob suffix :supervisor)})
-                          :advisory? true :role :supervisor))
+             b (-> (or (some-> carry (resume-branch prob))
+                       (assoc (state/new-branch
+                               {:id bid :problem prob
+                                :messages (turn/initial-messages prob suffix :supervisor)})
+                              :advisory? true :role :supervisor))
+                   (mark-brief brief-id hashes))
              ;; The stream's own read timeout for the supervisor's calls
              ;; (gates.edn :oversight :timeout-ms), when set. Its brief is a
              ;; digest plus a carried context, and on GLM-5.3 those calls
