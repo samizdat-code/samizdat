@@ -21,6 +21,11 @@
  :input-schema
  [:map [:branch :map] [:turn :int]]
 
+ ;; The nodes that mark this workflow's progress: entering one is journaled
+ ;; as a :progress note, which is what the supervisor reads instead of the
+ ;; steps (karamazov-rz7t.2). Per-turn nodes do not belong here.
+ :progress [:distil]
+
  :cells {:start          :loop/assemble
          :infer          :llm/infer
          :parse          :llm/parse

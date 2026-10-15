@@ -10,6 +10,11 @@
 {:description "The factory loop: a single branch iterating a turn at a time until it ships or gives up. The simplest driver — no fan-out, no critic, no supervisor. The baseline every other workflow specializes."
  :extends "turn"
 
+ ;; The nodes that mark this workflow's progress: entering one is journaled
+ ;; as a :progress note, which is what the supervisor reads instead of the
+ ;; steps (karamazov-rz7t.2). Per-turn nodes do not belong here.
+ :progress [:distil]
+
  :cells {:distil :memory/distil
          :finish :loop/finish}
 

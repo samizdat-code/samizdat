@@ -109,6 +109,8 @@
     :summary "Every cycle in a manifest that cannot change its own exit — no dispatch on it with an edge out reads a key a cell on it promises in :output — with what its exits read and what its cells write. A compile warning (:unguarded-cycle) and a paragraph on manifest save/patch, never a refusal: the shipped manifests all pass, and termination itself stays with max-turns and the deadlines."}
    {:name samizdat.manifests/preconditions
     :summary "Every node's preconditions as one report — the ctx keys and data keys it requires, what holds on every path in, and what is unsatisfied with the path that fails — before an edit rather than as the refusal after."}
+   {:name samizdat.progress/interceptors
+    :summary "Where each branch is in its workflow, journaled as :progress notes by every compiled manifest. Entering a node the manifest lists under `:progress [...]` at its top is a stage move (per-turn nodes do not belong there; a node the graph lacks is refused at compile), and a change in any branch field gates.edn :progress :branch-keys watches (phase, task, goal, status) is a field move. journal/progress reads them back per branch — the supervisor's view of a run, instead of its steps."}
    {:name samizdat.workflow/compile-loop
     :summary "Compile a workflow definition through mycelium's static checks. Throws on any violation."}
    {:name samizdat.workflow/turn-manifest

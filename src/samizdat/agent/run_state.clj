@@ -24,13 +24,15 @@
   them (a serve process otherwise keeps one entry per run it ever ran)."
   (:require [samizdat.agent.verify :as verify]
             [samizdat.llm.client :as llm]
+            [samizdat.progress :as progress]
             [samizdat.sdiff.address :as address]
             [samizdat.security.flow :as flow]))
 
 (defn run-ended!
   "Forget run `run-id`'s seal, its branches' flow labels, the models it
-  retired and the file reads its branches made. Each is best effort: one
+  retired, the file reads its branches made and where its branches last were. Each is best effort: one
   failing must not keep the rest."
   [run-id]
-  (doseq [f [verify/unseal-run! flow/forget-run! llm/forget-retired! address/forget-reads!]]
+  (doseq [f [verify/unseal-run! flow/forget-run! llm/forget-retired! address/forget-reads!
+             progress/forget-run!]]
     (try (f run-id) (catch Throwable _ nil))))

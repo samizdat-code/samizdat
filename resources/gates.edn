@@ -115,6 +115,21 @@
         are wrong, which is the supervisor's actual subject. One is noise; two
         is a pattern worth the call."}
 
+ :progress
+ {:value {:branch-keys {:phase [:phase]
+                        :task [:task :id]
+                        :goal [:repl-plan :goal]
+                        :status [:status]}}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-rz7t.2"]
+  :doc "Which branch fields samizdat.progress journals as :progress notes when
+        they change (karamazov-rz7t.2), each a path into the branch. Beside
+        the nodes a manifest names under :progress, these are what the
+        supervisor reads to see a branch moving through its work: a phase
+        left, a task claimed or closed, a goal stated, an ending. A field
+        that changes every turn does not belong here — the point is the few
+        moves, not the steps."}
+
  :oversight-idle-floor
  {:value 25 :kind :threshold :capability-tunable? true
   :doc "Turns a branch may go without writing a file before the supervisor

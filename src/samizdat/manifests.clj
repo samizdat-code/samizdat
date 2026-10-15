@@ -47,6 +47,7 @@
             [samizdat.agent.roles :as roles]
             [samizdat.prompt :as prompt]
             [samizdat.cancel :as cancel]
+            [samizdat.progress :as progress]
             [samizdat.cells :as cells]
             [samizdat.lexicon :as lexicon]
             [samizdat.store.userspace :as us]
@@ -669,7 +670,17 @@
    (register-subworkflows! definition)
    (check-requires! definition)
    (check-role! definition)
-   (let [compiled (myc/pre-compile
+   (when-let [missing (seq (remove (set (keys (:cells definition))) (:progress definition)))]
+     (throw (ex-info (str ":progress names " (str/join ", " missing)
+                          ", which this workflow has no node for. :progress lists the"
+                          " nodes whose entry is journaled as the branch's progress;"
+                          " name nodes from :cells.")
+                     {:progress (:progress definition) :missing (vec missing)})))
+   (let [;; Every manifest records where its branch is (karamazov-rz7t.2):
+         ;; entering a node it names under :progress, and any move in the
+         ;; branch fields gates.edn :progress watches.
+         prog (progress/interceptors (set (map name (:progress definition))))
+         compiled (myc/pre-compile
                    (assoc definition :constraints (enforced-constraints definition))
                    ;; Baked in HERE because mycelium reads :validate at compile
                    ;; time, into the interceptors it builds — there is no
@@ -684,7 +695,10 @@
                             ;; passes through every catch on the path.
                             ;; Mechanism only; whether a run is cancelled, and
                             ;; when, is the beam's decision.
-                            :pre cancel/pre-check
+                            :pre (fn [st res]
+                                   (-> (cancel/pre-check st res)
+                                       ((:pre prog) res)))
+                            :post (:post prog)
                             :rethrow? cancel/control-signal?}
                      (:on-trace opts) (assoc :on-trace (:on-trace opts))))]
      ;; The loop-guard warnings join mycelium's on the one channel a caller
@@ -920,6 +934,8 @@
         retarget (fn [to] (if (contains? terminal to) :end to))]
     (-> definition
         (assoc :cells (into {} (remove (comp finish key)) (:cells definition)))
+        ;; The finish node leaves the slice, so it leaves the progress list.
+        (cond-> (:progress definition) (update :progress #(vec (remove finish %))))
         (assoc :edges
                (into {}
                      (for [[from to] (:edges definition)
