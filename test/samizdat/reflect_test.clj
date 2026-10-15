@@ -22,6 +22,12 @@
 
 ;; --- the half that CAN be tested --------------------------------------------
 
+(deftest the-reasoning-is-not-a-reflection
+  (is (= {"FACTS" ["builds with jolt bin"]}
+         (select-keys (reflect/parse-sections
+                       "<think>\n## FACTS\n- maybe it uses make\n</think>\n## FACTS\n- builds with jolt bin")
+                      ["FACTS"]))))
+
 (deftest every-fact-the-harness-means-to-hand-over-reaches-the-prompt
   ;; dirge guards exactly this in CI (compaction_recall.rs), and the reasoning
   ;; carries over: nobody can unit-test what a model chooses to write, but a

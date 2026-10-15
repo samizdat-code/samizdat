@@ -43,6 +43,8 @@
     (is (= 1.0 (trajectory/parse-letter
                 "The Branch Advanced Toward The Goal.\n\nT")))
     (is (= 0.0 (trajectory/parse-letter "Reasoning: no progress\nScore: A"))))
+  (testing "a truncated thought is no score, whatever letter it ended on"
+    (is (nil? (trajectory/parse-letter "<think>it advanced, so maybe\nK"))))
   (testing "unparseable replies are nil, never a fabricated number"
     (is (nil? (trajectory/parse-letter "no letter here 42")))
     (is (nil? (trajectory/parse-letter "")))

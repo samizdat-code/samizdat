@@ -82,15 +82,11 @@
   not at the call sites because there are three critics — :board/review,
   :feature/critique and cells/critic.clj — and a fourth would forget.
 
-  AN UNTERMINATED BLOCK IS ALL REASONING. strip-think-blocks removes matched
-  pairs only, so a truncated judge call leaves an open <think> and everything
-  after it is rehearsal. Cut there: what remains is empty, and both parsers
-  fail open on empty, which is what a judge that could not answer has to do."
+  A truncated judge call is all reasoning (`message/answer`), so what remains
+  is empty, and both parsers fail open on empty, which is what a judge that
+  could not answer has to do."
   [reply]
-  (let [s (message/strip-think-blocks (str reply))]
-    (if-let [i (str/index-of s "<think>")]
-      (str/trim (subs s 0 i))
-      s)))
+  (message/answer reply))
 
 (declare parse-verdict)
 

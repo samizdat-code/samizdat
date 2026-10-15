@@ -244,11 +244,18 @@
 
 (defn- user-msg? [m] (= "user" (str (:role m))))
 
-(defn- snap-forward [messages idx]
+(defn- snap-forward
+  "The first index at or after `idx` a fold may start at: a user turn, or an
+  earlier fold's summary. The summary is no tool call and no tool result, so
+  starting there orphans nothing — and it has to be startable, or a summary
+  in a system role sits just past the head forever and every later fold
+  stacks a new one after it."
+  [messages idx]
   (let [n (count messages)]
     (loop [i (min idx n)]
       (cond (>= i n) n
             (user-msg? (nth messages i)) i
+            (:compaction? (nth messages i)) i
             :else (recur (inc i))))))
 
 (defn- snap-backward [messages idx]
@@ -265,6 +272,9 @@
   prompt and the opening statement of the problem are what the branch is for;
   folding them leaves it working on a summary of its own instructions. The
   TAIL is protected because recent turns are the ones still in play.
+
+  An earlier fold's summary is a start as well, so the next fold takes it in
+  and rewrites it rather than leaving it behind (see snap-forward).
 
   Both cuts SNAP TO USER-MESSAGE BOUNDARIES, and that is a correctness
   requirement rather than tidiness: a user message never carries a dangling

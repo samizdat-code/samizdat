@@ -23,6 +23,7 @@
             [samizdat.claims :as claims]
             [samizdat.lexicon :as lexicon]
             [samizdat.llm.client :as llm]
+            [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
             [samizdat.store.knowledge :as knowledge]))
@@ -49,7 +50,7 @@
   "The reviser's reply as {:verdict :keep|:revise|:retire :text}, or nil when
   it is none of them — and nil changes nothing."
   [text]
-  (let [t (str/trim (str text))]
+  (let [t (message/answer text)]
     (when-let [[_ verb rest] (re-find (re-pattern (lexicon/wordlist :revision-verdict)) t)]
       (let [verdict (keyword (str/lower-case verb))
             body (str/trim (first (str/split-lines (str rest))))]

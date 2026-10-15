@@ -40,6 +40,7 @@
   (:require [clojure.string :as str]
             [samizdat.agent.gates :as gates]
             [samizdat.llm.client :as llm]
+            [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]))
@@ -52,7 +53,7 @@
   judge must never read as 'no progress'."
   [reply]
   (when (string? reply)
-    (when-let [line (->> (str/split-lines reply)
+    (when-let [line (->> (str/split-lines (message/answer reply))
                          (map str/trim)
                          (remove str/blank?)
                          last)]
@@ -93,15 +94,19 @@
   its absence."
   [ask rows {:keys [problem repeats stride criteria]}]
   (let [rows (vec rows)]
-    (mapv (fn [i]
-            (let [upto (subvec rows 0 (inc i))
-                  p (judge-prompt {:problem problem :criteria criteria
-                                   :steps (steps-digest upto)})
-                  vals (keep parse-letter (doall (repeatedly repeats #(ask p))))]
-              {:turn (:turn (rows i))
-               :score (when (seq vals)
-                        (/ (reduce + 0.0 vals) (count vals)))}))
-          (range (dec stride) (count rows) stride))))
+    ;; reduce, not mapv/repeatedly: `ask` parks on a fiber (llm/chat), and a
+    ;; park inside a lazy or mapping fn is the fiber rule's hang.
+    (reduce (fn [acc i]
+              (let [upto (subvec rows 0 (inc i))
+                    p (judge-prompt {:problem problem :criteria criteria
+                                     :steps (steps-digest upto)})
+                    vals (keep parse-letter
+                               (reduce (fn [rs _] (conj rs (ask p))) [] (range repeats)))]
+                (conj acc {:turn (:turn (rows i))
+                           :score (when (seq vals)
+                                    (/ (reduce + 0.0 vals) (count vals)))})))
+            []
+            (range (dec stride) (count rows) stride))))
 
 (defn score-run
   "Score one finished (or live) branch's trajectory from the journal — the

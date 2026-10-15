@@ -38,6 +38,26 @@
       (str/replace #"(?s)<think>.*?</think>" "")
       str/trim))
 
+(defn answer
+  "What a reply SAID, with its reasoning removed: the text a side call parses
+  or keeps.
+
+  client/chat folds a reasoning model's thinking into :content as a <think>
+  block, because the loop's fence parser has to find a tool call wherever the
+  model put it. Every other caller wants the answer alone — a judge's verdict,
+  a fold's summary, a reflection's sections — and one that reads :content
+  whole reads the scratchpad as part of it.
+
+  AN UNTERMINATED BLOCK IS ALL REASONING. strip-think-blocks removes matched
+  pairs only, so a reply cut off mid-thought leaves an open <think> and
+  everything after it is rehearsal; cut there. Empty is the honest result for
+  a reply that never got to answering."
+  [content]
+  (let [s (strip-think-blocks (str content))]
+    (if-let [i (str/index-of s "<think>")]
+      (str/trim (subs s 0 i))
+      s)))
+
 (defn merge-reasoning
   "Fold a provider's separate reasoning stream into the visible content with
   <think> framing.

@@ -258,6 +258,10 @@
     {:vars [chat]
      :effects #{:net}}
 
+    ;; A reply's answer without its reasoning. Pure.
+    samizdat.llm.message
+    {:vars [answer]}
+
     ;; String repair. Pure.
     samizdat.llm.fence
     {:vars [close-unbalanced fill-dangling-key repair-control-chars strip-trailing-commas]}

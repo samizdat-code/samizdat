@@ -45,6 +45,14 @@
     (is (= ["detect-completion" "gate-on-diff"] (mapv :name (:subtasks d))))
     (is (every? :description (:subtasks d)))))
 
+(deftest parse-decision-reads-past-the-reasoning
+  ;; The JSON is found greedily from the first brace; a reasoning model's
+  ;; scratchpad with one in it made every decision unparseable.
+  (let [d (dec/parse-decision
+           "<think>maybe {split it} or not</think>\n{\"decision\":\"fresh_approach\",\"hint\":\"use a regex\"}")]
+    (is (= :fresh-approach (:kind d)))
+    (is (= "use a regex" (:hint d)))))
+
 (deftest parse-decision-reads-a-fresh-approach
   (let [d (dec/parse-decision
            "{\"decision\":\"fresh_approach\",\"reason\":\"wrong strategy\",\"hint\":\"regex, not substring\"}")]

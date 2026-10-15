@@ -134,6 +134,25 @@
     (is (>= s 2) "the head snap only ever protects more")
     (is (<= e 15) "and so does the tail snap")))
 
+(deftest a-later-fold-takes-the-earlier-summary-in
+  ;; MEASURED on the rz7t.7 GLM run: the supervisor's summaries are system
+  ;; messages, the head cut snapped PAST each one to the next user turn, and
+  ;; every fold stacked a new summary after the last — four of 15-36k chars
+  ;; by turn 42, none ever refolded, until a fold freed 1% of a 66k prompt.
+  (let [summary {:role "system" :content "MARKER:old" :compaction? true}
+        msgs (into [{:role "system" :content "sys"} {:role "user" :content "go"}
+                    {:role "assistant" :content "call"} summary]
+                   (convo 14))
+        [s e] (cmp/compress-window msgs 2 5)]
+    (is (= 3 s) "the window starts AT the earlier summary, so the next one replaces it")
+    (is (< s e)))
+  (testing "a user-role marker is a user turn already"
+    (let [msgs (into [{:role "system" :content "sys"} {:role "user" :content "go"}
+                      {:role "assistant" :content "call"}
+                      {:role "user" :content "MARKER:old" :compaction? true}]
+                     (convo 14))]
+      (is (= 3 (first (cmp/compress-window msgs 2 5)))))))
+
 (deftest the-summary-budget-is-a-fraction-floored-and-capped
   (let [b {:ratio 0.20 :floor 2000 :ceiling 12000}]
     (is (= 2000 (cmp/summary-budget 100 b)) "a small fold still carries its facts")
@@ -612,6 +631,39 @@
         (is (some #(= task %) out-msgs) "the pinned message is still there, whole")
         (is (not (str/includes? @sent "PINNED TASK STATEMENT"))
             "and the summarizer never saw it, so it is not duplicated in the summary")))
+    (testing "the summary is the model's answer, not its reasoning"
+      ;; GLM's reply carries its <think> block inline (client/chat merges
+      ;; reasoning into :content for the loop's fence parser); kept, it made
+      ;; the summary several times its budget.
+      (let [out (with-redefs [samizdat.store.journal/note! (fn [& _] nil)
+                              samizdat.llm.client/chat
+                              (fn [& _] {:content "<think>let me weigh what matters here</think>\n## Active Task\nFinish it.\n## Goal\nShip."})
+                              samizdat.agent.compaction/validate-summary (fn [& _] true)
+                              samizdat.store.knowledge/distil-session! (fn [& _] 0)]
+                  ((:handler (cell/get-cell! :compaction/fold))
+                   {:conn ::conn :run-id "r1"
+                    :llm-adapter ::adapter :llm-config {:context-window 128000}}
+                   data))
+            s (some #(when (:compaction? %) (:content %)) (get-in out [:branch :messages]))]
+        (is (str/includes? s "Finish it."))
+        (is (not (str/includes? s "weigh what matters")))))
+    (testing "a second fold replaces the first summary instead of stacking another"
+      (let [once (with-redefs [samizdat.store.journal/note! (fn [& _] nil)
+                               samizdat.llm.client/chat
+                               (fn [& _] {:content "## Active Task\nFinish it.\n## Goal\nShip."})
+                               samizdat.agent.compaction/validate-summary (fn [& _] true)
+                               samizdat.store.knowledge/distil-session! (fn [& _] 0)]
+                   (let [f #((:handler (cell/get-cell! :compaction/fold))
+                             {:conn ::conn :run-id "r1"
+                              :llm-adapter ::adapter :llm-config {:context-window 128000}}
+                             %)
+                         first-fold (f data)
+                         grown (update-in first-fold [:branch :messages] into
+                                          (mapcat (fn [i] [{:role "assistant" :content (str "more " i)}
+                                                           {:role "user" :content big}])
+                                                  (range 8)))]
+                     (f (assoc grown :compaction/before 999999))))]
+        (is (= 1 (count (filter :compaction? (get-in once [:branch :messages])))))))
     (testing "an explicit policy value wins over the probe"
       (with-redefs [gates/threshold (let [orig gates/threshold]
                                       (fn [k] (if (= k :fold-role) "system" (orig k))))]

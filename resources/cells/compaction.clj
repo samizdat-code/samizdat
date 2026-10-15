@@ -29,6 +29,7 @@
             [samizdat.agent.compaction :as cmp]
             [samizdat.agent.gates :as gates]
             [samizdat.llm.client :as llm]
+            [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
             [samizdat.store.knowledge :as knowledge]
@@ -219,7 +220,10 @@
                           [{:role "system"
                             :content (prompt/render "compaction-summary" {:budget budget})}
                            {:role "user" :content material}])]
-      (not-empty (str/trim (str (:content reply)))))
+      ;; The answer alone: a reasoning model's <think> block rides in
+      ;; :content, and kept it made GLM's summaries several times their
+      ;; budget (rz7t.7).
+      (not-empty (message/answer (:content reply))))
     (catch Throwable e
       (log/warn "compaction: summarizer failed:" (ex-message e))
       nil)))

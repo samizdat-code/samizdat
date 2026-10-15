@@ -31,6 +31,7 @@
             [samizdat.agent.state :as state]
             [samizdat.lexicon :as lexicon]
             [samizdat.llm.client :as llm]
+            [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
             [samizdat.store.knowledge :as knowledge]))
@@ -98,7 +99,7 @@
   empty will often write `None.` or `-` instead."
   [text]
   (let [placeholder (re-pattern (lexicon/wordlist :empty-section))
-        chunks (rest (str/split (str text) #"(?m)^##\s+"))]
+        chunks (rest (str/split (message/answer text) #"(?m)^##\s+"))]
     (into {}
           (keep (fn [chunk]
                   (let [[header & body] (str/split-lines chunk)

@@ -25,6 +25,13 @@
   (is (nil? (revise/parse-verdict "I think this memory is mostly fine")))
   (is (nil? (revise/parse-verdict "REVISE:")) "a revision with no text is no revision"))
 
+(deftest a-verdict-is-read-after-the-reasoning
+  ;; GLM's reply opens with its <think> block, so a verdict anchored at the
+  ;; start never matched and every revision was refused as unparseable.
+  (is (= {:verdict :revise :text "build with jolt bin"}
+         (revise/parse-verdict "<think>KEEP? no, RETIRE? no.</think>\nREVISE: build with jolt bin")))
+  (is (nil? (revise/parse-verdict "<think>KEEP it, I think")) "a truncated thought is no verdict"))
+
 (def ^:private policy {:max-per-branch 3 :feedback-turns 4 :answer-chars 100})
 
 (defn- fixture

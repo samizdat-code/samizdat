@@ -647,6 +647,19 @@
 
 ;; --- messages ---------------------------------------------------------------
 
+(deftest an-answer-is-what-follows-the-reasoning
+  ;; client/chat merges a reasoning model's thinking into :content for the
+  ;; loop's fence parser, so every side call that reads :content as an ANSWER
+  ;; reads the scratchpad too. GLM's compaction summaries carried it, its
+  ;; memory reviser never matched a verdict, and judge/usable was the one
+  ;; parser that knew.
+  (is (= "KEEP" (message/answer "<think>maybe RETIRE?</think>\nKEEP")))
+  (is (= "plain" (message/answer "plain")))
+  (is (= "" (message/answer "<think>cut off mid-thought")))
+  (is (= "half" (message/answer "half <think>then a truncated thought"))
+      "an unterminated block is all reasoning")
+  (is (= "" (message/answer nil))))
+
 (deftest think-blocks
   (testing "think blocks are stripped from prior assistant turns"
     (is (= "the answer" (message/strip-think-blocks "<think>musing</think>\nthe answer")))
