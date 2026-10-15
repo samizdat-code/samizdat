@@ -11,8 +11,11 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [samizdat.agent.reflect :as reflect]
+            [samizdat.llm.client]
             [samizdat.store.db :as db]
-            [samizdat.store.knowledge :as knowledge]))
+            [samizdat.store.journal]
+            [samizdat.store.knowledge :as knowledge]
+            [samizdat.store.runs]))
 
 (def ^:private conn (atom nil))
 (use-fixtures :each (fn [f] (reset! conn (db/open! ":memory:")) (f) (db/close @conn)))
@@ -83,9 +86,34 @@
   ;; The implementor is the only role positioned to notice that a memory it was
   ;; handed is wrong, so its word counts against that memory's record.
   (let [id (knowledge/remember! @conn {:content "tests live under spec/" :kind "semantic"})]
-    (reflect/record! @conn {:run-id "r1"}
+    (reflect/record! @conn {:run-id "r1" :shown #{id}}
                      {"WRONG" [(str id " — the tests moved to test/")]})
     (is (= 1 (:failure_count (knowledge/get-by-id @conn id))))))
+
+(deftest a-correction-against-a-memory-the-branch-never-saw-counts-for-nothing
+  ;; karamazov-4dn8.2. The reflector was handed knowledge/standing recomputed
+  ;; at reflection time, not what the branch read, so a WRONG could land on a
+  ;; row the branch never saw.
+  (let [id (knowledge/remember! @conn {:content "tests live under spec/" :kind "semantic"})]
+    (reflect/record! @conn {:run-id "r1" :shown #{}}
+                     {"WRONG" [(str id " — the tests moved to test/")]})
+    (is (zero? (or (:failure_count (knowledge/get-by-id @conn id)) 0)))))
+
+(deftest the-reflector-is-shown-what-the-branch-was-shown
+  (let [c @conn
+        rid (samizdat.store.runs/start-run! c {:problem "p"})
+        seen (knowledge/remember! c {:content "build with jolt bin" :kind "semantic"})
+        unseen (knowledge/remember! c {:content "the overview of everything" :kind "overview"})
+        sent (atom nil)]
+    (samizdat.store.journal/note! c rid :exposed {:branch-id "T0" :turn 2
+                                                  :data {:via "breadcrumb" :ids [seen]}})
+    (with-redefs [samizdat.llm.client/chat (fn [_ _ msgs & _]
+                                             (reset! sent (:content (second msgs)))
+                                             {:content "## FACTS\n- x"})]
+      (reflect/distil-task! {:conn c :run-id rid} {:id "T0" :problem "p"}))
+    (is (str/includes? (str @sent) "build with jolt bin"))
+    (is (not (str/includes? (str @sent) "the overview of everything"))
+        "standing, recomputed, is not what the branch read")))
 
 (deftest a-correction-naming-an-unknown-id-is-ignored
   (is (some? (reflect/record! @conn {:run-id "r1"} {"WRONG" ["k-nosuch — invented"]}))))

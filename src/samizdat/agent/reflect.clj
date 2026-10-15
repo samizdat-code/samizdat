@@ -119,7 +119,7 @@
   corroborated that description rather than correcting it, and the same run
   flagged the memory it had just agreed with as WRONG. A standing fact
   corroborates; a description restates."
-  [conn {:keys [run-id]} sections]
+  [conn {:keys [run-id shown]} sections]
   (let [written
         (vec (for [[section lines] sections
                    :let [kind (section->kind section)]
@@ -147,8 +147,10 @@
                   :kind kind :repeat? false})))]
     (doseq [{:keys [id]} (corrections sections)]
       ;; The implementor is the only role positioned to notice that a memory it
-      ;; was handed is stale, so its word counts against that memory's record.
-      (when (knowledge/get-by-id conn id)
+      ;; was handed is stale, so its word counts against that memory's record
+      ;; — but only a memory it WAS handed (`shown`, karamazov-4dn8.2). A
+      ;; reflector naming any other id is judging a row the branch never read.
+      (when (and (contains? (set shown) id) (knowledge/get-by-id conn id))
         (knowledge/record-outcome! conn id false)))
     written))
 
@@ -161,7 +163,12 @@
   [{:keys [conn run-id llm-adapter llm-config] :as _ctx} branch]
   (try
     (let [turns (journal/branch-turns conn run-id (:id branch))
-          memories (knowledge/standing conn)
+          ;; WHAT THE BRANCH WAS SHOWN, not knowledge/standing recomputed now
+          ;; (karamazov-4dn8.2): the breadcrumb index ranks by the branch's
+          ;; own claims turn by turn, so the two sets differ, and the WRONG
+          ;; section below counts against whatever ids this list offers.
+          shown (keys (journal/exposed conn run-id (:id branch)))
+          memories (keep #(knowledge/get-by-id conn %) shown)
           user (build-prompt {:problem (:problem branch)
                               :turns turns
                               :memories memories})
@@ -178,7 +185,7 @@
                                         :model (:model llm-config)
                                         :usage (:usage answer)})
           sections (parse-sections (:content answer))
-          written (record! conn {:run-id run-id} sections)]
+          written (record! conn {:run-id run-id :shown (set shown)} sections)]
       (journal/note! conn run-id :task-reflection
                      {:branch-id (:id branch)
                       :data {:sections (keys sections) :written (count written)}})
