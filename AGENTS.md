@@ -181,9 +181,9 @@ Start your OWN server. `jolt serve` writes the harness's nREPL port to
 `.nrepl-port` (and so does any `nrepl-server` started from this directory —
 put it back if you clobber it); reloading edited namespaces into a harness
 that is mid-run changes the run under it. The runner needs the `gui` path
-the `:test` alias adds, hence `-A:dev:test`. Reload edited namespaces one at
-a time with `:reload`; `:reload-all` on the runner currently dies inside
-`jolt.time` (karamazov-cc3a).
+the `:test` alias adds, hence `-A:dev:test`. Reload one edited namespace with
+`:reload`; `(require 'samizdat.test-runner :reload-all)` reloads the whole
+tree (about 90 s on this machine) and needs jolt 0.8.22 (karamazov-cc3a).
 
 ## The local model for testing
 

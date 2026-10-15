@@ -10,7 +10,12 @@
  ;; getParameterTypes return arrays, so SCI calls a constructor that takes
  ;; arguments — `delay`, `(Exception. msg)`, `case`'s no-match throw — in the
  ;; cell sandbox (karamazov-jfcf).
- :jolt/min-version "0.8.16"
+ ;; 0.8.22: :reload-all reloads each namespace once, in its own namespace
+ ;; (karamazov-cc3a), so the live-image idiom below works; a process that
+ ;; cannot create its AOT cache runs without one instead of dying, which a
+ ;; sandboxed image needs (jolt-lang/jolt#1335); and a set or map literal
+ ;; whose computed keys collide throws, as on the JVM.
+ :jolt/min-version "0.8.22"
 
  :paths ["src" "resources"]
 
@@ -181,9 +186,9 @@
            ;; The dev tree (the nREPL client, the ebb spike) plus the tests, so
            ;; a live image can run the suite without paying startup — with
            ;; :test too, for the gui path: `jolt -A:dev:test nrepl-server 7899`,
-           ;; then (require 'samizdat.test-runner) (samizdat.test-runner/run).
-           ;; Not :reload-all on the runner: that dies inside jolt.time
-           ;; (karamazov-cc3a). See AGENTS.md, "Live development over nREPL".
+           ;; then (require 'samizdat.test-runner :reload-all)
+           ;; (samizdat.test-runner/run). See AGENTS.md, "Live development
+           ;; over nREPL".
            :dev  {:extra-paths ["dev" "test"]}
 
            ;; The GUI is an optional component and a strict HTTP client of the
