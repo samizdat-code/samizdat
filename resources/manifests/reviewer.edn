@@ -19,10 +19,14 @@
  ;; steps (karamazov-rz7t.2). Per-turn nodes do not belong here.
  :progress [:distil]
 
- :cells {:distil :memory/distil}
+ :cells {:distil :memory/distil
+         ;; Then the memories this branch was shown, against their sources
+         ;; (karamazov-4dn8.4); gates.edn :memory-revise decides whether.
+         :revisit :memory/revise}
 
  :edges {:route  {:continue  :start
                   :done      :distil
                   :abandoned :distil
                   :exhausted :distil}
-         :distil :end}}
+         :distil :revisit
+         :revisit :end}}

@@ -111,6 +111,8 @@
     :summary "Every node's preconditions as one report — the ctx keys and data keys it requires, what holds on every path in, and what is unsatisfied with the path that fails — before an edit rather than as the refusal after."}
    {:name samizdat.progress/interceptors
     :summary "Where each branch is in its workflow, journaled as :progress notes by every compiled manifest. Entering a node the manifest lists under `:progress [...]` at its top is a stage move (per-turn nodes do not belong there; a node the graph lacks is refused at compile), and a change in any branch field gates.edn :progress :branch-keys watches (phase, task, goal, status) is a field move. journal/progress reads them back per branch — the supervisor's view of a run, instead of its steps."}
+   {:name samizdat.agent.revise/revise!
+    :summary "Backward revision (ReHarness): after a branch ends, each memory it was shown that an earlier run wrote is put back beside the turns it was written from (knowledge source_branch/source_turn_*), with this branch's outcome as feedback only, and kept, rewritten through restate! (its lineage keeps the old wording) or retired. The :memory/revise cell (node :revisit after :distil) decides under gates.edn :memory-revise — off until the arena has measured it, clean endings only. Each call is a :revision side call and a :memory-revised note."}
    {:name samizdat.workflow/compile-loop
     :summary "Compile a workflow definition through mycelium's static checks. Throws on any violation."}
    {:name samizdat.workflow/turn-manifest

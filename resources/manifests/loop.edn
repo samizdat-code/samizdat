@@ -16,6 +16,7 @@
  :progress [:distil]
 
  :cells {:distil :memory/distil
+         :revisit :memory/revise
          :finish :loop/finish}
 
  ;; Every ending goes through :distil first. A run that gave up has the most
@@ -25,7 +26,8 @@
                   :done      :distil
                   :abandoned :distil
                   :exhausted :distil}
-         :distil :finish
+         :distil :revisit
+         :revisit :finish
          :finish :end}
 
  :invariants
