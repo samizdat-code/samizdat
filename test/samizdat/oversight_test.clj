@@ -1194,3 +1194,38 @@
       (let [folded (update b1 :messages (fn [ms] (vec (remove :brief ms))))]
         (pass folded)
         (is (str/includes? (last @seen) "Workflows available"))))))
+
+(deftest a-brief-the-prune-tier-shrank-is-no-longer-visible
+  ;; The prune tier summarises long user-role messages to one line, and a
+  ;; brief is one: it keeps its :brief tag but not its sections.
+  (let [visible @(cells/cell-var 'cells.oversight 'visible-sections)]
+    (is (= {} (visible {:messages [{:role "user" :brief 1 :pruned? true}]
+                        :brief-shown {1 {:catalog 11}}})))))
+
+(deftest a-finished-pass-leaves-its-tool-output-as-one-line-each
+  ;; karamazov-rz7t.6. What a pass read is settled once the pass ends; its
+  ;; bulk stayed in the carried branch until a fold near the ceiling.
+  (cells/load-cells!)
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        ctx {:conn conn :run-id rid :config {}}
+        seen (atom nil)
+        big (apply str (repeat 3000 "x"))
+        carry {:id "SUP" :messages [{:role "system" :content "sys"}
+                                    {:role "user" :content (str "brief " big) :brief 1}
+                                    {:role "assistant" :content "reading"}
+                                    {:role "user" :content big :tool "read_file"}]
+               :brief-shown {1 {}}}]
+    (with-redefs [myc/run-compiled (fn [_ rctx data]
+                                     (reset! seen {:branch (:branch data) :rctx rctx})
+                                     {:branch (assoc (:branch data) :final-answer "ok")})]
+      ((:handler (cell/get-cell! :oversight/reason))
+       ctx (assoc (gather-now conn rid) :oversight/carry carry)))
+    (let [ms (get-in @seen [:branch :messages])]
+      (is (:pruned? (nth ms 3)) "the read is one line now")
+      (is (< (count (:content (nth ms 3))) 400))
+      (is (not (:pruned? (nth ms 1))) "a brief is not tool output")
+      (is (= "reading" (:content (nth ms 2)))))
+    (testing "the supervisor works under its own, smaller window"
+      (is (= (get-in (gates/threshold :oversight) [:context-window])
+             (get-in @seen [:rctx :llm-config :context-window]))))))

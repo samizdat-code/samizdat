@@ -7,6 +7,7 @@
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [mycelium.cell :as cell]
+            [samizdat.agent.compaction :as cmp]
             [samizdat.agent.loop :as turn]
             [samizdat.agent.roles :as roles]
             [samizdat.agent.state :as state]
@@ -424,7 +425,9 @@
   showing of a section winning. A brief compaction folded away is gone from
   here as it is from the context."
   [branch]
-  (let [live (set (keep :brief (:messages branch)))]
+  ;; A brief the prune tier shrank to one line keeps its tag, not its
+  ;; sections.
+  (let [live (set (keep #(when-not (:pruned? %) (:brief %)) (:messages branch)))]
     (reduce (fn [m id] (merge m (get-in branch [:brief-shown id])))
             {}
             (sort (filter live (keys (:brief-shown branch)))))))
@@ -694,7 +697,15 @@
              ;; out — and the instructions with it — while the run's position
              ;; is new every pass. "Can still see" is read off the messages,
              ;; so a brief compaction folded away is shown again.
-             carry (:oversight/carry data)
+             ;; What the last pass read is settled now that it has ended:
+             ;; its tool output goes to one line each, the way the prune tier
+             ;; would have done it near the ceiling (karamazov-rz7t.6). The
+             ;; briefs are left whole; they are what the supervisor reads.
+             carry (some-> (:oversight/carry data)
+                           (update :messages #(cmp/prune-tool-outputs
+                                               (vec %)
+                                               (assoc (cmp/prune-options (gates/threshold :compaction) 0 prompt/render-str)
+                                                      :keep? (complement :tool)))))
              [shown hashes] (select-sections
                              (assoc (select-keys full delta-sections)
                                     :instructions "instructions")
@@ -734,9 +745,12 @@
              ;; so a pass keeps a whole allowance of its own.
              done (safely :last-turn #(journal/last-turn conn run-id bid) 0)
              rctx (let [rc (wf/role-ctx ctx :supervisor)
-                        t (:timeout-ms (gates/threshold :oversight))]
+                        {t :timeout-ms w :context-window} (gates/threshold :oversight)]
                     (cond-> rc
                       t (assoc-in [:llm-config :timeout-ms] t)
+                      ;; Its own window, so its compaction ladder folds well
+                      ;; before the implementer's would (karamazov-rz7t.6).
+                      w (assoc-in [:llm-config :context-window] w)
                       (and (pos? done) (:max-turns rc)) (update :max-turns + done)))
              out (myc/run-compiled (wf/compiled-manifest "supervisor")
                                    rctx

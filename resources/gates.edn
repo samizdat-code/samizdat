@@ -1419,9 +1419,15 @@
           ;; past the run's 300 s three times running (run e1b765e7,
           ;; 2026-09-07): every later pass ended abandoned with no note and
           ;; the stream never steered again (karamazov-cz90).
-          :timeout-ms 600000}
+          :timeout-ms 600000
+          ;; The context window the supervisor's compaction ladder measures
+          ;; against, in tokens; nil keeps the model's. Its branch carries
+          ;; every pass of the run and folded near 100k on GLM while the
+          ;; implementers stayed under 55k (karamazov-rz7t, 2026-10-15), so
+          ;; it gets a smaller one and folds sooner.
+          :context-window 64000}
   :kind :policy :capability-tunable? false
-  :provenance ["RFC-012 F2" "karamazov-cz90"]
+  :provenance ["RFC-012 F2" "karamazov-cz90" "karamazov-rz7t.6"]
   :doc "THE SUPERVISOR STREAM: the harness reasoning about itself, in parallel
         with the run, in its own context. The ONE supervisor a run has
         (RFC-012): the feature loop no longer runs a second one as a stage.

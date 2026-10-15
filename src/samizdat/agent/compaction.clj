@@ -197,6 +197,22 @@
              :preview (clip (str/replace text #"\s+" " ") (:preview-chars templates))}]
     ((:render templates) (get (:by-tool templates) tool (:default templates)) ctx)))
 
+(defn prune-options
+  "prune-tool-outputs' options from the :compaction policy map `p`, protecting
+  the last `protect-tail` messages, rendering each one-line template with
+  `render` (a selmer render-str). One place, so every stage that prunes —
+  the context ladder's tier and the supervisor's pass boundary
+  (karamazov-rz7t.6) — prunes the same way."
+  [p protect-tail render]
+  {:protect-tail protect-tail
+   :min-chars (:prune-min-chars p)
+   :roles (:result-roles p)
+   :tool-of :tool
+   :templates {:preview-chars (:preview-chars p)
+               :render (fn [tmpl ctx] (render (str tmpl) ctx))
+               :by-tool (:prune-lines p)
+               :default (:prune-line-default p)}})
+
 (defn prune-tool-outputs
   "Replace the BODY of older tool results with one line each, keeping the call
   itself and the protected tail whole.
@@ -208,13 +224,15 @@
   branch did survives; what it saw is one `fetch_turn` away.
 
   Only results over `min-chars`: summarising a short result costs more than it
-  saves and loses something the model can read at a glance."
-  [messages {:keys [protect-tail min-chars roles tool-of templates]}]
+  saves and loses something the model can read at a glance. `keep?`, when
+  given, leaves alone any message it answers true for."
+  [messages {:keys [protect-tail min-chars roles tool-of templates keep?]}]
   (let [n (count messages)
         cutoff (max 0 (- n protect-tail))]
     (vec (map-indexed
           (fn [i m]
             (if (or (>= i cutoff)
+                    (and keep? (keep? m))
                     (not (contains? roles (str (:role m))))
                     (<= (content-chars (:content m)) min-chars))
               m
