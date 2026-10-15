@@ -59,7 +59,7 @@
   [config llm o]
   (cond
     (empty? o) llm
-    (and (:provider o) (not (#{(:provider llm) (:provider-name llm)} (:provider o))))
+    (and (:provider o) (not (some #{(:provider o)} [(:provider llm) (:provider-name llm)])))
     (config/provider-llm config (:provider o)
                          (dissoc (merge (select-keys llm [:reasoning-effort :timeout-ms]) o)
                                  :provider))

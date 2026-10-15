@@ -90,7 +90,7 @@
                             (and (nil? m) (declared p)) [p nil]
                             :else [nil model])
          llm-config (if (and provider
-                             (not (#{(:provider llm-config) (:provider-name llm-config)} provider)))
+                             (not (some #{provider} [(:provider llm-config) (:provider-name llm-config)])))
                       (config/provider-llm config provider
                                            (select-keys llm-config [:reasoning-effort]))
                       llm-config)]
