@@ -1813,10 +1813,17 @@
  :reflection
  {:value
   {:args-chars   160
-   :result-chars 240}
+   :result-chars 240
+   ;; Memories revised against their source shown as examples (4dn8.6);
+   ;; 0 until revision has produced some and the arena has read it.
+   :demonstrations 0}
   :kind :policy :capability-tunable? false
+  :provenance ["karamazov-4dn8.6"]
   :doc "HOW MUCH OF A TURN THE REFLECTOR SEES, per turn of the transcript it
-        is asked to distil into project memories.
+        is asked to distil into project memories, and how many revised
+        memories it is shown as examples of the shape to write in
+        (:demonstrations, karamazov-4dn8.6 — ReHarness writes new reflections
+        with revised ones as demonstrations).
 
         The two are separate because they are truncating different things.
         :args-chars is the CALL — a path, a command, a patch header; 160 is

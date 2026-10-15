@@ -80,11 +80,15 @@
   intends the model to see must be IN here; what the model does with it is not
   something a test can pin, but a fact that never arrived is a harness bug and
   is exactly what this makes visible."
-  [{:keys [problem turns memories]}]
+  [{:keys [problem turns memories examples]}]
   (prompt/render "task-reflection-input"
                  {:problem problem
                   :turns (mapv turn-line turns)
-                  :memories (mapv #(select-keys % [:id :kind :content]) memories)}))
+                  :memories (mapv #(select-keys % [:id :kind :content]) memories)
+                  ;; Memories that held up against their source, as the shape
+                  ;; to write in (karamazov-4dn8.6). None unless gates.edn
+                  ;; :reflection :demonstrations asks for some.
+                  :examples (mapv #(select-keys % [:kind :content]) examples)}))
 
 (defn parse-sections
   "The reflector's reply as `{section [line …]}`.
@@ -183,7 +187,9 @@
           memories (keep #(knowledge/get-by-id conn %) shown)
           user (build-prompt {:problem (:problem branch)
                               :turns turns
-                              :memories memories})
+                              :memories memories
+                              :examples (knowledge/revised
+                                         conn (:demonstrations (lexicon/policy :reflection)))})
           answer (llm/chat llm-adapter llm-config
                            [{:role "system" :content (prompt/prompt "task-reflection")}
                             {:role "user" :content user}]

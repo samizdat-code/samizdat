@@ -143,3 +143,19 @@
       (testing "a standing fact still corroborates rather than being rewritten"
         (is (= 1 (count facts)))
         (is (= 2 (:corroborations (first facts))))))))
+
+(deftest revised-memories-become-the-reflectors-examples
+  ;; karamazov-4dn8.6: ReHarness writes new reflections with revised ones as
+  ;; demonstrations. A memory that was revised against its source and has not
+  ;; failed since is the shape a reflection should take.
+  (let [c @conn
+        old (knowledge/remember! c {:content "build with uberjar" :kind "semantic"})
+        new (knowledge/restate! c old "build the binary with `jolt bin`; it writes ./app"
+                                {:reason "revised"})
+        _ (knowledge/remember! c {:content "never revised" :kind "semantic"})]
+    (is (= [new] (mapv :id (knowledge/revised c 3))))
+    (is (empty? (knowledge/revised c 0)) "none when the policy asks for none")
+    (let [p (reflect/build-prompt {:problem "p" :turns [] :memories []
+                                   :examples (knowledge/revised c 3)})]
+      (is (str/includes? p "jolt bin"))
+      (is (not (str/includes? p "never revised"))))))

@@ -1099,7 +1099,7 @@
     :max-wind-down-steers :no-edit-turns :orient-turns
     :oversight-idle-floor :oversight-note-chars :oversight-unmet-floor
     :pause-poll-ms :planner-max-parts :prediction-grace-turns :progress-stall-threshold
-    :project-facts :reflection :review-blocking-severities :run-health
+    :project-facts :review-blocking-severities :run-health
     :safe-state-multiple :same-failure-chars :session-findings :split-parts
     :storm-enabled :storm-error-digest-chars :storm-min-cycles
     :storm-strikes-to-force :storm-threshold :storm-timeout-floor

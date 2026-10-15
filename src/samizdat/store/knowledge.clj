@@ -1159,6 +1159,20 @@
         (<= (count candidate) cap) (recur (conj kept l) more)
         :else kept))))
 
+(defn revised
+  "Up to `n` current memories that were revised against their source
+  (karamazov-4dn8.4) and have not failed more than they succeeded since,
+  newest first: the examples a reflection is shown of what a memory that held
+  up looks like (karamazov-4dn8.6)."
+  [conn n]
+  (if (pos? (or n 0))
+    (db/fetch conn ["SELECT k.* FROM knowledge k
+                      JOIN knowledge p ON p.id = k.supersedes
+                     WHERE k.current = 1 AND p.retired_reason = 'revised'
+                       AND coalesce(k.failure_count, 0) <= coalesce(k.success_count, 0)
+                     ORDER BY k.created_at DESC LIMIT ?" n])
+    []))
+
 (defn breadcrumb
   "The breadcrumb index as {:text :ids}, or nil when there are no memories:
   `text` the bounded index a branch reads, `ids` the rows whose lines made
