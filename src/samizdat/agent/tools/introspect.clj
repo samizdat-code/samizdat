@@ -56,6 +56,7 @@
             [samizdat.vocabulary :as vocabulary]
             [samizdat.callable :as callable]
             [samizdat.manifests :as manifests]
+            [samizdat.security.flow :as flow]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]
             [samizdat.store.userspace :as store-us]))
@@ -241,7 +242,75 @@
                               (sandbox/backend-for (config/eval-sandbox root)
                                                    (System/getProperty "os.name")))})))
 
-(defmethod base/run-tool "introspect" [{:keys [branch conn run-id max-turns] :as ctx}]
+(defn- clip [s n]
+  (let [t (str/replace (str s) #"\s+" " ")]
+    (if (> (count t) n) (str (subs t 0 n) "…") t)))
+
+(defn branch-view
+  "One branch, for a supervisor asking why it is not progressing
+  (karamazov-rz7t.5): its moves (journal/progress notes), its last turns as
+  one line each, the calls it keeps repeating, the gates it has not acted on
+  and its last failure in its own words. Data for prompts/introspect-
+  branch.md; every list bounded by `caps` (gates.edn :introspect-branch)."
+  [{:keys [moves rows firings]} {:keys [turns args-chars result-chars repeats gates]}]
+  (let [failed? #(contains? #{"failure" "mechanics"} (some-> (:category %) name))
+        sig #(str (:tool_name %) " " (clip (:args %) args-chars))]
+    {:moves (mapv (fn [{:keys [turn key from to]}]
+                    {:turn turn :key key :from (or from "—") :to (or to "—")})
+                  moves)
+     :tail (mapv (fn [r] {:turn (:turn r) :tool (:tool_name r)
+                          :category (some-> (:category r) name)
+                          :args (clip (:args r) args-chars)})
+                 (take-last turns rows))
+     :repeats (->> (frequencies (map sig rows))
+                   (filter #(> (val %) 1))
+                   (sort-by (comp - val))
+                   (take repeats)
+                   (mapv (fn [[k n]] {:call k :times n})))
+     :unmet (->> firings
+                 (filter #(= "unmet" (str (:outcome %))))
+                 (take-last gates)
+                 (mapv (fn [f] {:gate (:gate f) :turn (:turn f)
+                                :message (clip (:message f) result-chars)})))
+     :failure (when-let [r (last (filter failed? rows))]
+                {:turn (:turn r)
+                 :tool (:tool_name r)
+                 :text (clip (or (not-empty (str (:parse_error r))) (:result r)) result-chars)})
+     :turns (count rows)}))
+
+(defn- introspect-branch
+  "The branch view as a tool result, or a miss naming the branches the run has."
+  [{:keys [branch conn run-id] :as ctx} bid]
+  (let [rows (journal/branch-turns conn run-id bid)
+        moves (get (journal/progress conn run-id) bid)]
+    (if (and (empty? rows) (empty? moves))
+      (base/malformed branch
+                      (prompt/render "introspect-branch"
+                                     {:miss true :branch bid
+                                      :branches (str/join ", " (map :id (runs/branches conn run-id)))}))
+      (do
+        ;; Another branch's turns carry what that branch had read, exactly as
+        ;; fetch_turn's do.
+        (when (not= bid (:id branch))
+          (flow/receive! ctx [(flow/encode (flow/label-of (assoc ctx :branch {:id bid})))]
+                         "introspect"))
+        (base/ok branch
+                 (prompt/render "introspect-branch"
+                                (assoc (branch-view
+                                        {:moves moves :rows rows
+                                         :firings (filter #(= bid (:branch_id %))
+                                                          (journal/gate-firings conn run-id))}
+                                        (gates/threshold :introspect-branch))
+                                       :branch bid)))))))
+
+(declare introspect-run)
+
+(defmethod base/run-tool "introspect" [{:keys [conn] :as ctx}]
+  (if-let [bid (and conn (some-> (base/arg ctx :branch) str str/trim not-empty))]
+    (introspect-branch ctx bid)
+    (introspect-run ctx)))
+
+(defn- introspect-run [{:keys [branch conn run-id max-turns] :as ctx}]
   (let [{:keys [name version definition]} (active-manifest ctx)]
     (base/ok branch
              (str "=== LOOP WIRING (" name

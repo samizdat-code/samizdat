@@ -287,13 +287,16 @@ reload_cells
     reload, compile the loop, dry-run (soak). Use it after a `cell revert`, or
     if you edited a file directly. If anything fails you are told why and the
     loop is unchanged. A bad edit cannot brick the loop.
-introspect
+introspect({branch?})
     See the loop you are running in. Renders two things: the WIRING - every
     node in the loop manifest with its cell, the cell's effects, and its
     outgoing edge or dispatch, so you can see the whole path a turn takes -
     and the HEALTH of this run so far - the last few turns (turn, tool,
     category) and tallies (turns used vs the cap, parse errors, failed
-    calls). Read-only.
+    calls). With `branch`, ONE branch instead: where it has been (phase,
+    task, stage moves), its last turns one line each, the calls it keeps
+    repeating, the gates it has not acted on and its last failure in its own
+    words — why it is not moving, in a screenful. Read-only.
 manifest({action, ...})
     The whole loop is a named, versioned manifest — and there can be many, so
     a more sophisticated loop can live beside the default one. Actions:

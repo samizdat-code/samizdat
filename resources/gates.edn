@@ -130,6 +130,16 @@
         that changes every turn does not belong here — the point is the few
         moves, not the steps."}
 
+ :introspect-branch
+ {:value {:turns 12 :args-chars 100 :result-chars 240 :repeats 3 :gates 5}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-rz7t.5"]
+  :doc "Bounds on introspect({branch}), the supervisor's look into one branch:
+        how many of its last turns as one-line rows, how much of each call's
+        arguments and of its last failure, how many repeated calls and how
+        many unmet gates. Its job is to say why the branch is not moving in a
+        screenful; a turn it wants whole is one fetch_turn away."}
+
  :oversight-held-floor
  {:value 40 :kind :threshold :capability-tunable? true
   :provenance ["karamazov-rz7t.3"]

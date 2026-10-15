@@ -104,6 +104,10 @@ runtime — look before you act:
   including this one.
 - **Skills** — `skill list` — the guidance the roles can load.
 - **The live loop + this run** — `introspect` — the wiring and the health.
+- **One branch that is not moving** — `introspect({branch: "T0"})` — its
+  moves, its last turns, what it repeats, the steering it ignores, its last
+  failure. Your brief shows each branch as one line on purpose; this is how
+  you look closer at the one that is stuck, and `fetch_turn` opens a turn.
 
 If you reach for a change and can't tell what exists, look it up first.
 

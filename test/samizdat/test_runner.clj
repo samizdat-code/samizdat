@@ -214,6 +214,7 @@
             [samizdat.replroots-test]
             [samizdat.oversight-test]
             [samizdat.progress-test]
+            [samizdat.introspect-branch-test]
             [samizdat.battery-test]
             [samizdat.heldout-test]
             [samizdat.procedure-test]
@@ -289,6 +290,7 @@
     samizdat.replroots-test
     samizdat.oversight-test
     samizdat.progress-test
+    samizdat.introspect-branch-test
     samizdat.battery-test
     samizdat.heldout-test
     samizdat.procedure-test

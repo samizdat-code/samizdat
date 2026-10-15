@@ -62,6 +62,7 @@
    :acceptance-judge "prompts/acceptance-judge.md"
    :checklist-answer "prompts/checklist-answer.md"
    :checklist-missing "prompts/checklist-missing.md"
+   :introspect-branch "prompts/introspect-branch.md"
    :tests-explained "prompts/tests-explained.md"
    :tests-unexplained "prompts/tests-unexplained.md"
    :adopt-tool "prompts/adopt-tool.md"
