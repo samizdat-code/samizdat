@@ -239,6 +239,63 @@
 (defn- health-policy []
   (lexicon/policy :run-health))
 
+;; --- progress, not steps (karamazov-rz7t.3) --------------------------------
+
+(def ^:private ended
+  "Branch statuses that mean the branch has stopped, so it cannot be stuck."
+  #{"done" "abandoned" "exhausted" "culled" "cancelled" "failed"})
+
+(defn branch-progress
+  "One entry per branch: the state it is in, since when, and whether it is
+  STUCK — the supervisor's view of a run instead of the branch's steps.
+
+  `progress` is journal/progress (per branch, the :progress notes), `rows`
+  the run's turn rows without the supervisor's own, `firings` its gate
+  firings. Each entry is {:id :state :status :task :since :held :wrote
+  :turns :thrash :unmet :stuck}: :state the latest stage the manifest named,
+  else the phase; :since the turn of the branch's last move and :held the
+  turns it has stayed there; :wrote its last file write. :stuck is nil, or
+  what makes it stuck — {:idle n} turns without a write, {:held n} turns
+  without a move, {:thrash n} mechanics turns — against `stuck` ({:idle-turns
+  :held-turns}) and the run-health thrash numbers. A branch that has ended
+  is never stuck. nil `stuck` judges nothing stuck."
+  [{:keys [progress idle-by-branch stuck]} rows firings]
+  (let [writes (gates/tool-vocab :file-write)
+        by-branch (group-by (comp str :branch_id) rows)
+        {:keys [thrash-min-turns thrash-mechanics-rate]} (health-policy)
+        unmet (frequencies (keep #(when (= "unmet" (s (:outcome %))) (str (:branch_id %)))
+                                 firings))]
+    (vec
+     (for [b (sort (distinct (concat (keys by-branch) (keys progress))))
+           :let [rs (get by-branch b)
+                 notes (get progress b)
+                 latest (fn [k] (:to (last (filter #(= k (:key %)) notes))))
+                 now (reduce max 0 (keep :turn rs))
+                 since (or (:turn (last notes)) (reduce min now (keep :turn rs)))
+                 held (max 0 (- now since))
+                 mech (count (filter #(= "mechanics" (s (:category %))) rs))
+                 status (latest "status")
+                 idle (get idle-by-branch b 0)
+                 stuck-by (when (and stuck (not (ended status)))
+                            (cond-> {}
+                              (>= idle (:idle-turns stuck)) (assoc :idle idle)
+                              (>= held (:held-turns stuck)) (assoc :held held)
+                              (and (>= (count rs) thrash-min-turns)
+                                   (>= (/ (double mech) (max 1 (count rs))) thrash-mechanics-rate))
+                              (assoc :thrash mech)))]]
+       {:id b
+        :state (or (latest "stage") (latest "phase") status)
+        :status status
+        :task (latest "task")
+        :since since
+        :held held
+        :wrote (some->> rs (filter #(contains? writes (str (:tool_name %)))) (keep :turn) seq (reduce max))
+        :turns (count rs)
+        :thrash mech
+        :unmet (get unmet b)
+        :stuck (not-empty stuck-by)}))))
+
+
 (defn- signal
   "One run-health sentence, rendered from gates.edn `:run-health :signals`."
   ([k] (signal k {}))
@@ -338,14 +395,27 @@
 
 (defn digest
   "The run-health block the supervisor reads. `facts` = {:results :review
-  :critic :revision}; `rows` = the run's journal turns."
+  :critic :revision ...}, plus the run's position for the per-branch view
+  (karamazov-rz7t.3): :progress (journal/progress), :idle-by-branch and
+  :stuck ({:idle-turns :held-turns}). `rows` = the run's journal turns
+  without the supervisor's own.
+
+  Each branch is ONE LINE — its state, since when, its last write — and the
+  failure exemplars are drawn only from the branches that are STUCK. The
+  supervisor's subject is whether the branches are moving, so a moving
+  branch's steps are not in its context; it digs into one with its tools.
+  Without :stuck, nothing is judged stuck and every row is drawn from, as
+  before."
   ([facts rows] (digest facts rows nil))
-  ([{:keys [results review critic revision errors fitness prescription] :as facts}
+  ([{:keys [results review critic revision errors fitness prescription stuck] :as facts}
     rows firings]
   (let [health (branch-health rows)
         total (count results)
         shipped (count (filter #(= :done (:status %)) results))
-        sigs (signals facts health)]
+        sigs (signals facts health)
+        branches (branch-progress facts rows firings)
+        stuck-ids (set (keep #(when (:stuck %) (:id %)) branches))
+        shown (if stuck (filter #(contains? stuck-ids (str (:branch_id %))) rows) rows)]
     (prompt/render
      "run-health"
      {:heading (signal :heading {:revision (or revision 0)})
@@ -357,17 +427,16 @@
       ;; With each branch's FITNESS — the number the cull read when it
       ;; decided (RFC-012 F3), so the supervisor judges the run, and its own
       ;; change to the run, on the scale selection used.
-      :per-branch (str/join "\n"
-                            (for [[b h] health]
-                              (str "- " b ": " (:turns h) " turns, "
-                                   (:mechanics h) " thrash, shipped=" (:shipped? h)
-                                   (when-let [f (get fitness b)]
-                                     (str ", fitness " (format "%.2f" (double f)) "/turn")))))
-      :failures (failure-exemplars rows (gates/threshold :supervisor-digest))
+      :branches (mapv (fn [b]
+                        (cond-> b
+                          (get fitness (:id b))
+                          (assoc :fitness (format "%.2f" (double (get fitness (:id b)))))))
+                      branches)
+      :stuck-mode (boolean stuck)
+      :failures (failure-exemplars shown (gates/threshold :supervisor-digest))
       ;; The SHAPE of the failures alongside the newest few of them (M7).
-      ;; Exemplars answer what went wrong recently; the distribution answers
-      ;; what is going wrong, which is the question a supervisor tuning the
-      ;; loop actually has.
+      ;; Over every branch: a count per signature is the run's shape, not a
+      ;; branch's steps.
       :patterns (pattern-lines
                  (failure-patterns rows (gates/threshold :supervisor-digest)))
       ;; What this project has already prescribed for itself (M9).

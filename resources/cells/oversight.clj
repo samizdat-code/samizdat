@@ -261,6 +261,7 @@
             {:reason [:map [:oversight/turns :any] [:oversight/firings :any]
                       [:oversight/findings :any] [:oversight/unmet :any]
                       [:oversight/idle :any] [:oversight/idle-by-branch :any]
+                      [:oversight/progress :any]
                       [:oversight/round :any]
                       [:oversight/crashes :any] [:oversight/results :any]
                       [:oversight/self-graded :any]
@@ -286,6 +287,11 @@
                        (let [r (get role-of b)]
                          (or (nil? r) (some #(roles/may-use? r %) writes))))
              by-branch (idle-by-branch turns writes writer?)
+             ;; The supervisor's own turns are not the run it watches: left
+             ;; in, they were a branch of the digest and their failures were
+             ;; its exemplars (karamazov-rz7t.3).
+             own? (fn [b] (= "supervisor" (some-> (get role-of b) name)))
+             watched (into [] (remove #(own? (str (:branch_id %)))) turns)
              since (reduce max 0 (vals by-branch))
              findings (session/findings (session/run-window run-id))
              ;; THE ROUND, off the journal. The feature loop's stage used to
@@ -345,7 +351,8 @@
                       :errors (count errors) :refused (count refusals)
                       :round (count (journal/notes conn run-id :route))}]
          (assoc data
-                :oversight/turns turns
+                :oversight/turns watched
+                :oversight/progress (journal/progress conn run-id)
                 :oversight/firings firings
                 :oversight/findings findings
                 :oversight/unmet unmet
@@ -438,7 +445,9 @@
             [:oversight/round {:optional true} :any]
             [:oversight/crashes {:optional true} :any]
             [:oversight/offers {:optional true} :any]
-            [:oversight/carry {:optional true} :any]]
+            [:oversight/carry {:optional true} :any]
+            [:oversight/progress {:optional true} :any]
+            [:oversight/idle-by-branch {:optional true} :any]]
    ;; :oversight/branch only on the path that ran — the fallback records a
    ;; verdict and an explanation, and there is no branch to carry.
    :output [:map [:oversight/verdict :keyword] [:oversight/answer :any]
@@ -456,6 +465,14 @@
              live (session/render mark)
              _ (session/mark! mark)
              dig (telemetry/digest {:idle-turns (:oversight/idle data)
+                                    ;; Where each branch is and since when,
+                                    ;; and what makes one STUCK — the brief
+                                    ;; is the branches' positions, and only
+                                    ;; a stuck branch's steps (rz7t.3).
+                                    :progress (:oversight/progress data)
+                                    :idle-by-branch (:oversight/idle-by-branch data)
+                                    :stuck {:idle-turns (gates/threshold :oversight-idle-floor)
+                                            :held-turns (gates/threshold :oversight-held-floor)}
                                     :unmet-gates (:oversight/unmet data)
                                     ;; The round's per-owner outcomes, which
                                     ;; is what :nobody-shipped counts and what

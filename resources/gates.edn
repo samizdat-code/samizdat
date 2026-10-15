@@ -130,6 +130,15 @@
         that changes every turn does not belong here — the point is the few
         moves, not the steps."}
 
+ :oversight-held-floor
+ {:value 40 :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-rz7t.3"]
+  :doc "Turns a branch may stay in one state — no stage entered, no phase,
+        task, goal or status change — before the supervisor's brief calls it
+        STUCK and shows its steps. Beside :oversight-idle-floor (turns without
+        a write), which marks it stuck the same way. A branch that is moving
+        is one line in the brief; this is where it stops being one."}
+
  :oversight-idle-floor
  {:value 25 :kind :threshold :capability-tunable? true
   :doc "Turns a branch may go without writing a file before the supervisor

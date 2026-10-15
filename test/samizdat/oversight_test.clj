@@ -1120,3 +1120,31 @@
           (is (true? (:oversight/worth-a-look? (gather-now conn rid)))
               "T0 newly at 27 counts whole although T1 is longer")
           (is (some? g1)))))))
+
+(deftest the-brief-is-the-branches-positions-not-their-steps
+  ;; karamazov-rz7t.3. A moving branch is one line; a stuck branch's
+  ;; failures are shown; the supervisor's own turns are neither.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        turn! (fn [b n tool & [err]]
+                (journal/record-turn! conn rid (cond-> {:branch-id b :turn n :tool-name tool
+                                                        :result "x" :category :neutral}
+                                                 err (assoc :category :mechanics
+                                                            :parse-error err))))]
+    (runs/open-branch! conn rid {:branch-id "SUP" :role :supervisor})
+    (runs/open-branch! conn rid {:branch-id "T0" :role :implementor})
+    (runs/open-branch! conn rid {:branch-id "T1" :role :implementor})
+    (journal/note! conn rid :progress {:branch-id "T0" :turn 1 :data {:key "phase" :to "build"}})
+    (journal/note! conn rid :progress {:branch-id "T1" :turn 1 :data {:key "phase" :to "build"}})
+    (turn! "T1" 1 "write_file")
+    (turn! "T1" 2 "__parse_error__" "T1 slipped once")
+    (turn! "T0" 1 "__parse_error__" "T0 keeps failing")
+    (doseq [n (range 2 32)] (turn! "T0" n "read_file"))
+    (turn! "SUP" 1 "__parse_error__" "the supervisor's own slip")
+    (let [{:keys [prob]} (reasoning-over conn rid)]
+      (is (re-find #"T0: build.*STUCK: 31 turns without a write" (str prob)))
+      (is (re-find #"T1: build" (str prob)))
+      (is (str/includes? (str prob) "T0 keeps failing"))
+      (is (not (str/includes? (str prob) "T1 slipped once")))
+      (is (not (str/includes? (str prob) "the supervisor's own slip")))
+      (is (not (re-find #"- SUP:" (str prob)))))))

@@ -3,9 +3,14 @@
 Implementors: {{shipped}}/{{total}} shipped. Outcomes: {{outcomes}}
 Reviewer: {{reviewer}}   Critic: {{critic}}
 
-Per branch (turns / mechanics-thrash / shipped? / fitness per turn, the number the cull reads):
-{{per-branch}}
-{% if failures %}
+Per branch — where it is in its work and since when, its last write, then
+turns / mechanics-thrash / fitness per turn (the number the cull reads):
+{% for b in branches %}- {{b.id}}: {{b.state|default:"?"}}{% if b.task %}, task {{b.task}}{% endif %}{% if b.status %}{% ifunequal b.status "active" %}, {{b.status}}{% endifunequal %}{% endif %} since turn {{b.since}} ({{b.held}} turns); last write {% if b.wrote %}turn {{b.wrote}}{% else %}none{% endif %}; {{b.turns}} turns, {{b.thrash}} thrash{% if b.fitness %}, fitness {{b.fitness}}/turn{% endif %}{% if b.unmet %}, {{b.unmet}} gate(s) unmet{% endif %}{% if b.stuck %} — STUCK:{% if b.stuck.idle %} {{b.stuck.idle}} turns without a write{% endif %}{% if b.stuck.held %} {{b.stuck.held}} turns without moving{% endif %}{% if b.stuck.thrash %} {{b.stuck.thrash}} turns that made no call{% endif %}{% endif %}
+{% endfor %}{% if stuck-mode %}
+A branch that is moving is one line here, not its steps. Its steps are below
+only once it is STUCK; to look at any branch sooner, `fetch_turn` the turns
+you want.
+{% endif %}{% if failures %}
 Failures this run, newest last. Start HERE: read the failure's own words,
 then `fetch_turn({turn: N, branch: "B"})` for the full record, then fix the
 cause at the surface that governs it — a parse failure lives in the prompt

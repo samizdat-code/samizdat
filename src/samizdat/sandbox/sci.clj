@@ -287,7 +287,7 @@
     ;; The run journal: reads, and appending a note or a side call's usage.
     samizdat.store.journal
     {:vars [branch-turns gate-firings gate-tally last-note last-turn note! notes notes-since
-            record-side-call! retirement-candidates run-usage turns]
+            progress record-side-call! retirement-candidates run-usage turns]
      :effects #{:db}}
 
     ;; The project's lessons: read, and recording one.
