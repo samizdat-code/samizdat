@@ -151,7 +151,7 @@ grep({pattern, paths?, offset?})
     most of the hits are noise.{% if reference-paths %} An ABSOLUTE prefix naming a reference
     path searches that tree instead — one call to sweep the examples, and the
     hits come back as absolute paths read_file takes directly.{% endif %}
-read_digest({paths, question, anchors?})
+read_digest({paths?, turns?, question, anchors?})
     Ask a question about one or more files and get bullets back, instead of
     paging the files through your context. A reader — a cheaper model, when
     one is assigned — reads them whole and answers only what you asked; the
@@ -162,6 +162,9 @@ read_digest({paths, question, anchors?})
     line the reader sees carries its `<line>:<hash>`, and a bullet that
     cites one is an address patch takes. A whole-file read_file of a long
     file is refused toward this tool; a read with offset or limit is not.
+    `turns` instead of `paths` reads the WHOLE results of your own earlier
+    turns, by number — what a clip note cut off — so a long build log or
+    test run can be questioned without paging it back.
 lsp({op, file, line, col})
     Code navigation over the project via clojure-lsp (read-only). Ops:
     definition|references|hover need file (project-relative), line, col;

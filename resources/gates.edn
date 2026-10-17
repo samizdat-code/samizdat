@@ -1703,7 +1703,11 @@
 
  :tool-clip
  {:value
-  {:message "\n… [{{shown}} of {{total}} chars shown — the rest was clipped. Ask for the part you still need (a narrower command, a `read_file` with an `offset`, or a filter), not the same call again.]"}
+  {:message "\n… [{{shown}} of {{total}} chars shown — the rest was clipped. Ask for the part you still need (a narrower command, a `read_file` with an `offset`, or a filter{% if turn %}, or `read_digest {turns: [{{turn}}], question}` to ask about the whole of this result{% endif %}), not the same call again.]"
+   ;; What a clipped result keeps on its turn row for read_digest {turns}
+   ;; (karamazov-05z0.15): the whole result up to this, so one huge output
+   ;; cannot fill the journal.
+   :keep-chars 262144}
   :kind :policy :capability-tunable? false
   :doc "WHAT A CLIPPED TOOL RESULT SAYS AT ITS CUT.
 

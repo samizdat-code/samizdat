@@ -117,7 +117,7 @@
   [conn run-id {:keys [branch-id turn tool-name args result category
                        parse-error auto-repaired assistant-text reasoning-text
                        usage policy-refusal? prefix forced-tool forced-via
-                       elapsed-ms model-change task-id]}]
+                       elapsed-ms model-change task-id full-result]}]
   (db/with-writer
     (db/execute! conn
                    ["INSERT INTO turns (run_id, branch_id, turn, tool_name, args, result,
@@ -128,8 +128,8 @@
                                         policy_refusal,
                                         prefix_stable_chars, prefix_chars, prefix_change,
                                         forced_tool, forced_via, elapsed_ms, request_hash,
-                                        task_id)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                                        task_id, full_result)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     run-id branch-id turn (str tool-name) (js (or args {}))
                     (str result) (some-> category name) parse-error
                     (if auto-repaired 1 0)
@@ -163,7 +163,10 @@
                     (:request-hash prefix)
                     ;; The task it served (migration v35): nil when none
                     ;; was held.
-                    (some-> task-id str not-empty)]))
+                    (some-> task-id str not-empty)
+                    ;; The result before its clip (migration v45): nil when
+                    ;; nothing was clipped.
+                    (some-> full-result str not-empty)]))
   ;; WHAT THE BRANCH IS RUNNING ON, on the turn it learned it
   ;; (karamazov-a28w). The loop marks the branch when the provider-reported
   ;; model is first seen or changes, so this is once per agent rather than a

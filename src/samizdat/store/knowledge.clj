@@ -38,6 +38,7 @@
             [clojure.tools.logging :as log]
             [samizdat.lexicon :as lexicon]
             [samizdat.memory :as memory]
+            [samizdat.prompt :as prompt]
             [samizdat.security.flow :as flow]
             [samizdat.store.db :as db]
             [samizdat.store.journal :as journal]
@@ -269,8 +270,12 @@
   [conn id]
   (first (db/fetch conn ["SELECT * FROM knowledge WHERE id = ? LIMIT 1" id])))
 
-(def ^:private preamble
-  "Memories you kept earlier (still active; fetch the full text with the recall tool by id):")
+(defn- preamble
+  "The line the breadcrumb index opens with — prompts/memory-index.md, so the
+  words the model reads about its own memories are editable like the rest
+  (karamazov-05z0.15)."
+  []
+  (str/trim (prompt/prompt "memory-index")))
 
 (defn corroborate!
   "Record that `run-id` also saw this memory's pattern, and return the new
@@ -1203,8 +1208,9 @@
                   ;; recalls it and takes its label.
                   (remove :flow (recall conn query rows)))]
      (when (seq picked)
-       (let [lines (fit-lines preamble cap (map index-line picked))]
-         {:text (str/join "\n" (cons preamble lines))
+       (let [head (preamble)
+             lines (fit-lines head cap (map index-line picked))]
+         {:text (str/join "\n" (cons head lines))
           :ids (mapv :id (take (count lines) picked))})))))
 
 (defn breadcrumb-index

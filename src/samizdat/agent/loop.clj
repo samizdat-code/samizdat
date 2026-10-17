@@ -248,15 +248,27 @@
 (defn- truncate
   "Clip a tool result to the budget, ending with what the model can DO about
   it. See gates.edn :tool-clip for why the marker carries the sizes and the
-  instruction rather than the bare word `truncated`."
+  instruction rather than the bare word `truncated`. `turn`, when given, is
+  named in the marker, since the whole result is kept on that turn's row for
+  read_digest {turns} (karamazov-05z0.15)."
+  ([s] (truncate s nil))
+  ([s turn]
+   (let [s (str s)
+         cap (max-result-chars)]
+     (if (> (count s) cap)
+       (str (subs s 0 cap)
+            (prompt/render-str (:message (gates/threshold :tool-clip))
+                               {:shown cap :total (count s) :turn turn}))
+       s))))
+
+(defn- unclipped
+  "What a clipped result was before the clip, up to gates.edn :tool-clip
+  :keep-chars, for the turn row; nil when nothing was clipped."
   [s]
-  (let [s (str s)
-        cap (max-result-chars)]
-    (if (> (count s) cap)
-      (str (subs s 0 cap)
-           (prompt/render-str (:message (gates/threshold :tool-clip))
-                              {:shown cap :total (count s)}))
-      s)))
+  (let [s (str s)]
+    (when (> (count s) (max-result-chars))
+      (let [keep (or (:keep-chars (gates/threshold :tool-clip)) 0)]
+        (when (pos? keep) (subs s 0 (min keep (count s))))))))
 
 (defn initial-messages
   "The branch's opening messages. A workflow may hand a `prompt-suffix` — extra
@@ -1135,7 +1147,8 @@
                          ;; one the branch holds now (karamazov-d5wo.5).
                          :task-id (or task-id (:id (:task branch)))
                          :tool-name tool :args (:args parsed)
-                         :result (truncate (:result result))
+                         :result (truncate (:result result) turn)
+                         :full-result (unclipped (:result result))
                          :category (name (:category result))
                          :policy-refusal? (:policy-refusal? result)
                          :auto-repaired (:auto-repaired? parsed)
@@ -1310,7 +1323,7 @@
       ;; a message that does not say which tool produced it gets the generic
       ;; preview instead, which is the one shape that carries nothing.
       (state/add-message branch "user"
-                         (message/frame-result tool (truncate (:result result)))
+                         (message/frame-result tool (truncate (:result result) turn))
                          {:turn turn :tool tool})
       ;; Coverage answers whether the safe-state rung's fallback is honest:
       ;; the green cursor still points into a turn log the journal can
@@ -1361,7 +1374,7 @@
             ;; then the harness's own blocks (karamazov-o4wm.3): what the
             ;; model can trust about who is speaking is the frame, not the
             ;; `---` rule — a file can carry one of those.
-            body (str (message/frame-result tool (truncate (:result result)))
+            body (str (message/frame-result tool (truncate (:result result) turn))
                       (when ctx-block (str "\n\n" ctx-block))
                       (when decision (str "\n\n---\n\n" (:message decision))))
             ;; Recorded exactly once. The row id is what a later turn settles,
