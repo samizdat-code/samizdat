@@ -68,6 +68,7 @@
    :removal-conditions "prompts/removal-conditions.md"
    :review-findings-ids "prompts/review-findings-ids.md"
    :review-prior-findings "prompts/review-prior-findings.md"
+   :worktree-conflict "prompts/worktree-conflict.md"
    :corrections-api "prompts/corrections-api.md"
    :corrections-block "prompts/corrections-block.md"
    :corrections-problem "prompts/corrections-problem.md"

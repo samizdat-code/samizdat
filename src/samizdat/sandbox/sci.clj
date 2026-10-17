@@ -149,6 +149,12 @@
     ;; Fixed git subcommands (stash create, write-tree, diff, ls-files) in `root`,
     ;; under the scrubbed environment. No caller-chosen command; a baseline that
     ;; looks like an option is refused (gitdiff/rev?).
+    ;; A worktree per parallel owner (karamazov-05z0.10): fixed git
+    ;; subcommands under the scrubbed environment, as gitdiff's are.
+    samizdat.agent.worktree
+    {:vars [isolated]
+     :effects #{:proc :fs}}
+
     samizdat.agent.gitdiff
     {:vars [baseline changed-files diff max-diff-chars review-diff]
      :effects #{:proc}}

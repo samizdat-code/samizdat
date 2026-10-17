@@ -7,6 +7,9 @@
   (:require [clojure.string :as str]
             [samizdat.fake-done :as fake-done]
             [clojure.test :refer [deftest testing is]]
+            [samizdat.agent.gates]
+            [samizdat.engine.proc]
+            [samizdat.agent.worktree]
             [samizdat.llm.client :as llm]
             [samizdat.store.db :as db]
             [samizdat.workflow :as workflow]))
@@ -210,3 +213,42 @@
               "which tells them to write the change to the file, not leave it in eval")
           (is (some #(str/includes? % "Your role: implementor") seen)
               "alongside their role identity"))))))
+
+(defn- worker-writes-its-part
+  "A worker that writes a file named for its sub-task, then ships."
+  [_ _ messages & _]
+  (let [content (str/join " " (map :content messages))
+        prob (or (second (re-find #"## Problem\s+(\w+)" content)) "task")]
+    ;; Its own write's result in the conversation means it has written.
+    (if (str/includes? content "<tool_result tool=\"write_file\">")
+      (worker-dones-its-task nil nil messages)
+      {:content (str "```tool-call\n{\"name\":\"write_file\",\"args\":{\"path\":\"" prob
+                     ".txt\",\"content\":\"" prob " part\\n\"}}\n```")
+       :finish-reason "stop"})))
+
+(deftest isolated-workers-land-their-parts-in-the-shared-tree
+  ;; karamazov-05z0.10: under :isolation :worktree each worker writes in a
+  ;; checkout of its own and only a shipped part comes back.
+  (let [root (doto (java.io.File/createTempFile "team-wt" "") (.delete) (.mkdirs))
+        sh (fn [& args] (apply samizdat.engine.proc/run {:timeout-ms 30000 :dir (str root)} args))
+        threshold samizdat.agent.gates/threshold
+        made (atom 0)]
+    (try
+      (sh "git" "init" "-q") (sh "git" "config" "user.email" "t@e.com") (sh "git" "config" "user.name" "t")
+      (spit (java.io.File. root "README") "x\n") (sh "git" "add" "-A") (sh "git" "commit" "-q" "-m" "i")
+      (with-redefs [llm/chat worker-writes-its-part
+                    samizdat.agent.gates/threshold (fn [k] (if (= k :isolation) {:mode :worktree} (threshold k)))
+                    samizdat.agent.worktree/create! (let [f samizdat.agent.worktree/create!]
+                                                      (fn [& args] (swap! made inc) (apply f args)))]
+        (let [conn (db/open! ":memory:")
+              r (workflow/run! {:conn conn
+                                :config {:run {:loop "team" :subtasks ["alpha" "beta"] :root (str root)}}
+                                :llm-adapter :a :llm-config {:max-tokens 16384}
+                                :problem "the feature" :max-turns 6})]
+          (is (= :completed (:status r)) (str (:answer r)))
+          (is (= "alpha part\n" (slurp (java.io.File. root "alpha.txt"))))
+          (is (= "beta part\n" (slurp (java.io.File. root "beta.txt"))))
+          (is (= 2 @made) "each worker had a checkout of its own")
+          (is (= 1 (count (remove str/blank? (str/split-lines (:out (sh "git" "worktree" "list"))))))
+              "and every one was removed")))
+      (finally (doseq [f (reverse (file-seq root))] (.delete f))))))

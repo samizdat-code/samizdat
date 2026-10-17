@@ -32,6 +32,21 @@
  {:value 3 :kind :threshold :capability-tunable? false
   :doc "Consecutive failed verifications before a branch is culled."}
 
+ :isolation
+ {:value {:mode :shared}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.10"]
+  :doc "Where a team's parallel owners work. `:shared` is one working tree,
+        coordinated through the mailbox and the shared-tree block — what the
+        team has always done. `:worktree` gives each owner its own git
+        worktree of the tree as it stands when it starts; an owner that
+        ships has its change applied back, one at a time, and one whose
+        change no longer applies comes back :conflict with its task reopened
+        for the supervise step to re-task from the tree as it now is. Pays
+        only where the provider keeps its speed with several calls in flight
+        (a local llama.cpp at width 2 drops to ~6 tok/s each), and each
+        worktree is a fresh checkout, so a project REPL image per owner."}
+
  :review-ledger
  {:value {:enabled? true :reuse-unchanged? true}
   :kind :policy :capability-tunable? false

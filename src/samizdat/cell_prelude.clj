@@ -32,6 +32,7 @@
             [samizdat.agent.planner]
             [samizdat.agent.reflect]
             [samizdat.agent.telemetry]
+            [samizdat.agent.worktree]
             ;; cells/board.clj and cells/feature.clj read the run's metrics;
             ;; nothing in src required the namespace, so a built binary would
             ;; have lacked it (cells-test caught it, 2026-09-16).

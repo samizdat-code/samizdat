@@ -35,6 +35,7 @@
             [samizdat.agent.compaction]
             [samizdat.agent.corrections]
             [samizdat.agent.findings]
+            [samizdat.agent.worktree]
             [samizdat.agent.files]
             [samizdat.agent.gates]
             [samizdat.agent.infer]
