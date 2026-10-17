@@ -215,6 +215,9 @@
             [samizdat.oversight-test]
             [samizdat.progress-test]
             [samizdat.introspect-branch-test]
+            [samizdat.memory-exposure-test]
+            [samizdat.memory-source-test]
+            [samizdat.memory-revise-test]
             [samizdat.battery-test]
             [samizdat.heldout-test]
             [samizdat.procedure-test]
@@ -291,6 +294,9 @@
     samizdat.oversight-test
     samizdat.progress-test
     samizdat.introspect-branch-test
+    samizdat.memory-exposure-test
+    samizdat.memory-source-test
+    samizdat.memory-revise-test
     samizdat.battery-test
     samizdat.heldout-test
     samizdat.procedure-test

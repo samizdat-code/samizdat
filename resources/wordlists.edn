@@ -213,6 +213,11 @@
  ;; number directly after a known tool name. Kept as a string because EDN
  ;; has no regex literal; the consumers re-pattern it.
  "(?i)\\b(lean|mathlib|z3|swipl|swi-prolog|prolog|octave|clojure|jolt|python|node|java|deepseek)[\\s-]*[0-9]+(\\.[0-9]+)*"
+ :revision-verdict
+ ;; How the memory reviser's one-line answer is read (karamazov-4dn8.4,
+ ;; prompts/memory-revise.md): the verb, then whatever follows it. A reply
+ ;; that does not start with one of the three changes nothing.
+ "(?is)^\\W*(KEEP|REVISE|RETIRE)\\b[:\\s]*(.*)$"
  :empty-section
  ;; What a model writes when it has nothing to put in a section it was asked
  ;; to fill. A reflector told to leave GOTCHAS empty almost never leaves it

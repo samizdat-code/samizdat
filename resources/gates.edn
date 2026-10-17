@@ -1813,10 +1813,17 @@
  :reflection
  {:value
   {:args-chars   160
-   :result-chars 240}
+   :result-chars 240
+   ;; Memories revised against their source shown as examples (4dn8.6);
+   ;; 0 until revision has produced some and the arena has read it.
+   :demonstrations 0}
   :kind :policy :capability-tunable? false
+  :provenance ["karamazov-4dn8.6"]
   :doc "HOW MUCH OF A TURN THE REFLECTOR SEES, per turn of the transcript it
-        is asked to distil into project memories.
+        is asked to distil into project memories, and how many revised
+        memories it is shown as examples of the shape to write in
+        (:demonstrations, karamazov-4dn8.6 — ReHarness writes new reflections
+        with revised ones as demonstrations).
 
         The two are separate because they are truncating different things.
         :args-chars is the CALL — a path, a command, a patch header; 160 is
@@ -1990,6 +1997,45 @@
         in samizdat.agent.webfetch, in src/, because a guard the agent can
         retune at runtime is not a guard — the same argument db's
         required-columns makes."}
+
+ :memory-revise
+ {:value {:enabled? false
+          :outcomes ["done"]
+          :max-per-branch 3
+          :feedback-turns 8
+          :answer-chars 400
+          :source-turns 40
+          :grounding {:min-token 4 :max-leaked 0}}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-4dn8.4" "karamazov-4dn8.5" "karamazov-4dn8.7" "arXiv 2610.12668"]
+  :doc "BACKWARD REVISION of the memories a branch was shown, after it ends:
+        each is put back beside the turns it was written from, with this
+        branch's outcome as feedback only, and kept, rewritten (through
+        restate!, so the old wording stays in its lineage) or retired.
+
+        :enabled?        off until the arena has measured it against the
+                         memory-without-revision and amnesiac arms
+                         (karamazov-4dn8.7); a step that costs a model call
+                         per memory has to earn it, per model class.
+        :outcomes        the branch endings that may revise. Clean ones only
+                         to start: ReHarness degraded under noisy reward, and
+                         an abandoned branch's failure says little about
+                         whether a memory it was shown is true.
+        :max-per-branch  memories revised per branch, in the order the
+                         branch first saw them.
+        :feedback-turns  how many of the branch's turns after it first saw a
+                         memory the reviser is shown as the outcome.
+        :answer-chars    how much of the branch's final answer goes with it.
+        :source-turns    the most of a memory's source turns the reviser
+                         reads, the latest kept: a reflection's source is
+                         its whole branch, and 200 turns of it outgrew a 32K
+                         window. Grounding still checks the whole span.
+        :grounding       the check a rewording must pass before it lands
+                         (karamazov-4dn8.5): not contradicted by its own
+                         source turns, and at most :max-leaked of the words
+                         it adds (of :min-token characters or more) found in
+                         the outcome but nowhere in the source. A refused
+                         revision is journaled with why and changes nothing."}
 
  :memory
  {:value

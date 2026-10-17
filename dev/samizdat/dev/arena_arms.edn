@@ -42,4 +42,22 @@
   :setup (samizdat.dev.arena/flip-gate! [:vocabulary :enabled?] false)}
  {:name :bridge-on-vocab-off :memory? false
   :setup (do (samizdat.dev.arena/flip-gate! [:eval-bridge :enabled?] true)
-             (samizdat.dev.arena/flip-gate! [:vocabulary :enabled?] false))}]}
+             (samizdat.dev.arena/flip-gate! [:vocabulary :enabled?] false))}]
+
+;; karamazov-4dn8.7: backward revision of shown memories (ReHarness). Memory
+;; is carried per arm across its runs, so the arms must run as one SEQUENCE
+;; each (n >= 2 on the same task: run 2 is the first that can revise run 1's
+;; memories). The amnesiac arm is the control; :memory is the shipped default.
+;; Arms in parallel sweeps are fine, they never share a store:
+;;
+;;   ARENA_PROVIDER=glm ARENA_ARMS=reharness ARENA_ONLY=memory-revise \
+;;     ARENA_BASE_PORT=4200 ARENA_WORK=... ARENA_RECORDINGS=... \
+;;     jolt -A:dev -m samizdat.dev.arena rows-memory-revise.edn 2 horizon-fade
+;;
+;; Read per arm: acceptance, turns, total tokens (the :revision side calls
+;; included), :memory-revised notes by verdict, :exposed counts.
+ :reharness
+ [{:name :amnesiac :memory? false}
+  {:name :memory}
+  {:name :memory-revise
+   :setup (samizdat.dev.arena/flip-gate! [:memory-revise :enabled?] true)}]}

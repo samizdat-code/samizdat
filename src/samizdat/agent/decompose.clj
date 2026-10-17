@@ -26,6 +26,7 @@
             [clojure.data.json :as json]
             [clojure.string :as str]
             [samizdat.agent.gates :as gates]
+            [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]))
 
 ;; Tier 1b: both budgets are gates.edn data (:decompose-max-depth,
@@ -271,7 +272,7 @@
   depth budget is honoured whatever the model returns."
   ([reply] (parse-decision reply 0))
   ([reply depth]
-   (let [m (try (json/read-str (or (re-find #"(?s)\{.*\}" (str reply)) ""))
+   (let [m (try (json/read-str (or (re-find #"(?s)\{.*\}" (message/answer reply)) ""))
                 (catch Throwable _ nil))]
      (when (map? m)
        (let [decision (some-> (get m "decision") str str/lower-case str/trim)

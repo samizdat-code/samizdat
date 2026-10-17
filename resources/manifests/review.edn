@@ -30,6 +30,7 @@
          :route          :loop/route
          ;; Task reflection on every ending, as the factory loop has (blt.26).
          :distil         :memory/distil
+         :revisit        :memory/revise
          :finish         :loop/finish}
 
  :edges {:start          :infer
@@ -47,7 +48,8 @@
                           :done      :distil
                           :abandoned :distil
                           :exhausted :distil}
-         :distil         :finish
+         :distil         :revisit
+         :revisit        :finish
          :finish         :end}
 
  ;; ORDER MATTERS in :parse, as in loop.edn: a provider failure passes the

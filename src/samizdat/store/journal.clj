@@ -1027,6 +1027,27 @@
                             WHERE run_id = ? AND kind = 'progress' ORDER BY id"
                           run-id])))
 
+;; Which memories a branch was shown, and how (karamazov-4dn8.1): the
+;; context block's first showing of each (:exposed) and every recall.
+(defn exposed
+  "{memory-id {:turn :via}} for `branch-id`: the first time each memory was
+  put in front of it — via the breadcrumb index, the learned-since block, or
+  a recall."
+  [conn run-id branch-id]
+  (reduce (fn [acc {:keys [kind data turn]}]
+            (if-let [d (try (json/read-str (str data) :key-fn keyword)
+                            (catch Throwable _ nil))]
+              (let [via (if (= "recall" kind) "recall" (str (:via d)))
+                    t (or (:turn d) turn)]
+                (reduce (fn [a id] (if (contains? a id) a (assoc a id {:turn t :via via})))
+                        acc (:ids d)))
+              acc))
+          {}
+          (db/fetch conn ["SELECT kind, data, turn FROM events
+                            WHERE run_id = ? AND branch_id = ? AND kind IN ('exposed', 'recall')
+                            ORDER BY id"
+                          run-id branch-id])))
+
 (defn notes-since
   "Notes of any of `kinds` on this run created at or after `since` (an ISO
   instant), oldest first, each its parsed data with :kind beside it."

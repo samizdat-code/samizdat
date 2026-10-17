@@ -339,6 +339,19 @@
   terminal, and reconcile-orphans! ignores them because none is running."
   ["runs" "knowledge"])
 
+(defn- insert-rows!
+  "Insert `rows` into `table` of `to`, replacing on id collision."
+  [to table rows]
+  (when (seq rows)
+    (let [cols (mapv name (keys (first rows)))
+          placeholders (str/join ", " (repeat (count cols) "?"))
+          sql (str "INSERT OR REPLACE INTO " table
+                   " (" (str/join ", " cols) ") VALUES (" placeholders ")")]
+      (doseq [r rows]
+        (db/with-writer
+          (db/execute! to (into [sql] (map #(get r (keyword %))) cols))))))
+  (count rows))
+
 (defn- copy-table!
   "Copy every row of `table` from `from` to `to`, replacing on id collision.
 
@@ -349,16 +362,28 @@
   carried — which is the failure mode a hand-written column list has, and it
   fails in the direction of losing exactly the newest field."
   [from to table]
-  (let [rows (db/fetch from [(str "SELECT * FROM " table)])]
-    (when (seq rows)
-      (let [cols (mapv name (keys (first rows)))
-            placeholders (str/join ", " (repeat (count cols) "?"))
-            sql (str "INSERT OR REPLACE INTO " table
-                     " (" (str/join ", " cols) ") VALUES (" placeholders ")")]
-        (doseq [r rows]
-          (db/with-writer
-            (db/execute! to (into [sql] (map #(get r (keyword %))) cols))))))
-    (count rows)))
+  (insert-rows! to table (db/fetch from [(str "SELECT * FROM " table)])))
+
+(defn- copy-source-turns!
+  "Copy the turns the carried memories cite as their SOURCE (karamazov-4dn8.3)
+  and nothing else. Backward revision (karamazov-4dn8.4) puts a memory back
+  beside the turns it was written from, which live in the earlier run's
+  record; without them every carried memory arrives with a span that reads
+  as empty and the revision arm measures nothing. Narrow on purpose, for the
+  reason memory-tables gives: these are the learning's provenance, like the
+  runs rows, not a transcript of what a previous run did."
+  [from to]
+  (let [spans (db/fetch from ["SELECT DISTINCT run_id, source_branch, source_turn_from, source_turn_to
+                                FROM knowledge
+                               WHERE source_branch IS NOT NULL AND source_turn_from IS NOT NULL"])
+        rows (into [] (mapcat (fn [{:keys [run_id source_branch source_turn_from source_turn_to]}]
+                                (db/fetch from ["SELECT * FROM turns
+                                                  WHERE run_id = ? AND branch_id = ?
+                                                    AND turn BETWEEN ? AND ?"
+                                                run_id source_branch source_turn_from
+                                                (or source_turn_to source_turn_from)])))
+                   spans)]
+    (insert-rows! to "turns" rows)))
 
 (defn carry-memory!
   "Seed the worktree at `root` with what this ARM has learned so far.
@@ -386,7 +411,8 @@
           _ (io/make-parents (io/file dest))
           to (db/open! dest)
           from (db/connect (str carry-db))]
-      (try (reduce + 0 (map #(copy-table! from to %) memory-tables))
+      (try (+ (reduce + 0 (map #(copy-table! from to %) memory-tables))
+              (copy-source-turns! from to))
            (finally (db/close from) (db/close to))))))
 
 (defn harvest-memory!
@@ -399,7 +425,8 @@
   (when (and carry-db recording (.exists (io/file (str recording))))
     (let [to (db/open! (str carry-db))
           from (db/connect (str recording))]
-      (try (reduce + 0 (map #(copy-table! from to %) memory-tables))
+      (try (+ (reduce + 0 (map #(copy-table! from to %) memory-tables))
+              (copy-source-turns! from to))
            (finally (db/close from) (db/close to))))))
 
 ;;; ---------------------------------------------------------- the measurement

@@ -11,13 +11,22 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [samizdat.agent.reflect :as reflect]
+            [samizdat.llm.client]
             [samizdat.store.db :as db]
-            [samizdat.store.knowledge :as knowledge]))
+            [samizdat.store.journal]
+            [samizdat.store.knowledge :as knowledge]
+            [samizdat.store.runs]))
 
 (def ^:private conn (atom nil))
 (use-fixtures :each (fn [f] (reset! conn (db/open! ":memory:")) (f) (db/close @conn)))
 
 ;; --- the half that CAN be tested --------------------------------------------
+
+(deftest the-reasoning-is-not-a-reflection
+  (is (= {"FACTS" ["builds with jolt bin"]}
+         (select-keys (reflect/parse-sections
+                       "<think>\n## FACTS\n- maybe it uses make\n</think>\n## FACTS\n- builds with jolt bin")
+                      ["FACTS"]))))
 
 (deftest every-fact-the-harness-means-to-hand-over-reaches-the-prompt
   ;; dirge guards exactly this in CI (compaction_recall.rs), and the reasoning
@@ -83,9 +92,49 @@
   ;; The implementor is the only role positioned to notice that a memory it was
   ;; handed is wrong, so its word counts against that memory's record.
   (let [id (knowledge/remember! @conn {:content "tests live under spec/" :kind "semantic"})]
-    (reflect/record! @conn {:run-id "r1"}
+    (reflect/record! @conn {:run-id "r1" :shown #{id}}
                      {"WRONG" [(str id " — the tests moved to test/")]})
     (is (= 1 (:failure_count (knowledge/get-by-id @conn id))))))
+
+(deftest a-correction-against-a-memory-the-branch-never-saw-counts-for-nothing
+  ;; karamazov-4dn8.2. The reflector was handed knowledge/standing recomputed
+  ;; at reflection time, not what the branch read, so a WRONG could land on a
+  ;; row the branch never saw.
+  (let [id (knowledge/remember! @conn {:content "tests live under spec/" :kind "semantic"})]
+    (reflect/record! @conn {:run-id "r1" :shown #{}}
+                     {"WRONG" [(str id " — the tests moved to test/")]})
+    (is (zero? (or (:failure_count (knowledge/get-by-id @conn id)) 0)))))
+
+(deftest the-reflector-is-shown-what-the-branch-was-shown
+  (let [c @conn
+        rid (samizdat.store.runs/start-run! c {:problem "p"})
+        seen (knowledge/remember! c {:content "build with jolt bin" :kind "semantic"})
+        unseen (knowledge/remember! c {:content "the overview of everything" :kind "overview"})
+        sent (atom nil)]
+    (samizdat.store.journal/note! c rid :exposed {:branch-id "T0" :turn 2
+                                                  :data {:via "breadcrumb" :ids [seen]}})
+    (with-redefs [samizdat.llm.client/chat (fn [_ _ msgs & _]
+                                             (reset! sent (:content (second msgs)))
+                                             {:content "## FACTS\n- x"})]
+      (reflect/distil-task! {:conn c :run-id rid} {:id "T0" :problem "p"}))
+    (is (str/includes? (str @sent) "build with jolt bin"))
+    (is (not (str/includes? (str @sent) "the overview of everything"))
+        "standing, recomputed, is not what the branch read")))
+
+(deftest a-memory-retired-since-it-was-shown-is-not-judged
+  (let [c @conn
+        rid (samizdat.store.runs/start-run! c {:problem "p"})
+        old (knowledge/remember! c {:content "build with make" :kind "semantic"})
+        sent (atom nil)]
+    (samizdat.store.journal/note! c rid :exposed {:branch-id "T0" :turn 2
+                                                  :data {:via "breadcrumb" :ids [old]}})
+    (knowledge/retire! c old {:reason "superseded"})
+    (with-redefs [samizdat.llm.client/chat (fn [_ _ msgs & _]
+                                             (reset! sent (:content (second msgs)))
+                                             {:content (str "## WRONG\n- " old " — no")})]
+      (reflect/distil-task! {:conn c :run-id rid} {:id "T0" :problem "p"}))
+    (is (not (str/includes? (str @sent) "build with make")))
+    (is (zero? (or (:failure_count (knowledge/get-by-id c old)) 0)))))
 
 (deftest a-correction-naming-an-unknown-id-is-ignored
   (is (some? (reflect/record! @conn {:run-id "r1"} {"WRONG" ["k-nosuch — invented"]}))))
@@ -115,3 +164,19 @@
       (testing "a standing fact still corroborates rather than being rewritten"
         (is (= 1 (count facts)))
         (is (= 2 (:corroborations (first facts))))))))
+
+(deftest revised-memories-become-the-reflectors-examples
+  ;; karamazov-4dn8.6: ReHarness writes new reflections with revised ones as
+  ;; demonstrations. A memory that was revised against its source and has not
+  ;; failed since is the shape a reflection should take.
+  (let [c @conn
+        old (knowledge/remember! c {:content "build with uberjar" :kind "semantic"})
+        new (knowledge/restate! c old "build the binary with `jolt bin`; it writes ./app"
+                                {:reason "revised"})
+        _ (knowledge/remember! c {:content "never revised" :kind "semantic"})]
+    (is (= [new] (mapv :id (knowledge/revised c 3))))
+    (is (empty? (knowledge/revised c 0)) "none when the policy asks for none")
+    (let [p (reflect/build-prompt {:problem "p" :turns [] :memories []
+                                   :examples (knowledge/revised c 3)})]
+      (is (str/includes? p "jolt bin"))
+      (is (not (str/includes? p "never revised"))))))

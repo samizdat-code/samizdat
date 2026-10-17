@@ -104,7 +104,7 @@
   "Insert a fact and return its id. Kind defaults to 'note' — the column
   exists so later kinds (decisions, gotchas, references) need no migration."
   [conn {:keys [content kind salience confidence run-id pinned pattern-key
-                cause supersedes lineage-id flow]}]
+                cause supersedes lineage-id flow source]}]
   (when (str/blank? (str content))
     (throw (ex-info "a memory needs content" {})))
   (let [kind (or kind "note")
@@ -140,12 +140,16 @@
                    ["INSERT INTO knowledge (id, content, kind, created_at,
                                              salience, confidence, run_id, pinned,
                                              last_run_id, pattern_key,
-                                             lineage_id, current, cause, supersedes, flow)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)"
+                                             lineage_id, current, cause, supersedes, flow,
+                                             source_branch, source_turn_from, source_turn_to)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)"
                                 id (str content) kind now
                                 salience confidence run-id (if pinned 1 0)
                                 run-id pattern-key
-                                (or lineage-id id) cause supersedes flow]))
+                                (or lineage-id id) cause supersedes flow
+                                ;; Where it came from (v40): the branch and
+                                ;; the turns it was written from.
+                                (some-> (:branch source) str) (:from source) (:to source)]))
                 1
                 (catch Exception e
                   ;; Only a UNIQUE collision is an id problem; anything else
@@ -376,7 +380,10 @@
 
 (defn restate!
   "Record a NEW version of a memory and retire the old one. Returns the new
-  row's id, or nil when the text did not change.
+  row's id, or nil when the text did not change or the row is no longer the
+  current version — restating a superseded row forks its lineage into two
+  current versions, which is what two branches revising the same memory one
+  after the other did.
 
   For a memory that describes a moving target rather than a standing fact.
   The project overview is the one: it says what the codebase IS, and a run
@@ -393,9 +400,9 @@
   version, so `history` still answers how often this project has been
   described, and a reader citing an old id still finds the row it cited."
   ([conn id content] (restate! conn id content {}))
-  ([conn id content {:keys [reason cause]}]
+  ([conn id content {:keys [reason cause source]}]
    (let [row (get-by-id conn id)]
-     (when (and row (not= (str content) (str (:content row))))
+     (when (and row (= 1 (:current row)) (not= (str content) (str (:content row))))
        (let [lineage (or (:lineage_id row) id)
              new-id (remember! conn {:content content
                                      :kind (:kind row)
@@ -406,7 +413,13 @@
                                      :pattern-key (:pattern_key row)
                                      :lineage-id lineage
                                      :supersedes id
-                                     :cause cause})]
+                                     :cause cause
+                                     ;; A new wording comes from the same
+                                     ;; place unless the caller says where.
+                                     :source (or source
+                                                 {:branch (:source_branch row)
+                                                  :from (:source_turn_from row)
+                                                  :to (:source_turn_to row)})})]
          (db/with-writer
            ;; THE RECORD MOVES WITH THE LINEAGE. Rewriting in place kept the
            ;; use count and corroborations for free; a new row starts at zero,
@@ -835,7 +848,7 @@
   fact."
   [conn {:keys [run-id]}]
   (let [rows (db/fetch conn
-                       ["SELECT tool_name, args, result, category FROM turns
+                       ["SELECT branch_id, turn, tool_name, args, result, category FROM turns
                           WHERE run_id = ? AND tool_name = ? ORDER BY turn"
                         run-id "shell"])
         command-of (fn [r] (try (some-> (json/read-str (str (:args r)) :key-fn keyword)
@@ -847,20 +860,23 @@
                              (cond
                                (= "success" (:category r))
                                (let [cmd (or (not-empty (normalise-command cmd)) cmd)]
-                                 {:key (str "cmd-works:" cmd) :content (fact :cmd-works cmd)})
+                                 {:key (str "cmd-works:" cmd) :content (fact :cmd-works cmd)
+                                  :source {:branch (:branch_id r) :from (:turn r) :to (:turn r)}})
 
                                (re-find (re-pattern (lexicon/wordlist :shell-refusal))
                                         (str (:result r)))
-                               {:key (str "cmd-refused:" cmd) :content (fact :cmd-refused cmd)}))))
-                   distinct)]
+                               {:key (str "cmd-refused:" cmd) :content (fact :cmd-refused cmd)
+                                :source {:branch (:branch_id r) :from (:turn r) :to (:turn r)}}))))
+                   ;; One fact per key, sourced to the first turn that showed it.
+                   (reduce (fn [acc f] (if (some #(= (:key f) (:key %)) acc) acc (conj acc f))) []))]
     (vec
-     (for [{:keys [key content]} facts
+     (for [{:keys [key content source]} facts
            :let [existing (by-pattern conn key)]]
        (if existing
          (do (corroborate! conn (:id existing) run-id)
              {:id (:id existing) :fact key :repeat? true})
          {:id (remember! conn {:content content :kind "semantic" :run-id run-id
-                               :pattern-key key :confidence 0.8})
+                               :pattern-key key :confidence 0.8 :source source})
           :fact key :repeat? false})))))
 
 (defn record-workflow-outcome!
@@ -1146,14 +1162,31 @@
         (<= (count candidate) cap) (recur (conj kept l) more)
         :else kept))))
 
-(defn breadcrumb-index
-  "A bounded index of kept memories as a string, or nil when there are
-  none. One line per memory — id, kind, ~70-char preview — so the index
-  is cheap enough to sit in every turn's context while full text is
-  fetched on demand by id (stub-and-expand). A non-blank query ranks the
-  rows via recall; a blank query falls back to the most recent. The
-  whole string is hard-capped so it never becomes a content dump."
-  ([conn query] (breadcrumb-index conn query {}))
+(defn revised
+  "Up to `n` current memories that were revised against their source
+  (karamazov-4dn8.4) and have not failed more than they succeeded since,
+  newest first: the examples a reflection is shown of what a memory that held
+  up looks like (karamazov-4dn8.6)."
+  [conn n]
+  (if (pos? (or n 0))
+    (db/fetch conn ["SELECT k.* FROM knowledge k
+                      JOIN knowledge p ON p.id = k.supersedes
+                     WHERE k.current = 1 AND p.retired_reason = 'revised'
+                       AND coalesce(k.failure_count, 0) <= coalesce(k.success_count, 0)
+                     ORDER BY k.created_at DESC LIMIT ?" n])
+    []))
+
+(defn breadcrumb
+  "The breadcrumb index as {:text :ids}, or nil when there are no memories:
+  `text` the bounded index a branch reads, `ids` the rows whose lines made
+  it in. One line per memory — id, kind, ~70-char preview — so the index is
+  cheap enough to sit in every turn's context while full text is fetched on
+  demand by id (stub-and-expand). A non-blank query ranks the rows via
+  recall; a blank query falls back to the standing set. The whole string is
+  hard-capped so it never becomes a content dump; the ids are the rows that
+  survived the cap, which is what the branch was actually shown
+  (karamazov-4dn8.1)."
+  ([conn query] (breadcrumb conn query {}))
   ([conn query {:keys [rows cap] :or {rows 8 cap 700}}]
    (let [picked (if (str/blank? query)
                   ;; `standing`, not `recent`. With no claim to rank against,
@@ -1170,4 +1203,12 @@
                   ;; recalls it and takes its label.
                   (remove :flow (recall conn query rows)))]
      (when (seq picked)
-       (str/join "\n" (cons preamble (fit-lines preamble cap (map index-line picked))))))))
+       (let [lines (fit-lines preamble cap (map index-line picked))]
+         {:text (str/join "\n" (cons preamble lines))
+          :ids (mapv :id (take (count lines) picked))})))))
+
+(defn breadcrumb-index
+  "The breadcrumb index as a string, or nil when there are none. See
+  `breadcrumb`, which also says which rows made it in."
+  ([conn query] (:text (breadcrumb conn query)))
+  ([conn query opts] (:text (breadcrumb conn query opts))))

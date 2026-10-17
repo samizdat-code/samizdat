@@ -36,6 +36,7 @@
          ;; — this manifest's header says "everything is the default loop
          ;; except the critic", and dropping distil was the silent exception.
          :distil         :memory/distil
+         :revisit        :memory/revise
          :finish         :loop/finish}
 
  :edges {:start          :infer
@@ -57,7 +58,8 @@
          ;; The critic either ships the done or sends the branch back to work.
          :critic         {:ship   :distil
                           :revise :start}
-         :distil         :finish
+         :distil         :revisit
+         :revisit        :finish
          :finish         :end}
 
  ;; ORDER MATTERS in :parse, as in loop.edn: a provider failure passes the

@@ -20,6 +20,7 @@
             [samizdat.agent.instructions :as instr]
             [samizdat.agent.loop :as turn]
             [samizdat.agent.reflect :as reflect]
+            [samizdat.agent.revise :as revise]
             [samizdat.agent.state :as state]
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
@@ -332,6 +333,29 @@
    :output [:map]}
   (fn [ctx {:keys [branch] :as data}]
     (reflect/distil-task! ctx branch)
+    data))
+
+(cell/defcell :memory/revise
+  {:doc "Revise the memories this branch was shown against the trajectories
+        they came from (karamazov-4dn8.4, ReHarness).
+
+        Runs after :memory/distil, when a task ends. The DECISION is here:
+        whether to revise at all (gates.edn :memory-revise :enabled?, off
+        until the arena has measured it) and after which endings
+        (:outcomes) — only clean ones by default, because a revision steered
+        by a noisy outcome is the failure the paper reports. The mechanism
+        is samizdat.agent.revise.
+
+        Fails safe to the data it was given, like :memory/distil."
+   :effects [:net :db]
+   :requires [:conn :run-id :llm-adapter :llm-config]
+   :input  [:map [:branch :map]]
+   :output [:map]}
+  (fn [ctx {:keys [branch] :as data}]
+    (let [{:keys [enabled? outcomes] :as policy} (gates/threshold :memory-revise)]
+      (when (and enabled?
+                 (some #{(some-> (:status branch) name)} (map name outcomes)))
+        (revise/revise! ctx branch policy)))
     data))
 
 (cell/defcell :loop/finish

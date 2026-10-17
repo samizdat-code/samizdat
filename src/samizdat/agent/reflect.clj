@@ -31,6 +31,7 @@
             [samizdat.agent.state :as state]
             [samizdat.lexicon :as lexicon]
             [samizdat.llm.client :as llm]
+            [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
             [samizdat.store.knowledge :as knowledge]))
@@ -61,6 +62,18 @@
          " -> [" category "] "
          (clip (str/replace (str result) #"\s+" " ") result-chars))))
 
+(defn source-lines
+  "The turns memory `row` was written from, one turn-line each: its source
+  branch's turns in its run between source_turn_from and source_turn_to.
+  Empty when the row records no source (karamazov-4dn8.3)."
+  [conn {:keys [run_id source_branch source_turn_from source_turn_to]}]
+  (if (and run_id source_branch source_turn_from source_turn_to)
+    (into []
+          (comp (filter #(<= source_turn_from (:turn %) source_turn_to))
+                (map turn-line))
+          (journal/branch-turns conn run_id source_branch))
+    []))
+
 (defn build-prompt
   "The user message handed to the reflector.
 
@@ -68,11 +81,15 @@
   intends the model to see must be IN here; what the model does with it is not
   something a test can pin, but a fact that never arrived is a harness bug and
   is exactly what this makes visible."
-  [{:keys [problem turns memories]}]
+  [{:keys [problem turns memories examples]}]
   (prompt/render "task-reflection-input"
                  {:problem problem
                   :turns (mapv turn-line turns)
-                  :memories (mapv #(select-keys % [:id :kind :content]) memories)}))
+                  :memories (mapv #(select-keys % [:id :kind :content]) memories)
+                  ;; Memories that held up against their source, as the shape
+                  ;; to write in (karamazov-4dn8.6). None unless gates.edn
+                  ;; :reflection :demonstrations asks for some.
+                  :examples (mapv #(select-keys % [:kind :content]) examples)}))
 
 (defn parse-sections
   "The reflector's reply as `{section [line …]}`.
@@ -82,7 +99,7 @@
   empty will often write `None.` or `-` instead."
   [text]
   (let [placeholder (re-pattern (lexicon/wordlist :empty-section))
-        chunks (rest (str/split (str text) #"(?m)^##\s+"))]
+        chunks (rest (str/split (message/answer text) #"(?m)^##\s+"))]
     (into {}
           (keep (fn [chunk]
                   (let [[header & body] (str/split-lines chunk)
@@ -119,7 +136,7 @@
   corroborated that description rather than correcting it, and the same run
   flagged the memory it had just agreed with as WRONG. A standing fact
   corroborates; a description restates."
-  [conn {:keys [run-id]} sections]
+  [conn {:keys [run-id shown source]} sections]
   (let [written
         (vec (for [[section lines] sections
                    :let [kind (section->kind section)]
@@ -143,12 +160,14 @@
                    {:id (or restated (:id existing)) :kind kind :repeat? true})
                  {:id (knowledge/remember! conn {:content line :kind kind
                                                  :run-id run-id :pattern-key key
-                                                 :confidence 0.7})
+                                                 :confidence 0.7 :source source})
                   :kind kind :repeat? false})))]
     (doseq [{:keys [id]} (corrections sections)]
       ;; The implementor is the only role positioned to notice that a memory it
-      ;; was handed is stale, so its word counts against that memory's record.
-      (when (knowledge/get-by-id conn id)
+      ;; was handed is stale, so its word counts against that memory's record
+      ;; — but only a memory it WAS handed (`shown`, karamazov-4dn8.2). A
+      ;; reflector naming any other id is judging a row the branch never read.
+      (when (and (contains? (set shown) id) (= 1 (:current (knowledge/get-by-id conn id))))
         (knowledge/record-outcome! conn id false)))
     written))
 
@@ -161,10 +180,19 @@
   [{:keys [conn run-id llm-adapter llm-config] :as _ctx} branch]
   (try
     (let [turns (journal/branch-turns conn run-id (:id branch))
-          memories (knowledge/standing conn)
+          ;; WHAT THE BRANCH WAS SHOWN, not knowledge/standing recomputed now
+          ;; (karamazov-4dn8.2): the breadcrumb index ranks by the branch's
+          ;; own claims turn by turn, so the two sets differ, and the WRONG
+          ;; section below counts against whatever ids this list offers.
+          shown (keys (journal/exposed conn run-id (:id branch)))
+          ;; Only what is still current: a memory retired or reworded since
+          ;; the branch saw it is not the reflector's to judge again.
+          memories (filter #(= 1 (:current %)) (keep #(knowledge/get-by-id conn %) shown))
           user (build-prompt {:problem (:problem branch)
                               :turns turns
-                              :memories memories})
+                              :memories memories
+                              :examples (knowledge/revised
+                                         conn (:demonstrations (lexicon/policy :reflection)))})
           answer (llm/chat llm-adapter llm-config
                            [{:role "system" :content (prompt/prompt "task-reflection")}
                             {:role "user" :content user}]
@@ -178,7 +206,11 @@
                                         :model (:model llm-config)
                                         :usage (:usage answer)})
           sections (parse-sections (:content answer))
-          written (record! conn {:run-id run-id} sections)]
+          ;; Every line came from this branch's turns (karamazov-4dn8.3).
+          source (let [ts (keep :turn turns)]
+                   (when (seq ts)
+                     {:branch (:id branch) :from (reduce min ts) :to (reduce max ts)}))
+          written (record! conn {:run-id run-id :shown (set shown) :source source} sections)]
       (journal/note! conn run-id :task-reflection
                      {:branch-id (:id branch)
                       :data {:sections (keys sections) :written (count written)}})

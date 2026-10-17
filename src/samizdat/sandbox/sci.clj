@@ -190,6 +190,12 @@
     {:vars [distil-task!]
      :effects #{:net :db}}
 
+    ;; Backward revision of the memories a branch was shown
+    ;; (karamazov-4dn8.4): model calls and the knowledge store's own writes.
+    samizdat.agent.revise
+    {:vars [revise!]
+     :effects #{:net :db}}
+
     ;; A skill's body BY NAME, from the discovered skill set — a lookup, not a
     ;; path.
     samizdat.agent.skills
@@ -251,6 +257,10 @@
     samizdat.llm.client
     {:vars [chat]
      :effects #{:net}}
+
+    ;; A reply's answer without its reasoning. Pure.
+    samizdat.llm.message
+    {:vars [answer]}
 
     ;; String repair. Pure.
     samizdat.llm.fence
