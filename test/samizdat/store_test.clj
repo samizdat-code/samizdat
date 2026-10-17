@@ -1478,6 +1478,29 @@
             "a forced tool outranks the prefix shape: the prefix was stable and
              the provider missed anyway, which is the forced call's doing")))))
 
+(deftest a-tail-miss-after-a-long-idle-is-its-own-cause
+  ;; karamazov-05z0.11: a :tail miss said the provider dropped the prefix on
+  ;; its own. One that came after the branch sat idle past the cache's
+  ;; lifetime is the expected one — the cache expired — and wants a
+  ;; different reading (fold while it is cold) than an eviction under load.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          row (fn [turn hit change at elapsed]
+                (journal/record-turn! c rid {:branch-id "B1" :turn turn :tool-name "t"
+                                             :result "ok" :category :success :elapsed-ms elapsed
+                                             :usage {:prompt-tokens 10000 :cache-hit-tokens hit}
+                                             :prefix {:change change :stable-chars 39000 :chars 40000}})
+                (db/execute! c ["UPDATE turns SET created_at = ? WHERE run_id = ? AND turn = ?"
+                                at rid turn]))]
+      (row 1 9000 :tail "2026-10-17T10:00:00.000Z" 1000)
+      (row 2 100 :tail "2026-10-17T10:10:01.000Z" 1000)
+      (row 3 100 :tail "2026-10-17T10:10:31.000Z" 1000)
+      (let [m (journal/cache-misses c rid {:min-prompt-tokens 2000 :hit-below 0.5 :idle-ms 300000})]
+        (is (= {:idle 1 :tail 1} (:by-cause m))
+            "ten minutes since the last call is idle; thirty seconds is the provider's own drop"))
+      (is (= {:tail 2} (:by-cause (journal/cache-misses c rid {:min-prompt-tokens 2000 :hit-below 0.5})))
+          "with no idle threshold the old grouping stands"))))
+
 (deftest context-block-notes-average-per-part
   ;; karamazov-o4wm.6: the block's cost was on the branch map for introspect's
   ;; last-turn view and nowhere durable. One note per turn per branch, and a

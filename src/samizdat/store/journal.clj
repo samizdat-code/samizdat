@@ -350,24 +350,43 @@
                  can move, and the compaction notes for the same branch
                  and turn say which rung
     :unknown     no fingerprint — a replay, a stub, a pre-v30 row
+    :idle        a :tail miss that came more than `:idle-ms` after the
+                 branch's previous call ended — the cache's lifetime ran out,
+                 which is expected, not the provider dropping a live prefix
+                 (karamazov-05z0.11); only when :idle-ms is given
 
-  `policy` is gates.edn :cache-miss: the hit ratio a turn counts under and
-  the prompt size it must reach to count at all."
-  [conn run-id {:keys [min-prompt-tokens hit-below]}]
-  (let [rows (db/fetch conn ["SELECT prefix_change, forced_tool, forced_via, count(*) AS n
-                                FROM turns
-                               WHERE run_id = ?
-                                 AND prompt_tokens >= ?
-                                 AND cache_hit_tokens IS NOT NULL
-                                 AND cache_hit_tokens * 1.0 / prompt_tokens < ?
-                               GROUP BY prefix_change, forced_tool, forced_via"
+  `policy` is gates.edn :cache-miss: the hit ratio a turn counts under, the
+  prompt size it must reach to count at all, and the idle gap."
+  [conn run-id {:keys [min-prompt-tokens hit-below idle-ms]}]
+  (let [rows (db/fetch conn ["SELECT t.prefix_change, t.forced_tool, t.forced_via,
+                                     t.created_at, t.elapsed_ms,
+                                     (SELECT max(p.created_at) FROM turns p
+                                       WHERE p.run_id = t.run_id AND p.branch_id = t.branch_id
+                                         AND p.id < t.id) AS prev_at,
+                                     1 AS n
+                                FROM turns t
+                               WHERE t.run_id = ?
+                                 AND t.prompt_tokens >= ?
+                                 AND t.cache_hit_tokens IS NOT NULL
+                                 AND t.cache_hit_tokens * 1.0 / t.prompt_tokens < ?"
                               run-id min-prompt-tokens hit-below])
+        ;; The gap between the previous call's end and this one's start: the
+        ;; row is written when a call ends, so its start is created_at less
+        ;; elapsed_ms.
+        gap-ms (fn [{:keys [created_at elapsed_ms prev_at]}]
+                 (try (- (.toEpochMilli (java.time.Instant/parse (str created_at)))
+                         (or elapsed_ms 0)
+                         (.toEpochMilli (java.time.Instant/parse (str prev_at))))
+                      (catch Throwable _ nil)))
+        idle? (fn [r] (and idle-ms (:prev_at r)
+                           (when-let [g (gap-ms r)] (> g idle-ms))))
         ;; A NATIVE force explains a miss on its own; a grammar force
         ;; (forced_via "grammar", v32) leaves the prefix alone, so a miss on
         ;; such a turn is whatever its prefix shape says. A pre-v32 row with
         ;; a forced tool and no via is native, the only force there was.
-        cause (fn [{:keys [prefix_change forced_tool forced_via]}]
+        cause (fn [{:keys [prefix_change forced_tool forced_via] :as r}]
                 (cond (and (seq forced_tool) (not= "grammar" forced_via)) :forced
+                      (and (= "tail" prefix_change) (idle? r)) :idle
                       (seq prefix_change) (keyword prefix_change)
                       :else :unknown))
         by (reduce (fn [m r] (update m (cause r) (fnil + 0) (:n r))) {} rows)]

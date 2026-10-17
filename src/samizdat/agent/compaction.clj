@@ -474,9 +474,11 @@
 (defn fold-cost
   "What a fold costs in fresh tokens: the summarizer reads the window once,
   and everything after the fold point is re-prefilled because the prefix
-  cache no longer matches it."
-  [{:keys [window-tokens after-tokens]}]
-  (double (+ window-tokens after-tokens)))
+  cache no longer matches it. With `window-cached?` — the summary asked on
+  the branch's own prefix (:summarize-via :tape) — the window is read from
+  the cache, and only the re-prefill is fresh."
+  [{:keys [window-tokens after-tokens window-cached?]}]
+  (double (+ (if window-cached? 0 window-tokens) after-tokens)))
 
 (defn fold-pays?
   "Whether carrying `window-tokens` for the turns left (capped at `horizon`)

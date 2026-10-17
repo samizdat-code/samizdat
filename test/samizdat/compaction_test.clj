@@ -19,7 +19,8 @@
             [samizdat.manifests :as manifests]
             [mycelium.cell :as cell]
             [samizdat.config :as config]
-            [samizdat.store.journal]))
+            [samizdat.store.journal]
+            [samizdat.workflow]))
 
 (def ^:private ladder
   {:aggressive-cap 0.60 :fold 0.75 :aggressive-fold 0.78 :force 0.80 :turn-start 0.90})
@@ -671,3 +672,55 @@
       (with-redefs [gates/threshold (let [orig gates/threshold]
                                       (fn [k] (if (= k :fold-role) "system" (orig k))))]
         (is (= "system" (fold {:context-window 128000 :fold-role "user"})))))))
+
+(deftest a-fold-can-summarise-on-the-branch-s-own-prefix
+  ;; karamazov-05z0.11: the summarizer was sent a fresh [system, material]
+  ;; pair, so the whole window was prefilled again — ~110 s a fold on a
+  ;; local model. :summarize-via :tape sends the branch's own conversation
+  ;; with the instruction appended to its newest turn, so everything before
+  ;; that turn is the prefix the provider already holds.
+  (cells/load-cells!)
+  (let [big (apply str (repeat 3000 "x"))
+        msgs (into [{:role "system" :content "BRANCH SYSTEM PROMPT"} {:role "user" :content "go"}]
+                   (mapcat (fn [i] [{:role "assistant" :content (str "call " i)}
+                                    {:role "user" :content (str "result " i " " big)}])
+                           (range 8)))
+        data {:compaction/tier :fold :compaction/before 999999
+              :branch {:id "B1" :messages msgs}}
+        summary "## Active Task\nFinish it.\n## Goal\nShip.\n## Completed Actions\nRead a.\n## Active State\nGreen."
+        fold (fn [via role-config]
+               (let [sent (atom nil)
+                     orig gates/threshold]
+                 (with-redefs [gates/threshold (fn [k] (if (= k :compaction)
+                                                         (assoc (orig k) :summarize-via via)
+                                                         (orig k)))
+                               samizdat.workflow/role-ctx (fn [ctx _] (cond-> ctx role-config (assoc :llm-config role-config)))
+                               samizdat.store.journal/note! (fn [& _] nil)
+                               samizdat.llm.client/chat (fn [_ _ messages & _]
+                                                          (reset! sent (vec messages))
+                                                          {:content summary :finish-reason "stop"})
+                               samizdat.agent.compaction/validate-summary (fn [& _] true)
+                               samizdat.store.knowledge/distil-session! (fn [& _] 0)]
+                   (let [out ((:handler (cell/get-cell! :compaction/fold))
+                              {:conn ::conn :run-id "r1"
+                               :llm-adapter ::adapter :llm-config {:context-window 128000}}
+                              data)]
+                     {:sent @sent :folded? (some :compaction? (get-in out [:branch :messages]))}))))]
+    (testing ":tape — the branch's own system prompt and history, the instruction on its newest turn"
+      (let [{:keys [sent folded?]} (fold :tape nil)]
+        (is folded?)
+        (is (= "BRANCH SYSTEM PROMPT" (:content (first sent))))
+        (is (= (count msgs) (count sent)) "no message added: the instruction rides the last turn")
+        (is (str/includes? (str (:content (last sent))) "result 7") "the newest turn is still there")
+        (is (str/includes? (str (:content (last sent))) "context checkpoint") "with the instruction after it")))
+    (testing ":fresh — the summarizer's own two messages, as before"
+      (let [{:keys [sent]} (fold :fresh nil)]
+        (is (= 2 (count sent)))
+        (is (not= "BRANCH SYSTEM PROMPT" (:content (first sent))))))
+    (testing "a :summarizer role on another model cannot share the prefix, so it goes fresh"
+      (let [{:keys [sent]} (fold :tape {:context-window 128000 :model "other"})]
+        (is (= 2 (count sent)))))))
+
+(deftest a-fold-on-the-tape-does-not-pay-to-read-the-window-again
+  (is (= 1500.0 (cmp/fold-cost {:window-tokens 10000 :after-tokens 1500 :window-cached? true})))
+  (is (= 11500.0 (cmp/fold-cost {:window-tokens 10000 :after-tokens 1500}))))

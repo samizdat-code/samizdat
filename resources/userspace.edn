@@ -105,6 +105,7 @@
    :clojure-syntax "prompts/clojure-syntax.md"
    :compaction-marker "prompts/compaction-marker.md"
    :compaction-summary "prompts/compaction-summary.md"
+   :compaction-summary-tape "prompts/compaction-summary-tape.md"
    :context-empty "prompts/context-empty.md"
    :critic "prompts/critic.md"
    :critic-system "prompts/critic-system.md"

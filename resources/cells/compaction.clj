@@ -28,6 +28,7 @@
             [mycelium.cell :as cell]
             [samizdat.agent.compaction :as cmp]
             [samizdat.agent.gates :as gates]
+            [samizdat.agent.infer :as infer]
             [samizdat.llm.client :as llm]
             [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]
@@ -105,7 +106,9 @@
                        (and (< s e)
                             (cmp/fold-pays? {:window-tokens (est (subvec msgs s e))
                                              :after-tokens (est (subvec msgs e))
-                                             :remaining (- max-turns turn)}
+                                             :remaining (- max-turns turn)
+                                             ;; read from the cache on the tape
+                                             :window-cached? (= :tape (:summarize-via p))}
                                             cf))))
           t (if cost? :fold t)]
       (cond-> (assoc data
@@ -228,6 +231,30 @@
       (log/warn "compaction: summarizer failed:" (ex-message e))
       nil)))
 
+(defn- summarize-on-tape!
+  "The summary asked for ON THE BRANCH'S OWN CONVERSATION (karamazov-05z0.11):
+  its tape as its next call would send it, with the summary instruction
+  appended to the newest turn — that turn has not been sent yet, so
+  everything before it is the prefix the provider already holds, and the
+  folded window is read from the cache instead of prefilled again. The same
+  seam as a turn (infer/complete-fn), so the same rendering, tool specs and
+  cache key. Text or nil, like `summarize!`."
+  [ctx branch tail budget]
+  (try
+    (let [msgs (vec (:messages branch))
+          instr (prompt/render "compaction-summary-tape" {:budget budget :tail tail})
+          last-m (peek msgs)
+          msgs' (if (= "user" (str (:role last-m)))
+                  (conj (pop msgs) (update last-m :content #(str % "\n\n" instr)))
+                  (conj msgs {:role "user" :content instr}))
+          r ((infer/complete-fn ctx {:journal? false})
+             (assoc (infer/of-branch branch) :messages msgs' :prefill nil :force-tool nil))]
+      (when (:ok r)
+        (not-empty (message/answer (get-in r [:response :content])))))
+    (catch Throwable e
+      (log/warn "compaction: summarizer on the tape failed:" (ex-message e))
+      nil)))
+
 (defn- template-sections
   "The section names the shipped template asks for — read from the prompt, so a
   project that rewords its template does not also have to edit a list."
@@ -319,7 +346,13 @@
                 budget (cmp/summary-budget
                         (cmp/estimate-tokens folded (:chars-per-token p))
                         (:summary p))
-                summary (summarize! summarizer summarizer-config folded budget)
+                ;; On the tape only when the summary runs on the branch's own
+                ;; model: a :summarizer on another model has no prefix of
+                ;; this conversation to reuse.
+                summary (if (and (= :tape (:summarize-via p))
+                                 (= summarizer-config llm-config))
+                          (summarize-on-tape! ctx branch tail budget)
+                          (summarize! summarizer summarizer-config folded budget))
                 ok? (and summary
                          (cmp/validate-summary
                           summary

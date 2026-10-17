@@ -2666,9 +2666,10 @@
 
  :cache-miss
  {:value {:min-prompt-tokens 2000
-          :hit-below 0.5}
+          :hit-below 0.5
+          :idle-ms 300000}
   :kind :threshold :capability-tunable? false
-  :provenance ["karamazov-o4wm.1"]
+  :provenance ["karamazov-o4wm.1" "karamazov-05z0.11"]
   :doc "WHICH TURNS COUNT AS CACHE MISSES when the journal groups them by
         cause (journal/cache-misses, shown on introspect's usage line).
 
@@ -2680,7 +2681,12 @@
         reading used (33 of 1352 turns), so a later reading compares.
 
         The CAUSES are not policy: first call, tail-only, history rewritten,
-        forced native tool_choice come off the turn row (migration v30)."}
+        forced native tool_choice come off the turn row (migration v30).
+        :idle-ms is: a tail-only miss more than this long after the branch's
+        previous call ended is counted :idle — the cache's own lifetime ran
+        out — rather than :tail (karamazov-05z0.11). Five minutes is the
+        shortest hosted cache lifetime in common use; a provider that keeps
+        its cache longer wants a larger number."}
 
  :repetition
  {:value {:window 80 :step 1 :min-repeats 3 :min-period 20 :max-gap-variance 0.5
@@ -3276,6 +3282,16 @@
             :aggressive-fold 0.78   ; the normal fold bought too little
             :force           0.80   ; force a summary and end the turn
             :turn-start      0.90}  ; fold before the first call of a turn
+
+   ;; WHERE THE FOLD'S SUMMARY IS ASKED FOR (karamazov-05z0.11). :fresh
+   ;; sends the summarizer the folded window as new material, so the whole
+   ;; window is prefilled again — ~110 s a fold on a 135 tok/s local model.
+   ;; :tape asks on the branch's own conversation, the instruction appended
+   ;; to its newest (unsent) turn, so the window is read from the prefix the
+   ;; provider already holds (prompts/compaction-summary-tape.md). A
+   ;; :summarizer role on another model always goes :fresh: it holds no
+   ;; prefix of this conversation.
+   :summarize-via :fresh
 
    ;; Rough token estimate. Bytes over this, the same method the session
    ;; meter uses, so the two cannot disagree about what they are measuring.
