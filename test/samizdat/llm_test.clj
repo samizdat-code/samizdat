@@ -433,6 +433,52 @@
     (testing "the shipped batch comes from gates.edn, not a constant here"
       (is (pos? (message/default-compaction-batch))))))
 
+(deftest stale-turn-context-is-dropped-only-when-the-frontier-moves
+  ;; karamazov-05z0.2. The per-turn context block (task, memories, inbox,
+  ;; failures, ...) is re-rendered every turn and appended to that turn's
+  ;; result, so every message in the verbatim window carried a stale copy.
+  ;; Stripping them every turn, as the ledger is, would rewrite the previous
+  ;; message on every call and re-prefill the last tool result — on this
+  ;; repo's journal the stale copies averaged ~900 chars a block, less than
+  ;; that re-prefill. So they go only when the frontier moves, which
+  ;; rewrites everything behind it anyway: between moves the wire is
+  ;; byte-identical, and the newest block always survives.
+  (let [ctx (fn [i] (str message/context-open "memories for " i message/context-close))
+        pair (fn [i] [{:role "assistant" :turn i
+                       :content (str "reasoning " i (apply str (repeat 400 "x")))}
+                      {:role "user" :turn i
+                       :content (str "result " i (apply str (repeat 400 "y"))
+                                     "\n\n" (ctx i) "\n\nlearned once " i)}])
+        tape (fn [n] (into [{:role "system" :content "SYS"}
+                            {:role "user" :content "## Problem\n\nsolve it"}]
+                           (mapcat pair (range 1 (inc n)))))
+        turns (mapv (fn [i] {:turn i :tool (str "tool" i) :category :success})
+                    (range 1 21))
+        opts {:keep-pairs 4 :threshold-chars 1000 :batch 4}
+        wire (fn [n] (mapv :content (message/prepare (message/compact (tape n) turns opts))))
+        carrying (fn [out] (count (filter #(str/includes? % "memories for ") out)))]
+    (testing "below the frontier's first move, nothing is touched"
+      (is (= 7 (carrying (wire 7)))))
+    (testing "the move that compacts a batch also drops the stale blocks"
+      (let [out (wire 8)]
+        (is (= 1 (carrying out)) "only the newest block is left")
+        (is (str/includes? (last out) "memories for 8"))
+        (is (some #(str/includes? % "learned once 7") out)
+            "a part shown once is outside the markers and stays")
+        (is (some #(str/includes? % "result 7") out) "the result itself is untouched")))
+    (testing "between moves the history behind the tail is byte-identical"
+      (let [at8 (wire 8)]
+        (doseq [n [9 10 11]]
+          (let [out (wire n)]
+            (is (= (butlast at8) (take (dec (count at8)) out))
+                (str "turn " n ": nothing before turn 8's result changed"))
+            (is (= (- n 7) (carrying out)) "the blocks since the move ride along")))))
+    (testing "the next move drops them again"
+      (is (= 1 (carrying (wire 12)))))
+    (testing "the markers never reach the model"
+      (is (not-any? #(str/includes? % message/context-open) (wire 9)))
+      (is (not-any? #(str/includes? % message/context-close) (wire 9))))))
+
 (deftest only-the-newest-settled-state-block-goes-over-the-wire
   ;; The settled-state ledger is regenerated every turn and appended to that
   ;; turn's user message, so without this every copy accumulates: gen-18's

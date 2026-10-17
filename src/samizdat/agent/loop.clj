@@ -456,7 +456,19 @@
                    [:shared-tree (shared-tree conn run-id (:id branch))]
                    [:failures (failures/render fhits)]
                    [:artifacts (artifacts/render ahits)]])]
-      {:block (when (seq parts) (str/join "\n\n" (map second parts)))
+      {:block (when (seq parts)
+                (str/join "\n\n"
+                          (map (fn [[k text]]
+                                 ;; Re-rendered every turn, so an older copy
+                                 ;; is a worse version of this one and is
+                                 ;; dropped when the compaction frontier
+                                 ;; moves (karamazov-05z0.2). :learned is
+                                 ;; shown once and must outlive its turn; the
+                                 ;; ledger has its own markers.
+                                 (if (#{:learned :ledger} k)
+                                   text
+                                   (str message/context-open text message/context-close)))
+                               parts)))
        ;; What each part cost this turn, in the order it was read, for
        ;; `introspect` to render. On the branch beside :shared-served for
        ;; the last-turn view; steer-step also journals it once per turn as
