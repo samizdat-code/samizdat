@@ -358,6 +358,11 @@ verdict({name})
     fitness per turn before and after. `worse` and `unchanged` both mean
     revert — a change nobody can justify is debt, and "it did not hurt" is not
     a reason to carry one.
+finding({action, id?, reason?, note?})
+    Answer the reviewer's findings on the task you hold. Each finding sent
+    back has an id. Actions: list; dispute {id, reason} when a finding is
+    wrong — say what shows it; resolve {id, note} when you fixed it. The
+    next review reads your answers and rules on each.
 papercut({action, title?, body?, id?, experiment?, resolution?})
     Friction with the HARNESS itself — a tool that misled you, a gate that
     fired wrongly, two instructions that disagree — recorded so it gets

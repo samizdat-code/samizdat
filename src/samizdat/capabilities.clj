@@ -34,6 +34,7 @@
             [samizdat.agent.budget]
             [samizdat.agent.compaction]
             [samizdat.agent.corrections]
+            [samizdat.agent.findings]
             [samizdat.agent.files]
             [samizdat.agent.gates]
             [samizdat.agent.infer]

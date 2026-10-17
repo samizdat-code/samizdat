@@ -164,9 +164,13 @@
 
     ;; The reviewer and critic: prompt text, parsing, and (review, review-plan,
     ;; review-rubric) a provider call.
+    ;; The review findings ledger (karamazov-05z0.9). Pure.
+    samizdat.agent.findings
+    {:vars [answered? digest fold id-of standing]}
+
     samizdat.agent.judge
     {:vars [blocking-findings consensus critic-prompt critique-message deterministic-block diff-veto evidence
-            findings focus-sources focused-diff for-the-record parse-criteria parse-verdict
+            finding-segments findings focus-sources focused-diff for-the-record parse-criteria parse-verdict
             parse-yesno review review-plan review-rubric section-bullets yesno-prompt]
      :effects #{:net}}
 
@@ -330,7 +334,8 @@
 
     ;; The task board, through its own functions.
     samizdat.store.tasks
-    {:vars [attempted! board children-of claim! close! create! get-task held-by release! update!]
+    {:vars [attempted! board children-of claim! close! create! findings get-task held-by release!
+            set-findings! update!]
      :effects #{:db}}
 
     ;; Read-only reports over the project's userspace history.

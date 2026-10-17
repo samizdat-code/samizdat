@@ -23,6 +23,7 @@
   (:require [samizdat.agent.budget]
             [samizdat.agent.compaction]
             [samizdat.agent.decompose]
+            [samizdat.agent.findings]
             ;; cells/oversight.clj reads the run's own health to decide
             ;; whether the harness needs looking at.
             [samizdat.agent.gates]

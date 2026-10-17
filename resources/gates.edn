@@ -32,6 +32,21 @@
  {:value 3 :kind :threshold :capability-tunable? false
   :doc "Consecutive failed verifications before a branch is culled."}
 
+ :review-ledger
+ {:value {:enabled? true :reuse-unchanged? true}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.9"]
+  :doc "The board review's findings ledger. :enabled? keeps each task's
+        findings with stable ids, sends them to the owner with those ids so
+        it can `finding dispute` or `finding resolve` one, and shows the next
+        review what it said and how the owner answered, to rule on each.
+        :reuse-unchanged? skips the judge when the diff is byte-for-byte the
+        one it last reviewed and the owner answered no finding (the answer is
+        rewritten every attempt, so it is not part of the key; an owner that
+        disagrees without changing code says so with `finding`) — the same
+        findings go back without paying for them again. A stateless review
+        bounced a disputed task until :board-review-attempts ran out."}
+
  :generation-fallback
  {:value {:error-runs 3}
   :kind :threshold :capability-tunable? false

@@ -235,6 +235,9 @@
    ;; Rows in the harness's own db; the text is the reporter's, carried
    ;; with its flow label like a message's (karamazov-05z0.5).
    "papercut"    {:reach :harness-only}
+   ;; Writes the held task's review ledger in the harness's own db
+   ;; (karamazov-05z0.9).
+   "finding"     {:reach :harness-only}
    "battery"     {:reach :spawns-process :also "heldout/draft! git update-ref under secrets/scrubbed-process-env"}
    "fetch_turn"  {:reach :harness-only}
    "fetch_artifact" {:reach :harness-only}

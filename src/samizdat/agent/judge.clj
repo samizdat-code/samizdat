@@ -499,12 +499,16 @@
   implementer's reasoning adopts its framing; a critic that reads the
   requirement and the diff forms its own. The transcript is still reachable —
   the journal has every turn — but it is no longer poured in by default."
-  [{:keys [requirement transcript evidence answer diff]}]
+  [{:keys [requirement transcript evidence answer diff prior]}]
   (let [budget (gates/threshold :context-budget)
         {:keys [seal sealed]} (sealing)]
     (prompt/render
      "judge-user"
      {:sealed sealed
+      ;; What the last review of this task said and how the owner answered
+      ;; each finding, already rendered (karamazov-05z0.9). Sealed: the
+      ;; owner's reasons are model-written.
+      :prior (when (seq (str prior)) (seal prior))
       :rubric (rubric-block :critic)
       :requirement (one-line requirement (:judge-rules-chars budget))
       :evidence (seal evidence)
@@ -802,12 +806,12 @@
   the argument is the one `usable` makes: a fourth would forget the second
   pass, and a critic quietly running one is indistinguishable from one running
   two until you read its findings."
-  [{:keys [chat requirement evidence diff answer transcript prompt-fn pass1]
+  [{:keys [chat requirement evidence diff answer transcript prompt-fn pass1 prior]
     :or {prompt-fn critic-prompt}}]
   (let [reply (chat (or pass1 :review)
                     (prompt-fn {:requirement requirement :evidence evidence
                                 :diff diff :answer answer
-                                :transcript transcript}))
+                                :transcript transcript :prior prior}))
         verdict (if reply (parse-verdict reply) :complete)
         ;; Nothing on a verdict line: the verdict above is the default, not
         ;; the judge's (karamazov-na2k.6). Still fail-open; now visible.
