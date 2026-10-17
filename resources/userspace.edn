@@ -78,6 +78,7 @@
    :checklist-answer "prompts/checklist-answer.md"
    :checklist-missing "prompts/checklist-missing.md"
    :introspect-branch "prompts/introspect-branch.md"
+   :mcp-tool "prompts/mcp-tool.md"
    :memory-index "prompts/memory-index.md"
    :memory-revise "prompts/memory-revise.md"
    :memory-revise-input "prompts/memory-revise-input.md"

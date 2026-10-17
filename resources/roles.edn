@@ -59,7 +59,7 @@
            "shell" "websearch" "webfetch" "skill"
            "task" "split"
            "remember" "recall" "outcome" "forget" "retire" "message"
-           "fetch_artifact" "fetch_turn" "papercut" "finding"}
+           "fetch_artifact" "fetch_turn" "papercut" "finding" "mcp"}
   :prompt "roles/implementor"
   :sees #{:task :problem :shared-tree :skills}}
 
@@ -112,7 +112,7 @@
   ;; read, not run, and loading a project into the image is its own risk.
   :tools #{"read_file" "read_digest" "grep" "glob" "lsp" "doc" "shell"
            "websearch" "webfetch" "skill" "manual" "recall" "remember"
-           "fetch_turn" "fetch_artifact" "done" "give_up"}
+           "fetch_turn" "fetch_artifact" "mcp" "done" "give_up"}
   :prompt "roles/answerer"
   :sees #{:problem :skills}}
 

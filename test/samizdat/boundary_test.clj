@@ -167,6 +167,12 @@
    ;; readily as a file's body can.
    "glob"        {:reach :host-bytes}
    "lsp"         {:reach :host-bytes}
+   ;; A process the person's config.edn names (a project's own config only
+   ;; where the person trusted its root), under the scrubbed environment plus
+   ;; the variables its entry names; each call passes the server's policy,
+   ;; and its result the redaction boundary (karamazov-05z0.16).
+   "mcp"         {:reach :spawns-process
+                  :also "config/mcp-servers trust rule; per-server :policy before every call"}
    "skill"       {:reach :host-bytes}
    "write_file"  {:reach :host-bytes}
    "edit_file"   {:reach :host-bytes}

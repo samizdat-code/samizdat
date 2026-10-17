@@ -165,6 +165,11 @@ read_digest({paths?, turns?, question, anchors?})
     `turns` instead of `paths` reads the WHOLE results of your own earlier
     turns, by number — what a clip note cut off — so a long build log or
     test run can be questioned without paging it back.
+mcp({action, server?, tool?, arguments?})
+    The tools of the MCP servers this project is configured with. Actions:
+    servers; tools {server}, each tool with its description and argument
+    schema; call {server, tool, arguments}. A server's policy may ask a
+    person before a call, or refuse tools it does not trust.
 lsp({op, file, line, col})
     Code navigation over the project via clojure-lsp (read-only). Ops:
     definition|references|hover need file (project-relative), line, col;

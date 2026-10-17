@@ -75,6 +75,14 @@
         offer is the supervisor's to take; SAMIZDAT_PRISTINE=1 (config
         :userspace {:mode :shipped}) boots the shipped workflow outright."}
 
+ :mcp
+ {:value {:timeout-ms 30000}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-05z0.16"]
+  :doc "How long an MCP server has to answer one request — the handshake, a
+        tool listing, a call — before the `mcp` tool reports it unavailable.
+        A server entry's own :timeout-ms in config.edn wins."}
+
  :papercut
  {:value {:window-ms 86400000 :overlap 0.6 :same-run-overlap 0.4 :min-word-chars 4
           :shown 8}

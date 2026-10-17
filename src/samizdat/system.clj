@@ -53,6 +53,7 @@
             [samizdat.session :as session]
             [samizdat.steps :as steps]
             [samizdat.lsp.client :as lsp-client]
+            [samizdat.mcp.client :as mcp-client]
             [samizdat.store.db :as db]
             [samizdat.store.runs :as runs]
             [samizdat.cells :as cells]
@@ -337,6 +338,7 @@
                        ;; an unbound store.
                        ["repair seam" #(fence/install-repair! nil)]
                        ["lsp clients" #(lsp-client/shutdown-all!)]
+                       ["mcp servers" #(mcp-client/shutdown-all!)]
                        ;; Unbind BEFORE the connection closes: a userspace read
                        ;; against a closed handle would throw where the same
                        ;; read against no handle simply serves the template.

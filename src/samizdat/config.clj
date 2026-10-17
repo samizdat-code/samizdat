@@ -96,6 +96,32 @@
   [root]
   (or (:layers (layers/resolve "config" (layer-opts root))) []))
 
+(defn- canonical [p]
+  (try (.getCanonicalPath (java.io.File. (str p))) (catch Throwable _ (str p))))
+
+(defn mcp-servers
+  "The MCP servers this project may run, from config.edn :mcp :servers
+  across the layers (karamazov-05z0.16): {:servers {name spec} :untrusted
+  [name…]}.
+
+  A person's layers (the global file, the env file) always count. The
+  PROJECT's .samizdat/config.edn counts only when one of the person's layers
+  lists this root under :mcp :trusted-roots: a checkout someone else wrote
+  must not be able to start a process on this machine by naming it. A
+  project server left out for that is named in :untrusted, so the refusal
+  can say why."
+  [root]
+  (let [ls (reverse (file-layers root))   ; lowest first
+        person (remove #(= :project (:layer %)) ls)
+        trusted (into #{} (map canonical) (mapcat #(get-in % [:value :mcp :trusted-roots]) person))
+        trusted? (and root (contains? trusted (canonical root)))
+        project (filter #(= :project (:layer %)) ls)]
+    {:servers (apply merge {} (for [l ls :when (or (not= :project (:layer l)) trusted?)]
+                                (get-in l [:value :mcp :servers])))
+     :untrusted (if trusted?
+                  []
+                  (vec (sort (mapcat #(keys (get-in % [:value :mcp :servers])) project))))}))
+
 (defn config-sources
   "Which config files this process reads, in precedence order (lowest first),
   whether each exists, and why one was dropped (:error). For the boot log and

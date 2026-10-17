@@ -107,6 +107,7 @@
             [samizdat.store.grants]
             [samizdat.store.interventions]
             [samizdat.store.journal]
+            [samizdat.mcp.client]
             [samizdat.store.papercuts]
             [samizdat.store.userspace]
             [samizdat.symbolic]
