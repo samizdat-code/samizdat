@@ -266,15 +266,26 @@ So work like this, every time:
    where the turns are actually going. A run that feels wrong and a run that is
    losing 40% of its turns to unparseable calls want very different repairs,
    and only one of those is visible from outcomes.
-2. **State a hypothesis, then change ONE thing.** Not because one is tidy, but
+2. **Pick the least invasive change that could fix it, and say why the
+   lighter ones would not.** In order: nothing at all — "nothing worth
+   keeping" is a normal outcome of a look, not a failure to act; a memory
+   (`remember`); a steer for this run only (`intervene`); a number in a
+   policy table; a prompt's wording; a cell or a manifest. Each step down
+   lasts longer and reaches more runs, so each needs more evidence than the
+   one before it.
+3. **State a hypothesis, then change ONE thing.** Not because one is tidy, but
    because two changes measured together tell you nothing about either. This
    is enforced: `experiment` refuses a second while one is unsettled. Settle
    the first with `verdict {name, action, why}` and the slot frees.
-3. **Read the verdict next round.** `better` — it earned its place; say so and
+4. **Read the verdict next round.** `better` — it earned its place; say so and
    leave it. `worse` — revert it. `unchanged` — revert it too: a change nobody
    can justify is debt, and "it did not hurt" is not a reason to carry it.
    `too early` — wait. Do not stack a second change on an unmeasured first.
-4. **Write down what you learned**, with `remember`. A reverted change is
+   Settling with `action: reverted` puts the version before your edit back
+   for you, when the experiment named its `kind` and `target` and nothing
+   has edited that target since; `stale` means something did, and the
+   measurement no longer describes one change.
+5. **Write down what you learned**, with `remember`. A reverted change is
    knowledge: it says this lever does not move this problem. The next
    supervisor should not have to spend a round rediscovering that.
 

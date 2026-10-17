@@ -331,6 +331,9 @@ manifest({action, ...})
                            saving a new name adds a loop that config
                            (:run :loop) can select. For a new manifest;
                            for an edit, patch.
+      revert {name, version, rationale}
+                           Back to an older version, compiled and checked
+                           like a save and stored as a new version.
 intervene({kind, branch?, text?, basis?})
     Steer a run that is happening right now. `kind` is one of message,
     review, cull, fork, retract, extend, pause, resume; `message` is the one

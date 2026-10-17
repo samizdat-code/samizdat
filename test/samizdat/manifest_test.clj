@@ -937,3 +937,27 @@
         warnings (get-in compiled [:compiled-fsm :mycelium/compile-warnings])]
     (is (some #(and (= :composed-prompt-ignored (:type %)) (= "review" (:manifest %))) warnings)
         (pr-str warnings))))
+
+(deftest a-manifest-reverts-through-its-own-save
+  ;; The one edit kind that had no revert (karamazov-05z0.6): an older body
+  ;; goes back through `save`, so it is compiled against today's cells and
+  ;; stored as a new version.
+  (with-db
+    (fn [conn]
+      (userspace/bind! conn)
+      (try
+        (cells/load-cells!)
+        (let [v1 (pr-str '{:description "one" :cells {:start :journal/record} :edges {:start :end}})
+              v2 (pr-str '{:description "two" :cells {:start :journal/record} :edges {:start :end}})
+              run (fn [args] (base/run-tool {:branch {:id "S"} :conn conn :tool-name "manifest"
+                                             :args args}))]
+          (userspace/save! :manifest "tiny" v1 "first")
+          (userspace/save! :manifest "tiny" v2 "second")
+          (let [r (run {:action "revert" :name "tiny" :version "1" :rationale "two was worse"})]
+            (is (= :neutral (:category r)) (str (:result r)))
+            (is (= v1 (:body (us/load-latest conn :manifest "tiny"))))
+            (is (= 3 (:version (us/load-latest conn :manifest "tiny")))))
+          (is (str/includes? (str (:result (run {:action "revert" :name "tiny" :version "9"
+                                                 :rationale "r"})))
+                             "No v9")))
+        (finally (userspace/unbind!))))))

@@ -16,7 +16,9 @@
             [samizdat.session :as session]
             [samizdat.store.db :as db]
             [samizdat.agent.tools.base :as base]
+            [samizdat.agent.tools]
             [samizdat.agent.tools.experiments]
+            [samizdat.userspace]
             [samizdat.store.knowledge :as knowledge]))
 
 (use-fixtures :each (fn [f] (session/reset!) (f) (session/reset!)))
@@ -915,3 +917,43 @@
                                         :branch {:id "B1"}})))]
     (is (str/includes? r "Refused"))
     (is (str/includes? r "one [confounded]"))))
+
+(deftest settling-a-change-as-reverted-reverts-it
+  ;; karamazov-05z0.6: `verdict … reverted` only recorded the decision, so a
+  ;; losing edit stayed live until somebody also ran the revert by hand. With
+  ;; a target it now puts the version before the experiment's edit back,
+  ;; through the edit's own tool — unless the target has moved since, which
+  ;; means it was already reverted or edited again.
+  (let [c (db/open! ":memory:")]
+    (try
+      (samizdat.userspace/bind! c)
+      (samizdat.userspace/save! :prompt "task-none" "first wording" "v1")
+      (samizdat.userspace/save! :prompt "task-none" "second wording" "the change")
+      (turns! 6 "eval" :success nil)
+      (session/experiment! "reword" {:change "c" :hypothesis "h"
+                                     :target {:kind "prompt" :name "task-none" :version 2}})
+      (turns! 8 "eval" :mechanics nil {:parse-error true})
+      (let [r (str (:result (base/run-tool {:tool-name "verdict"
+                                            :args {"name" "reword" "action" "reverted"
+                                                   "why" "worse"}
+                                            :branch {:id "SUP"}})))]
+        (is (str/includes? r "settled"))
+        (is (= "first wording" (samizdat.userspace/body :prompt "task-none"))
+            "the version before the edit is live again")
+        (is (= 3 (:version (last (samizdat.userspace/versions :prompt "task-none"))))
+            "as a new version: a revert is itself an edit"))
+      (testing "a target that has already moved is left alone"
+        (session/reset!)
+        (turns! 6 "eval" :success nil)
+        (session/experiment! "again" {:change "c" :hypothesis "h"
+                                      :target {:kind "prompt" :name "task-none" :version 2}})
+        (turns! 8 "eval" :mechanics nil {:parse-error true})
+        (let [r (str (:result (base/run-tool {:tool-name "verdict"
+                                              :args {"name" "again" "action" "reverted" "why" "w"}
+                                              :branch {:id "SUP"}})))]
+          (is (str/includes? r "v3") "says where the target is now")
+          (is (= 3 (:version (last (samizdat.userspace/versions :prompt "task-none"))))
+              "nothing more was written")))
+      (finally
+        (samizdat.userspace/unbind!)
+        (db/close c)))))
