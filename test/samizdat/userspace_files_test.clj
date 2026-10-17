@@ -323,9 +323,9 @@
           (delete-recursively (io/file root)))))))
 
 (deftest the-userspace-setting-is-read-strictly
-  (is (= {:adopt :unedited} (config/userspace-settings {})))
-  (is (= {:adopt :none} (config/userspace-settings {:userspace {:adopt :none}})))
-  (is (= {:adopt :unedited} (config/userspace-settings {:userspace {:adopt "none"}}))))
+  (is (= :unedited (:adopt (config/userspace-settings {}))))
+  (is (= :none (:adopt (config/userspace-settings {:userspace {:adopt :none}}))))
+  (is (= :unedited (:adopt (config/userspace-settings {:userspace {:adopt "none"}})))))
 
 (deftest a-run-drives-the-loop-the-projects-file-says
   ;; load-loop! read the STORED row, so in a project with files a run started

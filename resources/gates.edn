@@ -32,6 +32,19 @@
  {:value 3 :kind :threshold :capability-tunable? false
   :doc "Consecutive failed verifications before a branch is culled."}
 
+ :generation-fallback
+ {:value {:error-runs 3}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-05z0.8"]
+  :doc "Runs in a row that must end in :error — the harness could not finish
+        them — before the supervisor's brief offers the way back to the last
+        set of project versions a run shipped on (the generations table),
+        naming every version that moved since. Errors are evidence about the
+        harness, so a streak of them after edits is the signature of a set
+        of changes that passes every check and still breaks the loop. The
+        offer is the supervisor's to take; SAMIZDAT_PRISTINE=1 (config
+        :userspace {:mode :shipped}) boots the shipped workflow outright."}
+
  :papercut
  {:value {:window-ms 86400000 :overlap 0.6 :same-run-overlap 0.4 :min-word-chars 4
           :shown 8}

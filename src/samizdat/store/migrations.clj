@@ -979,7 +979,27 @@
      flow TEXT)"
    "CREATE INDEX IF NOT EXISTS idx_papercuts_status ON papercuts(status, last_at)"])
 
+(def v42
+  "WHEN AN EDIT SHOULD COME OUT (karamazov-05z0.7): a version's removal
+  condition, in words — `remove once upstream ships X`. A rationale says why
+  an edit went in; nothing said when it stops being needed, so overrides
+  only accumulated. NULL for the versions that named none."
+  ["ALTER TABLE userspace ADD COLUMN remove_when TEXT"])
+
+(def v43
+  "GENERATIONS (karamazov-05z0.8): at every run's end, which project versions
+  were current and how the run ended. last-good fallback works one role at a
+  time and cannot say which versions worked TOGETHER; a set that passes every
+  check and makes every run error was never offered for removal, because
+  pruning ignores crashes. `versions` is EDN: {[kind name] version}."
+  ["CREATE TABLE IF NOT EXISTS generations (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     run_id TEXT,
+     outcome TEXT NOT NULL,
+     versions TEXT NOT NULL,
+     created_at TEXT NOT NULL)"])
+
 (def migrations
   "Ordered. Index 0 is migration 1; PRAGMA user_version holds the count applied."
   [v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24
-   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40 v41])
+   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40 v41 v42 v43])

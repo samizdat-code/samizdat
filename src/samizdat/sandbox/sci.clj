@@ -335,7 +335,8 @@
 
     ;; Read-only reports over the project's userspace history.
     samizdat.store.userspace
-    {:vars [drift pruning-candidates]
+    {:vars [changed-since drift errors-since-shipped last-shipped-generation pruning-candidates
+            removal-conditions]
      :effects #{:db}}
 
     ;; Read-only reports: pending template offers and rejected edits.

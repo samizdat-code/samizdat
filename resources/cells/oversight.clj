@@ -427,7 +427,7 @@
   The digest and the since-last-look block are not among them: the run's
   position is the news of every pass."
   [:learned :candidates :drift :offers :rejected :refused :retire :reviews
-   :inconclusive :prune :papercuts :catalog])
+   :inconclusive :prune :papercuts :removals :fallback :catalog])
 
 (defn visible-sections
   "{section hash} for what the carried branch can still see: the sections
@@ -727,7 +727,25 @@
                                                                                       :undecided (str/join "; " (keep #(when (nil? (:rating %)) (:criterion %))
                                                                                                                       (get-in n [:rubric :ratings])))})
                                                                                    ns)})))
-                                  :prune (let [ps (safely :pruning
+;; Current edits that said when they should come
+                                  ;; out — the supervisor checks whether that
+                                  ;; time has come (karamazov-05z0.7).
+;; Runs erroring in a row since the last set of
+                                  ;; versions that shipped: the way back, named
+                                  ;; (karamazov-05z0.8).
+                                  :fallback (let [n (safely :errors #(store-us/errors-since-shipped conn) 0)
+                                                  g (when (>= n (:error-runs (gates/threshold :generation-fallback)))
+                                                      (safely :generation #(store-us/last-shipped-generation conn) nil))
+                                                  moved (when g (safely :changed #(store-us/changed-since conn g) []))]
+                                              (when (seq moved)
+                                                (prompt/render "generation-fallback"
+                                                               {:errors n :run (:run-id g) :at (:at g)
+                                                                :moved (mapv #(update % :kind clojure.core/name) moved)})))
+                                                                    :removals (let [rs (safely :removals
+                                                             #(store-us/removal-conditions conn) [])]
+                                              (when (seq rs)
+                                                (prompt/render "removal-conditions" {:edits rs})))
+                                                                    :prune (let [ps (safely :pruning
                                                           #(store-us/pruning-candidates
                                                             conn (gates/threshold :pruning))
                                                           [])]

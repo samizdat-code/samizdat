@@ -1356,7 +1356,7 @@
                         (try (knowledge/record-workflow-outcome!
                               conn {:workflow loop-nm :run-id run-id
                                     :outcome :error})
-                             (userspace/record-run-outcome! :error)
+                             (userspace/record-run-outcome! :error run-id)
                              (catch Throwable _ nil))
                         (throw e))
                       ;; The run's sealed commands end with it (verify).
@@ -1375,7 +1375,7 @@
         ;; versions that were current for it — the standing the versions
         ;; listing shows a later supervisor weighing an unfamiliar edit
         ;; (karamazov-c58).
-        (userspace/record-run-outcome! outcome))
+        (userspace/record-run-outcome! outcome run-id))
       result)))
 
 (defn summary

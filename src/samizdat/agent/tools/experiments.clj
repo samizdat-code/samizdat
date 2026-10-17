@@ -62,7 +62,8 @@
         hypothesis (some-> (base/arg ctx :hypothesis) str str/trim not-empty)
         predicts (read-prediction (base/arg ctx :predicts))
         target (target-of (some-> (base/arg ctx :kind) str str/trim not-empty)
-                          (some-> (base/arg ctx :target) str str/trim not-empty))]
+                          (some-> (base/arg ctx :target) str str/trim not-empty))
+        until (some-> (base/arg ctx :until) str str/trim not-empty)]
     (cond
       (not (and name change hypothesis))
       (base/malformed branch (str (base/missing ctx :name :change :hypothesis)
@@ -77,11 +78,17 @@
       (try
         (session/experiment! name {:change change :hypothesis hypothesis
                                    :target target :predicts predicts})
+        ;; When the edit should come out, on the version itself, where it
+        ;; outlives this session (karamazov-05z0.7).
+        (when (and until (:version target))
+          (userspace/set-remove-when! (keyword (:kind target)) (:name target)
+                                      (:version target) until))
         (base/ok branch (msg {:started true :name name
                               :change change :hypothesis hypothesis
                               :target (when target
                                         (str (:kind target) " " (:name target)
                                              (when (:version target) (str " v" (:version target)))))
+                              :until (when (and until (:version target)) until)
                               :predicts (when predicts
                                           (str (clojure.core/name (:signal predicts)) " "
                                                (clojure.core/name (:direction predicts))))})

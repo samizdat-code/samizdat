@@ -44,7 +44,8 @@
   APPEND-ONLY, never an UPDATE. The edit history of a system that rewrites
   itself is the most valuable thing in its database: it is how a surprising
   run is explained, and how a bad edit is undone without a backup."
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [samizdat.store.db :as db]
             [samizdat.store.outcomes :as outcomes]))
 
@@ -85,6 +86,29 @@
                    FROM userspace
                    WHERE kind = ? AND name = ? ORDER BY version"
                   (kind-str kind) (str name)]))
+
+(defn set-remove-when!
+  "Record when version `version` of `kind`/`name` should come out."
+  [conn kind name version text]
+  (db/with-writer
+    (db/execute! conn ["UPDATE userspace SET remove_when = ?
+                        WHERE kind = ? AND name = ? AND version = ?"
+                       (str text) (kind-str kind) (str name) (long version)])))
+
+(defn removal-conditions
+  "The CURRENT versions that named a removal condition, as {:kind :name
+  :version :until :rationale}: what the supervisor should check is still
+  needed. A later version of the same name is a different edit, so a
+  condition on a superseded version is not listed."
+  [conn]
+  (mapv (fn [r] {:kind (:kind r) :name (:name r) :version (:version r)
+                 :until (:remove_when r) :rationale (:rationale r)})
+        (db/fetch conn ["SELECT u.kind, u.name, u.version, u.remove_when, u.rationale
+                         FROM userspace u
+                         WHERE u.remove_when IS NOT NULL
+                           AND u.version = (SELECT max(version) FROM userspace v
+                                            WHERE v.kind = u.kind AND v.name = u.name)
+                         ORDER BY u.kind, u.name"])))
 
 (defn save!
   "Append `body` as the next version of `name` at `kind`. Returns the new
@@ -215,6 +239,56 @@
                                                     WHERE v.kind = userspace.kind
                                                       AND v.name = userspace.name)"
                                  col col)]))))
+
+(defn- current-project-versions
+  "{[kind name] version} for every name whose newest version the project
+  authored. Factory copies are the baseline, not a tuning."
+  [conn]
+  (into {}
+        (map (fn [r] [[(keyword (:kind r)) (:name r)] (:version r)]))
+        (db/fetch conn ["SELECT u.kind, u.name, u.version FROM userspace u
+                         WHERE u.source = 'project'
+                           AND u.version = (SELECT max(version) FROM userspace v
+                                            WHERE v.kind = u.kind AND v.name = u.name)"])))
+
+(defn record-generation!
+  "Record the project versions current as run `run-id` ended `outcome`."
+  [conn run-id outcome]
+  (db/with-writer
+    (db/execute! conn ["INSERT INTO generations (run_id, outcome, versions, created_at)
+                        VALUES (?, ?, ?, ?)"
+                       (some-> run-id str) (name outcome)
+                       (pr-str (current-project-versions conn)) (db/now)])))
+
+(defn- generation [row]
+  (when row
+    {:id (:id row) :run-id (:run_id row) :outcome (keyword (:outcome row))
+     :versions (edn/read-string (:versions row)) :at (:created_at row)}))
+
+(defn last-shipped-generation
+  "The newest generation a run SHIPPED on, or nil."
+  [conn]
+  (generation (db/fetch-one conn ["SELECT * FROM generations WHERE outcome = 'shipped'
+                                   ORDER BY id DESC LIMIT 1"])))
+
+(defn errors-since-shipped
+  "How many runs in a row, newest back, ended :error — the streak a set of
+  edits that breaks the harness leaves."
+  [conn]
+  (count (take-while #(= "error" (:outcome %))
+                     (db/fetch conn ["SELECT outcome FROM generations ORDER BY id DESC LIMIT 1000"]))))
+
+(defn changed-since
+  "What moved since generation `g`: [{:kind :name :from now :to then}], :to
+  nil for a name `g` did not hold (it was the template then)."
+  [conn g]
+  (let [then (:versions g)]
+    (->> (current-project-versions conn)
+         (keep (fn [[[k n] v]]
+                 (when (not= v (get then [k n]))
+                   {:kind k :name n :from v :to (get then [k n])})))
+         (sort-by (juxt :kind :name))
+         vec)))
 
 (defn drift
   "How much each userspace surface has moved: per kind, the names edited, the

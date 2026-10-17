@@ -18,6 +18,7 @@
             [samizdat.agent.tools.base :as base]
             [samizdat.agent.tools]
             [samizdat.agent.tools.experiments]
+            [samizdat.store.userspace]
             [samizdat.userspace]
             [samizdat.store.knowledge :as knowledge]))
 
@@ -954,6 +955,32 @@
           (is (str/includes? r "v3") "says where the target is now")
           (is (= 3 (:version (last (samizdat.userspace/versions :prompt "task-none"))))
               "nothing more was written")))
+      (finally
+        (samizdat.userspace/unbind!)
+        (db/close c)))))
+
+(deftest an-edit-can-say-when-it-should-come-out
+  ;; karamazov-05z0.7, after autolith's adaptation ledger: a version
+  ;; rationale says why an edit went in and never when it should come out,
+  ;; so project overrides only ever piled up. `until` on the experiment
+  ;; that measures the edit lands on that version, and the supervisor's
+  ;; brief lists the current versions still waiting on one.
+  (let [c (db/open! ":memory:")]
+    (try
+      (samizdat.userspace/bind! c)
+      (samizdat.userspace/save! :prompt "task-none" "workaround wording" "work around GLM's echo")
+      (let [r (str (:result (base/run-tool {:tool-name "experiment"
+                                            :args {"name" "echo" "change" "c" "hypothesis" "h"
+                                                   "kind" "prompt" "target" "task-none"
+                                                   "until" "GLM stops echoing the fence"}
+                                            :branch {:id "SUP"}})))]
+        (is (str/includes? r "GLM stops echoing the fence")))
+      (is (= [{:kind "prompt" :name "task-none" :version 1 :until "GLM stops echoing the fence"}]
+             (mapv #(select-keys % [:kind :name :version :until])
+                   (samizdat.store.userspace/removal-conditions c))))
+      (testing "a later version of the same name is a different edit"
+        (samizdat.userspace/save! :prompt "task-none" "plain wording" "workaround no longer needed")
+        (is (empty? (samizdat.store.userspace/removal-conditions c))))
       (finally
         (samizdat.userspace/unbind!)
         (db/close c)))))

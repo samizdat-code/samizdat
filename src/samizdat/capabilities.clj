@@ -106,6 +106,7 @@
             [samizdat.store.interventions]
             [samizdat.store.journal]
             [samizdat.store.papercuts]
+            [samizdat.store.userspace]
             [samizdat.symbolic]
             [samizdat.symbolic.dispatch]
             [samizdat.tape]

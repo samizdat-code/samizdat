@@ -72,7 +72,9 @@ episode and ranks as one.
 {{retire}}{% endif %}{% if reviews %}
 {{reviews}}{% endif %}{% if inconclusive %}
 {{inconclusive}}{% endif %}{% if prune %}
-{{prune}}{% endif %}{% if offers %}
+{{prune}}{% endif %}{% if fallback %}
+{{fallback}}{% endif %}{% if removals %}
+{{removals}}{% endif %}{% if offers %}
 {{offers}}{% endif %}{% if rejected %}
 {{rejected}}{% endif %}{% if refused %}
 {{refused}}{% endif %}{% if drift %}

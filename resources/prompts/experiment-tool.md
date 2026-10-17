@@ -1,11 +1,12 @@
-{% if usage %}`experiment` binds a change you are making to what you expect it to do, so the next round can tell you whether it worked: {name, change, hypothesis, kind?, target?, predicts?}. Start one whenever you edit a cell, manifest, prompt or threshold. `kind` and `target` name what you edited (cell / manifest / prompt / policy and its name), and the ledger records the version. `predicts` is the one signal you expect to move and which way, e.g. "parse-error down" or "gate-unmet down"; the verdict says whether it did.
+{% if usage %}`experiment` binds a change you are making to what you expect it to do, so the next round can tell you whether it worked: {name, change, hypothesis, kind?, target?, predicts?}. Start one whenever you edit a cell, manifest, prompt or threshold. `kind` and `target` name what you edited (cell / manifest / prompt / policy and its name), and the ledger records the version. `predicts` is the one signal you expect to move and which way, e.g. "parse-error down" or "gate-unmet down"; the verdict says whether it did. `until` is when the edit should come out — "remove once the provider stops echoing the fence" — kept on the version and shown to every later supervisor while that version is current.
 `verdict {name}` reads it back: better / worse / unchanged / costly / cheaper / below best / too early, with the fitness and the tokens per turn before and after.
 `verdict {name, action, why}` settles it — action is `reverted` or `kept`. `reverted` also puts back the version before the edit when the experiment named its kind and target and nothing has edited it since. A losing change you have not settled keeps being raised, because a modification the evidence says is not helping, left in place because nobody got back to it, is the thing this measurement exists to prevent.{% endif %}{% if started %}Experiment `{{name}}` started. Measuring from here.
 
   changed:  {{change}}
   expected: {{hypothesis}}{% if target %}
   edit:     {{target}}{% endif %}{% if predicts %}
-  predicts: {{predicts}}{% endif %}
+  predicts: {{predicts}}{% endif %}{% if until %}
+  remove when: {{until}}{% endif %}
 
 You will see the verdict on your next turn. Change nothing else until then — a second change measured alongside this one tells you nothing about either.{% endif %}{% if settled %}`{{name}}` settled as {{action}}.{% if why %} Reason: {{why}}{% endif %}
 

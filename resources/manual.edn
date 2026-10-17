@@ -243,7 +243,11 @@
 
  {:group "Policy as data"
   :entries
-  [{:name samizdat.store.papercuts/report!
+  [{:name samizdat.store.userspace/last-shipped-generation
+    :summary "Generations: every run's end records which project versions were current and how it ended. The newest one a run shipped on is the set known to work together; when gates.edn :generation-fallback :error-runs runs in a row have errored since, the supervisor's brief names every version that moved and the one to go back to. To boot the shipped workflow without touching the project's files, start with SAMIZDAT_PRISTINE=1 or config :userspace {:mode :shipped}."}
+   {:name samizdat.store.userspace/removal-conditions
+    :summary "The current versions whose edit said when it should come out — `experiment {..., until}` records it on the version it measures. The supervisor's brief lists them so an override stops being carried once its reason has gone; a later version of the same name is a different edit and drops off the list."}
+   {:name samizdat.store.papercuts/report!
     :summary "Papercuts: friction a branch reports about the harness with the `papercut` tool, kept across runs. A report that repeats an open one (same title words, or enough shared words — gates.edn :papercut) adds to its count instead of opening another. The supervisor's brief lists the open ones; `papercut close` needs the experiment whose verdict reads better or cheaper, so a closed papercut is a measured fix."}
    {:name samizdat.agent.corrections/matching
     :summary "Corrections: guidance a person asked for, shown in a turn's context block when the branch's recent turns match a rule's :when. :output-contains is a literal matched only against what the model itself wrote, never a tool result. The project's set is the `corrections` policy (editable with the `policy` tool, checked on save); a person's own is ~/.config/samizdat/corrections.edn and follows them across projects. A person drafts one from a complaint with /complain in the TUI (POST /v1/corrections/draft), reviews it, and saves it with /keep. Bounds are gates.edn :corrections."}

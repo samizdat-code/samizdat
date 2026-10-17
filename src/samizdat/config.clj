@@ -233,14 +233,23 @@
      :env-refs (names (:env-refs m))}))
 
 (defn userspace-settings
-  "The `:userspace` block of a config, normalised to `{:adopt …}`.
+  "The `:userspace` block of a config, normalised to `{:adopt … :mode …}`.
 
   `:adopt :unedited` (the default) takes, when a project binds, every shipped
   update whose project copy was never edited (userspace/adopt-unedited!);
-  `:none` leaves all of them to the supervisor. Anything else is the default."
+  `:none` leaves all of them to the supervisor. Anything else is the default.
+
+  `:mode :project` (the default) runs the project's own workflow; `:shipped`
+  is the PRISTINE boot (karamazov-05z0.8): the shipped templates, with the
+  project's .samizdat/ neither read nor written — how to get a working
+  harness back when the project's edits have broken it, without deleting
+  them. `SAMIZDAT_PRISTINE=1` in the environment does the same."
   [cfg]
   (let [m (:userspace cfg)]
-    {:adopt (get #{:unedited :none} (when (map? m) (:adopt m)) :unedited)}))
+    {:adopt (get #{:unedited :none} (when (map? m) (:adopt m)) :unedited)
+     :mode (if (#{"1" "true" "yes"} (some-> (env "SAMIZDAT_PRISTINE") str/lower-case))
+             :shipped
+             (get #{:project :shipped} (when (map? m) (:mode m)) :project))}))
 
 (defn shell-sandbox
   "The shell settings for the project rooted at `root`."

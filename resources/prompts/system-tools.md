@@ -344,12 +344,15 @@ intervene({kind, branch?, text?, basis?})
     does with one directive before sending another. `basis`, as for
     `remember`, names the turns or artifacts the directive rests on; each
     must exist, or nothing is sent.
-experiment({name, change, hypothesis, kind?, target?, predicts?})
+experiment({name, change, hypothesis, kind?, target?, predicts?, until?})
     Bind a change you are making to what you expect it to do, so the next
     round can tell you whether it worked. Start one whenever you edit a cell,
     manifest, prompt or threshold; name the edit with kind and target, and
     the one signal you expect to move with predicts ("parse-error down"). A change with no stated expectation cannot
     be wrong, and a change that cannot be wrong teaches nothing.
+    `until` says when the edit should come out again ("remove once the
+    provider fixes its tool-call echo"); later supervisors see it while the
+    version is current.
 verdict({name})
     Read an experiment back: better / worse / unchanged / too early, with the
     fitness per turn before and after. `worse` and `unchanged` both mean
