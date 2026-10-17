@@ -32,6 +32,21 @@
  {:value 3 :kind :threshold :capability-tunable? false
   :doc "Consecutive failed verifications before a branch is culled."}
 
+ :corrections
+ {:value {:window 8 :max-shown 5 :max-instruction-chars 400
+          :max-trigger-chars 80 :max-attempts 3}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.4"]
+  :doc "Corrections, a person's complaints turned into triggered guidance
+        (policy corrections.edn, ~/.config/samizdat/corrections.edn).
+        :window is how many of the model's own recent turns an
+        :output-contains trigger is matched against, and how many a
+        complaint is drafted from; :max-shown bounds the block a turn
+        carries; the two :max-*-chars bound what a save accepts, because a
+        rule rides on every turn it matches; :max-attempts is how many
+        drafts a complaint gets before an unmatched one comes back for the
+        person to confirm."}
+
  :token-budget
  {:value {:reserve? true :chars-per-token 4 :output-factor 1
           :fallback-max-tokens 8192}

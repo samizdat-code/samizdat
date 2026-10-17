@@ -73,6 +73,7 @@
             [samizdat.base-test]
             [samizdat.boundary-test]
             [samizdat.compaction-test]
+            [samizdat.corrections-test]
             [samizdat.collab-test]
             [samizdat.acceptance-test]
             [samizdat.checklist-test]
@@ -322,6 +323,7 @@
     samizdat.base-test
     samizdat.boundary-test
     samizdat.compaction-test
+    samizdat.corrections-test
     samizdat.collab-test
     samizdat.acceptance-test
     samizdat.checklist-test

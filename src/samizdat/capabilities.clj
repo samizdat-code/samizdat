@@ -33,6 +33,7 @@
             [samizdat.agent.gitdiff]
             [samizdat.agent.budget]
             [samizdat.agent.compaction]
+            [samizdat.agent.corrections]
             [samizdat.agent.files]
             [samizdat.agent.gates]
             [samizdat.agent.infer]

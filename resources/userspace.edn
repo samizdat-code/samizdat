@@ -37,6 +37,7 @@
   {:gates "gates.edn"
    :manual "manual.edn"
    :phases "phases.edn"
+   :corrections "corrections.edn"
    :prompt-chain "prompt-chain.edn"
    :roles "roles.edn"
    :rubrics "rubrics.edn"
@@ -58,6 +59,10 @@
 
  :prompts
   {:acceptance-failed "prompts/acceptance-failed.md"
+   :complaint "prompts/complaint.md"
+   :corrections-api "prompts/corrections-api.md"
+   :corrections-block "prompts/corrections-block.md"
+   :corrections-problem "prompts/corrections-problem.md"
    :abandoned-reason "prompts/abandoned-reason.md"
    :acceptance-judge "prompts/acceptance-judge.md"
    :checklist-answer "prompts/checklist-answer.md"

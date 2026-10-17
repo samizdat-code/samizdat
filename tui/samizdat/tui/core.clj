@@ -265,6 +265,35 @@
                       (say! (str "mode not set: " (:error r))))))
                 (say! (str "approval mode: " (or (get-in @state [:project :approval_mode]) "unknown")
                            " — /mode attended (ask while a TUI watches), refuse, block, or yolo (every ask allowed)")))
+        :complain
+        (cond
+          (not arg) (say! "/complain needs what went wrong, e.g. /complain stop narrating the plan")
+          (not run-id) (say! "no run on screen to complain about")
+          :else
+          (future
+            (say! "drafting a correction from the run's recent turns…")
+            (let [r (client/draft-correction! base run-id branch-id arg)
+                  d (:body r)]
+              (if-not (:ok r)
+                (say! (str "no correction drafted: " (:error r)))
+                (do (swap! state assoc :pending-correction d)
+                    (say! (str "correction `" (:id d) "`: " (:instruction d))
+                          (str "  fires when the model writes: "
+                               (str/join " | " (get-in d [:when :output-contains])))
+                          (if (get d (keyword "matched?"))
+                            "  (that phrase is in the turns you complained about)"
+                            "  (WARNING: that phrase is not in the recent turns, so it may never fire)")
+                          "/keep saves it for you everywhere, /keep project for this project only; anything else drops it"))))))
+        :keep-correction
+        (if-let [d (:pending-correction @state)]
+          (future
+            (let [scope (if (= "project" arg) "project" "person")
+                  r (client/save-correction! base (dissoc d (keyword "matched?")) scope)]
+              (swap! state dissoc :pending-correction)
+              (say! (if (:ok r)
+                      (str "correction `" (:id d) "` saved for the " scope)
+                      (str "correction not saved: " (:error r))))))
+          (say! "nothing to keep — /complain drafts a correction first"))
         :intervene
         (cond
           (not run-id) (say! "no run on screen to direct")

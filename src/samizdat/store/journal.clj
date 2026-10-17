@@ -397,6 +397,23 @@
          :avg-total (avg (map #(long (or (:total %) 0)) notes))
          :parts (into {} (map (fn [[k xs]] [k (avg xs)])) parts)}))))
 
+(defn recent-assistant-texts
+  "The model's own text of a run's last `n` turns, oldest first — one
+  branch's when `branch-id` is given. What a complaint about the model's
+  behaviour is drafted from (karamazov-05z0.4)."
+  [conn run-id branch-id n]
+  (->> (db/fetch conn (if branch-id
+                        ["SELECT assistant_text FROM turns WHERE run_id = ? AND branch_id = ?
+                            AND assistant_text IS NOT NULL ORDER BY id DESC LIMIT ?"
+                         run-id branch-id n]
+                        ["SELECT assistant_text FROM turns WHERE run_id = ?
+                            AND assistant_text IS NOT NULL ORDER BY id DESC LIMIT ?"
+                         run-id n]))
+       (map :assistant_text)
+       (remove str/blank?)
+       reverse
+       vec))
+
 (defn turns
   "Every turn of a run, whole rows. `assistant_text` comes back with them, so
   this is what resume replays from — and it is why nothing that merely

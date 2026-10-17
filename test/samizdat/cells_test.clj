@@ -25,6 +25,8 @@
             [jolt.fs :as fs]
             [mycelium.cell :as cell]
             [samizdat.cells :as cells]
+            [samizdat.agent.budget]
+            [samizdat.agent.loop]
             [samizdat.agent.state]
             [samizdat.store.db]
             [samizdat.store.journal]

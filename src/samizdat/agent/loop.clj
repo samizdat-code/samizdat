@@ -39,6 +39,7 @@
             [clojure.tools.logging :as log]
             [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.files :as files]
+            [samizdat.agent.corrections :as corrections]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.handoff :as handoff]
             [samizdat.agent.gitdiff :as gitdiff]
@@ -63,6 +64,7 @@
             [samizdat.store.knowledge :as knowledge]
             [samizdat.store.messages :as messages]
             [samizdat.store.runs :as runs]
+            [samizdat.layers :as layers]
             [samizdat.userspace :as userspace]))
 
 (defn max-result-chars
@@ -336,6 +338,23 @@
                                  (update :sketches hide)
                                  (update :inherited hide)))))
 
+(defn corrections-text
+  "The corrections block for `branch`: the rules whose triggers its recent
+  turns match, the person's under the project's (samizdat.agent.corrections,
+  karamazov-05z0.4). nil when none apply, or when the project has no
+  :corrections policy or gates entry yet — an older project runs without
+  them until it adopts the role."
+  [branch]
+  (when-let [p (gates/threshold :corrections)]
+    (let [person (try (:value (layers/resolve "corrections" {:global-dir (layers/global-dir)}))
+                      (catch Throwable _ nil))
+          project (try (userspace/edn-body :policy "corrections") (catch Throwable _ nil))
+          shown (corrections/matching
+                 (corrections/rules {:corrections (corrections/combine person project)})
+                 (corrections/facts branch p) p)]
+      (when (seq shown)
+        (prompt/render "corrections-block" {:rules shown})))))
+
 (defn- context-block
   "What the harness adds to the branch's view before its next turn: the
   failures most like what it just tried, and — when sharing is on — the
@@ -440,6 +459,11 @@
                    ;; assembler, which opens with a "new in memory since last
                    ;; turn" section for the same reason.
                    [:learned (:text learned)]
+                   ;; What the person asked for, when the branch's own recent
+                   ;; turns match a rule's trigger (karamazov-05z0.4).
+                   ;; Re-evaluated every turn, so a stale copy is dropped
+                   ;; with the others.
+                   [:corrections (corrections-text branch)]
                    ;; Unread mail from other branches on this run, a bounded
                    ;; preview; nil when the inbox is empty. Surfacing does not
                    ;; consume — the message tool's inbox action marks read.

@@ -38,6 +38,7 @@
   down between turns."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
+            [samizdat.agent.corrections :as corrections]
             [samizdat.agent.gates :as gates]
             [jolt.time]
             [clojure.data.json :as json]
@@ -187,6 +188,12 @@
                                          "no term they touch reaches a fixpoint: "
                                          (str/join ", " (map pr-str cycles)))
                                     {:cycles cycles}))))
+    "corrections" ;; Each rule's shape, bounded: a rule rides on every turn
+                  ;; it matches (karamazov-05z0.4).
+                (when-let [p (corrections/problems
+                              (edn/read-string (str (userspace/body :policy "corrections")))
+                              (gates/threshold :corrections))]
+                  (throw (ex-info (corrections/describe p) {:table "corrections" :problems p})))
     "rubrics"   ;; The critic's rubrics: dimensions with questions, worked
                 ;; examples that are a pass or a fail (karamazov-0e2c.8).
                 (when-let [p (judge/rubric-problems

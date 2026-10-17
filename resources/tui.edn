@@ -228,6 +228,10 @@
                :doc "the per-owner turn budget for the feature loop's next rounds"}
   "/stop"     {:do :intervene :kind "stop" :args "<why>"
                :doc "end the run unsolved at the feature loop's next round"}
+  "/complain" {:do :complain :args "<what went wrong>"
+               :doc "turn a complaint about the run on screen into a correction the model is shown when it does that again; /keep saves it"}
+  "/keep"     {:do :keep-correction :args "[project]"
+               :doc "save the drafted correction for you everywhere, or with `project` for this project only"}
   "/q"        {:alias "/quit"}}
 
  ;; DESKTOP NOTIFICATIONS, after dirge's: when the run on screen needs you

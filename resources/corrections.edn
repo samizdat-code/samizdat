@@ -1,0 +1,27 @@
+;; Corrections: guidance a person asked for, shown to the model when what it
+;; is doing matches (karamazov-05z0.4). This is the PROJECT's set, versioned
+;; with the rest of the workflow; a person's own set, which follows them
+;; across projects, is ~/.config/samizdat/corrections.edn (samizdat.layers).
+;; A project rule wins over a person's rule of the same id.
+;;
+;; A rule is drafted from a complaint (`/complain` in the TUI, POST
+;; /v1/corrections/draft) and reviewed before it is saved, or written here
+;; by hand or with the `policy` tool:
+;;
+;;   {"lead-with-result"
+;;    {:instruction "Give the result first, then the reasoning behind it."
+;;     :when {:output-contains ["let me explain"]}
+;;     :priority 1}}
+;;
+;; :when predicates are ANDed and the values inside one are ORed. An empty
+;; :when always applies.
+;;   :output-contains  literal, case-insensitive, matched ONLY against what
+;;                     the model itself wrote in its last few turns — never a
+;;                     tool result, so file contents cannot fire a rule
+;;   :tools            the last turn's tool
+;;   :roles            the branch's role
+;;   :events           how the last turn went: success, failure, mechanics
+;;
+;; Ships empty. A rule exists because somebody wanted it.
+
+{:corrections {}}
