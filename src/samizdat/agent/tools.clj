@@ -75,6 +75,7 @@
             [samizdat.agent.tools.experiments]
             [samizdat.agent.tools.findings]
             [samizdat.agent.tools.mcp]
+            [samizdat.agent.tools.wait]
             [samizdat.agent.tools.papercuts]
             [samizdat.agent.tools.battery]
             [samizdat.agent.tools.policy]

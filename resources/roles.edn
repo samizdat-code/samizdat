@@ -59,7 +59,7 @@
            "shell" "websearch" "webfetch" "skill"
            "task" "split"
            "remember" "recall" "outcome" "forget" "retire" "message"
-           "fetch_artifact" "fetch_turn" "papercut" "finding" "mcp"}
+           "fetch_artifact" "fetch_turn" "papercut" "finding" "mcp" "wait"}
   :prompt "roles/implementor"
   :sees #{:task :problem :shared-tree :skills}}
 

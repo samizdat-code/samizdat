@@ -75,6 +75,15 @@
         offer is the supervisor's to take; SAMIZDAT_PRISTINE=1 (config
         :userspace {:mode :shipped}) boots the shipped workflow outright."}
 
+ :wakeups
+ {:value {:max-wait-ms 1800000 :poll-floor-ms 15000}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-05z0.21"]
+  :doc "The `wait` tool's bounds. A wait lasts at most :max-wait-ms (thirty
+        minutes) whatever it asks for, and polls its condition no more often
+        than every :poll-floor-ms, so a branch waiting on a build costs one
+        turn and a handful of check runs rather than a turn a look."}
+
  :mcp
  {:value {:timeout-ms 30000}
   :kind :threshold :capability-tunable? false

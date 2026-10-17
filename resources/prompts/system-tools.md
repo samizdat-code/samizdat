@@ -170,6 +170,11 @@ mcp({action, server?, tool?, arguments?})
     servers; tools {server}, each tool with its description and argument
     schema; call {server, tool, arguments}. A server's policy may ask a
     person before a call, or refuse tools it does not trust.
+wait({seconds?, until?, every?})
+    Wait for the world instead of checking it every turn. {seconds} sleeps.
+    {until, every?, seconds?} runs `until` — the run's own configured test
+    or acceptance command, nothing else — every `every` seconds until it
+    passes or `seconds` run out, all in one turn. Bounded at half an hour.
 lsp({op, file, line, col, new_name?})
     Code navigation over the project via clojure-lsp. Ops:
     definition|references|hover need file (project-relative), line, col;
