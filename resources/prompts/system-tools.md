@@ -10,12 +10,14 @@ branch_theses({theses})
     Propose up to 4 competing plans. The first commits this branch; the rest
     become sibling branches that explore independently and share your failure
     log, so none of you repeats another's dead end.
-done({answer, checklist?, changed_tests?})
+done({answer, checklist?, changed_tests?, result?})
     Ship. `answer` is REQUIRED and is the run's actual output — the text a
     person reads to learn what you did and why they should believe it. A
     `done` with no answer is refused and costs you the turn.
     Also refused if the answer states figures nothing in the evidence
     supports, or engages nothing the problem asked.
+    `result` is a value, for a role whose instructions ask for one — your
+    role says its shape; `done` without it is refused for that role.
     `checklist` accounts for each requirement you owe, by its id:
     [{"item": "p1", "status": "met" | "not_met" | "n/a", "evidence": "…"}].
     The requirements are the list items in the problem (p1…), the operator's

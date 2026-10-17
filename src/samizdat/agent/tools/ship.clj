@@ -6,6 +6,7 @@
   claim-evidence gates those methods share (answer-tokens,
   uncovered-tokens, engages-problem? and friends)."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [samizdat.agent.acceptance :as acceptance]
             [samizdat.agent.checklist :as checklist]
             [samizdat.agent.exam :as exam]
@@ -13,11 +14,15 @@
             [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
+            ;; With jolt.time first, as base and journal load it.
+            [jolt.time]
+            [clojure.data.json :as json]
             [samizdat.agent.state :as state]
             [samizdat.agent.stubs :as stubs]
             [samizdat.agent.roles :as roles]
             [samizdat.agent.verify :as verify]
             [samizdat.lexicon :as lexicon]
+            [samizdat.prompt :as prompt]
             [samizdat.sandbox.sci :as sandbox]
             [samizdat.store.journal :as journal]
             [samizdat.store.tasks :as tasks]
@@ -458,7 +463,34 @@
 
 ;; --- shipping ---------------------------------------------------------------
 
+(declare done*)
+
 (defmethod base/run-tool "done" [{:keys [branch] :as ctx}]
+  ;; A ROLE'S OUTPUT CONTRACT first (karamazov-05z0.14): a role that declares
+  ;; one in roles.edn :output finishes with a `result` that fits it, so the
+  ;; caller reads a value instead of parsing the answer's prose and failing
+  ;; open on whatever it could not read. A result that does not fit is a
+  ;; malformed call, answered with the contract — the branch tries again on
+  ;; its next turn.
+  (if-let [schema (roles/output-schema (:role branch))]
+    (let [result (base/arg ctx :result)
+          result (if (string? result)
+                   (try (json/read-str result) (catch Throwable _ result))
+                   result)
+          problem (if (map? result)
+                    (roles/result-problems schema result)
+                    :missing)]
+      (if problem
+        (base/malformed branch (prompt/render "done-result"
+                                              {:schema (pr-str schema)
+                                               :missing (= :missing problem)
+                                               :problem (when-not (= :missing problem) (pr-str problem))}))
+        (let [r (done* ctx)]
+          (cond-> r
+            (:done? r) (assoc-in [:branch :final-result] (walk/keywordize-keys result))))))
+    (done* ctx)))
+
+(defn- done* [{:keys [branch] :as ctx}]
   ;; Slimmed from the proof harness's seven-rung ship gate: the audit, review
   ;; and LLM-relevance rungs left with the judge machinery. What remains is
   ;; every rung that runs with no model in the path — an answer must exist,

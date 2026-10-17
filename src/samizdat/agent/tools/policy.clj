@@ -210,6 +210,13 @@
                     (when-not (or (= :all surface) (set? surface))
                       (throw (ex-info (str "role " r " declares no tool surface")
                                       {:role r})))
+                    ;; An output contract must be a malli form that compiles
+                    ;; (karamazov-05z0.14): a broken one would refuse every
+                    ;; `done` the role makes.
+                    (when-let [o (roles/output-schema r)]
+                      (when-let [why (roles/output-problem o)]
+                        (throw (ex-info (str "role " r " :output is not a malli schema: " why)
+                                        {:role r}))))
                     (when (and registered (set? surface))
                       (when-let [unknown (seq (remove registered surface))]
                         (throw (ex-info (str "role " r " names unregistered tools: "

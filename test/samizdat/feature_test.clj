@@ -54,10 +54,13 @@
                                                     "test/example_test.clj"])]
       (t))))
 
-(defn- done-call [answer]
-  {:content (str "```tool-call\n{\"name\":\"done\",\"args\":{\"answer\":\""
-                 answer "\",\"checklist\":" fake-done/checklist-json "}}\n```")
-   :finish-reason "stop"})
+(defn- done-call
+  ([answer] (done-call answer nil))
+  ([answer result]
+   {:content (str "```tool-call\n{\"name\":\"done\",\"args\":{\"answer\":\""
+                  answer "\",\"checklist\":" fake-done/checklist-json
+                  (when result (str ",\"result\":" result)) "}}\n```")
+    :finish-reason "stop"}))
 
 (defn- review-answer
   "A substantive review verdict — PASS/REVISE on the first line, then reasons
@@ -81,7 +84,11 @@
     (let [c (str/join " " (map :content messages))]
       (cond
         (str/includes? c "Your role: reviewer")
-        (done-call (review-answer review))        ; PASS/REVISE on the first line
+        ;; The verdict in the reviewer's output contract (roles.edn :output).
+        (done-call (review-answer review)
+                   (if (= :revise review)
+                     "{\"verdict\":\"REVISE\",\"findings\":[\"the changes touch the wrong area\"]}"
+                     "{\"verdict\":\"PASS\"}"))
 
         (str/includes? c "Your role: implementor")
         (if exhaust
@@ -830,3 +837,14 @@
           (is (str/includes? q "(defn hud [] (wind-at))"))
           (is (< (str/index-of q "diff --git a/src/x.clj") (str/index-of q "diff --git a/PLAN.md"))
               "the diff is ordered with the file the question is about first"))))))
+
+(deftest a-reviewer-s-revise-is-read-from-its-result
+  ;; karamazov-05z0.14: the verdict comes from the reviewer's output
+  ;; contract when it has one; the first-line read is the fallback.
+  (samizdat.cells/load-cells!)
+  (let [decide @(samizdat.cells/cell-var 'cells.feature 'review-decision)]
+    (is (= :revise (decide :done "PASS — looks fine to me" {:verdict "REVISE"}))
+        "the result wins over prose that says otherwise")
+    (is (= :pass (decide :done "REVISE: x" {:verdict "PASS"})))
+    (is (= :revise (decide :done "REVISE: the wrong area" nil)) "no result: the first line")
+    (is (= :pass (decide :exhausted "" nil)) "a reviewer that did not finish fails open")))

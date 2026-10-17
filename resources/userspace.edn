@@ -62,6 +62,7 @@
    :acceptance-undecided "prompts/acceptance-undecided.md"
    :complaint "prompts/complaint.md"
    :papercut-tool "prompts/papercut-tool.md"
+   :done-result "prompts/done-result.md"
    :finding-tool "prompts/finding-tool.md"
    :generation-fallback "prompts/generation-fallback.md"
    :papercuts "prompts/papercuts.md"

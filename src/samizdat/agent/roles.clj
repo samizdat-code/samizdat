@@ -24,6 +24,9 @@
   context."
   (:require [clojure.set :as set]
             [clojure.string :as str]
+            [clojure.walk :as walk]
+            [malli.core :as m]
+            [malli.error :as me]
             [samizdat.config :as config]
             [samizdat.userspace :as userspace]))
 
@@ -38,6 +41,29 @@
 (defn spec [role] (get (table) (keyword role)))
 
 (defn doc [role] (str (:doc (spec role))))
+
+(defn output-schema
+  "The malli form a role's `done` result must fit, from roles.edn :output, or
+  nil for a role that finishes with prose alone (karamazov-05z0.14)."
+  [role]
+  (when role (:output (spec role))))
+
+(defn output-problem
+  "Why `schema` is not a usable output contract, or nil."
+  [schema]
+  (try (m/schema schema) nil
+       (catch Throwable e (or (ex-message e) (str e)))))
+
+(defn result-problems
+  "Why `result` does not fit `schema` — malli's own explanation, humanised —
+  or nil when it does. String keys are read as keywords, since a tool call's
+  arguments arrive as JSON."
+  [schema result]
+  (let [v (walk/keywordize-keys result)]
+    (try
+      (when-not (m/validate schema v)
+        (or (me/humanize (m/explain schema v)) "does not fit"))
+      (catch Throwable e (or (ex-message e) (str e))))))
 
 (defn sees
   "What this role's opening context is assembled from. Documentation for the

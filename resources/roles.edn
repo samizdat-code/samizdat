@@ -93,6 +93,12 @@
   :tools #{"read_file" "read_digest" "grep" "glob" "lsp" "doc" "complete" "fetch_artifact"
            "fetch_turn" "recall" "done" "give_up"}
   :prompt "roles/reviewer"
+  ;; ITS OUTPUT CONTRACT (karamazov-05z0.14): `done` takes a `result` that
+  ;; fits this, and the feature review reads the verdict from it rather than
+  ;; from the answer's first line. A malli form; the policy save checks it.
+  :output [:map
+           [:verdict [:enum "PASS" "REVISE"]]
+           [:findings {:optional true} [:vector :string]]]
   :sees #{:requirement :diff :answer}}
 
  :answerer
