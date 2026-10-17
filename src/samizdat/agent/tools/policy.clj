@@ -194,6 +194,17 @@
                               (edn/read-string (str (userspace/body :policy "corrections")))
                               (gates/threshold :corrections))]
                   (throw (ex-info (corrections/describe p) {:table "corrections" :problems p})))
+    "modes"     ;; Every mode names a prompt the project has (karamazov-05z0.18).
+                (let [table (:modes (edn/read-string (str (userspace/body :policy "modes"))))]
+                  (when-not (map? table)
+                    (throw (ex-info (str/trim (prompt/render "modes-problem" {:not-a-map true}))
+                                    {:table "modes"})))
+                  (doseq [[n m] table
+                          :when (str/blank? (str (some-> (:prompt m) (#(userspace/body :prompt %)))))]
+                    (throw (ex-info (str/trim (prompt/render "modes-problem"
+                                                             {:no-prompt true :mode n
+                                                              :prompt (pr-str (:prompt m))}))
+                                    {:mode n}))))
     "rubrics"   ;; The critic's rubrics: dimensions with questions, worked
                 ;; examples that are a pass or a fail (karamazov-0e2c.8).
                 (when-let [p (judge/rubric-problems

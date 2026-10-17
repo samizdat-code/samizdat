@@ -1,0 +1,17 @@
+;; Session modes (karamazov-05z0.18, after autolith's hurry-up and Simple
+;; Technical English): a named overlay a run is started with — config.edn
+;; :run :modes ["hurry"], or `modes` on POST /v1/runs — whose words the
+;; model reads in every turn's context block. There, and not in the system
+;; prompt, so turning one on does not invalidate the cached prefix.
+;;
+;; A mode is {:doc what it is for, :prompt the prompt role holding its
+;; words}. Add one by adding a prompt and an entry; the policy save checks
+;; that every :prompt names a prompt the project has.
+
+{:modes
+ {"hurry" {:doc "Get to a working result fast: the smallest change that does what was asked."
+           :prompt "mode-hurry"}
+  "plain" {:doc "Write for a reader whose first language is not English: Simple Technical English."
+           :prompt "mode-plain"}
+  "relax" {:doc "Do not cut the work short over how long the conversation has become."
+           :prompt "mode-relax"}}}

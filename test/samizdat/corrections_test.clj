@@ -180,3 +180,12 @@
         (samizdat.store.db/close c)
         (samizdat.layers/forget-files!)
         (doseq [f (reverse (file-seq dir))] (.delete f))))))
+
+(deftest a-run-s-modes-are-words-in-its-context-block
+  ;; karamazov-05z0.18: a mode is a prompt overlay chosen at run start, in the
+  ;; per-turn block rather than the system prompt so the prefix stays cached.
+  (let [text (samizdat.agent.loop/modes-text ["hurry" "nonsense"])]
+    (is (str/includes? text "smallest change") "the shipped hurry mode")
+    (is (str/includes? text "Modes this run was started with")))
+  (is (nil? (samizdat.agent.loop/modes-text [])))
+  (is (nil? (samizdat.agent.loop/modes-text ["nonsense"])) "an unknown name is no mode"))

@@ -144,7 +144,11 @@
         beam-width (or (:beam_width body) (:beam-width body))
         token-budget (or (:token_budget body) (:token-budget body))
         seed-run (or (:seed_run body) (:seed-run body))
-        quarantine (or (:quarantine body) (get body "quarantine"))]
+        quarantine (or (:quarantine body) (get body "quarantine"))
+        ;; Session modes for this run (resources/modes.edn,
+        ;; karamazov-05z0.18), over config.edn :run :modes.
+        modes (not-empty (vec (map str (or (:modes body) (get body "modes")))))
+        config (cond-> config modes (assoc-in [:run :modes] modes))]
   ;; A {} body used to start a REAL run on a nil problem — a selection model
   ;; call plus a full beam of provider spend answering nothing, while
   ;; /v1/chat/completions 400s the same input (blt.38).

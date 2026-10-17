@@ -367,6 +367,19 @@
       (when (seq shown)
         (prompt/render "corrections-block" {:rules shown})))))
 
+(defn modes-text
+  "The words of the modes `names` the run was started with, as the context
+  block's part (resources/modes.edn, karamazov-05z0.18). nil with none, or
+  when the project has no :modes policy; a name the policy lacks is skipped."
+  [names]
+  (when (seq names)
+    (let [table (:modes (try (userspace/edn-body :policy "modes") (catch Throwable _ nil)))
+          texts (keep (fn [n] (when-let [m (get table (str n))]
+                                (some-> (prompt/prompt (:prompt m)) str str/trim not-empty)))
+                      names)]
+      (when (seq texts)
+        (prompt/render "modes-block" {:modes (mapv (fn [t] {:text t}) texts)})))))
+
 (defn- context-block
   "What the harness adds to the branch's view before its next turn: the
   failures most like what it just tried, and — when sharing is on — the
@@ -381,7 +394,9 @@
   distinct sharing. Whether sharing earns the beam its width stays a question
   the journal can answer, now directly. Returns {:block :branch}; the branch
   carries the :shared-served ids the dedup reads."
-  [conn run-id branch last-claim share?]
+  ([conn run-id branch last-claim share?]
+   (context-block conn run-id branch last-claim share? nil))
+  ([conn run-id branch last-claim share? modes]
   (let [;; Other branches' entries, less the labelled ones: these are
         ;; samples put in front of the branch unasked (samizdat.security.flow).
         others #(flow/unlabelled (remove (fn [e] (= (:branch_id e) (:id branch))) %))
@@ -476,6 +491,8 @@
                    ;; Re-evaluated every turn, so a stale copy is dropped
                    ;; with the others.
                    [:corrections (corrections-text branch)]
+                   ;; The modes the run was started with (karamazov-05z0.18).
+                   [:modes (modes-text modes)]
                    ;; Unread mail from other branches on this run, a bounded
                    ;; preview; nil when the inbox is empty. Surfacing does not
                    ;; consume — the message tool's inbox action marks read.
@@ -515,7 +532,7 @@
                    (update :memories-shown (fnil into #{}) (concat new-crumb new-learned))
                    (update :shared-served (fnil into #{}) (map :id fresh))
                    (assoc :context-sizes
-                          (mapv (fn [[k v]] [k (count v)]) parts)))})))
+                          (mapv (fn [[k v]] [k (count v)]) parts)))}))))
 
 ;; --- one turn ---------------------------------------------------------------
 
@@ -1357,7 +1374,8 @@
             {ctx-block :block branch :branch}
             (context-block conn run-id branch
                            (get-in parsed [:args :claim])
-                           (get-in ctx [:config :run :share-artifacts?]))
+                           (get-in ctx [:config :run :share-artifacts?])
+                           (get-in ctx [:config :run :modes]))
             ;; What the block cost, durably: one note per turn per branch,
             ;; sizes by part (karamazov-o4wm.6). The branch keeps the same
             ;; vector for introspect's last-turn view; the note is what a
