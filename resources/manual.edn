@@ -243,7 +243,9 @@
 
  {:group "Policy as data"
   :entries
-  [{:name samizdat.agent.corrections/matching
+  [{:name samizdat.store.papercuts/report!
+    :summary "Papercuts: friction a branch reports about the harness with the `papercut` tool, kept across runs. A report that repeats an open one (same title words, or enough shared words — gates.edn :papercut) adds to its count instead of opening another. The supervisor's brief lists the open ones; `papercut close` needs the experiment whose verdict reads better or cheaper, so a closed papercut is a measured fix."}
+   {:name samizdat.agent.corrections/matching
     :summary "Corrections: guidance a person asked for, shown in a turn's context block when the branch's recent turns match a rule's :when. :output-contains is a literal matched only against what the model itself wrote, never a tool result. The project's set is the `corrections` policy (editable with the `policy` tool, checked on save); a person's own is ~/.config/samizdat/corrections.edn and follows them across projects. A person drafts one from a complaint with /complain in the TUI (POST /v1/corrections/draft), reviews it, and saves it with /keep. Bounds are gates.edn :corrections."}
    {:name samizdat.agent.gates/threshold
     :summary "Read one tunable from gates.edn. Every gate budget in the harness is a value here."}

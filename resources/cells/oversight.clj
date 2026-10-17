@@ -17,6 +17,7 @@
             [samizdat.session :as session]
             [samizdat.store.journal :as journal]
             [samizdat.store.knowledge :as knowledge]
+            [samizdat.store.papercuts :as papercuts]
             [samizdat.store.runs :as runs]
             [samizdat.store.userspace :as store-us]
             [samizdat.userspace :as userspace]
@@ -426,7 +427,7 @@
   The digest and the since-last-look block are not among them: the run's
   position is the news of every pass."
   [:learned :candidates :drift :offers :rejected :refused :retire :reviews
-   :inconclusive :prune :catalog])
+   :inconclusive :prune :papercuts :catalog])
 
 (defn visible-sections
   "{section hash} for what the carried branch can still see: the sections
@@ -591,6 +592,20 @@
                                   ;; store surfaces; the supervisor judges
                                   ;; (karamazov-h27r).
                                   :candidates (seq (knowledge/graduation-candidates conn))
+                                  ;; Friction the branches reported about the
+                                  ;; harness, still open (karamazov-05z0.5).
+                                  :papercuts (let [ps (safely :papercuts #(papercuts/open conn) [])]
+                                               (when (seq ps)
+                                                 (prompt/render "papercuts"
+                                                                ;; A labelled report's words are
+                                                                ;; not put in front of the
+                                                                ;; supervisor unasked (security.flow).
+                                                                {:open (mapv #(cond-> %
+                                                                                (not-empty (str (:flow %)))
+                                                                                (-> (dissoc :title :body)
+                                                                                    (assoc :withheld true)))
+                                                                             (take (:shown (gates/threshold :papercut)) ps))
+                                                                 :more (max 0 (- (count ps) (:shown (gates/threshold :papercut))))})))
                                   ;; Which surfaces the tuning keeps
                                   ;; touching, and which edits keep being
                                   ;; undone — nil when nothing moved, so

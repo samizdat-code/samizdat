@@ -310,6 +310,11 @@
     {:vars [graduation-candidates remember! standing]
      :effects #{:db}}
 
+    ;; Open papercuts, for the supervisor's brief (karamazov-05z0.5).
+    samizdat.store.papercuts
+    {:vars [open]
+     :effects #{:db}}
+
     ;; A branch handed other branches' work takes what they had read
     ;; (karamazov-3vu1.14). Both only ever LOWER a label, so a cell holding
     ;; them can confine a branch and never free one.

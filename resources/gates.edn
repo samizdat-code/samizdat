@@ -32,6 +32,20 @@
  {:value 3 :kind :threshold :capability-tunable? false
   :doc "Consecutive failed verifications before a branch is culled."}
 
+ :papercut
+ {:value {:window-ms 86400000 :overlap 0.6 :same-run-overlap 0.4 :min-word-chars 4
+          :shown 8}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.5"]
+  :doc "Papercuts, friction a branch reports about the harness (the
+        `papercut` tool). A report repeats an open papercut when the titles
+        hold the same words, or when the title-and-body word sets share
+        :overlap of the smaller one's words (:same-run-overlap when the
+        report comes from the run that last reported it — a branch re-filing
+        a problem rewords it), within :window-ms of that papercut's last
+        report. Words shorter than :min-word-chars do not count. :shown is
+        how many open papercuts the supervisor's brief lists."}
+
  :corrections
  {:value {:window 8 :max-shown 5 :max-instruction-chars 400
           :max-trigger-chars 80 :max-attempts 3}

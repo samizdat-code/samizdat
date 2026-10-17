@@ -232,6 +232,9 @@
    "ask_human"   {:reach :harness-only}
    "experiment"  {:reach :harness-only}
    "verdict"     {:reach :harness-only}
+   ;; Rows in the harness's own db; the text is the reporter's, carried
+   ;; with its flow label like a message's (karamazov-05z0.5).
+   "papercut"    {:reach :harness-only}
    "battery"     {:reach :spawns-process :also "heldout/draft! git update-ref under secrets/scrubbed-process-env"}
    "fetch_turn"  {:reach :harness-only}
    "fetch_artifact" {:reach :harness-only}

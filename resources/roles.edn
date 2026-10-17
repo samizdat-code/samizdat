@@ -59,7 +59,7 @@
            "shell" "websearch" "webfetch" "skill"
            "task" "split"
            "remember" "recall" "outcome" "forget" "retire" "message"
-           "fetch_artifact" "fetch_turn"}
+           "fetch_artifact" "fetch_turn" "papercut"}
   :prompt "roles/implementor"
   :sees #{:task :problem :shared-tree :skills}}
 
@@ -79,7 +79,7 @@
   :tools #{"intervene" "read_file" "read_digest" "grep" "lsp" "skill" "doc" "complete" "manual"
            "introspect" "cells" "cell" "manifest" "prompt" "policy" "adopt"
            "fetch_turn" "fetch_artifact" "recall" "remember" "forget" "retire" "outcome"
-           "experiment" "verdict" "battery" "message" "eval" "shell" "websearch" "done" "give_up"}
+           "experiment" "verdict" "papercut" "battery" "message" "eval" "shell" "websearch" "done" "give_up"}
   :prompt "roles/supervisor"
   :sees #{:run-health :gate-health :failures}}
 

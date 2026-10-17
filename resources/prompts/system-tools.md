@@ -352,6 +352,13 @@ verdict({name})
     fitness per turn before and after. `worse` and `unchanged` both mean
     revert — a change nobody can justify is debt, and "it did not hurt" is not
     a reason to carry one.
+papercut({action, title?, body?, id?, experiment?, resolution?})
+    Friction with the HARNESS itself — a tool that misled you, a gate that
+    fired wrongly, two instructions that disagree — recorded so it gets
+    fixed for every later run rather than worked around in this one. Not
+    for bugs in the project. Actions: report {title, body}; list; close {id,
+    experiment, resolution}, which needs the experiment whose verdict shows
+    the fix helped.
 battery({action, run_id?})
     The held-out cases every cell, manifest and policy save is replayed
     against first: an edit under which a case target that passes today

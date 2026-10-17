@@ -954,7 +954,32 @@
    "ALTER TABLE knowledge ADD COLUMN source_turn_from INTEGER"
    "ALTER TABLE knowledge ADD COLUMN source_turn_to INTEGER"])
 
+(def v41
+  "PAPERCUTS (karamazov-05z0.5): friction a branch reports about the harness
+  itself — a tool that misleads, a gate that fires wrong — kept across runs,
+  folded together when the same one is reported again, and closed only with
+  the experiment whose verdict says the fix helped. `flow` is the reporter's
+  flow label (samizdat.security.flow), as on messages: a papercut is
+  model-written text another branch reads."
+  ["CREATE TABLE IF NOT EXISTS papercuts (
+     id TEXT PRIMARY KEY,
+     title TEXT NOT NULL,
+     body TEXT NOT NULL DEFAULT '',
+     run_id TEXT,
+     branch_id TEXT,
+     status TEXT NOT NULL DEFAULT 'open',
+     reports INTEGER NOT NULL DEFAULT 1,
+     first_at TEXT NOT NULL,
+     last_at TEXT NOT NULL,
+     last_run_id TEXT,
+     resolution TEXT,
+     experiment TEXT,
+     verdict TEXT,
+     closed_at TEXT,
+     flow TEXT)"
+   "CREATE INDEX IF NOT EXISTS idx_papercuts_status ON papercuts(status, last_at)"])
+
 (def migrations
   "Ordered. Index 0 is migration 1; PRAGMA user_version holds the count applied."
   [v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24
-   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40])
+   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40 v41])

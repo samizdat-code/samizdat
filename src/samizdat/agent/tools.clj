@@ -73,6 +73,7 @@
             [samizdat.agent.tools.mutate]
             [samizdat.agent.tools.manifest]
             [samizdat.agent.tools.experiments]
+            [samizdat.agent.tools.papercuts]
             [samizdat.agent.tools.battery]
             [samizdat.agent.tools.policy]
             [samizdat.agent.tools.prompts]

@@ -60,6 +60,8 @@
  :prompts
   {:acceptance-failed "prompts/acceptance-failed.md"
    :complaint "prompts/complaint.md"
+   :papercut-tool "prompts/papercut-tool.md"
+   :papercuts "prompts/papercuts.md"
    :corrections-api "prompts/corrections-api.md"
    :corrections-block "prompts/corrections-block.md"
    :corrections-problem "prompts/corrections-problem.md"
