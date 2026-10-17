@@ -31,6 +31,7 @@
             [samizdat.agent.checklist]
             [samizdat.agent.exam]
             [samizdat.agent.gitdiff]
+            [samizdat.agent.budget]
             [samizdat.agent.compaction]
             [samizdat.agent.files]
             [samizdat.agent.gates]

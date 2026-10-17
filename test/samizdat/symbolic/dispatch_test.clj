@@ -230,7 +230,7 @@
   ;; this pins it as the whole of the manifest's order-dependence.
   (let [def (manifests/read-definition (slurp (io/resource "manifests/loop.edn")))
         tables (:dispatches def)]
-    (is (= #{:measure :cap :parse :route} (set (keys tables))))
+    (is (= #{:measure :cap :admit :parse :route} (set (keys tables))))
     (doseq [[cell table] tables
             [label spec] table]
       (is (d/pattern-entry? spec) (str cell " " label " is still a fn form")))

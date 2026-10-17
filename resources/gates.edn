@@ -32,6 +32,25 @@
  {:value 3 :kind :threshold :capability-tunable? false
   :doc "Consecutive failed verifications before a branch is culled."}
 
+ :token-budget
+ {:value {:reserve? true :chars-per-token 4 :output-factor 1
+          :fallback-max-tokens 8192}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.3"]
+  :doc "How :budget/admit holds a run's token budget BEFORE a call rather than
+        after it. The journal is the bill and is written when a call returns,
+        so a budget read off it alone let every live branch start a call
+        under the line and land past it, and a reply with no usage cost
+        nothing. Each call reserves its worst case — the request at
+        :chars-per-token plus max-tokens times :output-factor (raise it to 2
+        to cover the doubled-budget retry) — against spend plus what calls in
+        flight hold; a call that does not fit is not made and the branch ends
+        :exhausted. A reply that reports no usage keeps its reservation as its
+        price. :fallback-max-tokens is the output ask when the provider config
+        names none. :reserve? false is the old after-the-fact check alone.
+        Only on a run with a budget; side calls (critic, judge, summarizer)
+        are still billed after the fact."}
+
  :provider-error-limit
  {:value 5 :kind :threshold :capability-tunable? false
   :provenance ["karamazov-e8iw"]

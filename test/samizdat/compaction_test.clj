@@ -428,11 +428,14 @@
         (is (= :compaction/prune (get-in d [:cells :prune])) m)
         (is (= :compaction/fold (get-in d [:cells :fold])) m))
       (testing (str m " routes on a key rather than an inline decision")
-        (is (= {:cap :cap :none :infer} (get-in d [:edges :measure])) m)
-        (is (= {:prune :prune :none :infer} (get-in d [:edges :cap])) m))
-      (testing (str m " starts the turn by measuring, and ends the ladder at infer")
+        (is (= {:cap :cap :none :admit} (get-in d [:edges :measure])) m)
+        (is (= {:prune :prune :none :admit} (get-in d [:edges :cap])) m))
+      ;; Through the budget admission, which reserves the call the ladder
+      ;; has just sized (karamazov-05z0.3).
+      (testing (str m " starts the turn by measuring, and ends the ladder at the call")
         (is (= :measure (get-in d [:edges :start])) m)
-        (is (= :infer (get-in d [:edges :fold])) m)))))
+        (is (= :admit (get-in d [:edges :fold])) m)
+        (is (= :infer (get-in d [:edges :admit :infer])) m)))))
 
 (deftest the-dispatch-patterns-only-read-the-route
   ;; A predicate that computed the tier would put the routing back inside code

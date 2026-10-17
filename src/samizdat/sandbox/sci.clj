@@ -110,6 +110,11 @@
             record-inactive! round-max-turns select-done-branch spawn-children! spent-tokens]
      :effects #{:net :db :run}}
 
+    ;; Token-budget reservations for calls in flight (karamazov-05z0.3). In
+    ;; memory, per run; no I/O.
+    samizdat.agent.budget
+    {:vars [estimate held release! reserve! reset-run! unpriced]}
+
     ;; Context-window arithmetic over message vectors. Pure.
     samizdat.agent.compaction
     {:vars [aggressive? apply-summary cap-oversized-results compress-window estimate-tokens

@@ -36,6 +36,8 @@
     :summary "Whether a replacement is small enough to accept: |new| <= max(|original|, floor)."}
    {:name samizdat.tape/apply-fold
     :summary "Collapse a finished conversation into one block plus a verbatim tail, or reject it. Pure: you supply the summary; the harness never calls it on its own."}
+   {:name samizdat.agent.budget/reserve!
+    :summary "Reserve a call's worst case against the run's token budget, atomically across branches; false when spend plus what calls in flight hold plus this one would pass it. The :budget/admit cell calls it before every turn's model call and ends the branch :exhausted when it refuses (gates.edn :token-budget). release! gives it back; a reply with no usage keeps it as its price (unpriced)."}
    {:name samizdat.agent.compaction/fold-pays?
     :summary "Whether folding a window now costs less than carrying it at the cached-token price for the turns left. The measure cell asks for a fold below the ladder when it does (gates.edn :cost-fold; the weight is the provider's :cached-token-weight)."}
    {:name samizdat.agent.compaction/task-span

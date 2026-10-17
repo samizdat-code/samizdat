@@ -34,6 +34,7 @@
          :fold           :compaction/fold
          :probe          :probe/next-move
          :ab             :probe/ab-model
+         :admit          :budget/admit
          :infer          :llm/infer
          :parse          :llm/parse
          :provider-error :loop/provider-error
@@ -58,11 +59,13 @@
          ;; recorded" was an intention rather than a fact (RFC-002 F1).
          :ab             :measure
          :measure        {:cap  :cap
-                          :none :infer}
+                          :none :admit}
          :cap            {:prune :prune
-                          :none  :infer}
+                          :none  :admit}
          :prune          :fold
-         :fold           :infer
+         :fold           :admit
+         :admit          {:infer :infer
+                          :over  :route}
          :infer          :parse
          :parse          {:provider-error :provider-error
                           :no-call        :no-call
@@ -88,6 +91,8 @@
 
  :dispatches {:measure [[:cap  {:compaction/route :cap}]
                         [:none _]]
+              :admit   [[:over {:over-budget? true}]
+                        [:infer _]]
               :cap     [[:prune {:compaction/route :prune}]
                         [:none  _]]
               ;; ORDER MATTERS here, as in loop.edn: a provider failure passes

@@ -15,6 +15,7 @@
 (ns cells.loop
   (:require [clojure.string :as str]
             [mycelium.cell :as cell]
+            [samizdat.agent.budget :as budget]
             [samizdat.agent.compaction :as cmp]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.instructions :as instr]
@@ -54,17 +55,53 @@
            :before branch
            :branch (turn/phase-valve branch turn))))
 
+(cell/defcell :budget/admit
+  {:doc "Reserve this call's worst case against the run's token budget before
+        it is made: the request at gates.edn :token-budget :chars-per-token
+        plus the output it may ask for. When spend, plus what calls in flight
+        hold, plus this one would pass the budget, the call is not made and
+        the turn routes to its end as over budget (karamazov-05z0.3). A run
+        with no budget reserves nothing."
+   :effects [:db]
+   :requires [:conn :llm-config :run-id :token-budget]
+   :input  [:map [:branch :map]]
+   :output [:map [:reserved {:optional true} :int]
+            [:over-budget? {:optional true} :boolean]]}
+  (fn [{:keys [conn run-id token-budget llm-config]} {:keys [branch] :as data}]
+    (let [p (gates/threshold :token-budget)]
+      (if-not (and token-budget conn run-id (:reserve? p))
+        (dissoc data :reserved)
+        (let [ask (budget/estimate (:messages branch)
+                                   (or (:max-tokens llm-config) (:fallback-max-tokens p))
+                                   p)
+              spent (or (:total-tokens (journal/run-usage conn run-id)) 0)]
+          (if (budget/reserve! run-id spent token-budget ask)
+            (assoc data :reserved ask)
+            (-> (dissoc data :reserved) (assoc :over-budget? true))))))))
+
 (cell/defcell :llm/infer
   {:doc "One model call, retried once at a doubled budget when the response hit
         the token cap before emitting a tool call. Produces :call {:ok
         :response} or {:ok false :error} — a provider failure is data, never an
-        exception."
+        exception. Gives back what :budget/admit reserved, except for a reply
+        that reported no usage, which keeps it as its price."
    :effects [:net :db]
-   :requires []
-   :input  [:map [:branch :map]]
+   :requires [:run-id]
+   :input  [:map [:branch :map] [:reserved {:optional true} :int]]
    :output [:map [:call [:map [:ok :boolean]]]]}
-  (fn [ctx {:keys [branch] :as data}]
-    (assoc data :call (turn/call-model ctx branch))))
+  (fn [{:keys [run-id] :as ctx} {:keys [branch reserved] :as data}]
+    (let [call (try (turn/call-model ctx branch)
+                    ;; call-model returns a failure as data; this is for
+                    ;; the bug that throws, so it cannot keep the slot.
+                    (catch Throwable e
+                      (when reserved (budget/release! run-id reserved true))
+                      (throw e)))]
+      ;; A failed call returned nothing to bill; a reply that came back
+      ;; without usage is unknown, and unknown is charged in full.
+      (when reserved
+        (budget/release! run-id reserved
+                         (or (not (:ok call)) (some? (get-in call [:response :usage])))))
+      (assoc (dissoc data :reserved) :call call))))
 
 (cell/defcell :llm/parse
   {:doc "Fold the response into the branch: parse the fence, record mechanics
@@ -247,8 +284,11 @@
           ;; spent without bound inside its nested loops. The sum is the
           ;; run's whole bill off the journal, the same number the beam
           ;; holds; a run with no budget pays for no query.
+          ;; Plus what replies with no usage were charged (karamazov-05z0.3),
+          ;; which the journal cannot sum.
           spent (when (and token-budget conn run-id)
-                  (:total-tokens (journal/run-usage conn run-id)))]
+                  (+ (or (:total-tokens (journal/run-usage conn run-id)) 0)
+                     (budget/unpriced run-id)))]
       (cond-> (assoc data :branch (turn/steer-step ctx branch turn
                                                    {:parsed parsed :result result}))
         (and spent (>= spent token-budget)) (assoc :over-budget? true)))))
