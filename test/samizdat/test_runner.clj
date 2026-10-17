@@ -75,6 +75,7 @@
             [samizdat.compaction-test]
             [samizdat.acp-test]
             [samizdat.corrections-test]
+            [samizdat.tui-onboarding-test]
             [samizdat.mcp-test]
             [samizdat.role-output-test]
             [samizdat.worktree-test]
@@ -332,6 +333,7 @@
     samizdat.compaction-test
     samizdat.acp-test
     samizdat.corrections-test
+    samizdat.tui-onboarding-test
     samizdat.mcp-test
     samizdat.role-output-test
     samizdat.worktree-test

@@ -194,6 +194,18 @@
  ;;   :do :intervene sends a directive to the run on screen, of :kind, with
  ;;   the argument as its payload, aimed by :target — :branch (the branch on
  ;;   screen), :arg (the argument names the branch) or nothing (the run).
+ ;; WHAT'S NEW, shown once per person (karamazov-05z0.19): each page is
+ ;; shown on the first start that has not seen it at its :version, then
+ ;; recorded in ~/.config/samizdat/onboarding.edn. Bump a page's version when
+ ;; what it describes changes and it is news again. /tour shows them all.
+ :onboarding
+ [{:id "welcome" :version 1
+   :lines ["samizdat: type a problem to start a run, or /help for the commands."
+           "Esc interrupts the run on screen; /resume picks it up again."]}
+  {:id "complain" :version 1
+   :lines ["New: when the model does something you do not want, /complain <what went wrong>."
+           "It drafts a rule from the run's own turns; /keep saves it for you everywhere, /keep project for this project."]}]
+
  :commands
  {"/help"     {:do :help :doc "these commands"}
   "/quit"     {:do :quit :doc "leave (Ctrl+Q)"}
@@ -232,6 +244,7 @@
                :doc "turn a complaint about the run on screen into a correction the model is shown when it does that again; /keep saves it"}
   "/keep"     {:do :keep-correction :args "[project]"
                :doc "save the drafted correction for you everywhere, or with `project` for this project only"}
+  "/tour"     {:do :tour :doc "show the what's-new pages again"}
   "/q"        {:alias "/quit"}}
 
  ;; DESKTOP NOTIFICATIONS, after dirge's: when the run on screen needs you

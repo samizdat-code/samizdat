@@ -43,6 +43,7 @@
             [samizdat.api.sse :as sse]
             [samizdat.tui.commands :as cmd]
             [samizdat.tui.layout :as layout]
+            [samizdat.tui.onboarding :as onboarding]
             [samizdat.tui.notify :as notify]
             [samizdat.tui.state :as st]
             [samizdat.tui.theme :as theme]
@@ -265,6 +266,7 @@
                       (say! (str "mode not set: " (:error r))))))
                 (say! (str "approval mode: " (or (get-in @state [:project :approval_mode]) "unknown")
                            " — /mode attended (ask while a TUI watches), refuse, block, or yolo (every ask allowed)")))
+        :tour (apply say! (onboarding/lines (:onboarding (layout/current))))
         :complain
         (cond
           (not arg) (say! "/complain needs what went wrong, e.g. /complain stop narrating the plan")
@@ -712,6 +714,10 @@
   (swap! state assoc :base base)
   ;; A first run leaves ~/.config/samizdat/tui.edn behind to edit.
   (try (layout/seed-global!) (catch Throwable _ nil))
+  ;; What is new since this person last looked, once (karamazov-05z0.19).
+  (try (when-let [d (seq (onboarding/due! (:onboarding (layout/current))))]
+         (apply say! (onboarding/lines d)))
+       (catch Throwable _ nil))
   (start-polling!)
   (try
     ;; Mouse on: the folds in the conversation are ftxui collapsibles and
