@@ -21,6 +21,7 @@
             [samizdat.prompt :as prompt]
             [clojure.string :as str]
             [samizdat.agent.gates :as gates]
+            [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.engine.proc :as proc]
             [samizdat.security.secrets :as secrets]
             [samizdat.util :as util]))
@@ -245,7 +246,9 @@
   the config they were handed — never by a cell. Returns nil."
   [run-id root config]
   (when run-id
-    (swap! sealed assoc run-id {:root (str root) :cmds (configured-commands config)}))
+    (swap! sealed assoc run-id {:root (str root) :cmds (configured-commands config)
+                                :deterministic (acceptance/deterministic-commands config)
+                                :memo {}}))
   nil)
 
 (defn unseal-run!
@@ -262,14 +265,39 @@
   [run-id]
   (contains? @sealed run-id))
 
+(defn run-remembered
+  "`run-verify`, answered from the last run of `cmd` on the same tree when
+  `cmd` is one the operator marked deterministic for sealed run `run-id` —
+  green or red alike, rather than paid for again (karamazov-05z0.12). The
+  `done` gate and :feature/verify share the memory, so one suite run serves
+  both. gates.edn :verify-memo turns it off; anything not marked runs."
+  [run-id root cmd timeout-ms]
+  (let [cmd (str cmd)
+        {:keys [deterministic]} (get @sealed run-id)]
+    (if-not (and (contains? deterministic cmd) (:enabled? (gates/threshold :verify-memo)))
+      (run-verify root cmd timeout-ms)
+      (let [tree (gitdiff/tree-id root)
+            hit (when tree (get-in @sealed [run-id :memo [(str root) cmd tree]]))]
+        (if hit
+          (assoc hit :reused? true)
+          (let [r (run-verify root cmd timeout-ms)]
+            (when (and tree (not (:timeout? r)))
+              (swap! sealed #(if (contains? % run-id)
+                               (assoc-in % [run-id :memo [(str root) cmd tree]] r)
+                               %)))
+            r))))))
+
 (defn run-configured
   "Run `cmd` for run `run-id` through run-verify, when it is one of the
   commands the run was sealed with, in the sealed root. Otherwise nothing
   runs and the result is not green, with :refused? true and the reason as
   its :output — the cell reports it like any failed check."
   [run-id cmd timeout-ms]
-  (let [{:keys [root cmds]} (get @sealed run-id)]
-    (if (and root (contains? cmds (str cmd)))
-      (run-verify root cmd timeout-ms)
+  (let [{:keys [root cmds deterministic]} (get @sealed run-id)
+        cmd (str cmd)]
+    (cond
+      (not (and root (contains? cmds cmd)))
       {:green? false :timeout? false :refused? true
-       :output (prompt/render "verify-refused" {:cmd (str cmd)})})))
+       :output (prompt/render "verify-refused" {:cmd cmd})}
+
+      :else (run-remembered run-id root cmd timeout-ms))))

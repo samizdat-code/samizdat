@@ -189,6 +189,22 @@
                     {:failed (mapv (fn [r] (update r :output #(tail % n))) f)
                      :passed (not-empty (mapv :name (filter #(true? (:passed? %)) results)))}))))
 
+(defn deterministic-commands
+  "The configured commands the OPERATOR said give the same answer on the same
+  tree (karamazov-05z0.12): :run :verify-cmd under :run
+  :verify-deterministic? true, and every :check criterion marked
+  :deterministic? true. Never assumed — a check that talks to a network or a
+  clock must keep running."
+  [config]
+  (let [checks (try (->> (get-in config [:run :acceptance])
+                         (filter #(and (map? %) (true? (:deterministic? %))))
+                         (keep #(some-> (:check %) str not-empty)))
+                    (catch Throwable _ nil))]
+    (into #{} (remove str/blank?)
+          (cons (when (true? (get-in config [:run :verify-deterministic?]))
+                  (some-> (get-in config [:run :verify-cmd]) str))
+                checks))))
+
 (defn configured-commands
   "The shell commands `config` names for a run: :run :verify-cmd and every
   :run :acceptance :check. A malformed :acceptance contributes none — the

@@ -573,6 +573,9 @@
                                             (:timeout? r) "tests TIMED OUT"
                                             (seq unrun) (prompt/render "tests-not-run"
                                                                        {:nses (str/join ", " unrun)})
+                                            ;; Answered from the last run on this
+                                            ;; tree (gates.edn :verify-memo).
+                                            (and tests-passed? (:reused? r)) "tests passed (unchanged tree, not rerun)"
                                             tests-passed? "tests passed"
                                             :else (str "tests FAILED (exit " (:exit r) ")\n"
                                                        (tail (str (:output r)) 25)))

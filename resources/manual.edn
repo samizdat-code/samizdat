@@ -247,6 +247,8 @@
     :summary "Generations: every run's end records which project versions were current and how it ended. The newest one a run shipped on is the set known to work together; when gates.edn :generation-fallback :error-runs runs in a row have errored since, the supervisor's brief names every version that moved and the one to go back to. To boot the shipped workflow without touching the project's files, start with SAMIZDAT_PRISTINE=1 or config :userspace {:mode :shipped}."}
    {:name samizdat.store.userspace/removal-conditions
     :summary "The current versions whose edit said when it should come out — `experiment {..., until}` records it on the version it measures. The supervisor's brief lists them so an override stops being carried once its reason has gone; a later version of the same name is a different edit and drops off the list."}
+   {:name samizdat.agent.gitdiff/tree-id
+    :summary "The working tree's content as one id, untracked files included, without touching the tree. The configured checks the operator marked deterministic (config :run :verify-deterministic?, an acceptance :check's :deterministic? true) are answered from their last run on the same tree id instead of being rerun (gates.edn :verify-memo); the result says :reused?."}
    {:name samizdat.agent.worktree/isolated
     :summary "Run one owner in a git worktree of its own, from the tree as it stands, and apply its change back only if it shipped — or report the paths that no longer apply. The team fan-out does this per worker when gates.edn :isolation :mode is :worktree; a conflict reopens the part for the supervise step to re-task."}
    {:name samizdat.agent.findings/fold

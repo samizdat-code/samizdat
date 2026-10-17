@@ -221,3 +221,41 @@
           "both ran")
       (is (empty? (verify/unrun-tests root changed "94 passed"))
           "a runner that names no namespace cannot be judged, so it is not"))))
+
+(deftest a-deterministic-check-is-not-rerun-on-an-unchanged-tree
+  ;; karamazov-05z0.12: `done` and :feature/verify both ran the suite on the
+  ;; same tree, and a red suite reran when nothing had changed. A command the
+  ;; operator marks deterministic is answered from the last run of it on the
+  ;; same tree — green or red — and run again when the tree moves.
+  (if-not (proc/available? "git")
+    (is true "no git here")
+    (let [root (doto (java.io.File/createTempFile "verify-memo" "") (.delete) (.mkdirs))
+          sh (fn [& args] (apply proc/run {:timeout-ms 30000 :dir (str root)} args))
+          runs (atom 0)]
+      (try
+        (sh "git" "init" "-q") (sh "git" "config" "user.email" "t@e.com") (sh "git" "config" "user.name" "t")
+        (spit (java.io.File. root "a.txt") "1\n") (sh "git" "add" "-A") (sh "git" "commit" "-q" "-m" "i")
+        (verify/seal-run! "memo-run" root {:run {:verify-cmd "make test"
+                                                 :verify-deterministic? true
+                                                 :acceptance [{:name "lint" :check "make lint"}]}})
+        (with-redefs [verify/run-verify (fn [_ cmd _] (swap! runs inc) {:green? false :output (str cmd " red")})]
+          (let [a (verify/run-configured "memo-run" "make test" nil)
+                b (verify/run-configured "memo-run" "make test" nil)]
+            (is (= 1 @runs) "the same tree: answered from the first run")
+            (is (not (:green? b)) "red stays red")
+            (is (:reused? b))
+            (is (not (:reused? a))))
+          (testing "a change to the tree, untracked files included, runs it again"
+            (spit (java.io.File. root "new.txt") "x\n")
+            (verify/run-configured "memo-run" "make test" nil)
+            (is (= 2 @runs)))
+          (testing "the done gate's run and the verify stage's share the memory"
+            (verify/run-remembered "memo-run" root "make test" nil)
+            (is (= 2 @runs) "the tree has not moved since the last run"))
+                    (testing "a command not marked deterministic always runs"
+            (verify/run-configured "memo-run" "make lint" nil)
+            (verify/run-configured "memo-run" "make lint" nil)
+            (is (= 4 @runs))))
+        (finally
+          (verify/unseal-run! "memo-run")
+          (doseq [f (reverse (file-seq root))] (.delete f)))))))

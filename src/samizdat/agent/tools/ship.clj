@@ -641,9 +641,11 @@
                         (and require-test? (some? changed) (seq changed)
                              (not (some verify/test-file? changed))
                              (nil? contracted-tests)))
+        ;; Through the run's memory of this tree (gates.edn :verify-memo):
+        ;; :feature/verify runs the same command on the same tree next.
         vresult (when (and verify-on? cmd (not pre-doomed?))
-                  (verify/run-verify (:root ctx) cmd
-                                     (get-in ctx [:config :run :verify-timeout-ms])))
+                  (verify/run-remembered (:run-id ctx) (:root ctx) cmd
+                                         (get-in ctx [:config :run :verify-timeout-ms])))
         verify-block (verify/verify-block
                       {:verify-on? verify-on? :result vresult
                        :changed changed :require-test? require-test?
@@ -663,8 +665,8 @@
                      (acceptance/check
                       criteria
                       {:kinds #{:check}
-                       :run-check #(verify/run-verify
-                                    (:root ctx) %
+                       :run-check #(verify/run-remembered
+                                    (:run-id ctx) (:root ctx) %
                                     (get-in ctx [:config :run :verify-timeout-ms]))}))
         block (or block (some-> acceptance acceptance/refusal))
         ;; The accounted checklist rides on the shipped answer: the critic

@@ -1656,6 +1656,19 @@
         that met them all. `:refuse` holds the ship until it is decided. A
         criterion that FAILED refuses under all three."}
 
+ :verify-memo
+ {:value {:enabled? true}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.12"]
+  :doc "Answer a configured check from its last run on the same tree. Only
+        for the commands the operator marked deterministic in config.edn —
+        :run :verify-deterministic? true for :verify-cmd, :deterministic? true
+        on an acceptance :check — because a check that reads a network or a
+        clock must run every time. The tree is identified by its content,
+        untracked files included (gitdiff/tree-id); a timed-out run is never
+        remembered. `done` and :feature/verify used to run the suite twice
+        on one tree, and a red suite again when nothing had changed."}
+
  :verify-unknown
  {:value :trust
   :kind :policy :capability-tunable? false
