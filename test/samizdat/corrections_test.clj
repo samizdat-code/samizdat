@@ -9,6 +9,8 @@
             [clojure.test :refer [deftest is testing]]
             [samizdat.agent.corrections :as corr]
             [samizdat.agent.loop]
+            [samizdat.agent.tools]
+            [samizdat.agent.tools.base]
             [samizdat.api.corrections]
             [samizdat.layers]
             [samizdat.store.db]
@@ -189,3 +191,16 @@
     (is (str/includes? text "Modes this run was started with")))
   (is (nil? (samizdat.agent.loop/modes-text [])))
   (is (nil? (samizdat.agent.loop/modes-text ["nonsense"])) "an unknown name is no mode"))
+
+(deftest saving-rules-says-nothing-reads-them
+  ;; karamazov-05z0.22: rules.edn is checked and versioned and fired by
+  ;; nothing, so a save says so rather than letting the agent think its rule
+  ;; is in force.
+  (let [c (samizdat.store.db/open! ":memory:")]
+    (try
+      (samizdat.userspace/bind! c)
+      (let [r (samizdat.agent.tools.base/run-tool
+               {:tool-name "policy" :branch {:id "SUP"}
+                :args {"action" "save" "name" "rules" "edn" "{:rules []}" "rationale" "test"}})]
+        (is (str/includes? (str (:result r)) "nothing reads rules.edn") (str (:result r))))
+      (finally (samizdat.userspace/unbind!) (samizdat.store.db/close c)))))

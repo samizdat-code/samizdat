@@ -31,6 +31,11 @@
 ;; and no orphans to clear when a rule is removed. The versioning half of that
 ;; finding applies here; the backfill half has nothing to act on.
 ;;
+;; NOTHING READS THIS AT RUNTIME YET (karamazov-05z0.22). A save is
+;; checked and versioned, and changes no run: no workflow fires these
+;; rules. The policy tool says so on every save, so a rule written here is
+;; not mistaken for one in force.
+;;
 ;; Ships EMPTY on purpose. A rule nobody measured is a rule that steers on a
 ;; guess, and this project has the receipts for what that costs — a
 ;; hand-written prior scored below no prior at all (RFC-014). Add one when

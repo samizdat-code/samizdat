@@ -386,7 +386,11 @@
                         (base/fail branch (msg {:unbound true :name name}))
                         (try
                           (reload-and-verify! name)
-                          (base/ok branch (str (msg {:saved true :name name :version v})
+                          ;; rules.edn has no runtime reader yet (karamazov-05z0.22):
+                          ;; the save is real, and the agent is told it changes
+                          ;; nothing a run does, rather than left to believe it.
+                          (base/ok branch (str (msg {:saved true :name name :version v
+                                                     :unread (= "rules" name)})
                                                (waiver-line name body))
                                    :progress? true)
                           (catch Throwable e
