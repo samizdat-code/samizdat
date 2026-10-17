@@ -380,7 +380,10 @@
 
 (defn restate!
   "Record a NEW version of a memory and retire the old one. Returns the new
-  row's id, or nil when the text did not change.
+  row's id, or nil when the text did not change or the row is no longer the
+  current version — restating a superseded row forks its lineage into two
+  current versions, which is what two branches revising the same memory one
+  after the other did.
 
   For a memory that describes a moving target rather than a standing fact.
   The project overview is the one: it says what the codebase IS, and a run
@@ -399,7 +402,7 @@
   ([conn id content] (restate! conn id content {}))
   ([conn id content {:keys [reason cause source]}]
    (let [row (get-by-id conn id)]
-     (when (and row (not= (str content) (str (:content row))))
+     (when (and row (= 1 (:current row)) (not= (str content) (str (:content row))))
        (let [lineage (or (:lineage_id row) id)
              new-id (remember! conn {:content content
                                      :kind (:kind row)

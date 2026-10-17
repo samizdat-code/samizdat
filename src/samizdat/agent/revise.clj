@@ -26,7 +26,8 @@
             [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
-            [samizdat.store.knowledge :as knowledge]))
+            [samizdat.store.knowledge :as knowledge]
+            [samizdat.store.runs :as runs]))
 
 (defn candidates
   "The memories `branch-id` was shown that can be revised: current, written
@@ -35,16 +36,26 @@
   `max-per-branch`. A memory this run wrote has no other trajectory to be
   checked against; one with no source has nothing to ground a revision."
   [conn run-id branch-id {:keys [max-per-branch]}]
-  (->> (journal/exposed conn run-id branch-id)
-       (sort-by (comp #(or % 0) :turn val))
-       (keep (fn [[id seen]]
-               (let [row (knowledge/get-by-id conn id)]
-                 (when (and row (= 1 (:current row))
-                            (not= run-id (:run_id row))
-                            (:source_branch row) (:source_turn_from row))
-                   {:row row :exposed seen}))))
-       (take (or max-per-branch 0))
-       vec))
+  (let [;; A version this run wrote carries the run id of the row it
+        ;; restated, so run_id alone let one branch's rewording be revised
+        ;; again by every later branch shown it. A rewording this run wrote,
+        ;; and anything created since it started, is this run's own.
+        revised (into #{} (keep :new-id) (journal/notes conn run-id :memory-revised))
+        started (:started_at (runs/get-run conn run-id))
+        this-run? (fn [row]
+                    (or (= run-id (:run_id row))
+                        (contains? revised (:id row))
+                        (and started (pos? (compare (str (:created_at row)) (str started))))))]
+    (->> (journal/exposed conn run-id branch-id)
+         (sort-by (comp #(or % 0) :turn val))
+         (keep (fn [[id seen]]
+                 (let [row (knowledge/get-by-id conn id)]
+                   (when (and row (= 1 (:current row))
+                              (not (this-run? row))
+                              (:source_branch row) (:source_turn_from row))
+                     {:row row :exposed seen}))))
+         (take (or max-per-branch 0))
+         vec)))
 
 (defn parse-verdict
   "The reviser's reply as {:verdict :keep|:revise|:retire :text}, or nil when
@@ -118,7 +129,12 @@
                            :content (prompt/render "memory-revise-input"
                                                    {:memory (:content row)
                                                     :kind (:kind row)
-                                                    :source (reflect/source-lines conn row)
+                                                    ;; The latest of a span that can be a
+                                                    ;; whole branch, so one memory cannot
+                                                    ;; outgrow the window.
+                                                    :source (mapv reflect/turn-line
+                                                                  (cond->> (source-turns conn row)
+                                                                    (:source-turns policy) (take-last (:source-turns policy))))
                                                     :status (some-> (:status branch) name)
                                                     :answer (some-> (:final-answer branch) str (clip (:answer-chars policy)))
                                                     :outcome (mapv reflect/turn-line

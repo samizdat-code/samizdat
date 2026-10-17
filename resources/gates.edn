@@ -2004,6 +2004,7 @@
           :max-per-branch 3
           :feedback-turns 8
           :answer-chars 400
+          :source-turns 40
           :grounding {:min-token 4 :max-leaked 0}}
   :kind :policy :capability-tunable? false
   :provenance ["karamazov-4dn8.4" "karamazov-4dn8.5" "karamazov-4dn8.7" "arXiv 2610.12668"]
@@ -2025,6 +2026,10 @@
         :feedback-turns  how many of the branch's turns after it first saw a
                          memory the reviser is shown as the outcome.
         :answer-chars    how much of the branch's final answer goes with it.
+        :source-turns    the most of a memory's source turns the reviser
+                         reads, the latest kept: a reflection's source is
+                         its whole branch, and 200 turns of it outgrew a 32K
+                         window. Grounding still checks the whole span.
         :grounding       the check a rewording must pass before it lands
                          (karamazov-4dn8.5): not contradicted by its own
                          source turns, and at most :max-leaked of the words

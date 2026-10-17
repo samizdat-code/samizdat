@@ -121,6 +121,21 @@
     (is (not (str/includes? (str @sent) "the overview of everything"))
         "standing, recomputed, is not what the branch read")))
 
+(deftest a-memory-retired-since-it-was-shown-is-not-judged
+  (let [c @conn
+        rid (samizdat.store.runs/start-run! c {:problem "p"})
+        old (knowledge/remember! c {:content "build with make" :kind "semantic"})
+        sent (atom nil)]
+    (samizdat.store.journal/note! c rid :exposed {:branch-id "T0" :turn 2
+                                                  :data {:via "breadcrumb" :ids [old]}})
+    (knowledge/retire! c old {:reason "superseded"})
+    (with-redefs [samizdat.llm.client/chat (fn [_ _ msgs & _]
+                                             (reset! sent (:content (second msgs)))
+                                             {:content (str "## WRONG\n- " old " — no")})]
+      (reflect/distil-task! {:conn c :run-id rid} {:id "T0" :problem "p"}))
+    (is (not (str/includes? (str @sent) "build with make")))
+    (is (zero? (or (:failure_count (knowledge/get-by-id c old)) 0)))))
+
 (deftest a-correction-naming-an-unknown-id-is-ignored
   (is (some? (reflect/record! @conn {:run-id "r1"} {"WRONG" ["k-nosuch — invented"]}))))
 

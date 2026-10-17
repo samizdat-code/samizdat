@@ -656,9 +656,11 @@
   (is (= "KEEP" (message/answer "<think>maybe RETIRE?</think>\nKEEP")))
   (is (= "plain" (message/answer "plain")))
   (is (= "" (message/answer "<think>cut off mid-thought")))
-  (is (= "half" (message/answer "half <think>then a truncated thought"))
-      "an unterminated block is all reasoning")
-  (is (= "" (message/answer nil))))
+  (is (= "" (message/answer nil)))
+  (testing "only the reasoning that leads the reply; a tag in the answer is text"
+    (is (= "strip <think> blocks before parsing"
+           (message/answer "<think>hm</think>\nstrip <think> blocks before parsing")))
+    (is (= "a</think>b" (message/answer "a</think>b")))))
 
 (deftest think-blocks
   (testing "think blocks are stripped from prior assistant turns"

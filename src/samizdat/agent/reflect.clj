@@ -167,7 +167,7 @@
       ;; was handed is stale, so its word counts against that memory's record
       ;; — but only a memory it WAS handed (`shown`, karamazov-4dn8.2). A
       ;; reflector naming any other id is judging a row the branch never read.
-      (when (and (contains? (set shown) id) (knowledge/get-by-id conn id))
+      (when (and (contains? (set shown) id) (= 1 (:current (knowledge/get-by-id conn id))))
         (knowledge/record-outcome! conn id false)))
     written))
 
@@ -185,7 +185,9 @@
           ;; own claims turn by turn, so the two sets differ, and the WRONG
           ;; section below counts against whatever ids this list offers.
           shown (keys (journal/exposed conn run-id (:id branch)))
-          memories (keep #(knowledge/get-by-id conn %) shown)
+          ;; Only what is still current: a memory retired or reworded since
+          ;; the branch saw it is not the reflector's to judge again.
+          memories (filter #(= 1 (:current %)) (keep #(knowledge/get-by-id conn %) shown))
           user (build-prompt {:problem (:problem branch)
                               :turns turns
                               :memories memories

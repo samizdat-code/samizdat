@@ -116,6 +116,30 @@
     (is (= 1 @calls))
     (is (= 1 (:current (knowledge/get-by-id c mem))))))
 
+(deftest a-memory-already-rewritten-is-not-rewritten-again
+  ;; Two branches shown the same memory: the second revision must not fork
+  ;; the lineage into two current versions, and the version this run wrote
+  ;; is not a candidate for the rest of the run.
+  (let [{:keys [c r2 mem]} (fixture)]
+    (with-redefs [samizdat.llm.client/chat (fn [& _] {:content "REVISE: build the binary with jolt bin"})]
+      (revise/revise! {:conn c :run-id r2} {:id "B1" :status :done} policy))
+    (let [new-id (:new-id (first (journal/notes c r2 :memory-revised)))]
+      (journal/note! c r2 :exposed {:branch-id "B2" :turn 2 :data {:via "breadcrumb" :ids [mem new-id]}})
+      (is (empty? (revise/candidates c r2 "B2" {:max-per-branch 3}))
+          "neither the retired original nor this run's own rewording"))
+    (testing "restate! refuses a row that is no longer current"
+      (is (nil? (knowledge/restate! c mem "a third wording")))
+      (is (= 1 (count (filter #(= 1 (:current %)) (knowledge/history c mem))))))))
+
+(deftest the-source-shown-is-bounded
+  (let [{:keys [c r2 mem]} (fixture)
+        sent (atom nil)]
+    (with-redefs [samizdat.llm.client/chat (fn [_ _ msgs & _] (reset! sent (:content (second msgs))) {:content "KEEP"})]
+      (revise/revise! {:conn c :run-id r2} {:id "B1" :status :done} (assoc policy :source-turns 1)))
+    (is (str/includes? @sent "jolt bin: wrote ./app") "the latest source turn")
+    (is (= 1 (count (re-seq #"jolt uberjar: unknown task" @sent)))
+        "not the whole span: the earlier source turn is gone, the outcome's copy stays")))
+
 ;; --- grounding (karamazov-4dn8.5) --------------------------------------------
 
 (def ^:private grounding {:min-token 4 :max-leaked 0})

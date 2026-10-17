@@ -48,15 +48,20 @@
   a fold's summary, a reflection's sections — and one that reads :content
   whole reads the scratchpad as part of it.
 
-  AN UNTERMINATED BLOCK IS ALL REASONING. strip-think-blocks removes matched
-  pairs only, so a reply cut off mid-thought leaves an open <think> and
-  everything after it is rehearsal; cut there. Empty is the honest result for
-  a reply that never got to answering."
+  Only the reasoning that LEADS the reply is removed — where merge-reasoning
+  puts it and where an inline-thinking model writes it. A tag later in the
+  text is the answer's own: a summary or a memory about this very code names
+  it, and cutting there destroyed the rest.
+
+  AN UNTERMINATED LEADING BLOCK IS ALL REASONING: a reply cut off mid-thought
+  never got to answering, and empty is the honest result."
   [content]
-  (let [s (strip-think-blocks (str content))]
-    (if-let [i (str/index-of s "<think>")]
-      (str/trim (subs s 0 i))
-      s)))
+  (loop [s (str/triml (str content))]
+    (if (str/starts-with? s "<think>")
+      (if-let [i (str/index-of s "</think>")]
+        (recur (str/triml (subs s (+ i (count "</think>")))))
+        "")
+      (str/trim s))))
 
 (defn merge-reasoning
   "Fold a provider's separate reasoning stream into the visible content with
