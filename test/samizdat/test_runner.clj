@@ -73,6 +73,7 @@
             [samizdat.base-test]
             [samizdat.boundary-test]
             [samizdat.compaction-test]
+            [samizdat.acp-test]
             [samizdat.corrections-test]
             [samizdat.mcp-test]
             [samizdat.role-output-test]
@@ -329,6 +330,7 @@
     samizdat.base-test
     samizdat.boundary-test
     samizdat.compaction-test
+    samizdat.acp-test
     samizdat.corrections-test
     samizdat.mcp-test
     samizdat.role-output-test

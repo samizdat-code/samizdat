@@ -181,7 +181,7 @@
  ;; everything except the toolkit's own run loop is written toolkit-free
  ;; (the TUI's widgets return hiccup, which is data), so the suite covers
  ;; them without cmake, GTK, or a terminal.
- :aliases {:test {:extra-paths ["test" "gui" "tui"]
+ :aliases {:test {:extra-paths ["test" "gui" "tui" "acp"]
                   :main-opts ["-m" "samizdat.test-runner"]}
            ;; The dev tree (the nREPL client, the ebb spike) plus the tests, so
            ;; a live image can run the suite without paying startup — with
@@ -237,6 +237,12 @@
            ;; fail at the first FFI call. `jolt tui-native` builds it there,
            ;; once per pinned sha, and the tasks that load the TUI run it
            ;; first. Bump :git/tag and :git/sha together, in both aliases.
+           ;; The ACP agent (karamazov-05z0.17): an editor runs `jolt acp`
+           ;; as a subprocess and speaks the Agent Client Protocol to it. A
+           ;; strict HTTP client of a running server, like the TUI, and with
+           ;; no toolkit, so its source is on the test path too.
+           :acp  {:extra-paths ["acp"]
+                  :main-opts ["-m" "samizdat.acp.main"]}
            :tui  {:extra-paths ["tui"]
                   :extra-deps
                   {jlt-commons/ftxui-jolt
@@ -293,6 +299,8 @@
          ;; A shell string, not :main-opts: a task's main-opts cannot carry an
          ;; -M alias, and this one needs the ftxui dep.
          tui-test "jolt tui-native && jolt -M:tui-test"
+         ;; samizdat as an ACP agent on stdio, against a running server.
+         acp "jolt -M:acp"
          ;; Policy trace files: tool calls and the decision each should get,
          ;; replayed against the real decisions with nothing run
          ;; (samizdat.security.replay). test/policy by default.
