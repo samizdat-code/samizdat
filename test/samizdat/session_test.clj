@@ -371,6 +371,55 @@
         "the finding has to name the fix it rules OUT, or it will be read as
          an argument for a wider beam")))
 
+(deftest a-target-edited-after-the-experiment-opened-is-stale
+  ;; karamazov-05z0.1: the cap stops a second experiment, but nothing stopped
+  ;; a second EDIT to the same target with no experiment around it, and the
+  ;; verdict then scored both edits as the first one.
+  (let [latest (atom 4)
+        prior (session/set-version-lookup!
+               (fn [kind name]
+                 (when (= ["prompt" "system-turn"] [kind name]) @latest)))]
+    (try
+      (turns! 6 "eval" :mechanics nil {:parse-error true})
+      (session/experiment! "fence" {:change "c" :hypothesis "h"
+                                    :target {:kind "prompt" :name "system-turn" :version 4}})
+      (turns! 8 "eval" :success nil)
+      (is (= :better (:verdict (session/verdict "fence")))
+          "an untouched target measures as before")
+      (reset! latest 5)
+      (let [v (session/verdict "fence")]
+        (is (= :stale (:verdict v)) "the thing measured is no longer the thing in place")
+        (is (= {:started 4 :now 5} (:stale v)))
+        (is (= :stale (:verdict (first (session/experiments))))))
+      (testing "it holds the slot until settled, like any unattributable verdict"
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (session/experiment! "next" {:change "c2" :hypothesis "h2"}))))
+      (testing "it is not inherited as a measured lever"
+        (let [c (db/open! ":memory:")]
+          (try (is (empty? (knowledge/distill-verdicts! c (session/experiments) {:run-id "r1"})))
+               (finally (db/close c)))))
+      (testing "the tool says so"
+        (let [out (str (:result (base/run-tool {:tool-name "verdict" :args {"name" "fence"}
+                                                :branch {:id "B1"}})))]
+          (is (str/includes? out "stale"))
+          (is (str/includes? out "v4"))
+          (is (str/includes? out "v5"))))
+      (finally (session/set-version-lookup! prior)))))
+
+(deftest a-target-with-no-recorded-version-or-no-lookup-is-not-stale
+  (turns! 6 "eval" :mechanics nil {:parse-error true})
+  (session/experiment! "a" {:change "c" :hypothesis "h"
+                            :target {:kind "prompt" :name "p" :version 2}})
+  (turns! 8 "eval" :success nil)
+  (let [prior (session/set-version-lookup! nil)]
+    (try
+      (is (= :better (:verdict (session/verdict "a"))) "no lookup installed")
+      (session/set-version-lookup! (fn [_ _] (throw (ex-info "store gone" {}))))
+      (is (= :better (:verdict (session/verdict "a"))) "a failing lookup is no evidence")
+      (session/set-version-lookup! (fn [_ _] nil))
+      (is (= :better (:verdict (session/verdict "a"))) "nothing stored is no evidence")
+      (finally (session/set-version-lookup! prior)))))
+
 (deftest the-lever-memory-names-the-edit-and-the-prediction
   ;; karamazov-na2k.5: the next session reads which version was tried and
   ;; whether what it was meant to move did.

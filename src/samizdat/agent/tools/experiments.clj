@@ -49,6 +49,13 @@
      :version (try (some-> (userspace/versions (keyword kind) name) last :version)
                    (catch Throwable _ nil))}))
 
+;; How a verdict notices its target was edited again (karamazov-05z0.1).
+;; Installed here because session is a leaf and this is where the target's
+;; version is read in the first place.
+(session/set-version-lookup!
+ (fn [kind name]
+   (some-> (userspace/versions (keyword kind) name) last :version)))
+
 (defmethod base/run-tool "experiment" [{:keys [branch] :as ctx}]
   (let [name (some-> (base/arg ctx :name) str str/trim not-empty)
         change (some-> (base/arg ctx :change) str str/trim not-empty)
@@ -137,6 +144,9 @@
                        :worse (= :worse (:verdict v))
                        :unchanged (= :unchanged (:verdict v))
                        :too-early (= :too-early (:verdict v))
+                       :stale (when-let [{:keys [started now]} (:stale v)]
+                                {:target (str (:kind (:target v)) " " (:name (:target v)))
+                                 :started started :now now})
                        ;; The second reading, and only when it is the reason
                        ;; for the verdict: on any other verdict it agrees with
                        ;; the first and is noise.

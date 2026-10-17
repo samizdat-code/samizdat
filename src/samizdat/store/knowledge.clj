@@ -646,7 +646,7 @@
   ;; connection is contended (ADR-001 rule 1). Same as distill-findings!.
   (reduce
    (fn [acc {:keys [name change hypothesis verdict before after regraded target prediction]}]
-     (if-not (and change (not regraded) (not (#{:too-early :confounded} verdict)))
+     (if-not (and change (not regraded) (not (#{:too-early :confounded :stale} verdict)))
        acc
        (let [pattern (lever-key change)
              content (str "[lever] " change " — " (clojure.core/name verdict)
