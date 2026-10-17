@@ -59,6 +59,7 @@
 
  :prompts
   {:acceptance-failed "prompts/acceptance-failed.md"
+   :acceptance-undecided "prompts/acceptance-undecided.md"
    :complaint "prompts/complaint.md"
    :papercut-tool "prompts/papercut-tool.md"
    :finding-tool "prompts/finding-tool.md"

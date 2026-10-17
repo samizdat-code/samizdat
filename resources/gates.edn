@@ -1628,6 +1628,19 @@
         The last one is not symmetry for its own sake: a supervisor shown only
         what is broken will keep changing things that are working."}
 
+ :acceptance-undecided
+ {:value :ship
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.13"]
+  :doc "WHAT GATE 2 DOES WITH AN ACCEPTANCE CRITERION NOBODY DECIDED — a
+        :judge criterion whose judge gave no verdict or threw. `:ship` lets it
+        through, as it always has: a judge that cannot answer must not refuse
+        a ship by itself. `:ship-flagged` lets it through and says so in the
+        verify note and on the :verify row (:undecided names them), so a run
+        that shipped on an undecided criterion stops reading exactly like one
+        that met them all. `:refuse` holds the ship until it is decided. A
+        criterion that FAILED refuses under all three."}
+
  :verify-unknown
  {:value :trust
   :kind :policy :capability-tunable? false

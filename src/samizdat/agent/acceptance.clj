@@ -154,6 +154,15 @@
   [results]
   (empty? (failed results)))
 
+(defn accepted?
+  "Whether the criteria let a run ship under `policy`, the gates.edn
+  :acceptance-undecided value: `:ship` and `:ship-flagged` pass a criterion
+  nobody decided, `:refuse` does not (karamazov-05z0.13). A criterion that
+  failed refuses under every policy."
+  [results policy]
+  (and (all-passed? results)
+       (or (not= :refuse policy) (empty? (unknown results)))))
+
 ;; --- what the branch reads --------------------------------------------------
 
 (defn- tail [s n]

@@ -101,7 +101,7 @@
     ;; criterion through the :run-check fn the CALLER passes, and a cell has only
     ;; verify/run-configured to pass.
     samizdat.agent.acceptance
-    {:vars [all-passed? check failed normalize table]}
+    {:vars [accepted? all-passed? check failed normalize table unknown]}
 
     ;; The beam driver's steps. Each takes branches through turns, which reach
     ;; tools only through the tool path's policy and approval.

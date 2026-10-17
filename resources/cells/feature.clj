@@ -561,7 +561,11 @@
                              (journal/note! conn run-id :stage-error
                                             {:data {:stage :acceptance :error (ex-message e)}})
                              nil))
-              accepted? (or (nil? results) (acceptance/all-passed? results))
+              ;; A criterion nobody could decide ships, ships flagged, or
+              ;; refuses — gates.edn :acceptance-undecided (karamazov-05z0.13).
+              undecided-policy (gates/threshold :acceptance-undecided)
+              undecided (when results (seq (acceptance/unknown results)))
+              accepted? (or (nil? results) (acceptance/accepted? results undecided-policy))
               passed? (and tests-passed? accepted?)
               note (str/join "\n"
                              (remove str/blank?
@@ -572,13 +576,20 @@
                                             tests-passed? "tests passed"
                                             :else (str "tests FAILED (exit " (:exit r) ")\n"
                                                        (tail (str (:output r)) 25)))
-                                      (acceptance-note results)]))]
+                                      (acceptance-note results)
+                                      (when (and undecided (not= :ship undecided-policy))
+                                        (prompt/render "acceptance-undecided"
+                                                       {:names (str/join ", " (map :name undecided))
+                                                        :refused (= :refuse undecided-policy)}))]))]
           ;; The note text rides the journal row too: it is the durable
           ;; account of WHY gate 2 refused, and the two halves it now has
           ;; make the booleans alone ambiguous.
           (journal/note! conn run-id :verify
                          {:data {:passed passed? :exit (:exit r) :timeout (:timeout? r)
                                  :tests-passed tests-passed? :accepted accepted?
+                                 ;; Criteria nobody decided, by name — what a
+                                 ;; ship on :ship-flagged leaves on the record.
+                                 :undecided (some->> undecided (mapv :name))
                                  :note (judge/for-the-record :reply-chars note)}})
           ;; The two halves as well as the verdict, so the route note can
           ;; say which one refused (karamazov-na2k.23).

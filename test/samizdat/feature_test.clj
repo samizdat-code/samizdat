@@ -473,6 +473,36 @@
       (let [{:keys [result]} (run "YES")]
         (is (= :completed (:status result)))))))
 
+(deftest an-undecided-criterion-follows-the-policy
+  ;; karamazov-05z0.13: a judge that gives no verdict leaves its criterion
+  ;; undecided. :ship lets the run complete as before; :refuse holds it.
+  (let [spec [{:name "says what it saw"
+               :judge "Does the answer say what the screenshot showed?"}]
+        run (fn [policy]
+              (let [threshold samizdat.agent.gates/threshold]
+                (with-redefs [samizdat.agent.gates/threshold
+                              (fn [k] (if (= k :acceptance-undecided) policy (threshold k)))
+                              judge/deterministic-block (constantly nil)
+                              judge/parse-verdict (constantly :complete)
+                              judge/blocking-findings (constantly nil)
+                              gitdiff/changed-files (constantly ["src/x.clj" "test/x_test.clj"])
+                              proc/run (constantly {:exit 0 :out "ok"})
+                              verify/run-verify (fn [_ _ _] {:green? true :output "63 tests, 0 failures"})
+                              llm/chat (roles-answering-acceptance {:review :pass} "I cannot tell")]
+                  (let [conn (db/open! ":memory:")
+                        r (run-feature conn {:config {:run {:loop "feature" :subtasks ["alpha"]
+                                                           :verify-cmd "run-tests"
+                                                           :acceptance spec
+                                                           :max-revisions 1 :max-revisions-hard 1}}})]
+                    {:result r :verify (journal/notes conn (:run-id r) :verify)}))))]
+    (is (= :completed (:status (:result (run :ship)))) "the default ships it")
+    (let [{:keys [result verify]} (run :ship-flagged)]
+      (is (= :completed (:status result)))
+      (is (some #(= ["says what it saw"] (:undecided %)) verify) "and names it on the record"))
+    (let [{:keys [result verify]} (run :refuse)]
+      (is (not= :completed (:status result)) ":refuse holds the ship")
+      (is (some #(str/includes? (str (:note %)) "UNDECIDED") verify)))))
+
 (deftest a-green-suite-that-never-ran-the-new-tests-is-not-green
   ;; karamazov-khzy, run bcd61b39: the suite reported the baseline's 94 tests
   ;; green while the run's new horizon test was not in the project's runner,
