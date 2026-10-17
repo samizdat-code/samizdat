@@ -560,15 +560,17 @@
 (defn- load-sources!
   "The full load: every source evaluated in order, transactionally."
   [dirs sources]
-   (let [snapshot (cell/registry-snapshot)
+   (let [changes (cell/recorder)
          ctx (sandbox/cell-context)]
      (try
-       (let [loaded (reduce (fn [acc src]
-                              (into acc (for [id (load-source! ctx src)]
-                                          [id {:source (:id src)
-                                               :store? (boolean (:store? src))}])))
-                            {}
-                            sources)]
+       (let [loaded (cell/recording
+                     changes
+                     #(reduce (fn [acc src]
+                                (into acc (for [id (load-source! ctx src)]
+                                            [id {:source (:id src)
+                                                 :store? (boolean (:store? src))}])))
+                              {}
+                              sources))]
          ;; Drop any cell we loaded before that is gone from the new set (a
          ;; deleted cell / removed defcell), WITHOUT clearing the shared
          ;; registry — other code and tests hold cells here that are not ours.
@@ -589,7 +591,9 @@
                                       (keys loaded))})
          loaded)
        (catch Throwable e
-         (cell/registry-restore! snapshot)
+         ;; Only what this load changed: a whole-registry restore also undid
+         ;; cells other threads registered meanwhile (karamazov-bmce).
+         (cell/undo! changes)
          (throw (ex-info (str "cell load failed; registry rolled back: "
                               (ex-message e))
                          {:dirs dirs} e))))))
@@ -617,7 +621,6 @@
        (requires-problem text)
        {:stage :requires :message (requires-problem text)}
        :else
-       (let [snapshot (cell/registry-snapshot)]
-         (try (eval-candidate! text) nil
-              (catch Throwable e (userspace/problem :load e))
-              (finally (cell/registry-restore! snapshot))))))))
+       ;; Undoes only what the trial registered (karamazov-bmce).
+       (try (cell/trial #(eval-candidate! text)) nil
+            (catch Throwable e (userspace/problem :load e)))))))

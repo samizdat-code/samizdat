@@ -31,19 +31,19 @@
   context and registry of its own, restored after, so checking registers
   nothing."
   [ctx body]
-  (let [snapshot (cell/registry-snapshot)]
-    (try
-      (cells/eval-candidate! body)
-      (let [ids (cells/defcell-ids body)
-            not-callable (remove #(:callable (cell/get-cell %)) ids)]
-        (cond
-          (empty? ids) {:none true}
-          (seq not-callable) {:not-callable (str/join ", " (map str not-callable))}
-          :else (some #(some->> (callable/example-problem % (repl-tool/tool-runner ctx))
-                                (hash-map :example))
-                      ids)))
-      (catch Throwable e {:load (or (ex-message e) (str e))})
-      (finally (cell/registry-restore! snapshot)))))
+  (try
+    (cell/trial
+     (fn []
+       (cells/eval-candidate! body)
+       (let [ids (cells/defcell-ids body)
+             not-callable (remove #(:callable (cell/get-cell %)) ids)]
+         (cond
+           (empty? ids) {:none true}
+           (seq not-callable) {:not-callable (str/join ", " (map str not-callable))}
+           :else (some #(some->> (callable/example-problem % (repl-tool/tool-runner ctx))
+                                 (hash-map :example))
+                       ids)))))
+    (catch Throwable e {:load (or (ex-message e) (str e))})))
 
 (defmethod base/run-tool "propose_cell" [{:keys [branch] :as ctx}]
   (if-let [m (base/missing ctx :name :body :rationale)]

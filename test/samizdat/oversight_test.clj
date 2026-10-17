@@ -1166,7 +1166,34 @@
       (let [[shown hashes] (select {:catalog "same" :learned "new" :drift nil}
                                    {:catalog (hash "same") :learned (hash "old")})]
         (is (= {:catalog nil :learned "new" :drift nil} shown))
-        (is (= {:learned (hash "new")} hashes))))))
+        (is (= {:learned (hash "new")} hashes))))
+    (testing "a section that emptied says so once, rather than leaving the old one standing"
+      (let [[shown hashes] (select {:offers nil :retire []} {:offers (hash "two offers") :retire (hash "x")})]
+        (is (= ["offers" "retire"] (sort (:cleared shown))))
+        (let [[again] (select {:offers nil :retire []} (merge {:offers 1 :retire 1} hashes))]
+          (is (empty? (:cleared again)) "and not again"))))))
+
+(deftest the-supervisor-window-never-exceeds-the-model-s
+  (let [window @(cells/cell-var 'cells.oversight 'supervisor-window)]
+    (is (= 32768 (window 32768 64000)) "a local model's 32K is the ceiling")
+    (is (= 64000 (window 128000 64000)))
+    (is (= 64000 (window nil 64000)))
+    (is (nil? (window 128000 nil)) "no policy keeps the model's")))
+
+(deftest a-closed-branch-is-neither-idle-nor-in-the-digest-as-stuck
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})]
+    (runs/open-branch! conn rid {:branch-id "SUP" :role :supervisor})
+    (runs/open-branch! conn rid {:branch-id "T0" :role :implementor})
+    (runs/open-branch! conn rid {:branch-id "T1" :role :implementor})
+    (doseq [n (range 1 40)]
+      (journal/record-turn! conn rid {:branch-id "T0" :turn n :tool-name "read_file" :result "x" :category :neutral}))
+    (journal/record-turn! conn rid {:branch-id "T1" :turn 1 :tool-name "write_file" :result "x" :category :neutral})
+    (runs/close-branch! conn rid "T0" "culled" "lost the beam")
+    (journal/note! conn rid :progress {:branch-id "SUP" :turn 1 :data {:key "status" :to "active"}})
+    (let [g (gather-now conn rid)]
+      (is (= {"T1" 0} (:oversight/idle-by-branch g)) "a culled branch is not stalled")
+      (is (not (contains? (:oversight/progress g) "SUP")) "nor is the supervisor its own subject"))))
 
 (deftest a-second-pass-over-an-unchanged-run-is-only-what-changed
   (cells/load-cells!)

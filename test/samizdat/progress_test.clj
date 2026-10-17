@@ -83,6 +83,26 @@
         "the second turn starts where the first ended, so nothing new")
     (progress/forget-run! rid)))
 
+(deftest a-composed-child-journals-its-progress-too
+  ;; orchestrator runs worker as a composed cell; that compile went straight
+  ;; through mycelium and skipped the progress interceptors.
+  (register-cells!)
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        child {:cells {:start :progress-test/work :review :progress-test/work}
+               :edges {:start :review :review :end}
+               :progress [:review]}]
+    (try
+      (with-redefs [manifests/manifest-body! (fn [_] "child")
+                    manifests/read-definition (fn [_] child)]
+        (manifests/register-subworkflows! {:subworkflows {:progress-test/child "kid"}}))
+      ((:handler (cell/get-cell! :progress-test/child)) {:conn conn :run-id rid}
+                                                         {:branch {:id "W1"} :turn 3})
+      (is (some #(= ["stage" "review"] [(:key %) (:to %)])
+                (get (journal/progress conn rid) "W1")))
+      (finally (cell/remove-cell! :progress-test/child)
+               (progress/forget-run! rid)))))
+
 (deftest no-run-record-no-journal-and-no-failure
   (is (= {:x 1} (select-keys (myc/run-compiled (compile* {:progress [:review]}) {}
                                                {:branch {:id "T0"} :turn 1 :x 1})

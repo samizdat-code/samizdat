@@ -119,6 +119,24 @@
     (testing "the last good cell is restored — the loop is not bricked"
       (is (= 1 (:n ((:handler (cell/get-cell :mini/start)) {} {:n 0})))))))
 
+(deftest a-soak-stubs-its-own-run-and-no-one-else-s
+  ;; karamazov-t25t: the soak registered identity stubs for every effectful
+  ;; cell in the SHARED registry while it ran, so any other branch running one
+  ;; of those cells in that window had its effect silently skipped.
+  (cell/defcell :mini/io {:doc "io" :effects [:fs] :requires []}
+    (fn [_ d] (assoc d :wrote true)))
+  (let [seen (atom nil)
+        io-def '{:cells {:start :mini/io}
+                 :edges {:start :end}}
+        compile-fn (fn [d]
+                     ;; another thread's view of the registry, mid-soak
+                     (reset! seen (binding [cell/*overlay* nil]
+                                    ((:handler (cell/get-cell :mini/io)) {} {})))
+                     (manifests/compile-definition d))]
+    (#'mut/soak compile-fn io-def {})
+    (is (= {:wrote true} @seen) "the shared registry kept the real cell during the soak")
+    (is (= {:wrote true} ((:handler (cell/get-cell :mini/io)) {} {})) "and after it")))
+
 ;; --- the record -------------------------------------------------------------
 
 (deftest a-rollback-is-journaled-as-a-negative-constraint

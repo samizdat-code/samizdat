@@ -241,10 +241,6 @@
 
 ;; --- progress, not steps (karamazov-rz7t.3) --------------------------------
 
-(def ^:private ended
-  "Branch statuses that mean the branch has stopped, so it cannot be stuck."
-  #{"done" "abandoned" "exhausted" "culled" "cancelled" "failed"})
-
 (defn branch-progress
   "One entry per branch: the state it is in, since when, and whether it is
   STUCK — the supervisor's view of a run instead of the branch's steps.
@@ -253,13 +249,16 @@
   the run's turn rows without the supervisor's own, `firings` its gate
   firings. Each entry is {:id :state :status :task :since :held :wrote
   :turns :thrash :unmet :stuck}: :state the latest stage the manifest named,
-  else the phase; :since the turn of the branch's last move and :held the
-  turns it has stayed there; :wrote its last file write. :stuck is nil, or
+  else the phase; :since the turn of the branch's last move or file write —
+  writing is moving, in a loop whose only named stage is its last — and :held
+  the turns since; :wrote its last file write. :status is the run's record
+  (`statuses`, from the branches table) once that says the branch is no
+  longer active: the beam culls and closes without a progress note. :stuck is nil, or
   what makes it stuck — {:idle n} turns without a write, {:held n} turns
   without a move, {:thrash n} mechanics turns — against `stuck` ({:idle-turns
   :held-turns}) and the run-health thrash numbers. A branch that has ended
   is never stuck. nil `stuck` judges nothing stuck."
-  [{:keys [progress idle-by-branch stuck]} rows firings]
+  [{:keys [progress idle-by-branch stuck statuses]} rows firings]
   (let [writes (gates/tool-vocab :file-write)
         by-branch (group-by (comp str :branch_id) rows)
         {:keys [thrash-min-turns thrash-mechanics-rate]} (health-policy)
@@ -271,12 +270,16 @@
                  notes (get progress b)
                  latest (fn [k] (:to (last (filter #(= k (:key %)) notes))))
                  now (reduce max 0 (keep :turn rs))
-                 since (or (:turn (last notes)) (reduce min now (keep :turn rs)))
+                 wrote (some->> rs (filter #(contains? writes (str (:tool_name %)))) (keep :turn) seq (reduce max))
+                 since (max (or (:turn (last notes)) (reduce min now (keep :turn rs)))
+                            (or wrote 0))
                  held (max 0 (- now since))
                  mech (count (filter #(= "mechanics" (s (:category %))) rs))
-                 status (latest "status")
+                 recorded (get statuses b)
+                 status (if (and recorded (not= "active" recorded)) recorded (latest "status"))
+                 ended? (and status (not= "active" status))
                  idle (get idle-by-branch b 0)
-                 stuck-by (when (and stuck (not (ended status)))
+                 stuck-by (when (and stuck (not ended?))
                             (cond-> {}
                               (>= idle (:idle-turns stuck)) (assoc :idle idle)
                               (>= held (:held-turns stuck)) (assoc :held held)
@@ -289,7 +292,7 @@
         :task (latest "task")
         :since since
         :held held
-        :wrote (some->> rs (filter #(contains? writes (str (:tool_name %)))) (keep :turn) seq (reduce max))
+        :wrote wrote
         :turns (count rs)
         :thrash mech
         :unmet (get unmet b)

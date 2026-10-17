@@ -361,7 +361,7 @@
                                                :schema  schema
                                                :requires (or requires [])
                                                :doc     (:doc cell-def)}]
-                                     (.addMethod cell/cell-spec id (constantly stub))
+                                     (cell/register-spec! id stub)
                                      stub))
                                  ;; Emit map form when params present, bare keyword otherwise
                                  [cell-name (if params
