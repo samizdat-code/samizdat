@@ -1086,3 +1086,173 @@
         (is (str/includes? t "sz-1"))
         (is (str/includes? t "streams large files")))
       (finally (samizdat.store.db/close c)))))
+
+(deftest idle-is-counted-per-writing-branch
+  ;; karamazov-rz7t.1. Idle used to be turns since ANY write across the whole
+  ;; run: the supervisor's own turns counted (it never writes, so its
+  ;; investigation raised the number that woke it), and one branch writing
+  ;; reset the count for a different branch that was stalled.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        turn! (fn [b n tool]
+                (journal/record-turn! conn rid {:branch-id b :turn n :tool-name tool
+                                                :result "x" :category :neutral}))]
+    (runs/open-branch! conn rid {:branch-id "SUP" :role :supervisor})
+    (runs/open-branch! conn rid {:branch-id "T0" :role :implementor})
+    (runs/open-branch! conn rid {:branch-id "T1" :role :implementor})
+    (turn! "T1" 1 "write_file")
+    (doseq [n (range 2 12)] (turn! "T1" n "read_file"))
+    (doseq [n (range 1 41)] (turn! "SUP" n "fetch_turn"))
+    (turn! "T0" 1 "read_file")
+    (turn! "T0" 2 "write_file")
+    (let [g (gather-now conn rid)]
+      (is (= 10 (:oversight/idle g))
+          "T1's ten turns since its own write; SUP's 40 and T0's fresh write change nothing")
+      (is (= {"T0" 0 "T1" 10} (:oversight/idle-by-branch g))))
+    (testing "a stall on a second branch wakes the supervisor even while the
+              first one's stall, already read, is longer"
+      (let [g1 (gather-now conn rid)]
+        (doseq [n (range 12 40)] (turn! "T1" n "read_file"))
+        (let [g2 (gather-now conn rid)]
+          (is (true? (:oversight/worth-a-look? g2)) "T1 at 38, never seen")
+          (spent-pass! conn rid g2)
+          (doseq [n (range 3 30)] (turn! "T0" n "read_file"))
+          (is (true? (:oversight/worth-a-look? (gather-now conn rid)))
+              "T0 newly at 27 counts whole although T1 is longer")
+          (is (some? g1)))))))
+
+(deftest the-brief-is-the-branches-positions-not-their-steps
+  ;; karamazov-rz7t.3. A moving branch is one line; a stuck branch's
+  ;; failures are shown; the supervisor's own turns are neither.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        turn! (fn [b n tool & [err]]
+                (journal/record-turn! conn rid (cond-> {:branch-id b :turn n :tool-name tool
+                                                        :result "x" :category :neutral}
+                                                 err (assoc :category :mechanics
+                                                            :parse-error err))))]
+    (runs/open-branch! conn rid {:branch-id "SUP" :role :supervisor})
+    (runs/open-branch! conn rid {:branch-id "T0" :role :implementor})
+    (runs/open-branch! conn rid {:branch-id "T1" :role :implementor})
+    (journal/note! conn rid :progress {:branch-id "T0" :turn 1 :data {:key "phase" :to "build"}})
+    (journal/note! conn rid :progress {:branch-id "T1" :turn 1 :data {:key "phase" :to "build"}})
+    (turn! "T1" 1 "write_file")
+    (turn! "T1" 2 "__parse_error__" "T1 slipped once")
+    (turn! "T0" 1 "__parse_error__" "T0 keeps failing")
+    (doseq [n (range 2 32)] (turn! "T0" n "read_file"))
+    (turn! "SUP" 1 "__parse_error__" "the supervisor's own slip")
+    (let [{:keys [prob]} (reasoning-over conn rid)]
+      (is (re-find #"T0: build.*STUCK: 31 turns without a write" (str prob)))
+      (is (re-find #"T1: build" (str prob)))
+      (is (str/includes? (str prob) "T0 keeps failing"))
+      (is (not (str/includes? (str prob) "T1 slipped once")))
+      (is (not (str/includes? (str prob) "the supervisor's own slip")))
+      (is (not (re-find #"- SUP:" (str prob)))))))
+
+;; --- the brief as a delta (karamazov-rz7t.4) --------------------------------
+
+(deftest a-section-is-visible-while-the-brief-that-showed-it-is-in-context
+  (let [visible @(cells/cell-var 'cells.oversight 'visible-sections)
+        select @(cells/cell-var 'cells.oversight 'select-sections)
+        b {:messages [{:role "system"} {:role "user" :brief 1} {:role "user" :brief 2}]
+           :brief-shown {1 {:catalog 11 :learned 22} 2 {:learned 33}}}]
+    (is (= {:catalog 11 :learned 33} (visible b)) "the newer showing wins")
+    (is (= {:catalog 11 :learned 22}
+           (visible (assoc b :messages [{:role "user" :brief 1}
+                                        {:role "system" :compaction? true}])))
+        "a brief folded away is no longer visible; the older showing is")
+    (is (= {} (visible (assoc b :messages [{:role "system" :compaction? true}]))))
+    (testing "a section is shown when it is new or changed, and not otherwise"
+      (let [[shown hashes] (select {:catalog "same" :learned "new" :drift nil}
+                                   {:catalog (hash "same") :learned (hash "old")})]
+        (is (= {:catalog nil :learned "new" :drift nil} shown))
+        (is (= {:learned (hash "new")} hashes))))
+    (testing "a section that emptied says so once, rather than leaving the old one standing"
+      (let [[shown hashes] (select {:offers nil :retire []} {:offers (hash "two offers") :retire (hash "x")})]
+        (is (= ["offers" "retire"] (sort (:cleared shown))))
+        (let [[again] (select {:offers nil :retire []} (merge {:offers 1 :retire 1} hashes))]
+          (is (empty? (:cleared again)) "and not again"))))))
+
+(deftest the-supervisor-window-never-exceeds-the-model-s
+  (let [window @(cells/cell-var 'cells.oversight 'supervisor-window)]
+    (is (= 32768 (window 32768 64000)) "a local model's 32K is the ceiling")
+    (is (= 64000 (window 128000 64000)))
+    (is (= 64000 (window nil 64000)))
+    (is (nil? (window 128000 nil)) "no policy keeps the model's")))
+
+(deftest a-closed-branch-is-neither-idle-nor-in-the-digest-as-stuck
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})]
+    (runs/open-branch! conn rid {:branch-id "SUP" :role :supervisor})
+    (runs/open-branch! conn rid {:branch-id "T0" :role :implementor})
+    (runs/open-branch! conn rid {:branch-id "T1" :role :implementor})
+    (doseq [n (range 1 40)]
+      (journal/record-turn! conn rid {:branch-id "T0" :turn n :tool-name "read_file" :result "x" :category :neutral}))
+    (journal/record-turn! conn rid {:branch-id "T1" :turn 1 :tool-name "write_file" :result "x" :category :neutral})
+    (runs/close-branch! conn rid "T0" "culled" "lost the beam")
+    (journal/note! conn rid :progress {:branch-id "SUP" :turn 1 :data {:key "status" :to "active"}})
+    (let [g (gather-now conn rid)]
+      (is (= {"T1" 0} (:oversight/idle-by-branch g)) "a culled branch is not stalled")
+      (is (not (contains? (:oversight/progress g) "SUP")) "nor is the supervisor its own subject"))))
+
+(deftest a-second-pass-over-an-unchanged-run-is-only-what-changed
+  (cells/load-cells!)
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        ctx {:conn conn :run-id rid :config {}}
+        seen (atom [])
+        pass (fn [carry]
+               (let [g (cond-> (gather-now conn rid) carry (assoc :oversight/carry carry))]
+                 (with-redefs [myc/run-compiled (fn [_ _ data]
+                                                  (swap! seen conj (:content (last (get-in data [:branch :messages]))))
+                                                  {:branch (assoc (:branch data) :final-answer "ok")})]
+                   ((:handler (cell/get-cell! :oversight/reason)) ctx g))))
+        b1 (:oversight/branch (pass nil))
+        _ (pass b1)
+        [first-brief second-brief] @seen]
+    (is (str/includes? first-brief "Decide one of four things"))
+    (is (str/includes? first-brief "Workflows available"))
+    (is (not (str/includes? second-brief "Decide one of four things"))
+        "the instructions are still in its context")
+    (is (not (str/includes? second-brief "Workflows available")))
+    (is (str/includes? second-brief "Per branch") "the run's position is always new")
+    (is (< (count second-brief) (/ (count first-brief) 2)))
+    (testing "after a fold took the first brief away, it is shown again"
+      (let [folded (update b1 :messages (fn [ms] (vec (remove :brief ms))))]
+        (pass folded)
+        (is (str/includes? (last @seen) "Workflows available"))))))
+
+(deftest a-brief-the-prune-tier-shrank-is-no-longer-visible
+  ;; The prune tier summarises long user-role messages to one line, and a
+  ;; brief is one: it keeps its :brief tag but not its sections.
+  (let [visible @(cells/cell-var 'cells.oversight 'visible-sections)]
+    (is (= {} (visible {:messages [{:role "user" :brief 1 :pruned? true}]
+                        :brief-shown {1 {:catalog 11}}})))))
+
+(deftest a-finished-pass-leaves-its-tool-output-as-one-line-each
+  ;; karamazov-rz7t.6. What a pass read is settled once the pass ends; its
+  ;; bulk stayed in the carried branch until a fold near the ceiling.
+  (cells/load-cells!)
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        ctx {:conn conn :run-id rid :config {}}
+        seen (atom nil)
+        big (apply str (repeat 3000 "x"))
+        carry {:id "SUP" :messages [{:role "system" :content "sys"}
+                                    {:role "user" :content (str "brief " big) :brief 1}
+                                    {:role "assistant" :content "reading"}
+                                    {:role "user" :content big :tool "read_file"}]
+               :brief-shown {1 {}}}]
+    (with-redefs [myc/run-compiled (fn [_ rctx data]
+                                     (reset! seen {:branch (:branch data) :rctx rctx})
+                                     {:branch (assoc (:branch data) :final-answer "ok")})]
+      ((:handler (cell/get-cell! :oversight/reason))
+       ctx (assoc (gather-now conn rid) :oversight/carry carry)))
+    (let [ms (get-in @seen [:branch :messages])]
+      (is (:pruned? (nth ms 3)) "the read is one line now")
+      (is (< (count (:content (nth ms 3))) 400))
+      (is (not (:pruned? (nth ms 1))) "a brief is not tool output")
+      (is (= "reading" (:content (nth ms 2)))))
+    (testing "the supervisor works under its own, smaller window"
+      (is (= (get-in (gates/threshold :oversight) [:context-window])
+             (get-in @seen [:rctx :llm-config :context-window]))))))

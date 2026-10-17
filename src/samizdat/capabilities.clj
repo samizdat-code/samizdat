@@ -74,6 +74,7 @@
             [samizdat.metrics]
             [samizdat.mutation]
             [samizdat.procedure]
+            [samizdat.progress]
             [samizdat.prompt]
             [samizdat.repl.guard]
             [samizdat.bridge]

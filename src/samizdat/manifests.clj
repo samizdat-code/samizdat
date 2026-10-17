@@ -47,6 +47,7 @@
             [samizdat.agent.roles :as roles]
             [samizdat.prompt :as prompt]
             [samizdat.cancel :as cancel]
+            [samizdat.progress :as progress]
             [samizdat.cells :as cells]
             [samizdat.lexicon :as lexicon]
             [samizdat.store.userspace :as us]
@@ -331,6 +332,20 @@
     (when (seq ks)
       {:output (into [:map] (map (fn [k] [k :any])) (sort ks))})))
 
+(defn- check-progress!
+  "Refuse a :progress node the graph does not have: a misspelt one would
+  record nothing, forever, and read as a branch that never got there."
+  [definition]
+  (when-let [missing (seq (remove (set (keys (:cells definition))) (:progress definition)))]
+    (throw (ex-info (str/trim (prompt/render "manifest-progress"
+                                             {:missing (str/join ", " missing)}))
+                    {:progress (:progress definition) :missing (vec missing)}))))
+
+(defn- progress-interceptors
+  "The :pre/:post that journal `definition`'s branch moving through it."
+  [definition]
+  (progress/interceptors (set (map name (:progress definition)))))
+
 (defn register-subworkflows!
   "A manifest can compose sub-loops: `:subworkflows {cell-id manifest-name}`
   registers each named manifest as a workflow-cell (mycelium.compose) under
@@ -345,10 +360,17 @@
   could not be composed (karamazov-blt.3/.6)."
   [definition]
   (doseq [[cell-id mname] (:subworkflows definition)]
-    (let [child (read-definition (manifest-body! mname))]
+    (let [child (read-definition (manifest-body! mname))
+          ;; A composed child is a manifest too: it journals its progress
+          ;; and stops when the run is cancelled, as compile-definition's do.
+          _ (check-progress! child)
+          prog (progress-interceptors child)]
       (compose/register-workflow-cell!
        cell-id child (merge (child-input-schema child)
-                            (child-output-schema child))))))
+                            (child-output-schema child))
+       {:pre (fn [st res] (-> (cancel/pre-check st res) ((:pre prog) res)))
+        :post (:post prog)
+        :rethrow? cancel/control-signal?}))))
 
 (def ctx-keys
   "The run-scoped resources every driver hands a cell, as a set.
@@ -669,7 +691,12 @@
    (register-subworkflows! definition)
    (check-requires! definition)
    (check-role! definition)
-   (let [compiled (myc/pre-compile
+   (check-progress! definition)
+   (let [;; Every manifest records where its branch is (karamazov-rz7t.2):
+         ;; entering a node it names under :progress, and any move in the
+         ;; branch fields gates.edn :progress watches.
+         prog (progress-interceptors definition)
+         compiled (myc/pre-compile
                    (assoc definition :constraints (enforced-constraints definition))
                    ;; Baked in HERE because mycelium reads :validate at compile
                    ;; time, into the interceptors it builds — there is no
@@ -684,7 +711,10 @@
                             ;; passes through every catch on the path.
                             ;; Mechanism only; whether a run is cancelled, and
                             ;; when, is the beam's decision.
-                            :pre cancel/pre-check
+                            :pre (fn [st res]
+                                   (-> (cancel/pre-check st res)
+                                       ((:pre prog) res)))
+                            :post (:post prog)
                             :rethrow? cancel/control-signal?}
                      (:on-trace opts) (assoc :on-trace (:on-trace opts))))]
      ;; The loop-guard warnings join mycelium's on the one channel a caller
@@ -920,6 +950,8 @@
         retarget (fn [to] (if (contains? terminal to) :end to))]
     (-> definition
         (assoc :cells (into {} (remove (comp finish key)) (:cells definition)))
+        ;; The finish node leaves the slice, so it leaves the progress list.
+        (cond-> (:progress definition) (update :progress #(vec (remove finish %))))
         (assoc :edges
                (into {}
                      (for [[from to] (:edges definition)

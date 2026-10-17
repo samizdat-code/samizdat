@@ -6,7 +6,11 @@ feature.
 {% if since %}
 {{since}}
 {% endif %}
-Decide one of four things.
+{% if again %}Same four choices as before: nothing is wrong (say so in a line and stop), steer
+a branch with `intervene`, tune the harness behind an `experiment`, or redirect
+the outer loop. What follows is only what is new since your last look.{% if cleared %}
+Now empty, so no longer stands as you last read it: {{cleared|join:", "}}.{% endif %}
+{% else %}Decide one of four things.
 
 **Nothing is wrong.** Say so in a line and stop. This is the usual answer and
 it is not a failure to have looked — a supervisor that finds a problem every
@@ -50,6 +54,7 @@ the first time a round comes back empty.
 
 Prefer tuning to steering when both would work. A steer helps one branch for
 one turn; a fix to a prompt or a threshold helps every run after this one.
+{% endif %}
 {% if learned %}
 ## What this project has learned
 {% for m in learned %}- {{m.id}} [{{m.kind}}] {{m.content}}

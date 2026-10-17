@@ -1010,6 +1010,23 @@
                           ORDER BY id"
                         run-id (name kind)])))
 
+;; Each branch's movement through its workflow, as samizdat.progress records it
+;; (karamazov-rz7t.2): what the supervisor reads instead of the steps.
+(defn progress
+  "Every :progress note of the run grouped by branch id, oldest first, each
+  {:turn :key :from :to :at}."
+  [conn run-id]
+  (reduce (fn [acc {:keys [branch_id turn data created_at]}]
+            (if-let [d (try (json/read-str (str data) :key-fn keyword)
+                            (catch Throwable _ nil))]
+              (update acc branch_id (fnil conj [])
+                      (assoc (select-keys d [:key :from :to]) :turn turn :at created_at))
+              acc))
+          {}
+          (db/fetch conn ["SELECT branch_id, turn, data, created_at FROM events
+                            WHERE run_id = ? AND kind = 'progress' ORDER BY id"
+                          run-id])))
+
 (defn notes-since
   "Notes of any of `kinds` on this run created at or after `since` (an ISO
   instant), oldest first, each its parsed data with :kind beside it."

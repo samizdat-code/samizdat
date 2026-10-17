@@ -113,7 +113,7 @@
     ;; Context-window arithmetic over message vectors. Pure.
     samizdat.agent.compaction
     {:vars [aggressive? apply-summary cap-oversized-results compress-window estimate-tokens
-            fold-pays? fold-task fold? pressure prune-tool-outputs result-cap results-of
+            fold-pays? fold-task fold? pressure prune-options prune-tool-outputs result-cap results-of
             snip-bought-enough? summary-budget task-span tier turn-range unpinned-in
             validate-summary]}
 
@@ -135,6 +135,11 @@
     ;; Reads of the policy tables. Pure lookups.
     samizdat.agent.gates
     {:vars [threshold tool-vocab]}
+
+    ;; Which tools a role may call, read from the role table. Pure lookup; the
+    ;; supervisor's gather asks it which branches can write (karamazov-rz7t.1).
+    samizdat.agent.roles
+    {:vars [may-use?]}
 
     ;; Fixed git subcommands (stash create, write-tree, diff, ls-files) in `root`,
     ;; under the scrubbed environment. No caller-chosen command; a baseline that
@@ -282,7 +287,7 @@
     ;; The run journal: reads, and appending a note or a side call's usage.
     samizdat.store.journal
     {:vars [branch-turns gate-firings gate-tally last-note last-turn note! notes notes-since
-            record-side-call! retirement-candidates run-usage turns]
+            progress record-side-call! retirement-candidates run-usage turns]
      :effects #{:db}}
 
     ;; The project's lessons: read, and recording one.
@@ -300,7 +305,7 @@
     ;; Run and branch rows, through the store's own functions. get-branch replaced
     ;; a raw SELECT in cells/board.clj.
     samizdat.store.runs
-    {:vars [close-branch! extend-budget! finish-run! get-branch nth-recent-start open-branch!]
+    {:vars [branches close-branch! extend-budget! finish-run! get-branch nth-recent-start open-branch!]
      :effects #{:db}}
 
     ;; The task board, through its own functions.

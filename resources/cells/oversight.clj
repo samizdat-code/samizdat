@@ -7,7 +7,9 @@
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [mycelium.cell :as cell]
+            [samizdat.agent.compaction :as cmp]
             [samizdat.agent.loop :as turn]
+            [samizdat.agent.roles :as roles]
             [samizdat.agent.state :as state]
             [samizdat.agent.telemetry :as telemetry]
             [samizdat.agent.gates :as gates]
@@ -113,6 +115,31 @@
                sent-back-green?
                (seq offers))))
 
+(defn idle-by-branch
+  "Turns since its own last write, for each branch whose role can write.
+
+  PURE over the run's turn rows. The count is PER BRANCH (karamazov-rz7t.1):
+  over the whole run, one branch writing reset the count for another that
+  was stalled, and the supervisor's own turns — it never writes — raised the
+  number that woke it. A branch whose role cannot write (the supervisor, a
+  reviewer) is not idle for not writing, so `writer?` leaves it out."
+  [turns writes writer?]
+  (reduce (fn [acc {:keys [branch_id tool_name]}]
+            (let [b (str branch_id)]
+              (if-not (writer? b)
+                acc
+                (assoc acc b (if (contains? writes (str tool_name)) 0 (inc (get acc b 0)))))))
+          {} turns))
+
+(defn- idle-news
+  "One branch's idle turns that are NEW since the last look: a stall the last
+  pass already saw wakes the next only after another floor's worth; one it
+  did not see, or a new one after a write reset the count, counts whole."
+  [idle p-idle idle-floor]
+  (if (and p-idle (>= p-idle idle-floor) (>= idle p-idle))
+    (- idle p-idle)
+    idle))
+
 (defn since-last-look
   "The signals worth-a-look? judges, reduced to what is NEW since the last
   pass that spent a model call (karamazov-na2k.16).
@@ -126,24 +153,27 @@
   last look that cost something.
 
   - unmet: the firings since, not the total.
-  - idle: a stall the last pass already saw wakes the next only after another
-    floor's worth of idle turns; one it did not see, or a new one after a
-    write reset the count, counts whole.
+  - idle: judged per branch (`:idle-by-branch`, karamazov-rz7t.1) and the
+    largest news wins, so a second branch stalling wakes the supervisor while
+    a longer stall it already read does not. Without a per-branch reading,
+    the run-level `:idle` is judged the same way.
   - errors and refusals: the entries past the ones already read. Both lists
     come from the journal in order, so the count is a position.
   - the round's flags (at the cap, nothing shipped, green work sent back):
     once per round, the round being how many :route notes there are.
   - offers are already once per run."
-  [{:keys [unmet idle errors refused round at-cap? nothing-shipped?
+  [{:keys [unmet idle idle-by-branch errors refused round at-cap? nothing-shipped?
            sent-back-green? offers]}
    prev {:keys [idle-floor]}]
-  (let [idle (or idle 0)
-        p-idle (or (:idle prev) 0)
-        new-round? (or (nil? prev) (not= round (:round prev)))]
+  (let [new-round? (or (nil? prev) (not= round (:round prev)))
+        ;; A note round-trips through JSON, so the branch ids come back as
+        ;; keywords; compare them by name.
+        p-by (into {} (map (fn [[k v]] [(name k) v])) (:idle-by-branch prev))]
     {:unmet-gates (- (or unmet 0) (if prev (or (:unmet prev) 0) 0))
-     :idle-turns (if (and prev (>= p-idle idle-floor) (>= idle p-idle))
-                   (- idle p-idle)
-                   idle)
+     :idle-turns (if (seq idle-by-branch)
+                   (reduce max 0 (map (fn [[b n]] (idle-news n (get p-by (name b)) idle-floor))
+                                      idle-by-branch))
+                   (idle-news (or idle 0) (when prev (or (:idle prev) 0)) idle-floor))
      :errors (seq (drop (if prev (or (:errors prev) 0) 0) errors))
      :refused (seq (drop (if prev (or (:refused prev) 0) 0) refused))
      :at-cap? (and at-cap? new-round?)
@@ -231,7 +261,9 @@
    :output [:per-transition
             {:reason [:map [:oversight/turns :any] [:oversight/firings :any]
                       [:oversight/findings :any] [:oversight/unmet :any]
-                      [:oversight/idle :any] [:oversight/round :any]
+                      [:oversight/idle :any] [:oversight/idle-by-branch :any]
+                      [:oversight/progress :any] [:oversight/statuses :any]
+                      [:oversight/round :any]
                       [:oversight/crashes :any] [:oversight/results :any]
                       [:oversight/self-graded :any]
                       [:oversight/refused :any]
@@ -248,8 +280,27 @@
              ;; most reliable distress signal — every stalled run in this
              ;; project's history shows it.
              writes (gates/tool-vocab :file-write)
-             since (count (take-while #(not (contains? writes (str (:tool_name %))))
-                                      (reverse turns)))
+             ;; Idle PER BRANCH, and only for branches whose role can write
+             ;; (karamazov-rz7t.1). A branch with no row, or a role the table
+             ;; does not name, is unrestricted and so counts.
+             rows (runs/branches conn run-id)
+             role-of (into {} (map (juxt :id :role)) rows)
+             ;; What the run recorded for each branch. The beam culls and
+             ;; closes without a progress note, so this is how a branch that
+             ;; ended is known to have: not stalled, and not stuck.
+             status-of (into {} (map (juxt :id (comp str :status))) rows)
+             live? (fn [b] (let [st (get status-of b)] (or (nil? st) (= "active" st))))
+             writer? (fn [b]
+                       (let [r (get role-of b)]
+                         (and (live? b)
+                              (or (nil? r) (some #(roles/may-use? r %) writes)))))
+             by-branch (idle-by-branch turns writes writer?)
+             ;; The supervisor's own turns are not the run it watches: left
+             ;; in, they were a branch of the digest and their failures were
+             ;; its exemplars (karamazov-rz7t.3).
+             own? (fn [b] (= "supervisor" (some-> (get role-of b) name)))
+             watched (into [] (remove #(own? (str (:branch_id %)))) turns)
+             since (reduce max 0 (vals by-branch))
              findings (session/findings (session/run-window run-id))
              ;; THE ROUND, off the journal. The feature loop's stage used to
              ;; hand a supervisor of its own the round's facts in a data map;
@@ -304,15 +355,19 @@
              idle-floor (gates/threshold :oversight-idle-floor)
              ;; What a pass that spends a call records, so the next gather
              ;; can tell new evidence from evidence already read.
-             signals {:unmet unmet :idle since
+             signals {:unmet unmet :idle since :idle-by-branch by-branch
                       :errors (count errors) :refused (count refusals)
                       :round (count (journal/notes conn run-id :route))}]
          (assoc data
-                :oversight/turns turns
+                :oversight/turns watched
+                ;; Not its own: the supervisor's manifest journals too.
+                :oversight/progress (into {} (remove (comp own? key)) (journal/progress conn run-id))
+                :oversight/statuses status-of
                 :oversight/firings firings
                 :oversight/findings findings
                 :oversight/unmet unmet
                 :oversight/idle since
+                :oversight/idle-by-branch by-branch
                 :oversight/round round
                 :oversight/results results
                 :oversight/self-graded self-graded
@@ -366,6 +421,68 @@
               (assoc :status :active :advisory? true))
     brief (update :messages (fnil conj []) {:role "user" :content brief})))
 
+(def ^:private delta-sections
+  "The brief's sections that are shown once and then only when they change.
+  The digest and the since-last-look block are not among them: the run's
+  position is the news of every pass."
+  [:learned :candidates :drift :offers :rejected :refused :retire :reviews
+   :inconclusive :prune :catalog])
+
+(defn visible-sections
+  "{section hash} for what the carried branch can still see: the sections
+  recorded against each brief message still among its messages, the newest
+  showing of a section winning. A brief compaction folded away is gone from
+  here as it is from the context."
+  [branch]
+  ;; A brief the prune tier shrank to one line keeps its tag, not its
+  ;; sections.
+  (let [live (set (keep #(when-not (:pruned? %) (:brief %)) (:messages branch)))]
+    (reduce (fn [m id] (merge m (get-in branch [:brief-shown id])))
+            {}
+            (sort (filter live (keys (:brief-shown branch)))))))
+
+(defn supervisor-window
+  "The supervisor's compaction window: the policy's, but never more than the
+  model's own — on a 32K local model a 64K window let the branch grow past
+  what the server accepts. nil policy keeps the model's."
+  [model-window policy-window]
+  (when policy-window
+    (if model-window (min model-window policy-window) policy-window)))
+
+(defn select-sections
+  "[shown hashes]: `sections` with every value the branch can already see
+  (same hash in `visible`) set to nil, and {section hash} for the ones shown.
+
+  A section that is EMPTY now but still visible as it was is named in
+  `:cleared`, once: left out, the earlier brief kept stating offers already
+  answered and a review already done, and an unchanged section and an
+  emptied one read the same."
+  [sections visible]
+  (reduce-kv (fn [[shown hashes] k v]
+               (let [none? (or (nil? v) (and (or (string? v) (coll? v)) (empty? v)))
+                     seen (get visible k)]
+                 (cond
+                   none? (if (and seen (not= :cleared seen))
+                            [(-> shown (assoc k nil) (update :cleared (fnil conj []) (name k)))
+                             (assoc hashes k :cleared)]
+                            [(assoc shown k nil) hashes])
+                   (not= (hash v) seen) [(assoc shown k v) (assoc hashes k (hash v))]
+                   :else [(assoc shown k nil) hashes])))
+             [{} {}]
+             sections))
+
+(defn mark-brief
+  "`branch` with its last message — this pass's brief — tagged `id`, and the
+  sections it showed recorded against that id. Entries whose brief has left
+  the messages are dropped."
+  [branch id hashes]
+  (let [ms (vec (:messages branch))
+        ms (cond-> ms (seq ms) (update (dec (count ms)) assoc :brief id))
+        live (set (keep :brief ms))]
+    (-> branch
+        (assoc :messages ms)
+        (update :brief-shown #(select-keys (assoc % id hashes) live)))))
+
 (cell/defcell :oversight/reason
   {:doc "One turn of the supervisor ROLE, in the stream's OWN branch.
 
@@ -400,7 +517,10 @@
             [:oversight/round {:optional true} :any]
             [:oversight/crashes {:optional true} :any]
             [:oversight/offers {:optional true} :any]
-            [:oversight/carry {:optional true} :any]]
+            [:oversight/carry {:optional true} :any]
+            [:oversight/progress {:optional true} :any]
+            [:oversight/statuses {:optional true} :any]
+            [:oversight/idle-by-branch {:optional true} :any]]
    ;; :oversight/branch only on the path that ran — the fallback records a
    ;; verdict and an explanation, and there is no branch to carry.
    :output [:map [:oversight/verdict :keyword] [:oversight/answer :any]
@@ -418,6 +538,15 @@
              live (session/render mark)
              _ (session/mark! mark)
              dig (telemetry/digest {:idle-turns (:oversight/idle data)
+                                    ;; Where each branch is and since when,
+                                    ;; and what makes one STUCK — the brief
+                                    ;; is the branches' positions, and only
+                                    ;; a stuck branch's steps (rz7t.3).
+                                    :progress (:oversight/progress data)
+                                    :idle-by-branch (:oversight/idle-by-branch data)
+                                    :statuses (:oversight/statuses data)
+                                    :stuck {:idle-turns (gates/threshold :oversight-idle-floor)
+                                            :held-turns (gates/threshold :oversight-held-floor)}
                                     :unmet-gates (:oversight/unmet data)
                                     ;; The round's per-owner outcomes, which
                                     ;; is what :nobody-shipped counts and what
@@ -451,7 +580,9 @@
                                     :errors (mapv crash-line (:oversight/crashes data))}
                                    (:oversight/turns data)
                                    (:oversight/firings data))
-             prob (prompt/render "oversight-pass"
+             ;; Everything a brief can carry. Which of it this pass shows is
+             ;; decided below: only what the supervisor cannot already see.
+             full (identity
                                  {:digest dig
                                   :since (not-empty (str live))
                                   :learned (seq (knowledge/standing conn))
@@ -588,6 +719,30 @@
                                            (when (seq ps)
                                              (prompt/render "pruning" {:edits ps})))
                                   :catalog (safely :catalog #(wf/render-catalog conn) "")})
+             ;; THE BRIEF IS A DELTA (karamazov-rz7t.4). Every pass used to
+             ;; append the whole brief to the carried branch, so the
+             ;; supervisor's context was the sum of every brief it was ever
+             ;; sent. A section the branch can still see, unchanged, is left
+             ;; out — and the instructions with it — while the run's position
+             ;; is new every pass. "Can still see" is read off the messages,
+             ;; so a brief compaction folded away is shown again.
+             ;; What the last pass read is settled now that it has ended:
+             ;; its tool output goes to one line each, the way the prune tier
+             ;; would have done it near the ceiling (karamazov-rz7t.6). The
+             ;; briefs are left whole; they are what the supervisor reads.
+             carry (some-> (:oversight/carry data)
+                           (update :messages #(cmp/prune-tool-outputs
+                                               (vec %)
+                                               (assoc (cmp/prune-options (gates/threshold :compaction) 0 prompt/render-str)
+                                                      :keep? (complement :tool)))))
+             [shown hashes] (select-sections
+                             (assoc (select-keys full delta-sections)
+                                    :instructions "instructions")
+                             (visible-sections carry))
+             prob (prompt/render "oversight-pass"
+                                 (merge full (dissoc shown :instructions)
+                                        {:again (nil? (:instructions shown))}))
+             brief-id (inc (reduce max 0 (keys (:brief-shown carry))))
              ;; ONE branch for the run, carried by the stream. Opened once;
              ;; re-opening an existing id is a no-op that returns the row.
              bid "SUP"
@@ -598,11 +753,12 @@
              ;; run-scoped resources every driver provides, and the carry is
              ;; this pass's value. Putting it in ctx would have meant claiming
              ;; the beam driver provides it, which it does not.
-             b (or (some-> (:oversight/carry data) (resume-branch prob))
-                   (assoc (state/new-branch
-                           {:id bid :problem prob
-                            :messages (turn/initial-messages prob suffix :supervisor)})
-                          :advisory? true :role :supervisor))
+             b (-> (or (some-> carry (resume-branch prob))
+                       (assoc (state/new-branch
+                               {:id bid :problem prob
+                                :messages (turn/initial-messages prob suffix :supervisor)})
+                              :advisory? true :role :supervisor))
+                   (mark-brief brief-id hashes))
              ;; The stream's own read timeout for the supervisor's calls
              ;; (gates.edn :oversight :timeout-ms), when set. Its brief is a
              ;; digest plus a carried context, and on GLM-5.3 those calls
@@ -618,9 +774,13 @@
              ;; so a pass keeps a whole allowance of its own.
              done (safely :last-turn #(journal/last-turn conn run-id bid) 0)
              rctx (let [rc (wf/role-ctx ctx :supervisor)
-                        t (:timeout-ms (gates/threshold :oversight))]
+                        {t :timeout-ms w :context-window} (gates/threshold :oversight)]
                     (cond-> rc
                       t (assoc-in [:llm-config :timeout-ms] t)
+                      ;; Its own window, so its compaction ladder folds well
+                      ;; before the implementer's would (karamazov-rz7t.6).
+                      w (assoc-in [:llm-config :context-window]
+                                  (supervisor-window (get-in rc [:llm-config :context-window]) w))
                       (and (pos? done) (:max-turns rc)) (update :max-turns + done)))
              out (myc/run-compiled (wf/compiled-manifest "supervisor")
                                    rctx

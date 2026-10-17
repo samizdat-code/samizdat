@@ -44,16 +44,6 @@
   [llm-config]
   (or (:context-window llm-config) (:max-context llm-config)))
 
-(defn- prune-templates
-  "The one-line stand-ins a pruned tool result becomes, from policy. Keyed by
-  TOOL because the useful line differs: a shell result's is its command, a
-  grep's is its match count, a read's is its size."
-  [p]
-  {:preview-chars (:preview-chars p)
-   :render (fn [tmpl ctx] (prompt/render-str (str tmpl) ctx))
-   :by-tool (:prune-lines p)
-   :default (:prune-line-default p)})
-
 (defn- note!
   "Record what the pass did, and WHERE. Best effort — a journal that refuses
   must not stop a compaction the context pressure requires.
@@ -211,11 +201,7 @@
              :branch (assoc branch
                             :messages (cmp/prune-tool-outputs
                                        (vec (:messages branch))
-                                       {:protect-tail (:protect-tail p)
-                                        :min-chars (:prune-min-chars p)
-                                        :roles (:result-roles p)
-                                        :tool-of :tool
-                                        :templates (prune-templates p)}))
+                                       (cmp/prune-options p (:protect-tail p) prompt/render-str)))
              :compaction/route :fold))))
 
 ;; --- fold --------------------------------------------------------------------

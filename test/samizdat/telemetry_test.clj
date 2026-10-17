@@ -176,12 +176,12 @@
                              :fitness {"W0" 1.25 "W1" -0.5}}
                             [(row "W0" 1 "done" "success")
                              (row "W1" 1 "shell" "failure")])]
-    (is (str/includes? d "W0: 1 turns, 0 thrash, shipped=true, fitness 1.25/turn"))
-    (is (str/includes? d "W1: 1 turns, 0 thrash, shipped=false, fitness -0.50/turn")))
+    (is (re-find #"W0: .*1 turns, 0 thrash, fitness 1.25/turn" d))
+    (is (re-find #"W1: .*1 turns, 0 thrash, fitness -0.50/turn" d)))
   (testing "a branch with no measurement shows none rather than a zero"
     (let [d (telemetry/digest {:results [] :fitness {}} [(row "W0" 1 "shell" "success")])]
-      (is (str/includes? d "W0: 1 turns, 0 thrash, shipped=false"))
-      (is (not (str/includes? d "shipped=false, fitness"))))))
+      (is (re-find #"W0: .*1 turns, 0 thrash" d))
+      (is (not (str/includes? d "thrash, fitness"))))))
 
 ;; --- the shape of the failures, not just the newest few (karamazov-7mo M7) --
 
@@ -332,3 +332,75 @@
     (is (str/includes? out "total: 1240"))
     (is (str/includes? out "over 12 turns"))
     (is (str/includes? out "ledger: 800"))))
+
+;; --- progress, not steps (karamazov-rz7t.3) ----------------------------------
+
+(def ^:private stuck-policy {:idle-turns 25 :held-turns 40})
+
+(deftest each-branch-is-a-state-it-has-been-in-for-so-long
+  (let [progress {"T0" [{:turn 1 :key "phase" :from nil :to "explore"}
+                        {:turn 1 :key "status" :from nil :to "active"}
+                        {:turn 4 :key "task" :from nil :to "T0-parse"}
+                        {:turn 9 :key "phase" :from "explore" :to "build"}]}
+        rows (concat (for [t (range 1 13)] (row "T0" t "read_file" "neutral"))
+                     [(row "T0" 10 "write_file" "success")])
+        [b] (telemetry/branch-progress {:progress progress :idle-by-branch {"T0" 2}
+                                        :stuck stuck-policy}
+                                       rows [])]
+    (is (= "T0" (:id b)))
+    (is (= "build" (:state b)))
+    (is (= "T0-parse" (:task b)))
+    (is (= 10 (:since b)) "the last move or write: the write at 10, after the phase move at 9")
+    (is (= 2 (:held b)) "turns 11-12 since it")
+    (is (= 10 (:wrote b)))
+    (is (nil? (:stuck b)))))
+
+(deftest a-branch-is-stuck-when-it-stops-writing-or-stops-moving
+  (let [rows (for [t (range 1 51)] (row "T0" t "read_file" "neutral"))
+        f #(first (telemetry/branch-progress % rows []))]
+    (is (= {:idle 30} (:stuck (f {:progress {"T0" [{:turn 20 :key "phase" :to "build"}]}
+                                  :idle-by-branch {"T0" 30} :stuck stuck-policy}))))
+    (is (= {:held 45} (:stuck (f {:progress {"T0" [{:turn 5 :key "phase" :to "build"}]}
+                                  :idle-by-branch {"T0" 3} :stuck stuck-policy}))))
+    (testing "a branch that has ended is not stuck"
+      (is (nil? (:stuck (f {:progress {"T0" [{:turn 5 :key "status" :to "done"}]}
+                            :idle-by-branch {"T0" 30} :stuck stuck-policy})))))))
+
+(deftest a-branch-the-run-closed-is-not-stuck
+  ;; The beam culls and closes branches without a :progress note, so a
+  ;; culled branch's last noted status stayed "active" and it read STUCK on
+  ;; every pass. Its row in branches says it ended.
+  (let [rows (for [t (range 1 51)] (row "T0" t "read_file" "neutral"))
+        [b] (telemetry/branch-progress {:progress {"T0" [{:turn 1 :key "status" :to "active"}]}
+                                        :statuses {"T0" "culled"}
+                                        :idle-by-branch {"T0" 50} :stuck stuck-policy}
+                                       rows [])]
+    (is (= "culled" (:status b)))
+    (is (nil? (:stuck b)))))
+
+(deftest writing-is-moving
+  ;; A plain loop names only its terminal stage, so a branch writing every
+  ;; turn in one phase never "moved" and read STUCK at the held floor.
+  (let [rows (for [t (range 1 51)] (row "T0" t "write_file" "success"))
+        [b] (telemetry/branch-progress {:progress {"T0" [{:turn 1 :key "phase" :to "build"}]}
+                                        :idle-by-branch {"T0" 0} :stuck stuck-policy}
+                                       rows [])]
+    (is (nil? (:stuck b)))
+    (is (= 0 (:held b)))))
+
+(deftest the-brief-shows-steps-only-for-the-branch-that-is-stuck
+  (let [rows [{:id 1 :turn 1 :branch_id "T0" :tool_name "__parse_error__"
+               :category "mechanics" :parse_error "T0 fence broke"}
+              {:id 2 :turn 1 :branch_id "T1" :tool_name "__parse_error__"
+               :category "mechanics" :parse_error "T1 fence broke"}]
+        d (telemetry/digest {:results [] :revision 0
+                             :progress {"T0" [{:turn 1 :key "phase" :to "build"}]
+                                        "T1" [{:turn 1 :key "phase" :to "build"}]}
+                             :idle-by-branch {"T0" 30 "T1" 1}
+                             :stuck stuck-policy}
+                            rows)]
+    (is (str/includes? d "T0 fence broke"))
+    (is (not (str/includes? d "T1 fence broke"))
+        "a branch that is moving is a line, not its steps")
+    (is (re-find #"T0: build.*STUCK" d))
+    (is (re-find #"T1: build" d))))

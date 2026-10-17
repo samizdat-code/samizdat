@@ -105,16 +105,17 @@
   ;; it regressed store-evolved cells to the templates for the rest of the
   ;; run, and its rollback wrote store keys into the cwd as files
   ;; (karamazov-blt.7).
-  (let [snapshot (cell/registry-snapshot)]
+  (let [changes (cell/recorder)]
     (try
-      (cells/load-cells!)
-      (manifests/compile-definition (current-loop-def ctx))
+      (cell/recording changes (fn []
+                                (cells/load-cells!)
+                                (manifests/compile-definition (current-loop-def ctx))))
       (base/ok branch
                (prompt/render "cell-tool" {:reloaded true
                                            :name (active-name ctx)})
                :progress? true)
       (catch Throwable e
-        (cell/registry-restore! snapshot)
+        (cell/undo! changes)
         ;; The registry is back to what it was and nothing is live, so this is
         ;; a rejected edit rather than a branch failure — see base/rejected.
         (base/rejected branch
