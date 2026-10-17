@@ -444,6 +444,29 @@
                 (cell/defcell :gen/ok {:doc \"d\" :requires [:run-id]}
                   (fn [{:keys [run-id]} data] (assoc data :r run-id)))")))))
 
+(deftest a-trial-load-undoes-only-its-own-cells
+  ;; karamazov-bmce: the trial snapshotted the WHOLE registry and put it back,
+  ;; so a cell another thread registered while a trial ran — a test fixture,
+  ;; a reload — was wiped with it. callable_test lost its cells to that on CI
+  ;; (PR #68) and locally, after the eval-candidate! that registered them.
+  (let [other {:id :gen/elsewhere :doc "registered by someone else" :pure true
+               :handler (fn [_ d] d)}
+        trial "(ns cells.gen.trial (:require [mycelium.cell :as cell]))
+               (cell/defcell :gen/trial {:doc \"d\" :requires []} (fn [_ d] d))"
+        eval! cells/eval-candidate!]
+    (try
+      (with-redefs [cells/eval-candidate!
+                    (fn [text]
+                      ;; what a concurrent thread does mid-trial: it
+                      ;; registers outside this thread's recording
+                      (binding [cell/*recorders* ()]
+                        (cell/register-spec! :gen/elsewhere other))
+                      (eval! text))]
+        (is (nil? ((userspace/validator :cell) "trial" trial))))
+      (is (= other (cell/get-cell :gen/elsewhere)) "the other thread's cell survives")
+      (is (nil? (cell/get-cell :gen/trial)) "and the trial's own cell is gone")
+      (finally (cell/remove-cell! :gen/elsewhere)))))
+
 (deftest a-run-over-its-token-budget-ends-inside-a-nested-loop
   ;; karamazov-lq57: the budget was read only at the beam's round boundary, so
   ;; a feature, team or decompose run — whose whole job is one "turn" — was

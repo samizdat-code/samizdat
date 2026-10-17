@@ -11,22 +11,56 @@
 
 (defonce ^:private cell-overrides (atom {}))
 
+;; --- recording a change, so it can be undone alone -----------------------------
+;; The registry is one table for the whole process. Undoing an operation by
+;; putting back a whole-registry snapshot also undoes whatever ANOTHER thread
+;; registered while it ran — a fixture, a reload, a run's own load
+;; (karamazov-bmce: callable_test's cells vanished after the eval that
+;; registered them). So an operation records the ids IT changes, with what
+;; each held before its first change, and an undo puts back only those.
+
+(def ^:dynamic *recorders*
+  "The recorders active on this thread, innermost first: atoms of
+  {id {:spec s :override o :override? b}}. Nested on purpose — a reload inside
+  a mutation is the mutation's change too."
+  ())
+
+(defn- touched!
+  "Note `id`'s current state in every active recorder that has not seen it."
+  [id]
+  (doseq [r *recorders*]
+    (when-not (contains? @r id)
+      (swap! r (fn [m]
+                 (if (contains? m id)
+                   m
+                   (assoc m id {:spec (cell-spec id)
+                                :override (get @cell-overrides id)
+                                :override? (contains? @cell-overrides id)})))))))
+
 (defn clear-registry!
   "Removes all cells from the registry."
   []
   (doseq [k (keys (dissoc (methods cell-spec) :default))]
+    (touched! k)
     (remove-method cell-spec k))
   (reset! cell-overrides {}))
 
 
+(def ^:dynamic *overlay*
+  "{id spec} that get-cell answers with before the registry, on this thread
+  only. How a dry run swaps cells for stubs without registering them where
+  every other run would pick them up (karamazov-t25t)."
+  nil)
+
 (defn get-cell
   "Returns the cell spec for the given id, or nil if not found."
   [id]
-  (let [spec (cell-spec id)]
-    (when spec
-      (if-let [overrides (get @cell-overrides id)]
-        (merge spec overrides)
-        spec))))
+  (or (get *overlay* id)
+      (let [spec (cell-spec id)]
+        (when spec
+          (if-let [overrides (get @cell-overrides id)]
+            (merge spec overrides)
+            spec)))))
 
 (defn get-cell!
   "Returns the cell spec for the given id, or throws if not found."
@@ -47,6 +81,7 @@
    (when-not (cell-spec cell-id)
      (throw (ex-info (str "Cell " cell-id " not found in registry")
                      {:id cell-id})))
+   (touched! cell-id)
    (do
      (when (:input schema-map)
        (v/validate-malli-schema! (:input schema-map)
@@ -85,6 +120,7 @@
    (let [overrides (cond-> {}
                      schema   (assoc :schema schema)
                      requires (assoc :requires requires))]
+     (touched! cell-id)
      (swap! cell-overrides update cell-id merge overrides))
    meta-map))
 
@@ -97,6 +133,7 @@
   "Register a raw cell spec map under its id, bypassing defcell's validation.
   Used by registry-restore! to put a snapshot back verbatim."
   [id spec]
+  (touched! id)
   (.addMethod cell-spec id (constantly spec)))
 
 (defn remove-cell!
@@ -104,6 +141,7 @@
   clear-registry!, so a loader can drop its own cells without touching cells
   other code registered in the shared registry."
   [id]
+  (touched! id)
   (remove-method cell-spec id)
   (swap! cell-overrides dissoc id))
 
@@ -125,6 +163,41 @@
   (doseq [[id spec] specs]
     (register-spec! id spec))
   (reset! cell-overrides (or overrides {})))
+
+(defn recorder
+  "A fresh recorder for `recording` and `undo!`."
+  []
+  (atom {}))
+
+(defn recording
+  "Call `f` with `r` recording every registry change made on this thread,
+  including inside nested recordings. Returns what `f` returns."
+  [r f]
+  (binding [*recorders* (cons r *recorders*)]
+    (f)))
+
+(defn undo!
+  "Put back what recorder `r` saw changed, and only that: each id it recorded
+  gets the spec and override it held before the first change. A cell some
+  other thread registered meanwhile is left where it is. The undo is itself a
+  change to any recording still active around it."
+  [r]
+  (doseq [[id {:keys [spec override override?]}] @r]
+    (touched! id)
+    (if spec
+      (.addMethod cell-spec id (constantly spec))
+      (remove-method cell-spec id))
+    (if override?
+      (swap! cell-overrides assoc id override)
+      (swap! cell-overrides dissoc id))))
+
+(defn trial
+  "Call `f`, then undo whatever it changed in the registry, whether it
+  returned or threw. For loading something only to look at it."
+  [f]
+  (let [r (recorder)]
+    (try (recording r f)
+         (finally (undo! r)))))
 
 ;; --- purity -------------------------------------------------------------------
 ;; A cell declares either `:pure true` or `:effects [:fs :net ...]` — what it
@@ -243,5 +316,6 @@
                       (:effects extra) (assoc :effects (vec (:effects extra)))
                       (:callable extra) (assoc :callable true)
                       (:examples extra) (assoc :examples (vec (:examples extra))))]
+    (touched! cell-id)
     (.addMethod cell-spec cell-id (constantly spec))
     spec))

@@ -115,36 +115,30 @@
   wires but throws when actually run. Effectful cells are stubbed to identity
   (the :pure/:effects marks earn their keep here) so the run does no IO, and it
   is bounded by a timeout so a cell that loops cannot hang the protocol. The
-  registry is restored to its pre-soak state afterward, so the stubs never
-  leak. Returns nil on success or a reason string on failure."
+  stubs exist only for this soak's own compile and run, so they never leak.
+  Returns nil on success or a reason string on failure."
   [compile-fn loop-def soak-input]
-  (let [snap (cell/registry-snapshot)]
+  ;; The stubs are an overlay on THIS soak's compile and run, never registered
+  ;; in the shared registry: there they stubbed the same cells for every other
+  ;; branch in the process while the soak ran (karamazov-t25t).
+  (let [stubs (into {}
+                    (for [[_ cell-ref] (:cells loop-def)
+                          :let [cell-id (if (map? cell-ref) (:id cell-ref) cell-ref)
+                                spec (cell/get-cell cell-id)]
+                          :when (and spec (not (cell/pure? spec)))]
+                      [cell-id (assoc spec :handler (fn [_ d] d))]))]
     (try
-      ;; Stub every effectful cell the loop references.
-      (doseq [[_ cell-ref] (:cells loop-def)
-              :let [cell-id (if (map? cell-ref) (:id cell-ref) cell-ref)
-                    spec (cell/get-cell cell-id)]
-              :when (and spec (not (cell/pure? spec)))]
-        (cell/register-spec! cell-id (assoc spec :handler (fn [_ d] d))))
-      ;; THE CALLER'S compile-fn, which is the loader's own pipeline
-      ;; (manifests/compile-definition) — not a bare pre-compile. The dry-run
-      ;; has to stand in for the real run, and a bare compile drops three
-      ;; things validate and production both have: the ctx-key requires, the
-      ;; constraints derived from the enforced invariants, and the :on-error
-      ;; that returns a schema violation as data. Without the last one a
-      ;; strict violation here throws out of maestro carrying the whole FSM
-      ;; map, and the soak reports it as "soak run threw: <dump>" instead of
-      ;; the message naming the cell and the missing keys.
-      (let [compiled (compile-fn loop-def)
+      (let [compiled (binding [cell/*overlay* stubs] (compile-fn loop-def))
             ;; Bounded and detached (RFC-013): at the budget the soak task is
             ;; cancelled and not waited for. A looping candidate otherwise
             ;; burned a thread forever per rejected edit (blt.38), and a tight
             ;; loop cannot be interrupted, so the wait has to end here.
             [tag r] (cancel/with-deadline
                      (ebb/via ebb/blk
-                       (try {:result (myc/run-compiled compiled {:max-turns 1}
-                                                       (or soak-input {}))}
-                            (catch Throwable e {:error (or (ex-message e) (str e))})))
+                       (binding [cell/*overlay* stubs]
+                         (try {:result (myc/run-compiled compiled {:max-turns 1}
+                                                         (or soak-input {}))}
+                              (catch Throwable e {:error (or (ex-message e) (str e))}))))
                      soak-timeout-ms)
             outcome (case tag
                       :timeout ::timeout
@@ -163,9 +157,7 @@
 
           :else nil))
       (catch Throwable e
-        (str "soak could not run: " (or (ex-message e) (str e))))
-      (finally
-        (cell/registry-restore! snap)))))
+        (str "soak could not run: " (or (ex-message e) (str e)))))))
 
 (defn- validate
   "Compile the loop definition through mycelium's static checks (structure,
@@ -215,14 +207,14 @@
     (catch Throwable _ nil)))
 
 (defn- rollback!
-  [{:keys [conn run-id dirs]} {:keys [registry files]} reason]
+  [{:keys [conn run-id dirs]} {:keys [changes files]} reason]
   ;; Undo the edit on disk, restore the registry, then reload from the restored
   ;; (good) files so the loader's known-good content re-syncs. The reload of
   ;; good files cannot fail; if it somehow does, the registry restore above
   ;; already left the running system working.
   (let [attempt (attempt-of files)]
   (restore-files! files)
-  (cell/registry-restore! registry)
+  (cell/undo! changes)
   (try (reload-cells! dirs) (catch Throwable _ nil))
   ;; WHAT WAS TRIED, not only that something was. Read before restore-files!
   ;; above overwrites it — the reason alone lets the next run re-derive the
@@ -267,7 +259,9 @@
         ;; CHECKPOINT — the last known-good state to roll back to: the registry
         ;; as loaded, and the on-disk content the loader last loaded (the
         ;; pre-edit content, since nothing has reloaded the agent's edit yet).
-        checkpoint {:registry (cell/registry-snapshot)
+        ;; What the reload below changes is recorded, and a rollback undoes
+        ;; only that (karamazov-bmce).
+        checkpoint {:changes (cell/recorder)
                     :files (cells/loaded-file-content)}]
     ;; REFUSE when the last load was store-mode. Its content is keyed by store
     ;; NAMES ("loop", "beam"), not paths — a rollback would spit those names as
@@ -284,7 +278,7 @@
       ;; RELOAD — install the edit into the live image. Transactional: a syntax
       ;; error throws here and the loader has already restored the registry;
       ;; we still restore the file below.
-      (reload-cells! dirs)
+      (cell/recording (:changes checkpoint) #(reload-cells! dirs))
       ;; VALIDATE — does the loop still compile with the edited cells, and
       ;; does every cell's :pure / :effects mark cover what its body reaches?
       ;; The second is over what was just loaded, before the soak that
@@ -400,9 +394,11 @@
   (let [compile-fn (or compile-fn myc/pre-compile)
         shadowing (shadowed-cells name body)
         unearned (unearned-marks body)
-        snapshot (cell/registry-snapshot)
+        ;; What installing the candidate changes, undone by id on a
+        ;; rejection (karamazov-bmce).
+        installed (cell/recorder)
         fail (fn [reason]
-               (cell/registry-restore! snapshot)
+               (cell/undo! installed)
                (when (and conn run-id)
                  (journal/note! conn run-id :mutation-rolled-back
                                 {:data {:cell name :reason reason}}))
@@ -439,7 +435,7 @@
       ;; in a context of its own (cells/eval-candidate!), so a reach past the
       ;; allowlist is refused here, naming it, and a rollback leaves the
       ;; running cells' helpers untouched. Syntax errors surface here too.
-      (cells/eval-candidate! body)
+      (cell/recording installed #(cells/eval-candidate! body))
       (if-let [reason (or (validate compile-fn loop-def)
                           (some (fn [[nm d]]
                                   (when-let [r (validate compile-fn d)]
@@ -463,7 +459,7 @@
                                    (journal/note! conn run-id :mutation-committed
                                                   {:data {:cell name :version v :heldout true}}))
                                  v))))
-            (do (cell/registry-restore! snapshot)
+            (do (cell/undo! installed)
                 {:status :pending})
           ;; COMMIT. The candidate is already live; this is what makes it
           ;; survive a restart and what another run will load.
