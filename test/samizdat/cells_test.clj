@@ -467,6 +467,17 @@
       (is (nil? (cell/get-cell :gen/trial)) "and the trial's own cell is gone")
       (finally (cell/remove-cell! :gen/elsewhere)))))
 
+(deftest a-dry-run-registers-into-its-overlay-only
+  ;; karamazov-t25t, the second route: compiling a manifest registers its
+  ;; composed sub-loops, and under the soak those were built from the stubs
+  ;; and registered where every run would find them.
+  (let [ov (atom {})
+        spec {:id :gen/ghost :doc "ghost" :pure true :handler (fn [_ d] d)}]
+    (binding [cell/*overlay* ov]
+      (cell/register-spec! :gen/ghost spec)
+      (is (= spec (cell/get-cell :gen/ghost)) "the dry run sees what it registered"))
+    (is (nil? (cell/get-cell :gen/ghost)) "and no one else does")))
+
 (deftest a-run-over-its-token-budget-ends-inside-a-nested-loop
   ;; karamazov-lq57: the budget was read only at the beam's round boundary, so
   ;; a feature, team or decompose run — whose whole job is one "turn" — was

@@ -107,8 +107,9 @@
   ;; (karamazov-blt.7).
   (let [changes (cell/recorder)]
     (try
-      (cell/recording changes #(cells/load-cells!))
-      (manifests/compile-definition (current-loop-def ctx))
+      (cell/recording changes (fn []
+                                (cells/load-cells!)
+                                (manifests/compile-definition (current-loop-def ctx))))
       (base/ok branch
                (prompt/render "cell-tool" {:reloaded true
                                            :name (active-name ctx)})

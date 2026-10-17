@@ -170,5 +170,5 @@
    (register-workflow-cell! cell-id workflow schema-map {}))
   ([cell-id workflow schema-map opts]
    (let [spec (workflow->cell cell-id workflow schema-map opts)]
-     (.addMethod cell/cell-spec cell-id (constantly spec))
+     (cell/register-spec! cell-id spec)
      spec)))

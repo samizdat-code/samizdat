@@ -83,6 +83,7 @@
    :cell-requires "prompts/cell-requires.md"
    :cell-shadowed "prompts/cell-shadowed.md"
    :manifest-role "prompts/manifest-role.md"
+   :manifest-progress "prompts/manifest-progress.md"
    :cell-tool "prompts/cell-tool.md"
    :clojure-syntax "prompts/clojure-syntax.md"
    :compaction-marker "prompts/compaction-marker.md"

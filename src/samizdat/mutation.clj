@@ -120,13 +120,15 @@
   [compile-fn loop-def soak-input]
   ;; The stubs are an overlay on THIS soak's compile and run, never registered
   ;; in the shared registry: there they stubbed the same cells for every other
-  ;; branch in the process while the soak ran (karamazov-t25t).
-  (let [stubs (into {}
+  ;; branch in the process while the soak ran (karamazov-t25t). What the
+  ;; compile registers — composed sub-loops built from the stubs — lands in
+  ;; the overlay too.
+  (let [stubs (atom (into {}
                     (for [[_ cell-ref] (:cells loop-def)
                           :let [cell-id (if (map? cell-ref) (:id cell-ref) cell-ref)
                                 spec (cell/get-cell cell-id)]
                           :when (and spec (not (cell/pure? spec)))]
-                      [cell-id (assoc spec :handler (fn [_ d] d))]))]
+                      [cell-id (assoc spec :handler (fn [_ d] d))])))]
     (try
       (let [compiled (binding [cell/*overlay* stubs] (compile-fn loop-def))
             ;; Bounded and detached (RFC-013): at the budget the soak task is
@@ -284,7 +286,8 @@
       ;; The second is over what was just loaded, before the soak that
       ;; trusts the mark (karamazov-viht.1).
       (if-let [reason (or (some unearned-marks (vals (cells/loaded-file-content)))
-                          (validate compile-fn loop-def))]
+                          (cell/recording (:changes checkpoint)
+                                          #(validate compile-fn loop-def)))]
         (rollback! opts checkpoint reason)
         ;; SOAK — does the edited cell actually run without throwing?
         (if-let [reason (soak-fn compile-fn loop-def soak-input)]
@@ -436,11 +439,15 @@
       ;; allowlist is refused here, naming it, and a rollback leaves the
       ;; running cells' helpers untouched. Syntax errors surface here too.
       (cell/recording installed #(cells/eval-candidate! body))
-      (if-let [reason (or (validate compile-fn loop-def)
-                          (some (fn [[nm d]]
-                                  (when-let [r (validate compile-fn d)]
-                                    (str "manifest '" nm "': " r)))
-                                extra-defs))]
+      ;; Recorded too: compiling registers composed sub-loops against the
+      ;; candidate, and a rejection has to take those back with it.
+      (if-let [reason (cell/recording
+                       installed
+                       #(or (validate compile-fn loop-def)
+                            (some (fn [[nm d]]
+                                    (when-let [r (validate compile-fn d)]
+                                      (str "manifest '" nm "': " r)))
+                                  extra-defs)))]
         (fail reason)
         (if-let [reason (soak compile-fn loop-def soak-input)]
           (fail reason)

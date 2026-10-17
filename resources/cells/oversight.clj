@@ -262,7 +262,7 @@
             {:reason [:map [:oversight/turns :any] [:oversight/firings :any]
                       [:oversight/findings :any] [:oversight/unmet :any]
                       [:oversight/idle :any] [:oversight/idle-by-branch :any]
-                      [:oversight/progress :any]
+                      [:oversight/progress :any] [:oversight/statuses :any]
                       [:oversight/round :any]
                       [:oversight/crashes :any] [:oversight/results :any]
                       [:oversight/self-graded :any]
@@ -283,10 +283,17 @@
              ;; Idle PER BRANCH, and only for branches whose role can write
              ;; (karamazov-rz7t.1). A branch with no row, or a role the table
              ;; does not name, is unrestricted and so counts.
-             role-of (into {} (map (juxt :id :role)) (runs/branches conn run-id))
+             rows (runs/branches conn run-id)
+             role-of (into {} (map (juxt :id :role)) rows)
+             ;; What the run recorded for each branch. The beam culls and
+             ;; closes without a progress note, so this is how a branch that
+             ;; ended is known to have: not stalled, and not stuck.
+             status-of (into {} (map (juxt :id (comp str :status))) rows)
+             live? (fn [b] (let [st (get status-of b)] (or (nil? st) (= "active" st))))
              writer? (fn [b]
                        (let [r (get role-of b)]
-                         (or (nil? r) (some #(roles/may-use? r %) writes))))
+                         (and (live? b)
+                              (or (nil? r) (some #(roles/may-use? r %) writes)))))
              by-branch (idle-by-branch turns writes writer?)
              ;; The supervisor's own turns are not the run it watches: left
              ;; in, they were a branch of the digest and their failures were
@@ -353,7 +360,9 @@
                       :round (count (journal/notes conn run-id :route))}]
          (assoc data
                 :oversight/turns watched
-                :oversight/progress (journal/progress conn run-id)
+                ;; Not its own: the supervisor's manifest journals too.
+                :oversight/progress (into {} (remove (comp own? key)) (journal/progress conn run-id))
+                :oversight/statuses status-of
                 :oversight/firings firings
                 :oversight/findings findings
                 :oversight/unmet unmet
@@ -432,15 +441,33 @@
             {}
             (sort (filter live (keys (:brief-shown branch)))))))
 
+(defn supervisor-window
+  "The supervisor's compaction window: the policy's, but never more than the
+  model's own — on a 32K local model a 64K window let the branch grow past
+  what the server accepts. nil policy keeps the model's."
+  [model-window policy-window]
+  (when policy-window
+    (if model-window (min model-window policy-window) policy-window)))
+
 (defn select-sections
   "[shown hashes]: `sections` with every value the branch can already see
-  (same hash in `visible`) set to nil, and {section hash} for the ones shown."
+  (same hash in `visible`) set to nil, and {section hash} for the ones shown.
+
+  A section that is EMPTY now but still visible as it was is named in
+  `:cleared`, once: left out, the earlier brief kept stating offers already
+  answered and a review already done, and an unchanged section and an
+  emptied one read the same."
   [sections visible]
   (reduce-kv (fn [[shown hashes] k v]
-               (let [h (some-> v hash)]
-                 (if (and (some? v) (not= h (get visible k)))
-                   [(assoc shown k v) (assoc hashes k h)]
-                   [(assoc shown k nil) hashes])))
+               (let [none? (or (nil? v) (and (or (string? v) (coll? v)) (empty? v)))
+                     seen (get visible k)]
+                 (cond
+                   none? (if (and seen (not= :cleared seen))
+                            [(-> shown (assoc k nil) (update :cleared (fnil conj []) (name k)))
+                             (assoc hashes k :cleared)]
+                            [(assoc shown k nil) hashes])
+                   (not= (hash v) seen) [(assoc shown k v) (assoc hashes k (hash v))]
+                   :else [(assoc shown k nil) hashes])))
              [{} {}]
              sections))
 
@@ -492,6 +519,7 @@
             [:oversight/offers {:optional true} :any]
             [:oversight/carry {:optional true} :any]
             [:oversight/progress {:optional true} :any]
+            [:oversight/statuses {:optional true} :any]
             [:oversight/idle-by-branch {:optional true} :any]]
    ;; :oversight/branch only on the path that ran — the fallback records a
    ;; verdict and an explanation, and there is no branch to carry.
@@ -516,6 +544,7 @@
                                     ;; a stuck branch's steps (rz7t.3).
                                     :progress (:oversight/progress data)
                                     :idle-by-branch (:oversight/idle-by-branch data)
+                                    :statuses (:oversight/statuses data)
                                     :stuck {:idle-turns (gates/threshold :oversight-idle-floor)
                                             :held-turns (gates/threshold :oversight-held-floor)}
                                     :unmet-gates (:oversight/unmet data)
@@ -750,7 +779,8 @@
                       t (assoc-in [:llm-config :timeout-ms] t)
                       ;; Its own window, so its compaction ladder folds well
                       ;; before the implementer's would (karamazov-rz7t.6).
-                      w (assoc-in [:llm-config :context-window] w)
+                      w (assoc-in [:llm-config :context-window]
+                                  (supervisor-window (get-in rc [:llm-config :context-window]) w))
                       (and (pos? done) (:max-turns rc)) (update :max-turns + done)))
              out (myc/run-compiled (wf/compiled-manifest "supervisor")
                                    rctx

@@ -350,8 +350,8 @@
     (is (= "T0" (:id b)))
     (is (= "build" (:state b)))
     (is (= "T0-parse" (:task b)))
-    (is (= 9 (:since b)) "the last move")
-    (is (= 3 (:held b)) "turns 10-12 since it")
+    (is (= 10 (:since b)) "the last move or write: the write at 10, after the phase move at 9")
+    (is (= 2 (:held b)) "turns 11-12 since it")
     (is (= 10 (:wrote b)))
     (is (nil? (:stuck b)))))
 
@@ -365,6 +365,28 @@
     (testing "a branch that has ended is not stuck"
       (is (nil? (:stuck (f {:progress {"T0" [{:turn 5 :key "status" :to "done"}]}
                             :idle-by-branch {"T0" 30} :stuck stuck-policy})))))))
+
+(deftest a-branch-the-run-closed-is-not-stuck
+  ;; The beam culls and closes branches without a :progress note, so a
+  ;; culled branch's last noted status stayed "active" and it read STUCK on
+  ;; every pass. Its row in branches says it ended.
+  (let [rows (for [t (range 1 51)] (row "T0" t "read_file" "neutral"))
+        [b] (telemetry/branch-progress {:progress {"T0" [{:turn 1 :key "status" :to "active"}]}
+                                        :statuses {"T0" "culled"}
+                                        :idle-by-branch {"T0" 50} :stuck stuck-policy}
+                                       rows [])]
+    (is (= "culled" (:status b)))
+    (is (nil? (:stuck b)))))
+
+(deftest writing-is-moving
+  ;; A plain loop names only its terminal stage, so a branch writing every
+  ;; turn in one phase never "moved" and read STUCK at the held floor.
+  (let [rows (for [t (range 1 51)] (row "T0" t "write_file" "success"))
+        [b] (telemetry/branch-progress {:progress {"T0" [{:turn 1 :key "phase" :to "build"}]}
+                                        :idle-by-branch {"T0" 0} :stuck stuck-policy}
+                                       rows [])]
+    (is (nil? (:stuck b)))
+    (is (= 0 (:held b)))))
 
 (deftest the-brief-shows-steps-only-for-the-branch-that-is-stuck
   (let [rows [{:id 1 :turn 1 :branch_id "T0" :tool_name "__parse_error__"

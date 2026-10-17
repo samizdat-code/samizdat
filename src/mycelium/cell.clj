@@ -47,20 +47,34 @@
 
 
 (def ^:dynamic *overlay*
-  "{id spec} that get-cell answers with before the registry, on this thread
-  only. How a dry run swaps cells for stubs without registering them where
-  every other run would pick them up (karamazov-t25t)."
+  "nil, or an atom of {id spec} that get-cell answers from before the
+  registry and that registrations go INTO instead of the registry, on this
+  thread only. How a dry run swaps cells for stubs, and compiles what is
+  built from them, without registering any of it where every other run
+  would pick it up (karamazov-t25t)."
   nil)
+
+(defn- registered
+  "The registry's own spec for `id`, its overrides merged in."
+  [id]
+  (let [spec (cell-spec id)]
+    (when spec
+      (if-let [overrides (get @cell-overrides id)]
+        (merge spec overrides)
+        spec))))
 
 (defn get-cell
   "Returns the cell spec for the given id, or nil if not found."
   [id]
-  (or (get *overlay* id)
-      (let [spec (cell-spec id)]
-        (when spec
-          (if-let [overrides (get @cell-overrides id)]
-            (merge spec overrides)
-            spec)))))
+  (if-let [o *overlay*]
+    (let [v (get @o id ::none)]
+      (if (= ::none v) (registered id) v))
+    (registered id)))
+
+(defn- overlay-merge!
+  "Under an overlay, `overrides` merged into the overlay's copy of `id`."
+  [o id overrides]
+  (swap! o assoc id (merge (get-cell id) overrides)))
 
 (defn get-cell!
   "Returns the cell spec for the given id, or throws if not found."
@@ -78,10 +92,9 @@
   ([cell-id schema-map]
    (set-cell-schema! cell-id schema-map {}))
   ([cell-id schema-map opts]
-   (when-not (cell-spec cell-id)
+   (when-not (get-cell cell-id)
      (throw (ex-info (str "Cell " cell-id " not found in registry")
                      {:id cell-id})))
-   (touched! cell-id)
    (do
      (when (:input schema-map)
        (v/validate-malli-schema! (:input schema-map)
@@ -91,7 +104,10 @@
        (v/validate-output-schema! (:output schema-map)
                                   (str cell-id " :output")
                                   opts))
-     (swap! cell-overrides update cell-id merge {:schema schema-map})
+     (if-let [o *overlay*]
+       (overlay-merge! o cell-id {:schema schema-map})
+       (do (touched! cell-id)
+           (swap! cell-overrides update cell-id merge {:schema schema-map})))
      schema-map)))
 
 (defn set-cell-meta!
@@ -105,7 +121,7 @@
   ([cell-id meta-map]
    (set-cell-meta! cell-id meta-map {}))
   ([cell-id {:keys [schema requires] :as meta-map} opts]
-   (when-not (cell-spec cell-id)
+   (when-not (get-cell cell-id)
      (throw (ex-info (str "Cell " cell-id " not found in registry")
                      {:id cell-id})))
    (when schema
@@ -120,8 +136,10 @@
    (let [overrides (cond-> {}
                      schema   (assoc :schema schema)
                      requires (assoc :requires requires))]
-     (touched! cell-id)
-     (swap! cell-overrides update cell-id merge overrides))
+     (if-let [o *overlay*]
+       (overlay-merge! o cell-id overrides)
+       (do (touched! cell-id)
+           (swap! cell-overrides update cell-id merge overrides))))
    meta-map))
 
 (defn list-cells
@@ -133,17 +151,21 @@
   "Register a raw cell spec map under its id, bypassing defcell's validation.
   Used by registry-restore! to put a snapshot back verbatim."
   [id spec]
-  (touched! id)
-  (.addMethod cell-spec id (constantly spec)))
+  (if-let [o *overlay*]
+    (swap! o assoc id spec)
+    (do (touched! id)
+        (.addMethod cell-spec id (constantly spec)))))
 
 (defn remove-cell!
   "Unregister a single cell by id — the surgical counterpart to
   clear-registry!, so a loader can drop its own cells without touching cells
   other code registered in the shared registry."
   [id]
-  (touched! id)
-  (remove-method cell-spec id)
-  (swap! cell-overrides dissoc id))
+  (if-let [o *overlay*]
+    (swap! o assoc id nil)
+    (do (touched! id)
+        (remove-method cell-spec id)
+        (swap! cell-overrides dissoc id))))
 
 (defn registry-snapshot
   "Capture the whole cell registry — every registered spec plus the override
@@ -316,6 +338,5 @@
                       (:effects extra) (assoc :effects (vec (:effects extra)))
                       (:callable extra) (assoc :callable true)
                       (:examples extra) (assoc :examples (vec (:examples extra))))]
-    (touched! cell-id)
-    (.addMethod cell-spec cell-id (constantly spec))
+    (register-spec! cell-id spec)
     spec))
