@@ -775,7 +775,6 @@
    #{
     "clojure-lsp is not installed; install it to use the lsp tool"
     "could not start clojure-lsp for root"
-    "diagnostics needs file. line/col are 0-based ints."
     "line and col must be integers. "
     }
    "src/samizdat/agent/tools/messages.clj"

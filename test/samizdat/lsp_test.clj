@@ -3,6 +3,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [samizdat.agent.tools.base :as base]
+             [samizdat.agent.tools]
              [samizdat.agent.tools.lsp]
              ;; the java.time.* host shim, before data.json — see samizdat.store.journal
              [jolt.time]
@@ -205,3 +206,44 @@
               (str path " is refused before anything is read"))
           (is (str/includes? (str (:result r)) "root")
               "the refusal names the boundary"))))))
+
+(deftest a-workspace-edit-becomes-whole-files
+  ;; karamazov-05z0.20: LSP edits are ranges; the harness writes files.
+  (is (= "(defn total [x] x)\n(total 1)"
+         (client/apply-edits "(defn sum [x] x)\n(sum 1)"
+                             [{:range {:start {:line 0 :character 6} :end {:line 0 :character 9}} :newText "total"}
+                              {:range {:start {:line 1 :character 1} :end {:line 1 :character 4}} :newText "total"}]))
+      "both edits, applied last first so the first's offsets hold")
+  (is (= {"/p/a.clj" "new"}
+         (client/edit-files {:documentChanges [{:textDocument {:uri "file:///p/a.clj"}
+                                                :edits [{:range {:start {:line 0 :character 0}
+                                                                 :end {:line 0 :character 3}}
+                                                         :newText "new"}]}]}
+                            (constantly "old")))))
+
+(deftest a-rename-writes-every-file-through-write-file
+  (let [root (doto (java.io.File/createTempFile "lsp-rename" "") (.delete) (.mkdirs))
+        a (io/file root "src/a.clj") b (io/file root "src/b.clj")]
+    (try
+      (io/make-parents a)
+      (spit a "(ns a)\n(defn sum [x] x)\n")
+      (spit b "(ns b (:require [a]))\n(a/sum 1)\n")
+      (with-redefs [client/available? (constantly true)
+                    client/client-for (constantly {:opened (atom #{})})
+                    client/rename (fn [_ _ _ _ new-name]
+                                    {:changes {(str "file://" (.getCanonicalPath a))
+                                               [{:range {:start {:line 1 :character 6} :end {:line 1 :character 9}}
+                                                 :newText new-name}]
+                                               (str "file://" (.getCanonicalPath b))
+                                               [{:range {:start {:line 1 :character 3} :end {:line 1 :character 6}}
+                                                 :newText new-name}]}})]
+        (let [r (base/run-tool {:tool-name "lsp" :root (str root) :branch {:id "B1" :role :implementor}
+                                :args {:op "rename" :file "src/a.clj" :line 1 :col 7 :new_name "total"}})]
+          (is (str/includes? (str (:result r)) "Renamed to `total`") (str (:result r)))
+          (is (= "(ns a)\n(defn total [x] x)\n" (slurp a)))
+          (is (= "(ns b (:require [a]))\n(a/total 1)\n" (slurp b))))
+        (testing "a role that does not write cannot rename"
+          (let [r (base/run-tool {:tool-name "lsp" :root (str root) :branch {:id "R1" :role :reviewer}
+                                  :args {:op "rename" :file "src/a.clj" :line 1 :col 7 :new_name "x"}})]
+            (is (str/includes? (str (:result r)) "does not write")))))
+      (finally (doseq [f (reverse (file-seq root))] (.delete f))))))

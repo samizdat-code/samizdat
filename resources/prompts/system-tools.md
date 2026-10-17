@@ -170,12 +170,15 @@ mcp({action, server?, tool?, arguments?})
     servers; tools {server}, each tool with its description and argument
     schema; call {server, tool, arguments}. A server's policy may ask a
     person before a call, or refuse tools it does not trust.
-lsp({op, file, line, col})
-    Code navigation over the project via clojure-lsp (read-only). Ops:
+lsp({op, file, line, col, new_name?})
+    Code navigation over the project via clojure-lsp. Ops:
     definition|references|hover need file (project-relative), line, col;
     diagnostics needs only file. line/col are 0-based ints. definition
     returns 'path:line:col'; references one per line; hover the symbol's
-    info; diagnostics 'line:col severity: message' per problem.
+    info; diagnostics 'line:col severity: message' per problem. rename
+    needs file, line, col and new_name: clojure-lsp renames the symbol
+    everywhere it is used, and every file it touches is written for you
+    through write_file — the one way to rename that cannot miss a use.
 write_file({path, content})
     Write a whole file in the project, creating directories as needed.
     Overwrites. Use this for NEW files; to change an existing file, prefer
