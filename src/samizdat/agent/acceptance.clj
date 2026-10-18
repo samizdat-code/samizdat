@@ -154,6 +154,15 @@
   [results]
   (empty? (failed results)))
 
+(defn accepted?
+  "Whether the criteria let a run ship under `policy`, the gates.edn
+  :acceptance-undecided value: `:ship` and `:ship-flagged` pass a criterion
+  nobody decided, `:refuse` does not (karamazov-05z0.13). A criterion that
+  failed refuses under every policy."
+  [results policy]
+  (and (all-passed? results)
+       (or (not= :refuse policy) (empty? (unknown results)))))
+
 ;; --- what the branch reads --------------------------------------------------
 
 (defn- tail [s n]
@@ -179,6 +188,22 @@
      (prompt/render "acceptance-failed"
                     {:failed (mapv (fn [r] (update r :output #(tail % n))) f)
                      :passed (not-empty (mapv :name (filter #(true? (:passed? %)) results)))}))))
+
+(defn deterministic-commands
+  "The configured commands the OPERATOR said give the same answer on the same
+  tree (karamazov-05z0.12): :run :verify-cmd under :run
+  :verify-deterministic? true, and every :check criterion marked
+  :deterministic? true. Never assumed — a check that talks to a network or a
+  clock must keep running."
+  [config]
+  (let [checks (try (->> (get-in config [:run :acceptance])
+                         (filter #(and (map? %) (true? (:deterministic? %))))
+                         (keep #(some-> (:check %) str not-empty)))
+                    (catch Throwable _ nil))]
+    (into #{} (remove str/blank?)
+          (cons (when (true? (get-in config [:run :verify-deterministic?]))
+                  (some-> (get-in config [:run :verify-cmd]) str))
+                checks))))
 
 (defn configured-commands
   "The shell commands `config` names for a run: :run :verify-cmd and every

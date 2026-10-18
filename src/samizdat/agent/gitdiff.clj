@@ -54,6 +54,21 @@
                   str/trim not-empty)))
       (finally (.delete idx)))))
 
+(defn tree-id
+  "The id of the working tree's content as it stands — untracked files
+  included, .gitignore respected — built in a scratch index so nothing is
+  touched. Two calls on an unchanged tree give the same id. nil when git or
+  the repo is unavailable."
+  [root]
+  (when (and root (proc/available? "git"))
+    (let [idx (java.io.File/createTempFile "samizdat-tree" ".index")
+          env (assoc (secrets/scrubbed-process-env) "GIT_INDEX_FILE" (.getPath idx))]
+      (try
+        (.delete idx)
+        (when (git* env root ["add" "-A"])
+          (some-> (git* env root ["write-tree"]) str/trim not-empty))
+        (finally (.delete idx))))))
+
 (defn baseline
   "A ref the run's changes are diffed against: a commit of the working tree
   now, UNTRACKED FILES INCLUDED, so later edits show as the diff and a file

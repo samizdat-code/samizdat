@@ -288,3 +288,15 @@
                                 {:kinds #{:check}
                                  :run-check (fn [_] {:green? false :output "2 failures"})})]
       (is (false? (:passed? r))))))
+
+(deftest an-undecided-criterion-ships-unless-the-policy-refuses-it
+  ;; karamazov-05z0.13: nil is fail-open by design, and a run that shipped on
+  ;; a criterion nobody decided read exactly like one that met them all.
+  (let [undecided [{:name "a" :passed? true} {:name "b" :passed? nil}]
+        failed [{:name "a" :passed? false} {:name "b" :passed? nil}]]
+    (is (acceptance/accepted? undecided :ship))
+    (is (acceptance/accepted? undecided :ship-flagged))
+    (is (not (acceptance/accepted? undecided :refuse)))
+    (is (acceptance/accepted? [{:name "a" :passed? true}] :refuse) "decided and met")
+    (doseq [p [:ship :ship-flagged :refuse]]
+      (is (not (acceptance/accepted? failed p)) (str p " never ships a failure")))))

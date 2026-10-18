@@ -225,7 +225,11 @@ measured against it.
   fan-out does over the same store); the board deliberately starts serial
   because simultaneity in one tree was the cost the dogfood run paid. If
   parallel boards return, they should come back as N single-owner board runs
-  over one shared board, not as N owners inside one run.
+  over one shared board, not as N owners inside one run. The cost of one tree now
+  has a mechanism: `samizdat.agent.worktree/isolated` gives an owner its own
+  git worktree and applies its change back only when it ships, reporting a
+  conflict otherwise. The team fan-out uses it under gates.edn `:isolation
+  {:mode :worktree}` (karamazov-05z0.10); the board does not yet.
 - The critic reviews a diff, not a rebuilt tree: it does not run the tests
   (that is the feature loop's verify gate, GATE 2). A standalone board run
   with no `:verify-cmd` therefore closes tasks on review alone — same standing

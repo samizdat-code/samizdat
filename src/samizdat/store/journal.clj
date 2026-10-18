@@ -117,7 +117,7 @@
   [conn run-id {:keys [branch-id turn tool-name args result category
                        parse-error auto-repaired assistant-text reasoning-text
                        usage policy-refusal? prefix forced-tool forced-via
-                       elapsed-ms model-change task-id]}]
+                       elapsed-ms model-change task-id full-result]}]
   (db/with-writer
     (db/execute! conn
                    ["INSERT INTO turns (run_id, branch_id, turn, tool_name, args, result,
@@ -128,8 +128,8 @@
                                         policy_refusal,
                                         prefix_stable_chars, prefix_chars, prefix_change,
                                         forced_tool, forced_via, elapsed_ms, request_hash,
-                                        task_id)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                                        task_id, full_result)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     run-id branch-id turn (str tool-name) (js (or args {}))
                     (str result) (some-> category name) parse-error
                     (if auto-repaired 1 0)
@@ -163,7 +163,10 @@
                     (:request-hash prefix)
                     ;; The task it served (migration v35): nil when none
                     ;; was held.
-                    (some-> task-id str not-empty)]))
+                    (some-> task-id str not-empty)
+                    ;; The result before its clip (migration v45): nil when
+                    ;; nothing was clipped.
+                    (some-> full-result str not-empty)]))
   ;; WHAT THE BRANCH IS RUNNING ON, on the turn it learned it
   ;; (karamazov-a28w). The loop marks the branch when the provider-reported
   ;; model is first seen or changes, so this is once per agent rather than a
@@ -350,24 +353,43 @@
                  can move, and the compaction notes for the same branch
                  and turn say which rung
     :unknown     no fingerprint — a replay, a stub, a pre-v30 row
+    :idle        a :tail miss that came more than `:idle-ms` after the
+                 branch's previous call ended — the cache's lifetime ran out,
+                 which is expected, not the provider dropping a live prefix
+                 (karamazov-05z0.11); only when :idle-ms is given
 
-  `policy` is gates.edn :cache-miss: the hit ratio a turn counts under and
-  the prompt size it must reach to count at all."
-  [conn run-id {:keys [min-prompt-tokens hit-below]}]
-  (let [rows (db/fetch conn ["SELECT prefix_change, forced_tool, forced_via, count(*) AS n
-                                FROM turns
-                               WHERE run_id = ?
-                                 AND prompt_tokens >= ?
-                                 AND cache_hit_tokens IS NOT NULL
-                                 AND cache_hit_tokens * 1.0 / prompt_tokens < ?
-                               GROUP BY prefix_change, forced_tool, forced_via"
+  `policy` is gates.edn :cache-miss: the hit ratio a turn counts under, the
+  prompt size it must reach to count at all, and the idle gap."
+  [conn run-id {:keys [min-prompt-tokens hit-below idle-ms]}]
+  (let [rows (db/fetch conn ["SELECT t.prefix_change, t.forced_tool, t.forced_via,
+                                     t.created_at, t.elapsed_ms,
+                                     (SELECT max(p.created_at) FROM turns p
+                                       WHERE p.run_id = t.run_id AND p.branch_id = t.branch_id
+                                         AND p.id < t.id) AS prev_at,
+                                     1 AS n
+                                FROM turns t
+                               WHERE t.run_id = ?
+                                 AND t.prompt_tokens >= ?
+                                 AND t.cache_hit_tokens IS NOT NULL
+                                 AND t.cache_hit_tokens * 1.0 / t.prompt_tokens < ?"
                               run-id min-prompt-tokens hit-below])
+        ;; The gap between the previous call's end and this one's start: the
+        ;; row is written when a call ends, so its start is created_at less
+        ;; elapsed_ms.
+        gap-ms (fn [{:keys [created_at elapsed_ms prev_at]}]
+                 (try (- (.toEpochMilli (java.time.Instant/parse (str created_at)))
+                         (or elapsed_ms 0)
+                         (.toEpochMilli (java.time.Instant/parse (str prev_at))))
+                      (catch Throwable _ nil)))
+        idle? (fn [r] (and idle-ms (:prev_at r)
+                           (when-let [g (gap-ms r)] (> g idle-ms))))
         ;; A NATIVE force explains a miss on its own; a grammar force
         ;; (forced_via "grammar", v32) leaves the prefix alone, so a miss on
         ;; such a turn is whatever its prefix shape says. A pre-v32 row with
         ;; a forced tool and no via is native, the only force there was.
-        cause (fn [{:keys [prefix_change forced_tool forced_via]}]
+        cause (fn [{:keys [prefix_change forced_tool forced_via] :as r}]
                 (cond (and (seq forced_tool) (not= "grammar" forced_via)) :forced
+                      (and (= "tail" prefix_change) (idle? r)) :idle
                       (seq prefix_change) (keyword prefix_change)
                       :else :unknown))
         by (reduce (fn [m r] (update m (cause r) (fnil + 0) (:n r))) {} rows)]
@@ -396,6 +418,23 @@
         {:turns n
          :avg-total (avg (map #(long (or (:total %) 0)) notes))
          :parts (into {} (map (fn [[k xs]] [k (avg xs)])) parts)}))))
+
+(defn recent-assistant-texts
+  "The model's own text of a run's last `n` turns, oldest first — one
+  branch's when `branch-id` is given. What a complaint about the model's
+  behaviour is drafted from (karamazov-05z0.4)."
+  [conn run-id branch-id n]
+  (->> (db/fetch conn (if branch-id
+                        ["SELECT assistant_text FROM turns WHERE run_id = ? AND branch_id = ?
+                            AND assistant_text IS NOT NULL ORDER BY id DESC LIMIT ?"
+                         run-id branch-id n]
+                        ["SELECT assistant_text FROM turns WHERE run_id = ?
+                            AND assistant_text IS NOT NULL ORDER BY id DESC LIMIT ?"
+                         run-id n]))
+       (map :assistant_text)
+       (remove str/blank?)
+       reverse
+       vec))
 
 (defn turns
   "Every turn of a run, whole rows. `assistant_text` comes back with them, so

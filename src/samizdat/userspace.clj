@@ -1257,18 +1257,31 @@
   — onto the project-authored versions that were current for it: their
   standing, read back through `versions`. A quiet nil when no project is
   bound, like every other unbound write; an outcome outside the vocabulary
-  throws whether bound or not."
-  [outcome]
-  (outcomes/column outcome)
-  (when-let [c (conn)]
-    (store/record-run-outcome! c outcome)
-    true))
+  throws whether bound or not.
+
+  Also records the GENERATION — the set of project versions current as the
+  run ended, with `run-id` — so a set that works together can be found
+  again and a streak of errors since it can be offered as a way back
+  (karamazov-05z0.8)."
+  ([outcome] (record-run-outcome! outcome nil))
+  ([outcome run-id]
+   (outcomes/column outcome)
+   (when-let [c (conn)]
+     (store/record-run-outcome! c outcome)
+     (store/record-generation! c run-id outcome)
+     true)))
 
 (defn versions
   "The edit history of one piece of userspace, oldest first. Empty when
   unbound: the template has no history, which is the point of copying it."
   [kind name]
   (if-let [c (conn)] (store/versions c kind name) []))
+
+(defn set-remove-when!
+  "Record on a stored version when it should come out (karamazov-05z0.7). A
+  quiet nil when unbound, like every other unbound write."
+  [kind name version text]
+  (when-let [c (conn)] (store/set-remove-when! c kind name version text)))
 
 (defn names
   "Every name the project holds at `kind`, with its latest version. Empty when

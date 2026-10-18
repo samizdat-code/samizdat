@@ -20,8 +20,10 @@
   preload, not a dependency — nothing here is called; the `require` is the
   whole point. Add a namespace here whenever a new shipped cell reaches for
   one that nothing in src already pulls in."
-  (:require [samizdat.agent.compaction]
+  (:require [samizdat.agent.budget]
+            [samizdat.agent.compaction]
             [samizdat.agent.decompose]
+            [samizdat.agent.findings]
             ;; cells/oversight.clj reads the run's own health to decide
             ;; whether the harness needs looking at.
             [samizdat.agent.gates]
@@ -30,6 +32,7 @@
             [samizdat.agent.planner]
             [samizdat.agent.reflect]
             [samizdat.agent.telemetry]
+            [samizdat.agent.worktree]
             ;; cells/board.clj and cells/feature.clj read the run's metrics;
             ;; nothing in src required the namespace, so a built binary would
             ;; have lacked it (cells-test caught it, 2026-09-16).

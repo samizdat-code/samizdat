@@ -1,0 +1,1 @@
+{% if no-patch %}This part's change could not be read back out of its worktree, so none of it was applied. The part is open again.{% else %}This part's change did not apply onto the tree as the other owners left it — {{paths}}{% if why %} ({{why}}){% endif %}. None of it was applied, and the part is open again, to be redone from the tree as it is now.{% endif %}

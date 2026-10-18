@@ -49,13 +49,21 @@
      :version (try (some-> (userspace/versions (keyword kind) name) last :version)
                    (catch Throwable _ nil))}))
 
+;; How a verdict notices its target was edited again (karamazov-05z0.1).
+;; Installed here because session is a leaf and this is where the target's
+;; version is read in the first place.
+(session/set-version-lookup!
+ (fn [kind name]
+   (some-> (userspace/versions (keyword kind) name) last :version)))
+
 (defmethod base/run-tool "experiment" [{:keys [branch] :as ctx}]
   (let [name (some-> (base/arg ctx :name) str str/trim not-empty)
         change (some-> (base/arg ctx :change) str str/trim not-empty)
         hypothesis (some-> (base/arg ctx :hypothesis) str str/trim not-empty)
         predicts (read-prediction (base/arg ctx :predicts))
         target (target-of (some-> (base/arg ctx :kind) str str/trim not-empty)
-                          (some-> (base/arg ctx :target) str str/trim not-empty))]
+                          (some-> (base/arg ctx :target) str str/trim not-empty))
+        until (some-> (base/arg ctx :until) str str/trim not-empty)]
     (cond
       (not (and name change hypothesis))
       (base/malformed branch (str (base/missing ctx :name :change :hypothesis)
@@ -70,11 +78,17 @@
       (try
         (session/experiment! name {:change change :hypothesis hypothesis
                                    :target target :predicts predicts})
+        ;; When the edit should come out, on the version itself, where it
+        ;; outlives this session (karamazov-05z0.7).
+        (when (and until (:version target))
+          (userspace/set-remove-when! (keyword (:kind target)) (:name target)
+                                      (:version target) until))
         (base/ok branch (msg {:started true :name name
                               :change change :hypothesis hypothesis
                               :target (when target
                                         (str (:kind target) " " (:name target)
                                              (when (:version target) (str " v" (:version target)))))
+                              :until (when (and until (:version target)) until)
                               :predicts (when predicts
                                           (str (clojure.core/name (:signal predicts)) " "
                                                (clojure.core/name (:direction predicts))))})
@@ -90,6 +104,27 @@
                                                       (str/join ", " unsettled))})))
             (throw e)))))))
 
+(defn- undo-target!
+  "Settling a change as reverted puts the version before it back
+  (karamazov-05z0.6), through the edit's own tool so a cell or a policy is
+  reloaded and checked as any revert is. Only while the target is still at
+  the version the experiment opened on: a target that has moved was already
+  reverted by hand, or edited again, and is left alone. The text of what
+  happened, or nil when the experiment named no target."
+  [ctx {:keys [target stale]}]
+  (let [{:keys [kind version] tname :name} target]
+    (when (and kind tname version)
+      (cond
+        stale (msg {:undo-moved true :target (str kind " " tname) :now (:now stale)})
+        (< (long version) 2) (msg {:undo-first true :target (str kind " " tname)})
+        :else
+        (let [r (base/run-tool (assoc ctx :tool-name (str kind)
+                                      :args {"action" "revert" "name" tname
+                                             "version" (str (dec (long version)))
+                                             "rationale" (str "experiment settled as reverted: "
+                                                              (or (base/arg ctx :why) "no reason given"))}))]
+          (str (:result r)))))))
+
 (defmethod base/run-tool "verdict" [{:keys [branch] :as ctx}]
   (let [name (some-> (base/arg ctx :name) str str/trim not-empty)
         action (some-> (base/arg ctx :action) str str/trim str/lower-case not-empty)]
@@ -103,12 +138,14 @@
       action
       (if-not (contains? #{"reverted" "kept"} action)
         (base/malformed branch (str "`action` is `reverted` or `kept`.\n\n" @usage))
-        (if-not (session/verdict name)
-          (base/fail branch (msg {:no-experiment true :name name}))
-          (do (session/reverted! name (= "kept" action))
-              (base/ok branch (msg {:settled true :name name :action action
-                                    :why (base/arg ctx :why)})
-                       :progress? true))))
+        (if-let [v (session/verdict name)]
+          (let [undo (when (= "reverted" action) (undo-target! ctx v))]
+            (session/reverted! name (= "kept" action))
+            (base/ok branch (str (msg {:settled true :name name :action action
+                                       :why (base/arg ctx :why)})
+                                 (when undo (str "\n\n" undo)))
+                     :progress? true))
+          (base/fail branch (msg {:no-experiment true :name name}))))
 
       :else
       (if-let [v (session/verdict name)]
@@ -137,6 +174,9 @@
                        :worse (= :worse (:verdict v))
                        :unchanged (= :unchanged (:verdict v))
                        :too-early (= :too-early (:verdict v))
+                       :stale (when-let [{:keys [started now]} (:stale v)]
+                                {:target (str (:kind (:target v)) " " (:name (:target v)))
+                                 :started started :now now})
                        ;; The second reading, and only when it is the reason
                        ;; for the verdict: on any other verdict it agrees with
                        ;; the first and is noise.

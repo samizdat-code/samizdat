@@ -134,7 +134,15 @@ data, so the suite covers them with no terminal and no cmake.
 jolt tui           # server + TUI in one process (samizdat.main); --headless, --connect [URL]
 jolt bin           # build ./samizdat from samizdat.main; test it from a directory other than the repo
 jolt tui-test      # the TUI's toolkit-bound tests: real FTXUI widgets, headless
+jolt acp [URL]     # samizdat as an ACP agent on stdio, for an editor (Zed,
+                   # Emacs agent-shell, …) to launch; against a running `jolt serve`
 ```
+
+`acp/` is a third front end of the same kind: a strict HTTP client of the
+server, with no toolkit, so it is on the test path and its tests run in the
+main suite. A prompt starts a run or steers the session's running one, the
+run's journal streams back as session updates, and a question the run puts
+to a person arrives in the editor as a permission request.
 
 The TUI's own arrangement is EDN in `tui.edn`, a layered settings file (see
 "Where a project's configuration lives" below): `$SAMIZDAT_TUI_FILE` /

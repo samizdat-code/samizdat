@@ -1,0 +1,2 @@
+{% if usage %}`wait` needs `seconds` (how long to sleep) or `until` (the run's configured test or acceptance command to rerun until it passes), with `every` seconds between checks and `seconds` as the limit.{% endif %}{% if slept %}Waited {{seconds}}s.{% endif %}{% if green %}`{{until}}` passed after {{seconds}}s ({{checks}} checks).{% endif %}{% if timed-out %}`{{until}}` still had not passed after {{seconds}}s ({{checks}} checks). Its last output:
+{{output}}{% endif %}

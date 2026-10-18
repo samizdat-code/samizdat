@@ -131,7 +131,9 @@
                  ;; is unrestricted, so a workflow that names none is unchanged.
                  :role role)
         out (myc/run-compiled compiled ctx {:branch b :turn 1})]
-    {:verdict (:verdict out) :answer (get-in out [:branch :final-answer])})))
+    {:verdict (:verdict out) :answer (get-in out [:branch :final-answer])
+     ;; The role's output-contract value, when it has one (roles.edn :output).
+     :result (get-in out [:branch :final-result])})))
 
 (defn- run-role-as
   "run-role with the ROLE named first — the call sites read better that way and
@@ -140,12 +142,19 @@
   (run-role ctx compiled bid prob suffix role))
 
 (defn- review-decision
-  "PASS/REVISE from the reviewer's verdict + answer. A reviewer that could not
+  "PASS/REVISE from the reviewer's verdict, its result and its answer. The
+  result's :verdict decides when there is one — the reviewer's output
+  contract (roles.edn :output, karamazov-05z0.14). A reviewer that could not
   finish (not :done) or said nothing fails OPEN to :pass — a review backstop
   that can wedge the loop is worse than none. Otherwise the first line decides."
-  [verdict answer]
-  (if (or (not= :done verdict) (str/blank? (str answer)))
-    :pass
+  [verdict answer result]
+  (cond
+    (and (= :done verdict) (:verdict result))
+    (if (= "REVISE" (str/upper-case (str (:verdict result)))) :revise :pass)
+
+    (or (not= :done verdict) (str/blank? (str answer))) :pass
+
+    :else
     (let [first-line (-> (str answer) str/split-lines first str str/upper-case)]
       (if (str/includes? first-line "REVISE") :revise :pass))))
 
@@ -270,12 +279,17 @@
               (assoc data :review/decision :pass :review/findings ""))
         (let [prob (str "Review this feature's work.\n\nFeature:\n" (:problem branch)
                         "\n\nThe implementors reported:\n" (:final-answer branch))
-              {:keys [verdict answer]}
+              {:keys [verdict answer result]}
               (try (run-role-as :reviewer (wf/role-ctx ctx :reviewer) (wf/compiled-manifest "reviewer")
                              (str "R" (revision data)) prob
                              (wf/prompt-text "roles/reviewer"))
                    (catch Throwable e {:verdict :error :answer (ex-message e)}))
-              decision (review-decision verdict answer)]
+              decision (review-decision verdict answer result)
+              ;; The findings the contract carried, one per line, ahead of
+              ;; the prose, so the revise round reads them first.
+              answer (if-let [fs (seq (:findings result))]
+                       (str (str/join "\n" (map #(str "- " %) fs)) "\n\n" answer)
+                       answer)]
           (journal/note! conn run-id :review {:data {:decision decision :verdict verdict}})
           (assoc data :review/decision decision :review/findings (str answer)))))
       ;; fail-open: a broken review does not block shipping
@@ -561,7 +575,11 @@
                              (journal/note! conn run-id :stage-error
                                             {:data {:stage :acceptance :error (ex-message e)}})
                              nil))
-              accepted? (or (nil? results) (acceptance/all-passed? results))
+              ;; A criterion nobody could decide ships, ships flagged, or
+              ;; refuses — gates.edn :acceptance-undecided (karamazov-05z0.13).
+              undecided-policy (gates/threshold :acceptance-undecided)
+              undecided (when results (seq (acceptance/unknown results)))
+              accepted? (or (nil? results) (acceptance/accepted? results undecided-policy))
               passed? (and tests-passed? accepted?)
               note (str/join "\n"
                              (remove str/blank?
@@ -569,16 +587,26 @@
                                             (:timeout? r) "tests TIMED OUT"
                                             (seq unrun) (prompt/render "tests-not-run"
                                                                        {:nses (str/join ", " unrun)})
+                                            ;; Answered from the last run on this
+                                            ;; tree (gates.edn :verify-memo).
+                                            (and tests-passed? (:reused? r)) "tests passed (unchanged tree, not rerun)"
                                             tests-passed? "tests passed"
                                             :else (str "tests FAILED (exit " (:exit r) ")\n"
                                                        (tail (str (:output r)) 25)))
-                                      (acceptance-note results)]))]
+                                      (acceptance-note results)
+                                      (when (and undecided (not= :ship undecided-policy))
+                                        (prompt/render "acceptance-undecided"
+                                                       {:names (str/join ", " (map :name undecided))
+                                                        :refused (= :refuse undecided-policy)}))]))]
           ;; The note text rides the journal row too: it is the durable
           ;; account of WHY gate 2 refused, and the two halves it now has
           ;; make the booleans alone ambiguous.
           (journal/note! conn run-id :verify
                          {:data {:passed passed? :exit (:exit r) :timeout (:timeout? r)
                                  :tests-passed tests-passed? :accepted accepted?
+                                 ;; Criteria nobody decided, by name — what a
+                                 ;; ship on :ship-flagged leaves on the record.
+                                 :undecided (some->> undecided (mapv :name))
                                  :note (judge/for-the-record :reply-chars note)}})
           ;; The two halves as well as the verdict, so the route note can
           ;; say which one refused (karamazov-na2k.23).

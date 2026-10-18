@@ -89,6 +89,82 @@
       {:text (str (subs full 0 cap) "\n" (msg {:clipped (- chars cap) :cap cap}))
        :chars chars :clipped (- chars cap)})))
 
+(defn- turns-of [ctx]
+  (let [t (base/arg ctx :turns)]
+    (->> (cond (nil? t) [] (sequential? t) t :else [t])
+         (keep #(cond (number? %) (long %) :else (parse-long (str %))))
+         vec)))
+
+(defn- turn-files
+  "The branch's own earlier turns' results as the reader's material
+  (karamazov-05z0.15): what a clipped result was before the clip, so it can
+  be questioned whole. {:files [...]} or {:missing [turns]}."
+  [{:keys [conn run-id branch]} turns]
+  (let [rows (for [t turns]
+               [t (when (and conn run-id)
+                    (journal/branch-turn conn run-id (:id branch) t))])
+        missing (vec (for [[t r] rows :when (nil? r)] t))]
+    (if (seq missing)
+      {:missing missing}
+      {:files (vec (for [[t r] rows]
+                     {:path (str "turn " t " " (:tool_name r))
+                      ;; The whole result where it was clipped (v45).
+                      :content (str (or (not-empty (:full_result r)) (:result r)))}))})))
+
+(defn- digest-of
+  "The reader's answer to `question` over `files` ({:path :content}), as the
+  tool's result, with the saving and the bill journaled."
+  [{:keys [branch conn run-id] :as ctx} files question policy]
+  (let [anchors? (boolean (base/arg ctx :anchors))
+        paths (mapv :path files)
+        {:keys [text chars clipped]} (material files anchors? (:input-chars policy))
+        {:keys [adapter config role]} (reader ctx)
+        messages [{:role "system"
+                   :content (prompt/render "digest" {:budget-chars (:budget-chars policy)
+                                                     :anchors anchors?})}
+                  {:role "user" :content (str question "\n\n" text)}]]
+    (try
+      (let [reply (llm/chat adapter config messages)
+            ;; The client folds a reasoning model's thinking into
+            ;; :content as a <think> block for the loop's fence parser
+            ;; to strip; a digest is prose for the branch, so it is
+            ;; stripped here. The first real digest of the validation
+            ;; run came back as 1,790 tokens of reasoning around eight
+            ;; bullets. And a reader that ignores its budget does not
+            ;; get to fill the branch's context anyway: twice the
+            ;; budget is the ceiling, named when it clips.
+            answer (message/strip-think-blocks (str (:content reply)))
+            ceiling (* 2 (:budget-chars policy))
+            answer (if (> (count answer) ceiling)
+                     (str (subs answer 0 ceiling) "\n"
+                          (msg {:clipped-answer (- (count answer) ceiling)
+                                :ceiling ceiling}))
+                     answer)]
+        (when (and conn run-id)
+          ;; TWO RECORDS, one fact each. The note is the SAVING — what
+          ;; the branch did not have to read — and the side call is the
+          ;; BILL, on the table the run's token budget sums
+          ;; (karamazov-2rqb.1). The usage used to live only in the
+          ;; note, where nothing summed it, so the shunt's whole point
+          ;; (move reading onto a cheaper model) moved spend out of the
+          ;; budget's view along with it.
+          (journal/note! conn run-id :digest
+                         {:branch-id (:id branch)
+                          :data {:paths paths :chars-in chars :clipped clipped
+                                 :role role :model (:model config)}})
+          (journal/record-side-call! conn run-id
+                                     {:branch-id (:id branch)
+                                      :turn (:turn branch)
+                                      :kind :digest
+                                      :role role
+                                      :model (:model config)
+                                      :usage (:usage reply)}))
+        (base/ok branch (if (str/blank? answer) (msg {:empty true}) answer)
+                 :digest {:paths paths :chars-in chars :role role}))
+      (catch Throwable e
+        (log/warn "read_digest: the reader failed:" (ex-message e))
+        (base/unavailable branch "the reader" e)))))
+
 (defn read-digest
   "Answer `question` about `paths` through the reader. The tool result is the
   reader's bullets, :neutral — a digest establishes nothing, like a read —
@@ -96,10 +172,16 @@
   have to read and what the answer cost."
   [{:keys [branch root conn run-id] :as ctx}]
   (let [paths (paths-of ctx)
+        turns (turns-of ctx)
         question (str (base/arg ctx :question))
         refs (files/ctx-reference-roots ctx)
-        policy (gates/digest-policy)]
+        policy (gates/digest-policy)
+        from-turns (when (and (empty? paths) (seq turns)) (turn-files ctx turns))]
     (cond
+      (:missing from-turns)
+      (base/malformed branch (msg {:no-turns true :turns (str/join ", " (:missing from-turns))}))
+      (and from-turns (str/blank? question)) (base/malformed branch (msg {:needs-question true}))
+      from-turns (digest-of ctx (:files from-turns) question policy)
       (empty? paths) (base/malformed branch (msg {:needs-paths true}))
       (str/blank? question) (base/malformed branch (msg {:needs-question true}))
       :else
@@ -118,54 +200,7 @@
           missing (base/malformed branch (msg {:missing true :path (str/join ", " (map :path missing))}))
           directory (base/malformed branch (msg {:directory true :path (:path directory)}))
           :else
-          (let [anchors? (boolean (base/arg ctx :anchors))
-                files (for [{:keys [path abs]} resolved] {:path path :content (slurp abs)})
-                {:keys [text chars clipped]} (material files anchors? (:input-chars policy))
-                {:keys [adapter config role]} (reader ctx)
-                messages [{:role "system"
-                           :content (prompt/render "digest" {:budget-chars (:budget-chars policy)
-                                                             :anchors anchors?})}
-                          {:role "user" :content (str question "\n\n" text)}]]
-            (try
-              (let [reply (llm/chat adapter config messages)
-                    ;; The client folds a reasoning model's thinking into
-                    ;; :content as a <think> block for the loop's fence parser
-                    ;; to strip; a digest is prose for the branch, so it is
-                    ;; stripped here. The first real digest of the validation
-                    ;; run came back as 1,790 tokens of reasoning around eight
-                    ;; bullets. And a reader that ignores its budget does not
-                    ;; get to fill the branch's context anyway: twice the
-                    ;; budget is the ceiling, named when it clips.
-                    answer (message/strip-think-blocks (str (:content reply)))
-                    ceiling (* 2 (:budget-chars policy))
-                    answer (if (> (count answer) ceiling)
-                             (str (subs answer 0 ceiling) "\n"
-                                  (msg {:clipped-answer (- (count answer) ceiling)
-                                        :ceiling ceiling}))
-                             answer)]
-                (when (and conn run-id)
-                  ;; TWO RECORDS, one fact each. The note is the SAVING — what
-                  ;; the branch did not have to read — and the side call is the
-                  ;; BILL, on the table the run's token budget sums
-                  ;; (karamazov-2rqb.1). The usage used to live only in the
-                  ;; note, where nothing summed it, so the shunt's whole point
-                  ;; (move reading onto a cheaper model) moved spend out of the
-                  ;; budget's view along with it.
-                  (journal/note! conn run-id :digest
-                                 {:branch-id (:id branch)
-                                  :data {:paths paths :chars-in chars :clipped clipped
-                                         :role role :model (:model config)}})
-                  (journal/record-side-call! conn run-id
-                                             {:branch-id (:id branch)
-                                              :turn (:turn branch)
-                                              :kind :digest
-                                              :role role
-                                              :model (:model config)
-                                              :usage (:usage reply)}))
-                (base/ok branch (if (str/blank? answer) (msg {:empty true}) answer)
-                         :digest {:paths paths :chars-in chars :role role}))
-              (catch Throwable e
-                (log/warn "read_digest: the reader failed:" (ex-message e))
-                (base/unavailable branch "the reader" e)))))))))
+          (digest-of ctx (for [{:keys [path abs]} resolved] {:path path :content (slurp abs)})
+                     question policy))))))
 
 (defmethod base/run-tool "read_digest" [ctx] (read-digest ctx))

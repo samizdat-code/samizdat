@@ -16,7 +16,10 @@
             [samizdat.session :as session]
             [samizdat.store.db :as db]
             [samizdat.agent.tools.base :as base]
+            [samizdat.agent.tools]
             [samizdat.agent.tools.experiments]
+            [samizdat.store.userspace]
+            [samizdat.userspace]
             [samizdat.store.knowledge :as knowledge]))
 
 (use-fixtures :each (fn [f] (session/reset!) (f) (session/reset!)))
@@ -370,6 +373,55 @@
     (is (str/includes? (:detail f) "widening the beam will not help")
         "the finding has to name the fix it rules OUT, or it will be read as
          an argument for a wider beam")))
+
+(deftest a-target-edited-after-the-experiment-opened-is-stale
+  ;; karamazov-05z0.1: the cap stops a second experiment, but nothing stopped
+  ;; a second EDIT to the same target with no experiment around it, and the
+  ;; verdict then scored both edits as the first one.
+  (let [latest (atom 4)
+        prior (session/set-version-lookup!
+               (fn [kind name]
+                 (when (= ["prompt" "system-turn"] [kind name]) @latest)))]
+    (try
+      (turns! 6 "eval" :mechanics nil {:parse-error true})
+      (session/experiment! "fence" {:change "c" :hypothesis "h"
+                                    :target {:kind "prompt" :name "system-turn" :version 4}})
+      (turns! 8 "eval" :success nil)
+      (is (= :better (:verdict (session/verdict "fence")))
+          "an untouched target measures as before")
+      (reset! latest 5)
+      (let [v (session/verdict "fence")]
+        (is (= :stale (:verdict v)) "the thing measured is no longer the thing in place")
+        (is (= {:started 4 :now 5} (:stale v)))
+        (is (= :stale (:verdict (first (session/experiments))))))
+      (testing "it holds the slot until settled, like any unattributable verdict"
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (session/experiment! "next" {:change "c2" :hypothesis "h2"}))))
+      (testing "it is not inherited as a measured lever"
+        (let [c (db/open! ":memory:")]
+          (try (is (empty? (knowledge/distill-verdicts! c (session/experiments) {:run-id "r1"})))
+               (finally (db/close c)))))
+      (testing "the tool says so"
+        (let [out (str (:result (base/run-tool {:tool-name "verdict" :args {"name" "fence"}
+                                                :branch {:id "B1"}})))]
+          (is (str/includes? out "stale"))
+          (is (str/includes? out "v4"))
+          (is (str/includes? out "v5"))))
+      (finally (session/set-version-lookup! prior)))))
+
+(deftest a-target-with-no-recorded-version-or-no-lookup-is-not-stale
+  (turns! 6 "eval" :mechanics nil {:parse-error true})
+  (session/experiment! "a" {:change "c" :hypothesis "h"
+                            :target {:kind "prompt" :name "p" :version 2}})
+  (turns! 8 "eval" :success nil)
+  (let [prior (session/set-version-lookup! nil)]
+    (try
+      (is (= :better (:verdict (session/verdict "a"))) "no lookup installed")
+      (session/set-version-lookup! (fn [_ _] (throw (ex-info "store gone" {}))))
+      (is (= :better (:verdict (session/verdict "a"))) "a failing lookup is no evidence")
+      (session/set-version-lookup! (fn [_ _] nil))
+      (is (= :better (:verdict (session/verdict "a"))) "nothing stored is no evidence")
+      (finally (session/set-version-lookup! prior)))))
 
 (deftest the-lever-memory-names-the-edit-and-the-prediction
   ;; karamazov-na2k.5: the next session reads which version was tried and
@@ -866,3 +918,69 @@
                                         :branch {:id "B1"}})))]
     (is (str/includes? r "Refused"))
     (is (str/includes? r "one [confounded]"))))
+
+(deftest settling-a-change-as-reverted-reverts-it
+  ;; karamazov-05z0.6: `verdict … reverted` only recorded the decision, so a
+  ;; losing edit stayed live until somebody also ran the revert by hand. With
+  ;; a target it now puts the version before the experiment's edit back,
+  ;; through the edit's own tool — unless the target has moved since, which
+  ;; means it was already reverted or edited again.
+  (let [c (db/open! ":memory:")]
+    (try
+      (samizdat.userspace/bind! c)
+      (samizdat.userspace/save! :prompt "task-none" "first wording" "v1")
+      (samizdat.userspace/save! :prompt "task-none" "second wording" "the change")
+      (turns! 6 "eval" :success nil)
+      (session/experiment! "reword" {:change "c" :hypothesis "h"
+                                     :target {:kind "prompt" :name "task-none" :version 2}})
+      (turns! 8 "eval" :mechanics nil {:parse-error true})
+      (let [r (str (:result (base/run-tool {:tool-name "verdict"
+                                            :args {"name" "reword" "action" "reverted"
+                                                   "why" "worse"}
+                                            :branch {:id "SUP"}})))]
+        (is (str/includes? r "settled"))
+        (is (= "first wording" (samizdat.userspace/body :prompt "task-none"))
+            "the version before the edit is live again")
+        (is (= 3 (:version (last (samizdat.userspace/versions :prompt "task-none"))))
+            "as a new version: a revert is itself an edit"))
+      (testing "a target that has already moved is left alone"
+        (session/reset!)
+        (turns! 6 "eval" :success nil)
+        (session/experiment! "again" {:change "c" :hypothesis "h"
+                                      :target {:kind "prompt" :name "task-none" :version 2}})
+        (turns! 8 "eval" :mechanics nil {:parse-error true})
+        (let [r (str (:result (base/run-tool {:tool-name "verdict"
+                                              :args {"name" "again" "action" "reverted" "why" "w"}
+                                              :branch {:id "SUP"}})))]
+          (is (str/includes? r "v3") "says where the target is now")
+          (is (= 3 (:version (last (samizdat.userspace/versions :prompt "task-none"))))
+              "nothing more was written")))
+      (finally
+        (samizdat.userspace/unbind!)
+        (db/close c)))))
+
+(deftest an-edit-can-say-when-it-should-come-out
+  ;; karamazov-05z0.7, after autolith's adaptation ledger: a version
+  ;; rationale says why an edit went in and never when it should come out,
+  ;; so project overrides only ever piled up. `until` on the experiment
+  ;; that measures the edit lands on that version, and the supervisor's
+  ;; brief lists the current versions still waiting on one.
+  (let [c (db/open! ":memory:")]
+    (try
+      (samizdat.userspace/bind! c)
+      (samizdat.userspace/save! :prompt "task-none" "workaround wording" "work around GLM's echo")
+      (let [r (str (:result (base/run-tool {:tool-name "experiment"
+                                            :args {"name" "echo" "change" "c" "hypothesis" "h"
+                                                   "kind" "prompt" "target" "task-none"
+                                                   "until" "GLM stops echoing the fence"}
+                                            :branch {:id "SUP"}})))]
+        (is (str/includes? r "GLM stops echoing the fence")))
+      (is (= [{:kind "prompt" :name "task-none" :version 1 :until "GLM stops echoing the fence"}]
+             (mapv #(select-keys % [:kind :name :version :until])
+                   (samizdat.store.userspace/removal-conditions c))))
+      (testing "a later version of the same name is a different edit"
+        (samizdat.userspace/save! :prompt "task-none" "plain wording" "workaround no longer needed")
+        (is (empty? (samizdat.store.userspace/removal-conditions c))))
+      (finally
+        (samizdat.userspace/unbind!)
+        (db/close c)))))

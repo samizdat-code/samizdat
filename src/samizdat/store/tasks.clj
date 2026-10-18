@@ -29,7 +29,8 @@
   contract and tests are what make a task a delegable unit: the spec the work
   must satisfy and the tests that define delivery. A subagent handed a task id
   has, in the row itself, a clear definition of what it must produce."
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [samizdat.security.flow :as flow]
             [samizdat.store.db :as db]))
 
@@ -250,6 +251,23 @@
     (db/execute! conn ["UPDATE tasks SET attempts = attempts + 1, updated_at = ?
                         WHERE id = ?" (db/now) id]))
   (:attempts (first (db/fetch conn ["SELECT attempts FROM tasks WHERE id = ?" id]))))
+
+(defn findings
+  "Task `id`'s review ledger, {} when it has none (samizdat.agent.findings)."
+  [conn id]
+  (or (some-> (:findings (get-task conn id)) not-empty edn/read-string) {}))
+
+(defn set-findings!
+  "Store task `id`'s review ledger, and the digest of the diff it reviewed
+  when one is given."
+  ([conn id ledger] (set-findings! conn id ledger nil))
+  ([conn id ledger reviewed-digest]
+   (db/with-writer
+     (if reviewed-digest
+       (db/execute! conn ["UPDATE tasks SET findings = ?, reviewed_digest = ?, updated_at = ?
+                           WHERE id = ?" (pr-str ledger) reviewed-digest (db/now) id])
+       (db/execute! conn ["UPDATE tasks SET findings = ?, updated_at = ? WHERE id = ?"
+                          (pr-str ledger) (db/now) id])))))
 
 (defn children-of [conn id]
   (db/fetch conn ["SELECT * FROM tasks WHERE parent_id = ? ORDER BY created_at, id" id]))

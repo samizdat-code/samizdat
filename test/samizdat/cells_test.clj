@@ -25,6 +25,8 @@
             [jolt.fs :as fs]
             [mycelium.cell :as cell]
             [samizdat.cells :as cells]
+            [samizdat.agent.budget]
+            [samizdat.agent.loop]
             [samizdat.agent.state]
             [samizdat.store.db]
             [samizdat.store.journal]
@@ -506,6 +508,58 @@
     (testing "a run with no budget pays for no query and runs on"
       (let [d (arbiter (dissoc ctx :token-budget) {:settled {} :branch b :turn 3})]
         (is (not (:over-budget? d)))))))
+
+(deftest a-call-that-would-overshoot-the-budget-is-not-made
+  ;; karamazov-05z0.3: the budget was checked after spending, so a run could
+  ;; pass it by a whole call per live branch, and a reply with no usage cost
+  ;; it nothing. :budget/admit reserves the call's worst case — the prompt
+  ;; estimate plus the output it may ask for — against spend plus what calls
+  ;; in flight have reserved; :llm/infer gives the reservation back, except
+  ;; when the reply did not say what it cost.
+  (cells/load-cells!)
+  (let [c (samizdat.store.db/open! ":memory:")
+        rid (samizdat.store.runs/start-run! c {:problem "p"})
+        admit (:handler (cell/get-cell! :budget/admit))
+        infer (:handler (cell/get-cell! :llm/infer))
+        arbiter (:handler (cell/get-cell! :gate/arbiter))
+        route (:handler (cell/get-cell! :loop/route))
+        b (assoc (samizdat.agent.state/new-branch {:id "W1" :problem "p"})
+                 :messages [{:role "system" :content (apply str (repeat 400 "s"))}])
+        ctx {:conn c :run-id rid :token-budget 1000 :max-turns 50
+             :llm-config {:max-tokens 400}}
+        spend! (fn [n] (samizdat.store.journal/record-turn!
+                        c rid {:branch-id "W1" :turn 1 :tool-name "shell" :category :neutral
+                               :result "" :usage {:prompt-tokens n :completion-tokens 0
+                                                  :total-tokens n}}))]
+    (try
+      (spend! 200)
+      (let [a (admit ctx {:branch b :turn 1})]
+        (is (not (:over-budget? a)) "200 spent + 500 asked (100 prompt, 400 output) fits in 1000")
+        (is (pos? (:reserved a)))
+        (testing "a second branch's call is held against the first's reservation"
+          (let [a2 (admit ctx {:branch (assoc b :id "W2") :turn 1})]
+            (is (:over-budget? a2) "200 + two worst cases is past 1000")
+            (is (= :exhausted (:verdict (route ctx a2))) "and the branch ends without calling")))
+        (testing "the call gives its reservation back when the reply priced itself"
+          (with-redefs [samizdat.agent.loop/call-model
+                        (fn [_ _] {:ok true :response {:content "x" :usage {:total-tokens 50}}})]
+            (infer ctx a))
+          (is (not (:over-budget? (admit ctx {:branch (assoc b :id "W2") :turn 1})))
+              "the slot freed")))
+      (testing "a reply with no usage is charged its reservation"
+        (samizdat.agent.budget/reset-run! rid)
+        (let [a (admit ctx {:branch b :turn 2})]
+          (with-redefs [samizdat.agent.loop/call-model
+                        (fn [_ _] {:ok true :response {:content "x"}})]
+            (infer ctx a))
+          (spend! 300)
+          (let [d (arbiter ctx {:settled {} :branch b :turn 2})]
+            (is (:over-budget? d) "500 billed plus the unpriced call's 500 is the whole budget"))))
+      (testing "a run with no budget reserves nothing"
+        (let [a (admit (dissoc ctx :token-budget) {:branch b :turn 3})]
+          (is (not (:over-budget? a)))
+          (is (nil? (:reserved a)))))
+      (finally (samizdat.agent.budget/reset-run! rid)))))
 
 (deftest an-abandoned-branch-always-says-why
   ;; karamazov-n6ql: the provider-error arm ended a branch with no

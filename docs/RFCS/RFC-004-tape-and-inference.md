@@ -144,6 +144,7 @@ to protect. Violating it does not fail a test — it silently doubles cost.
 | compaction frontier, now | advances `:compaction-batch` exchanges at once | batch−1 turns in every batch send a byte-identical history |
 | current task | appended once on claim, `:pinned?`, never rewritten | free — an append lands where the cache boundary already is |
 | per-turn context block | appended | free |
+| stale per-turn context blocks | dropped from the verbatim window only when the frontier moves | free: that move rewrites the history behind it anyway |
 
 A block held at a fixed early position and rewritten when its subject changes
 invalidates every cached token behind it; one carrying anything per-turn means
@@ -174,6 +175,17 @@ previous turn's settled-state block on the way to the wire, so the byte-stable
 prefix ends one ledger position earlier than the newest message. The cost is
 re-prefilling roughly one turn's tail per call; the alternative — every stale
 ledger riding along — grows the context by a full ledger per turn.
+
+The rest of the per-turn context block (task, memories, inbox, shared tree,
+failures, artifacts) is NOT stripped that way. Each regenerated part is
+wrapped in `message/context-open`/`context-close`, and `message/compact`
+drops the stale copies only on the turns the frontier moves: blocks older
+than the newest r+1 exchanges go, r being how far the window has floated
+since the last move, so the set changes only when the history behind it is
+being rewritten anyway. Measured on this repository's journal the block
+averages ~900 chars, less than the tail re-prefill an every-turn strip
+would cost on a local model (karamazov-05z0.2). `:learned` is shown once and
+sits outside the markers.
 
 ### The opening block
 

@@ -274,3 +274,29 @@
           (handler (run-ctx {:summarizer :cheap-sum}) data))
         (is (= "cheap-sum" (get-in (first @seen) [:config :model])))
         (is (= :deepseek (get-in (first @seen) [:config :provider])))))))
+
+(deftest a-digest-can-read-the-branch-s-own-earlier-results
+  ;; karamazov-05z0.15, after autolith's context:<sha> inputs: a tool result
+  ;; clipped on the way in can be questioned whole through the reader,
+  ;; instead of paged back a screen at a time.
+  (let [c (db/open! ":memory:")
+        rid (runs/start-run! c {:problem "p"})
+        seen (atom [])]
+    (try
+      ;; What the model saw was clipped; the row keeps what the tool said.
+      (journal/record-turn! c rid {:branch-id "B1" :turn 3 :tool-name "shell" :category :success
+                                   :result "BUILD LOG\nline 0\n… [clipped]"
+                                   :full-result (str "BUILD LOG\n" (str/join "\n" (map #(str "line " %) (range 500)))
+                                                     "\nERROR: missing symbol foo/bar")})
+      (with-redefs [llm/chat (capturing-chat seen "- the build failed on foo/bar")]
+        (let [r (tools-base/run-tool
+                 (ctx :conn c :run-id rid :args {:turns [3] :question "why did the build fail?"}))]
+          (is (= "- the build failed on foo/bar" (:result r)))
+          (is (str/includes? (user-text (first @seen)) "ERROR: missing symbol foo/bar")
+              "the whole result went to the reader")
+          (is (str/includes? (user-text (first @seen)) "turn 3"))))
+      (testing "a turn the branch does not have is named"
+        (let [r (tools-base/run-tool (ctx :conn c :run-id rid :args {:turns [9] :question "q"}))]
+          (is (str/includes? (str (:result r)) "9"))
+          (is (not= :neutral (:category r)))))
+      (finally (db/close c)))))

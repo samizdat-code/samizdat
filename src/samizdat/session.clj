@@ -337,6 +337,27 @@
 
 (declare experiments unsettled-losses)
 
+(defonce ^:private version-lookup (atom nil))
+
+(defn set-version-lookup!
+  "Install `(fn [kind name] latest-version)`, how a verdict learns whether
+  the target it measures has been edited since (karamazov-05z0.1). An
+  injected seam because this namespace stays a leaf: the userspace store
+  registers it, nil uninstalls it, and with none installed no verdict is
+  stale. Returns the lookup it replaced, so a caller can put it back."
+  [f]
+  (first (reset-vals! version-lookup f)))
+
+(defn- moved-target
+  "{:started v :now v'} when the experiment's target is no longer at the
+  version it opened on, else nil. A lookup that fails or finds nothing is no
+  evidence either way."
+  [{:keys [kind name version]}]
+  (when-let [f (and kind name version @version-lookup)]
+    (let [now (try (f kind name) (catch Throwable _ nil))]
+      (when (and now (not= now version))
+        {:started version :now now}))))
+
 (defn experiment!
   "Record that the supervisor is CHANGING something, and start measuring.
 
@@ -556,7 +577,13 @@
   which is the detection-over-prevention line M10 settled on.
 
   `:branches` — how many measured branches went backwards, beside the
-  aggregate that cannot say so."
+  aggregate that cannot say so.
+
+  `:stale` — the target was edited again after the experiment opened, so
+  the stretch measured two edits and credits both to the first. The cap on
+  open experiments cannot catch an edit made with no experiment around it;
+  this does, and like `:confounded` it holds the slot until settled
+  (karamazov-05z0.1)."
   ([name] (verdict name (lexicon/policy :fitness)))
   ([name p]
    (when-let [e (get-in @tally [:experiments (str name)])]
@@ -573,7 +600,8 @@
            ;; bit-identical doubles and ANY difference means the weights moved
            ;; under the experiment.
            regraded? (boolean (and stamped (:before full)
-                                   (not= (:before full) stamped)))]
+                                   (not= (:before full) stamped)))
+           stale (moved-target (:target e))]
        (merge (select-keys e [:change :hypothesis :at])
               (select-keys full [:before :after :delta :band])
               {:turns-since turns
@@ -587,9 +615,12 @@
                :branches (branch-regressions e p)
                :cost (cost (:before e) delta)
                :target (:target e)
+               :stale stale
                :prediction (prediction (:predicts e) (:before e) delta)
                :verdict
                (cond
+                 ;; First: no amount of waiting makes it a measurement again.
+                 stale :stale
                  (< turns (:min-turns-for-verdict p)) :too-early
                  (nil? (:delta full)) :too-early
                  (not= (:verdict full) (:verdict blind)) :confounded
@@ -810,7 +841,7 @@
   The wording is prompts/experiment-line.md — a supervisor being told its
   verdict is not attributable has to be able to change what it is told."
   [{:keys [name change hypothesis verdict before after turns-since settled
-           health-blind regraded branches] :as e}]
+           health-blind regraded branches stale target] :as e}]
   (str/trim-newline
    (prompt/render
     "experiment-line"
@@ -833,7 +864,9 @@
      :regraded (when regraded
                  {:stamped (num2 (:before-as-stamped e))
                   :now (num2 before)})
-     :branches branches})))
+     :branches branches
+     :stale (when stale
+              (assoc stale :target (str (:kind target) " " (:name target))))})))
 
 (defn render
   "The session block a supervisor reads.

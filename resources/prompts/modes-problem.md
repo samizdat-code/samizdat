@@ -1,0 +1,1 @@
+{% if not-a-map %}`:modes` must be a map of name to mode, e.g. {:modes {"hurry" {:doc "…" :prompt "mode-hurry"}}}.{% endif %}{% if no-prompt %}Mode `{{mode}}` names {{prompt}} as its :prompt, and the project has no prompt by that name — add it, or point the mode at one it has.{% endif %}

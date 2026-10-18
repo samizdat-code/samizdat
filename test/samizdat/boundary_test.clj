@@ -167,6 +167,12 @@
    ;; readily as a file's body can.
    "glob"        {:reach :host-bytes}
    "lsp"         {:reach :host-bytes}
+   ;; A process the person's config.edn names (a project's own config only
+   ;; where the person trusted its root), under the scrubbed environment plus
+   ;; the variables its entry names; each call passes the server's policy,
+   ;; and its result the redaction boundary (karamazov-05z0.16).
+   "mcp"         {:reach :spawns-process
+                  :also "config/mcp-servers trust rule; per-server :policy before every call"}
    "skill"       {:reach :host-bytes}
    "write_file"  {:reach :host-bytes}
    "edit_file"   {:reach :host-bytes}
@@ -232,6 +238,16 @@
    "ask_human"   {:reach :harness-only}
    "experiment"  {:reach :harness-only}
    "verdict"     {:reach :harness-only}
+   ;; Rows in the harness's own db; the text is the reporter's, carried
+   ;; with its flow label like a message's (karamazov-05z0.5).
+   "papercut"    {:reach :harness-only}
+   ;; Writes the held task's review ledger in the harness's own db
+   ;; (karamazov-05z0.9).
+   "finding"     {:reach :harness-only}
+   ;; Sleeps, or reruns one of the run's OPERATOR-configured commands
+   ;; through verify/run-configured, which refuses any other (karamazov-05z0.21).
+   "wait"        {:reach :spawns-process
+                  :also "only verify/run-configured's sealed commands, in the sealed root"}
    "battery"     {:reach :spawns-process :also "heldout/draft! git update-ref under secrets/scrubbed-process-env"}
    "fetch_turn"  {:reach :harness-only}
    "fetch_artifact" {:reach :harness-only}

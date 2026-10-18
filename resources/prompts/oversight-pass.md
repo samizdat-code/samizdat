@@ -67,11 +67,14 @@ loop, not a bad afternoon. If you agree, `remember` it as a rule — kind
 as one; if it is noise, `retire` it with the reason. Left alone it stays an
 episode and ranks as one.
 {% for m in candidates %}- {{m.id}} seen in {{m.corroborations}} runs: {{m.content}}
-{% endfor %}{% endif %}{% if retire %}
+{% endfor %}{% endif %}{% if papercuts %}
+{{papercuts}}{% endif %}{% if retire %}
 {{retire}}{% endif %}{% if reviews %}
 {{reviews}}{% endif %}{% if inconclusive %}
 {{inconclusive}}{% endif %}{% if prune %}
-{{prune}}{% endif %}{% if offers %}
+{{prune}}{% endif %}{% if fallback %}
+{{fallback}}{% endif %}{% if removals %}
+{{removals}}{% endif %}{% if offers %}
 {{offers}}{% endif %}{% if rejected %}
 {{rejected}}{% endif %}{% if refused %}
 {{refused}}{% endif %}{% if drift %}

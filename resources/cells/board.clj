@@ -40,6 +40,7 @@
             [samizdat.agent.files :as files]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.gitdiff :as gitdiff]
+            [samizdat.agent.findings :as findings]
             [samizdat.agent.judge :as judge]
             [samizdat.approval :as approval]
             [samizdat.agent.loop :as turn]
@@ -1180,13 +1181,36 @@
                                       :usage (:usage r)})
                         (catch Throwable _ nil))
                    (:content r)))
-          reviewed (when (and landed? (not det))
-                     (try (judge/review {:chat chat
-                                         :requirement requirement
-                                         :evidence (judge/evidence rows)
-                                         :diff diff
-                                         :answer answer})
-                          (catch Throwable _ nil)))
+          ;; THE FINDINGS LEDGER (karamazov-05z0.9). What the last review
+          ;; said and how the owner answered it goes to the judge, which
+          ;; rules on each; an unchanged diff with nothing answered is the
+          ;; same review again, and is not paid for twice.
+          ledger-p (gates/threshold :review-ledger)
+          prior (when (:enabled? ledger-p) (tasks/findings conn task))
+          standing (findings/standing prior)
+          ;; The DIFF, not the answer: the answer is rewritten every attempt
+          ;; (the checklist alone changes it), and what is judged is the
+          ;; code. An owner that changed no code but thinks a finding is
+          ;; wrong answers it with `finding`, which is what clears reuse.
+          digest (findings/digest diff)
+          reuse? (and (:reuse-unchanged? ledger-p) landed? (not det) (seq standing)
+                      (not (findings/answered? prior))
+                      (= digest (:reviewed_digest (tasks/get-task conn task))))
+          prior-text (when (seq standing)
+                       (prompt/render "review-prior-findings"
+                                      {:findings (mapv (fn [[id f]] (assoc f :id id :status (name (:status f))))
+                                                       (sort-by key standing))}))
+          reviewed (cond
+                     (not (and landed? (not det))) nil
+                     reuse? {:verdict :incomplete :reused true
+                             :findings (str/join "\n" (map :text (vals standing)))}
+                     :else (try (judge/review {:chat chat
+                                               :requirement requirement
+                                               :evidence (judge/evidence rows)
+                                               :diff diff
+                                               :answer answer
+                                               :prior prior-text})
+                                (catch Throwable _ nil)))
           verdict (cond (not landed?) :unfinished
                         det :deterministic
                         ;; fail-open: a broken judge ships
@@ -1209,6 +1233,15 @@
           blocking (when verified (try (judge/blocking-findings
                                         (str "FINDINGS:\n" verified))
                                        (catch Throwable _ nil)))
+          ;; The ledger after this review, stored with the diff it read; the
+          ;; findings the owner is sent carry their ids, so it can answer one.
+          ledger (when (and (:enabled? ledger-p) landed? (not det) reviewed)
+                   (findings/fold prior (or (judge/finding-segments verified) [])))
+          _ (when ledger (tasks/set-findings! conn task ledger digest))
+          sent (when (seq (findings/standing ledger))
+                 (prompt/render "review-findings-ids"
+                                {:findings (mapv (fn [[id f]] (assoc f :id id :upheld (= :upheld (:status f))))
+                                                 (sort-by key (findings/standing ledger)))}))
           pass? (and landed?
                      (nil? det)
                      (= :complete verdict)
@@ -1242,6 +1275,9 @@
                              ;; the verdict is the fail-open default: the
                              ;; judge's reply had no verdict line (na2k.6)
                              :unread (boolean (:unread reviewed))
+                             ;; the judge was not asked again: same diff,
+                             ;; nothing answered (karamazov-05z0.9)
+                             :reused (boolean (:reused reviewed))
                              ;; WHY, beside the verdict (karamazov-3htz).
                              :reason (judge/for-the-record :reply-chars det)
                              ;; The VERIFIED findings, which is what the retry
@@ -1258,6 +1294,11 @@
              :board/attempts attempts
              :board/findings (when (= :revise decision)
                                (or det
+                                   ;; With a ledger the owner gets every
+                                   ;; standing finding with its id, blocking
+                                   ;; ones included, so it can answer each.
+                                   (when (seq (findings/standing ledger))
+                                     (judge/critique-message verdict sent))
                                    blocking
                                    (judge/critique-message verdict verified)))
              ;; counts TASKS finished with, not attempts — a re-attempt is the

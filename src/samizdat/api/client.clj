@@ -227,6 +227,19 @@
         (cond-> {:kind (or kind "message") :payload payload}
           branch-id (assoc :branch_id branch-id))))
 
+(defn draft-correction!
+  "A correction drafted from `complaint` about `run-id`'s recent turns (one
+  branch's when `branch-id` is given). Nothing is saved."
+  [base run-id branch-id complaint]
+  (POST base "/v1/corrections/draft"
+        (cond-> {:complaint complaint :run_id run-id}
+          branch-id (assoc :branch_id branch-id))))
+
+(defn save-correction!
+  "Save a drafted `rule` for the \"person\" or the \"project\"."
+  [base rule scope]
+  (POST base "/v1/corrections" {:rule rule :scope scope}))
+
 (defn set-approval-mode!
   "Set this server session's approval mode: \"refuse\" or \"block\"."
   [base mode]

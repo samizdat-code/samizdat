@@ -32,6 +32,7 @@
             [samizdat.agent.gates :as gates]
             [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.api.control :as control]
+            [samizdat.api.corrections :as api-corrections]
             [samizdat.api.openai :as openai]
             [samizdat.api.runs :as api-runs]
             [samizdat.api.stream :as stream]
@@ -39,6 +40,7 @@
             [samizdat.config :as config]
             [samizdat.engine.proc :as proc]
             [samizdat.llm.client :as llm-client]
+            [samizdat.llm.message :as message]
             [samizdat.store.db :as db]
             [samizdat.security.token :as token]
             [samizdat.system :as system]
@@ -349,7 +351,29 @@
                   (json-response 400 {:error {:message (str "not a mode: " (pr-str m)
                                                             "; one of "
                                                             (str/join ", " (map name (sort approval/modes))))}}))))}
-   {:method :get :path "/v1/runs" :response
+;; Corrections (karamazov-05z0.4): draft a rule from a complaint about a
+   ;; run, then save it where the person says. Drafting stores nothing.
+   {:method :get :path "/v1/corrections" :response
+    (fn [_] (json-response (api-corrections/listing)))}
+   {:method :post :path "/v1/corrections/draft" :response
+    (fn [req] (let [{:keys [complaint run_id branch_id]} (body-json req)
+                    d (api-corrections/draft!
+                       (system/conn) {:complaint complaint :run-id run_id :branch-id branch_id}
+                       (fn [p]
+                         (message/strip-think-blocks
+                          (str (:content (llm-client/chat (system/adapter) (:llm (system/config))
+                                                          [{:role "user" :content p}]))))))]
+                (if (:error d)
+                  (json-response 400 {:error {:message (:error d)}})
+                  (json-response d))))}
+   {:method :post :path "/v1/corrections" :response
+    (fn [req] (let [{:keys [rule scope]} (body-json req)
+                    r (api-corrections/save! (update rule :when #(or % {}))
+                                             (keyword (str (or scope "person"))))]
+                (if (= :saved (:status r))
+                  (json-response r)
+                  (json-response 400 {:error {:message (:problem r)}}))))}
+      {:method :get :path "/v1/runs" :response
     (fn [req] (json-response (api-runs/list-runs (system/conn) (long-param req "limit"))))}
    ;; `(or (:status r) 200)`, the same shape resume uses: a handler that refuses
    ;; says so with a status, and success carries none. Answering 200 with an

@@ -150,7 +150,7 @@
                                     ", its cells promise " (pr-str (vec (sort produces))))))}))))
 
 (def ^:private usage
-  "Actions: list, show {name, version?}, versions {name}, save {name, edn | file, rationale}, patch {name, ops, rationale, expect-version?}, refs {name, cell}, diff {name, from?, to?}. A manifest is the loop as data — a :cells map, :edges, and dispatch patterns. Save and patch validate by compiling before they store; the run that uses it is chosen by config :run :loop. Show, save and patch report where only branch order decides and name every dispatch entry written as a form, which the analysis cannot read. Prefer patch to save for an edit: it names the change and keeps the rest of the file, comments included. rationale: one sentence on why — the history shows it to the next supervisor deciding whether your change stays.")
+  "Actions: list, show {name, version?}, versions {name}, save {name, edn | file, rationale}, patch {name, ops, rationale, expect-version?}, refs {name, cell}, diff {name, from?, to?}, revert {name, version, rationale}. A manifest is the loop as data — a :cells map, :edges, and dispatch patterns. Save and patch validate by compiling before they store; the run that uses it is chosen by config :run :loop. Show, save and patch report where only branch order decides and name every dispatch entry written as a form, which the analysis cannot read. Prefer patch to save for an edit: it names the change and keeps the rest of the file, comments included. rationale: one sentence on why — the history shows it to the next supervisor deciding whether your change stays.")
 
 (defn- deflag
   "The vendored op refusals speak the CLI's `--rewire`; here an argument is a
@@ -388,6 +388,26 @@
                            (str (saved-line name v) (dispatch-report edn-text)
                                 (cycle-report edn-text))
                            :progress? true))))))
+
+        ;; Back to an older version, through `save` — so the old body is
+        ;; compiled and battery-checked against today's cells like any edit,
+        ;; and stored as a new version. The only edit kind that had no
+        ;; revert, which an experiment settled as reverted needs
+        ;; (karamazov-05z0.6).
+        "revert"
+        (let [name (base/arg ctx :name)
+              v (some-> (base/arg ctx :version) str str/trim not-empty parse-long)
+              why (base/rationale ctx)
+              row (when (and (not (str/blank? (str name))) v)
+                    (us/load-version conn :manifest name v))]
+          (cond
+            (str/blank? (str name)) (base/malformed branch (base/missing ctx :name))
+            (nil? v) (base/malformed branch (base/missing ctx :version))
+            (nil? why) (base/malformed branch (base/missing ctx :rationale))
+            (nil? row) (base/malformed branch (say :no-version :name name :version v))
+            :else (base/run-tool (assoc ctx :args {"action" "save" "name" name
+                                                   "edn" (:body row)
+                                                   "rationale" (str "revert to v" v ": " why)}))))
 
         "patch"
         (let [name (base/arg ctx :name)

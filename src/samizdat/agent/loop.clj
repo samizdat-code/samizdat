@@ -39,6 +39,7 @@
             [clojure.tools.logging :as log]
             [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.files :as files]
+            [samizdat.agent.corrections :as corrections]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.handoff :as handoff]
             [samizdat.agent.gitdiff :as gitdiff]
@@ -63,6 +64,7 @@
             [samizdat.store.knowledge :as knowledge]
             [samizdat.store.messages :as messages]
             [samizdat.store.runs :as runs]
+            [samizdat.layers :as layers]
             [samizdat.userspace :as userspace]))
 
 (defn max-result-chars
@@ -246,15 +248,27 @@
 (defn- truncate
   "Clip a tool result to the budget, ending with what the model can DO about
   it. See gates.edn :tool-clip for why the marker carries the sizes and the
-  instruction rather than the bare word `truncated`."
+  instruction rather than the bare word `truncated`. `turn`, when given, is
+  named in the marker, since the whole result is kept on that turn's row for
+  read_digest {turns} (karamazov-05z0.15)."
+  ([s] (truncate s nil))
+  ([s turn]
+   (let [s (str s)
+         cap (max-result-chars)]
+     (if (> (count s) cap)
+       (str (subs s 0 cap)
+            (prompt/render-str (:message (gates/threshold :tool-clip))
+                               {:shown cap :total (count s) :turn turn}))
+       s))))
+
+(defn- unclipped
+  "What a clipped result was before the clip, up to gates.edn :tool-clip
+  :keep-chars, for the turn row; nil when nothing was clipped."
   [s]
-  (let [s (str s)
-        cap (max-result-chars)]
-    (if (> (count s) cap)
-      (str (subs s 0 cap)
-           (prompt/render-str (:message (gates/threshold :tool-clip))
-                              {:shown cap :total (count s)}))
-      s)))
+  (let [s (str s)]
+    (when (> (count s) (max-result-chars))
+      (let [keep (or (:keep-chars (gates/threshold :tool-clip)) 0)]
+        (when (pos? keep) (subs s 0 (min keep (count s))))))))
 
 (defn initial-messages
   "The branch's opening messages. A workflow may hand a `prompt-suffix` — extra
@@ -336,6 +350,36 @@
                                  (update :sketches hide)
                                  (update :inherited hide)))))
 
+(defn corrections-text
+  "The corrections block for `branch`: the rules whose triggers its recent
+  turns match, the person's under the project's (samizdat.agent.corrections,
+  karamazov-05z0.4). nil when none apply, or when the project has no
+  :corrections policy or gates entry yet — an older project runs without
+  them until it adopts the role."
+  [branch]
+  (when-let [p (gates/threshold :corrections)]
+    (let [person (try (:value (layers/resolve "corrections" {:global-dir (layers/global-dir)}))
+                      (catch Throwable _ nil))
+          project (try (userspace/edn-body :policy "corrections") (catch Throwable _ nil))
+          shown (corrections/matching
+                 (corrections/rules {:corrections (corrections/combine person project)})
+                 (corrections/facts branch p) p)]
+      (when (seq shown)
+        (prompt/render "corrections-block" {:rules shown})))))
+
+(defn modes-text
+  "The words of the modes `names` the run was started with, as the context
+  block's part (resources/modes.edn, karamazov-05z0.18). nil with none, or
+  when the project has no :modes policy; a name the policy lacks is skipped."
+  [names]
+  (when (seq names)
+    (let [table (:modes (try (userspace/edn-body :policy "modes") (catch Throwable _ nil)))
+          texts (keep (fn [n] (when-let [m (get table (str n))]
+                                (some-> (prompt/prompt (:prompt m)) str str/trim not-empty)))
+                      names)]
+      (when (seq texts)
+        (prompt/render "modes-block" {:modes (mapv (fn [t] {:text t}) texts)})))))
+
 (defn- context-block
   "What the harness adds to the branch's view before its next turn: the
   failures most like what it just tried, and — when sharing is on — the
@@ -350,7 +394,9 @@
   distinct sharing. Whether sharing earns the beam its width stays a question
   the journal can answer, now directly. Returns {:block :branch}; the branch
   carries the :shared-served ids the dedup reads."
-  [conn run-id branch last-claim share?]
+  ([conn run-id branch last-claim share?]
+   (context-block conn run-id branch last-claim share? nil))
+  ([conn run-id branch last-claim share? modes]
   (let [;; Other branches' entries, less the labelled ones: these are
         ;; samples put in front of the branch unasked (samizdat.security.flow).
         others #(flow/unlabelled (remove (fn [e] (= (:branch_id e) (:id branch))) %))
@@ -440,6 +486,13 @@
                    ;; assembler, which opens with a "new in memory since last
                    ;; turn" section for the same reason.
                    [:learned (:text learned)]
+                   ;; What the person asked for, when the branch's own recent
+                   ;; turns match a rule's trigger (karamazov-05z0.4).
+                   ;; Re-evaluated every turn, so a stale copy is dropped
+                   ;; with the others.
+                   [:corrections (corrections-text branch)]
+                   ;; The modes the run was started with (karamazov-05z0.18).
+                   [:modes (modes-text modes)]
                    ;; Unread mail from other branches on this run, a bounded
                    ;; preview; nil when the inbox is empty. Surfacing does not
                    ;; consume — the message tool's inbox action marks read.
@@ -456,7 +509,19 @@
                    [:shared-tree (shared-tree conn run-id (:id branch))]
                    [:failures (failures/render fhits)]
                    [:artifacts (artifacts/render ahits)]])]
-      {:block (when (seq parts) (str/join "\n\n" (map second parts)))
+      {:block (when (seq parts)
+                (str/join "\n\n"
+                          (map (fn [[k text]]
+                                 ;; Re-rendered every turn, so an older copy
+                                 ;; is a worse version of this one and is
+                                 ;; dropped when the compaction frontier
+                                 ;; moves (karamazov-05z0.2). :learned is
+                                 ;; shown once and must outlive its turn; the
+                                 ;; ledger has its own markers.
+                                 (if (#{:learned :ledger} k)
+                                   text
+                                   (str message/context-open text message/context-close)))
+                               parts)))
        ;; What each part cost this turn, in the order it was read, for
        ;; `introspect` to render. On the branch beside :shared-served for
        ;; the last-turn view; steer-step also journals it once per turn as
@@ -467,7 +532,7 @@
                    (update :memories-shown (fnil into #{}) (concat new-crumb new-learned))
                    (update :shared-served (fnil into #{}) (map :id fresh))
                    (assoc :context-sizes
-                          (mapv (fn [[k v]] [k (count v)]) parts)))})))
+                          (mapv (fn [[k v]] [k (count v)]) parts)))}))))
 
 ;; --- one turn ---------------------------------------------------------------
 
@@ -1099,7 +1164,8 @@
                          ;; one the branch holds now (karamazov-d5wo.5).
                          :task-id (or task-id (:id (:task branch)))
                          :tool-name tool :args (:args parsed)
-                         :result (truncate (:result result))
+                         :result (truncate (:result result) turn)
+                         :full-result (unclipped (:result result))
                          :category (name (:category result))
                          :policy-refusal? (:policy-refusal? result)
                          :auto-repaired (:auto-repaired? parsed)
@@ -1274,7 +1340,7 @@
       ;; a message that does not say which tool produced it gets the generic
       ;; preview instead, which is the one shape that carries nothing.
       (state/add-message branch "user"
-                         (message/frame-result tool (truncate (:result result)))
+                         (message/frame-result tool (truncate (:result result) turn))
                          {:turn turn :tool tool})
       ;; Coverage answers whether the safe-state rung's fallback is honest:
       ;; the green cursor still points into a turn log the journal can
@@ -1308,7 +1374,8 @@
             {ctx-block :block branch :branch}
             (context-block conn run-id branch
                            (get-in parsed [:args :claim])
-                           (get-in ctx [:config :run :share-artifacts?]))
+                           (get-in ctx [:config :run :share-artifacts?])
+                           (get-in ctx [:config :run :modes]))
             ;; What the block cost, durably: one note per turn per branch,
             ;; sizes by part (karamazov-o4wm.6). The branch keeps the same
             ;; vector for introspect's last-turn view; the note is what a
@@ -1325,7 +1392,7 @@
             ;; then the harness's own blocks (karamazov-o4wm.3): what the
             ;; model can trust about who is speaking is the frame, not the
             ;; `---` rule — a file can carry one of those.
-            body (str (message/frame-result tool (truncate (:result result)))
+            body (str (message/frame-result tool (truncate (:result result) turn))
                       (when ctx-block (str "\n\n" ctx-block))
                       (when decision (str "\n\n---\n\n" (:message decision))))
             ;; Recorded exactly once. The row id is what a later turn settles,

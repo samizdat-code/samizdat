@@ -32,6 +32,114 @@
  {:value 3 :kind :threshold :capability-tunable? false
   :doc "Consecutive failed verifications before a branch is culled."}
 
+ :isolation
+ {:value {:mode :shared}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.10"]
+  :doc "Where a team's parallel owners work. `:shared` is one working tree,
+        coordinated through the mailbox and the shared-tree block — what the
+        team has always done. `:worktree` gives each owner its own git
+        worktree of the tree as it stands when it starts; an owner that
+        ships has its change applied back, one at a time, and one whose
+        change no longer applies comes back :conflict with its task reopened
+        for the supervise step to re-task from the tree as it now is. Pays
+        only where the provider keeps its speed with several calls in flight
+        (a local llama.cpp at width 2 drops to ~6 tok/s each), and each
+        worktree is a fresh checkout, so a project REPL image per owner."}
+
+ :review-ledger
+ {:value {:enabled? true :reuse-unchanged? true}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.9"]
+  :doc "The board review's findings ledger. :enabled? keeps each task's
+        findings with stable ids, sends them to the owner with those ids so
+        it can `finding dispute` or `finding resolve` one, and shows the next
+        review what it said and how the owner answered, to rule on each.
+        :reuse-unchanged? skips the judge when the diff is byte-for-byte the
+        one it last reviewed and the owner answered no finding (the answer is
+        rewritten every attempt, so it is not part of the key; an owner that
+        disagrees without changing code says so with `finding`) — the same
+        findings go back without paying for them again. A stateless review
+        bounced a disputed task until :board-review-attempts ran out."}
+
+ :generation-fallback
+ {:value {:error-runs 3}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-05z0.8"]
+  :doc "Runs in a row that must end in :error — the harness could not finish
+        them — before the supervisor's brief offers the way back to the last
+        set of project versions a run shipped on (the generations table),
+        naming every version that moved since. Errors are evidence about the
+        harness, so a streak of them after edits is the signature of a set
+        of changes that passes every check and still breaks the loop. The
+        offer is the supervisor's to take; SAMIZDAT_PRISTINE=1 (config
+        :userspace {:mode :shipped}) boots the shipped workflow outright."}
+
+ :wakeups
+ {:value {:max-wait-ms 1800000 :poll-floor-ms 15000}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-05z0.21"]
+  :doc "The `wait` tool's bounds. A wait lasts at most :max-wait-ms (thirty
+        minutes) whatever it asks for, and polls its condition no more often
+        than every :poll-floor-ms, so a branch waiting on a build costs one
+        turn and a handful of check runs rather than a turn a look."}
+
+ :mcp
+ {:value {:timeout-ms 30000}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-05z0.16"]
+  :doc "How long an MCP server has to answer one request — the handshake, a
+        tool listing, a call — before the `mcp` tool reports it unavailable.
+        A server entry's own :timeout-ms in config.edn wins."}
+
+ :papercut
+ {:value {:window-ms 86400000 :overlap 0.6 :same-run-overlap 0.4 :min-word-chars 4
+          :shown 8}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.5"]
+  :doc "Papercuts, friction a branch reports about the harness (the
+        `papercut` tool). A report repeats an open papercut when the titles
+        hold the same words, or when the title-and-body word sets share
+        :overlap of the smaller one's words (:same-run-overlap when the
+        report comes from the run that last reported it — a branch re-filing
+        a problem rewords it), within :window-ms of that papercut's last
+        report. Words shorter than :min-word-chars do not count. :shown is
+        how many open papercuts the supervisor's brief lists."}
+
+ :corrections
+ {:value {:window 8 :max-shown 5 :max-instruction-chars 400
+          :max-trigger-chars 80 :max-attempts 3}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.4"]
+  :doc "Corrections, a person's complaints turned into triggered guidance
+        (policy corrections.edn, ~/.config/samizdat/corrections.edn).
+        :window is how many of the model's own recent turns an
+        :output-contains trigger is matched against, and how many a
+        complaint is drafted from; :max-shown bounds the block a turn
+        carries; the two :max-*-chars bound what a save accepts, because a
+        rule rides on every turn it matches; :max-attempts is how many
+        drafts a complaint gets before an unmatched one comes back for the
+        person to confirm."}
+
+ :token-budget
+ {:value {:reserve? true :chars-per-token 4 :output-factor 1
+          :fallback-max-tokens 8192}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.3"]
+  :doc "How :budget/admit holds a run's token budget BEFORE a call rather than
+        after it. The journal is the bill and is written when a call returns,
+        so a budget read off it alone let every live branch start a call
+        under the line and land past it, and a reply with no usage cost
+        nothing. Each call reserves its worst case — the request at
+        :chars-per-token plus max-tokens times :output-factor (raise it to 2
+        to cover the doubled-budget retry) — against spend plus what calls in
+        flight hold; a call that does not fit is not made and the branch ends
+        :exhausted. A reply that reports no usage keeps its reservation as its
+        price. :fallback-max-tokens is the output ask when the provider config
+        names none. :reserve? false is the old after-the-fact check alone.
+        Only on a run with a budget; side calls (critic, judge, summarizer)
+        are still billed after the fact."}
+
  :provider-error-limit
  {:value 5 :kind :threshold :capability-tunable? false
   :provenance ["karamazov-e8iw"]
@@ -1552,6 +1660,32 @@
         The last one is not symmetry for its own sake: a supervisor shown only
         what is broken will keep changing things that are working."}
 
+ :acceptance-undecided
+ {:value :ship
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.13"]
+  :doc "WHAT GATE 2 DOES WITH AN ACCEPTANCE CRITERION NOBODY DECIDED — a
+        :judge criterion whose judge gave no verdict or threw. `:ship` lets it
+        through, as it always has: a judge that cannot answer must not refuse
+        a ship by itself. `:ship-flagged` lets it through and says so in the
+        verify note and on the :verify row (:undecided names them), so a run
+        that shipped on an undecided criterion stops reading exactly like one
+        that met them all. `:refuse` holds the ship until it is decided. A
+        criterion that FAILED refuses under all three."}
+
+ :verify-memo
+ {:value {:enabled? true}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-05z0.12"]
+  :doc "Answer a configured check from its last run on the same tree. Only
+        for the commands the operator marked deterministic in config.edn —
+        :run :verify-deterministic? true for :verify-cmd, :deterministic? true
+        on an acceptance :check — because a check that reads a network or a
+        clock must run every time. The tree is identified by its content,
+        untracked files included (gitdiff/tree-id); a timed-out run is never
+        remembered. `done` and :feature/verify used to run the suite twice
+        on one tree, and a red suite again when nothing had changed."}
+
  :verify-unknown
  {:value :trust
   :kind :policy :capability-tunable? false
@@ -1586,7 +1720,11 @@
 
  :tool-clip
  {:value
-  {:message "\n… [{{shown}} of {{total}} chars shown — the rest was clipped. Ask for the part you still need (a narrower command, a `read_file` with an `offset`, or a filter), not the same call again.]"}
+  {:message "\n… [{{shown}} of {{total}} chars shown — the rest was clipped. Ask for the part you still need (a narrower command, a `read_file` with an `offset`, or a filter{% if turn %}, or `read_digest {turns: [{{turn}}], question}` to ask about the whole of this result{% endif %}), not the same call again.]"
+   ;; What a clipped result keeps on its turn row for read_digest {turns}
+   ;; (karamazov-05z0.15): the whole result up to this, so one huge output
+   ;; cannot fill the journal.
+   :keep-chars 262144}
   :kind :policy :capability-tunable? false
   :doc "WHAT A CLIPPED TOOL RESULT SAYS AT ITS CUT.
 
@@ -2562,9 +2700,10 @@
 
  :cache-miss
  {:value {:min-prompt-tokens 2000
-          :hit-below 0.5}
+          :hit-below 0.5
+          :idle-ms 300000}
   :kind :threshold :capability-tunable? false
-  :provenance ["karamazov-o4wm.1"]
+  :provenance ["karamazov-o4wm.1" "karamazov-05z0.11"]
   :doc "WHICH TURNS COUNT AS CACHE MISSES when the journal groups them by
         cause (journal/cache-misses, shown on introspect's usage line).
 
@@ -2576,7 +2715,12 @@
         reading used (33 of 1352 turns), so a later reading compares.
 
         The CAUSES are not policy: first call, tail-only, history rewritten,
-        forced native tool_choice come off the turn row (migration v30)."}
+        forced native tool_choice come off the turn row (migration v30).
+        :idle-ms is: a tail-only miss more than this long after the branch's
+        previous call ended is counted :idle — the cache's own lifetime ran
+        out — rather than :tail (karamazov-05z0.11). Five minutes is the
+        shortest hosted cache lifetime in common use; a provider that keeps
+        its cache longer wants a larger number."}
 
  :repetition
  {:value {:window 80 :step 1 :min-repeats 3 :min-period 20 :max-gap-variance 0.5
@@ -3172,6 +3316,16 @@
             :aggressive-fold 0.78   ; the normal fold bought too little
             :force           0.80   ; force a summary and end the turn
             :turn-start      0.90}  ; fold before the first call of a turn
+
+   ;; WHERE THE FOLD'S SUMMARY IS ASKED FOR (karamazov-05z0.11). :fresh
+   ;; sends the summarizer the folded window as new material, so the whole
+   ;; window is prefilled again — ~110 s a fold on a 135 tok/s local model.
+   ;; :tape asks on the branch's own conversation, the instruction appended
+   ;; to its newest (unsent) turn, so the window is read from the prefix the
+   ;; provider already holds (prompts/compaction-summary-tape.md). A
+   ;; :summarizer role on another model always goes :fresh: it holds no
+   ;; prefix of this conversation.
+   :summarize-via :fresh
 
    ;; Rough token estimate. Bytes over this, the same method the session
    ;; meter uses, so the two cannot disagree about what they are measuring.

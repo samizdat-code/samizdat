@@ -38,6 +38,7 @@
   down between turns."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
+            [samizdat.agent.corrections :as corrections]
             [samizdat.agent.gates :as gates]
             [jolt.time]
             [clojure.data.json :as json]
@@ -187,6 +188,23 @@
                                          "no term they touch reaches a fixpoint: "
                                          (str/join ", " (map pr-str cycles)))
                                     {:cycles cycles}))))
+    "corrections" ;; Each rule's shape, bounded: a rule rides on every turn
+                  ;; it matches (karamazov-05z0.4).
+                (when-let [p (corrections/problems
+                              (edn/read-string (str (userspace/body :policy "corrections")))
+                              (gates/threshold :corrections))]
+                  (throw (ex-info (corrections/describe p) {:table "corrections" :problems p})))
+    "modes"     ;; Every mode names a prompt the project has (karamazov-05z0.18).
+                (let [table (:modes (edn/read-string (str (userspace/body :policy "modes"))))]
+                  (when-not (map? table)
+                    (throw (ex-info (str/trim (prompt/render "modes-problem" {:not-a-map true}))
+                                    {:table "modes"})))
+                  (doseq [[n m] table
+                          :when (str/blank? (str (some-> (:prompt m) (#(userspace/body :prompt %)))))]
+                    (throw (ex-info (str/trim (prompt/render "modes-problem"
+                                                             {:no-prompt true :mode n
+                                                              :prompt (pr-str (:prompt m))}))
+                                    {:mode n}))))
     "rubrics"   ;; The critic's rubrics: dimensions with questions, worked
                 ;; examples that are a pass or a fail (karamazov-0e2c.8).
                 (when-let [p (judge/rubric-problems
@@ -203,6 +221,13 @@
                     (when-not (or (= :all surface) (set? surface))
                       (throw (ex-info (str "role " r " declares no tool surface")
                                       {:role r})))
+                    ;; An output contract must be a malli form that compiles
+                    ;; (karamazov-05z0.14): a broken one would refuse every
+                    ;; `done` the role makes.
+                    (when-let [o (roles/output-schema r)]
+                      (when-let [why (roles/output-problem o)]
+                        (throw (ex-info (str "role " r " :output is not a malli schema: " why)
+                                        {:role r}))))
                     (when (and registered (set? surface))
                       (when-let [unknown (seq (remove registered surface))]
                         (throw (ex-info (str "role " r " names unregistered tools: "
@@ -361,7 +386,11 @@
                         (base/fail branch (msg {:unbound true :name name}))
                         (try
                           (reload-and-verify! name)
-                          (base/ok branch (str (msg {:saved true :name name :version v})
+                          ;; rules.edn has no runtime reader yet (karamazov-05z0.22):
+                          ;; the save is real, and the agent is told it changes
+                          ;; nothing a run does, rather than left to believe it.
+                          (base/ok branch (str (msg {:saved true :name name :version v
+                                                     :unread (= "rules" name)})
                                                (waiver-line name body))
                                    :progress? true)
                           (catch Throwable e

@@ -53,6 +53,7 @@
             [samizdat.session :as session]
             [samizdat.steps :as steps]
             [samizdat.lsp.client :as lsp-client]
+            [samizdat.mcp.client :as mcp-client]
             [samizdat.store.db :as db]
             [samizdat.store.runs :as runs]
             [samizdat.cells :as cells]
@@ -74,6 +75,8 @@
   []
   (registry/adapter-for (get-in @system [:config :llm :provider])))
 
+(declare bind-project-files!)
+
 (defn bind-project!
   "Point userspace at this project's store, THEN reload every policy table.
 
@@ -92,6 +95,20 @@
   what the caches hold (karamazov-3vu1.12)."
   ([conn] (bind-project! conn (config/userspace-settings {})))
   ([conn settings]
+   (if (= :shipped (:mode settings))
+     ;; PRISTINE: the shipped templates, the project's files untouched. An
+     ;; unbound userspace reads the templates and stores nothing a tool
+     ;; saves, and says so (karamazov-05z0.8).
+     (do (userspace/unbind!)
+         (log/warn "userspace: PRISTINE mode — running the shipped workflow;"
+                   "the project's .samizdat/ is neither read nor written"))
+     (bind-project-files! conn settings))
+   (gates/reload-config!)
+   (lexicon/reload!)
+   (phases/reload!)
+   conn))
+
+(defn- bind-project-files! [conn settings]
    (userspace/bind! conn)
    ;; A project's first run copies the shipped role map and its files into
    ;; .samizdat/ — before the reloads below, which must read the project's
@@ -103,11 +120,7 @@
          (log/info "userspace: took" (count adopted) "update(s) the project never edited"))
        (doseq [{:keys [offer problem]} refused]
          (log/warn "userspace: an unedited update does not pass, left on offer:"
-                   (name (:kind offer)) (:name offer) (pr-str problem)))))
-   (gates/reload-config!)
-   (lexicon/reload!)
-   (phases/reload!)
-   conn))
+                   (name (:kind offer)) (:name offer) (pr-str problem))))))
 
 (declare start-system! abandon-start!)
 
@@ -325,6 +338,7 @@
                        ;; an unbound store.
                        ["repair seam" #(fence/install-repair! nil)]
                        ["lsp clients" #(lsp-client/shutdown-all!)]
+                       ["mcp servers" #(mcp-client/shutdown-all!)]
                        ;; Unbind BEFORE the connection closes: a userspace read
                        ;; against a closed handle would throw where the same
                        ;; read against no handle simply serves the template.

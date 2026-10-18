@@ -1,0 +1,1 @@
+{% if refused %}acceptance criteria UNDECIDED — not shipped until decided: {{names}}. Their judge gave no verdict; make what they ask for visible in the diff or the answer so the next check can decide it.{% else %}acceptance criteria shipped UNDECIDED: {{names}}. Their judge gave no verdict, so this run did not show they hold.{% endif %}

@@ -73,6 +73,16 @@
             [samizdat.base-test]
             [samizdat.boundary-test]
             [samizdat.compaction-test]
+            [samizdat.acp-test]
+            [samizdat.corrections-test]
+            [samizdat.wait-test]
+            [samizdat.tui-onboarding-test]
+            [samizdat.mcp-test]
+            [samizdat.role-output-test]
+            [samizdat.worktree-test]
+            [samizdat.findings-test]
+            [samizdat.generations-test]
+            [samizdat.papercuts-test]
             [samizdat.collab-test]
             [samizdat.acceptance-test]
             [samizdat.checklist-test]
@@ -322,6 +332,16 @@
     samizdat.base-test
     samizdat.boundary-test
     samizdat.compaction-test
+    samizdat.acp-test
+    samizdat.corrections-test
+    samizdat.wait-test
+    samizdat.tui-onboarding-test
+    samizdat.mcp-test
+    samizdat.role-output-test
+    samizdat.worktree-test
+    samizdat.findings-test
+    samizdat.generations-test
+    samizdat.papercuts-test
     samizdat.collab-test
     samizdat.acceptance-test
     samizdat.checklist-test

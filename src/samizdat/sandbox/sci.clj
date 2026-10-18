@@ -101,7 +101,7 @@
     ;; criterion through the :run-check fn the CALLER passes, and a cell has only
     ;; verify/run-configured to pass.
     samizdat.agent.acceptance
-    {:vars [all-passed? check failed normalize table]}
+    {:vars [accepted? all-passed? check failed normalize table unknown]}
 
     ;; The beam driver's steps. Each takes branches through turns, which reach
     ;; tools only through the tool path's policy and approval.
@@ -109,6 +109,11 @@
     {:vars [advance-all await-resume! drain-directives! ensure-scored finish-now?
             record-inactive! round-max-turns select-done-branch spawn-children! spent-tokens]
      :effects #{:net :db :run}}
+
+    ;; Token-budget reservations for calls in flight (karamazov-05z0.3). In
+    ;; memory, per run; no I/O.
+    samizdat.agent.budget
+    {:vars [estimate held release! reserve! reset-run! unpriced]}
 
     ;; Context-window arithmetic over message vectors. Pure.
     samizdat.agent.compaction
@@ -144,6 +149,12 @@
     ;; Fixed git subcommands (stash create, write-tree, diff, ls-files) in `root`,
     ;; under the scrubbed environment. No caller-chosen command; a baseline that
     ;; looks like an option is refused (gitdiff/rev?).
+    ;; A worktree per parallel owner (karamazov-05z0.10): fixed git
+    ;; subcommands under the scrubbed environment, as gitdiff's are.
+    samizdat.agent.worktree
+    {:vars [isolated]
+     :effects #{:proc :fs}}
+
     samizdat.agent.gitdiff
     {:vars [baseline changed-files diff max-diff-chars review-diff]
      :effects #{:proc}}
@@ -159,9 +170,13 @@
 
     ;; The reviewer and critic: prompt text, parsing, and (review, review-plan,
     ;; review-rubric) a provider call.
+    ;; The review findings ledger (karamazov-05z0.9). Pure.
+    samizdat.agent.findings
+    {:vars [answered? digest fold id-of standing]}
+
     samizdat.agent.judge
     {:vars [blocking-findings consensus critic-prompt critique-message deterministic-block diff-veto evidence
-            findings focus-sources focused-diff for-the-record parse-criteria parse-verdict
+            finding-segments findings focus-sources focused-diff for-the-record parse-criteria parse-verdict
             parse-yesno review review-plan review-rubric section-bullets yesno-prompt]
      :effects #{:net}}
 
@@ -305,6 +320,11 @@
     {:vars [graduation-candidates remember! standing]
      :effects #{:db}}
 
+    ;; Open papercuts, for the supervisor's brief (karamazov-05z0.5).
+    samizdat.store.papercuts
+    {:vars [open]
+     :effects #{:db}}
+
     ;; A branch handed other branches' work takes what they had read
     ;; (karamazov-3vu1.14). Both only ever LOWER a label, so a cell holding
     ;; them can confine a branch and never free one.
@@ -320,12 +340,14 @@
 
     ;; The task board, through its own functions.
     samizdat.store.tasks
-    {:vars [attempted! board children-of claim! close! create! get-task held-by release! update!]
+    {:vars [attempted! board children-of claim! close! create! findings get-task held-by release!
+            set-findings! update!]
      :effects #{:db}}
 
     ;; Read-only reports over the project's userspace history.
     samizdat.store.userspace
-    {:vars [drift pruning-candidates]
+    {:vars [changed-since drift errors-since-shipped last-shipped-generation pruning-candidates
+            removal-conditions]
      :effects #{:db}}
 
     ;; Read-only reports: pending template offers and rejected edits.

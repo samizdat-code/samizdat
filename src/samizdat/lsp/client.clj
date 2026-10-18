@@ -256,6 +256,62 @@
 (defn hover [client path line character]
   (at client path line character "textDocument/hover"))
 
+(defn rename
+  "The WorkspaceEdit renaming the symbol at `path`:`line`:`character` to
+  `new-name` (karamazov-05z0.20) — a PROPOSAL; nothing is written here."
+  [client path line character new-name]
+  (ensure-open! client path)
+  (request! client "textDocument/rename"
+            {:textDocument {:uri (uri path)}
+             :position {:line line :character character}
+             :newName (str new-name)}))
+
+(defn changed!
+  "Tell the server `path` now holds `text`, after the harness wrote it, so
+  its next answer is about the file as it is."
+  [client path text]
+  (when (contains? @(:opened client) path)
+    (notify! client "textDocument/didChange"
+             {:textDocument {:uri (uri path) :version (System/currentTimeMillis)}
+              :contentChanges [{:text text}]})))
+
+(defn- offset-of
+  "The character offset of an LSP position (0-based line and character) in
+  `text`."
+  [text {:keys [line character]}]
+  (loop [i 0 l 0]
+    (cond
+      (= l line) (min (count text) (+ i character))
+      (>= i (count text)) (count text)
+      :else (let [nl (.indexOf ^String text "\n" (int i))]
+              (if (neg? nl) (count text) (recur (inc nl) (inc l)))))))
+
+(defn apply-edits
+  "`text` with LSP TextEdits applied, last first so earlier offsets hold."
+  [text edits]
+  (reduce (fn [t {:keys [range newText]}]
+            (let [a (offset-of t (:start range)) b (offset-of t (:end range))]
+              (str (subs t 0 a) newText (subs t b))))
+          (str text)
+          (sort-by (fn [{:keys [range]}] [(- (get-in range [:start :line]))
+                                          (- (get-in range [:start :character]))])
+                   edits)))
+
+(defn edit-files
+  "A WorkspaceEdit as {path new-text}: `changes` or `documentChanges` (text
+  edits only — a create, rename or delete of a file is not applied), each
+  file's current text read with `read`."
+  [ws read]
+  (let [by-uri (merge-with into
+                           (or (:changes ws) {})
+                           (into {} (for [dc (:documentChanges ws)
+                                          :when (:edits dc)]
+                                      [(get-in dc [:textDocument :uri]) (:edits dc)])))]
+    (into {}
+          (for [[u edits] by-uri
+                :let [path (.getPath (java.net.URI. (name u)))]]
+            [path (apply-edits (read path) edits)]))))
+
 (defn diagnostics
   "The problems clojure-lsp reports for `path`. didOpen/didChange trigger a
   publishDiagnostics push; the reader stores each push versioned per uri, so

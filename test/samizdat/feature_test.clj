@@ -54,10 +54,13 @@
                                                     "test/example_test.clj"])]
       (t))))
 
-(defn- done-call [answer]
-  {:content (str "```tool-call\n{\"name\":\"done\",\"args\":{\"answer\":\""
-                 answer "\",\"checklist\":" fake-done/checklist-json "}}\n```")
-   :finish-reason "stop"})
+(defn- done-call
+  ([answer] (done-call answer nil))
+  ([answer result]
+   {:content (str "```tool-call\n{\"name\":\"done\",\"args\":{\"answer\":\""
+                  answer "\",\"checklist\":" fake-done/checklist-json
+                  (when result (str ",\"result\":" result)) "}}\n```")
+    :finish-reason "stop"}))
 
 (defn- review-answer
   "A substantive review verdict — PASS/REVISE on the first line, then reasons
@@ -81,7 +84,11 @@
     (let [c (str/join " " (map :content messages))]
       (cond
         (str/includes? c "Your role: reviewer")
-        (done-call (review-answer review))        ; PASS/REVISE on the first line
+        ;; The verdict in the reviewer's output contract (roles.edn :output).
+        (done-call (review-answer review)
+                   (if (= :revise review)
+                     "{\"verdict\":\"REVISE\",\"findings\":[\"the changes touch the wrong area\"]}"
+                     "{\"verdict\":\"PASS\"}"))
 
         (str/includes? c "Your role: implementor")
         (if exhaust
@@ -473,6 +480,36 @@
       (let [{:keys [result]} (run "YES")]
         (is (= :completed (:status result)))))))
 
+(deftest an-undecided-criterion-follows-the-policy
+  ;; karamazov-05z0.13: a judge that gives no verdict leaves its criterion
+  ;; undecided. :ship lets the run complete as before; :refuse holds it.
+  (let [spec [{:name "says what it saw"
+               :judge "Does the answer say what the screenshot showed?"}]
+        run (fn [policy]
+              (let [threshold samizdat.agent.gates/threshold]
+                (with-redefs [samizdat.agent.gates/threshold
+                              (fn [k] (if (= k :acceptance-undecided) policy (threshold k)))
+                              judge/deterministic-block (constantly nil)
+                              judge/parse-verdict (constantly :complete)
+                              judge/blocking-findings (constantly nil)
+                              gitdiff/changed-files (constantly ["src/x.clj" "test/x_test.clj"])
+                              proc/run (constantly {:exit 0 :out "ok"})
+                              verify/run-verify (fn [_ _ _] {:green? true :output "63 tests, 0 failures"})
+                              llm/chat (roles-answering-acceptance {:review :pass} "I cannot tell")]
+                  (let [conn (db/open! ":memory:")
+                        r (run-feature conn {:config {:run {:loop "feature" :subtasks ["alpha"]
+                                                           :verify-cmd "run-tests"
+                                                           :acceptance spec
+                                                           :max-revisions 1 :max-revisions-hard 1}}})]
+                    {:result r :verify (journal/notes conn (:run-id r) :verify)}))))]
+    (is (= :completed (:status (:result (run :ship)))) "the default ships it")
+    (let [{:keys [result verify]} (run :ship-flagged)]
+      (is (= :completed (:status result)))
+      (is (some #(= ["says what it saw"] (:undecided %)) verify) "and names it on the record"))
+    (let [{:keys [result verify]} (run :refuse)]
+      (is (not= :completed (:status result)) ":refuse holds the ship")
+      (is (some #(str/includes? (str (:note %)) "UNDECIDED") verify)))))
+
 (deftest a-green-suite-that-never-ran-the-new-tests-is-not-green
   ;; karamazov-khzy, run bcd61b39: the suite reported the baseline's 94 tests
   ;; green while the run's new horizon test was not in the project's runner,
@@ -800,3 +837,14 @@
           (is (str/includes? q "(defn hud [] (wind-at))"))
           (is (< (str/index-of q "diff --git a/src/x.clj") (str/index-of q "diff --git a/PLAN.md"))
               "the diff is ordered with the file the question is about first"))))))
+
+(deftest a-reviewer-s-revise-is-read-from-its-result
+  ;; karamazov-05z0.14: the verdict comes from the reviewer's output
+  ;; contract when it has one; the first-line read is the fallback.
+  (samizdat.cells/load-cells!)
+  (let [decide @(samizdat.cells/cell-var 'cells.feature 'review-decision)]
+    (is (= :revise (decide :done "PASS — looks fine to me" {:verdict "REVISE"}))
+        "the result wins over prose that says otherwise")
+    (is (= :pass (decide :done "REVISE: x" {:verdict "PASS"})))
+    (is (= :revise (decide :done "REVISE: the wrong area" nil)) "no result: the first line")
+    (is (= :pass (decide :exhausted "" nil)) "a reviewer that did not finish fails open")))

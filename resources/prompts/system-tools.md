@@ -10,12 +10,14 @@ branch_theses({theses})
     Propose up to 4 competing plans. The first commits this branch; the rest
     become sibling branches that explore independently and share your failure
     log, so none of you repeats another's dead end.
-done({answer, checklist?, changed_tests?})
+done({answer, checklist?, changed_tests?, result?})
     Ship. `answer` is REQUIRED and is the run's actual output — the text a
     person reads to learn what you did and why they should believe it. A
     `done` with no answer is refused and costs you the turn.
     Also refused if the answer states figures nothing in the evidence
     supports, or engages nothing the problem asked.
+    `result` is a value, for a role whose instructions ask for one — your
+    role says its shape; `done` without it is refused for that role.
     `checklist` accounts for each requirement you owe, by its id:
     [{"item": "p1", "status": "met" | "not_met" | "n/a", "evidence": "…"}].
     The requirements are the list items in the problem (p1…), the operator's
@@ -149,7 +151,7 @@ grep({pattern, paths?, offset?})
     most of the hits are noise.{% if reference-paths %} An ABSOLUTE prefix naming a reference
     path searches that tree instead — one call to sweep the examples, and the
     hits come back as absolute paths read_file takes directly.{% endif %}
-read_digest({paths, question, anchors?})
+read_digest({paths?, turns?, question, anchors?})
     Ask a question about one or more files and get bullets back, instead of
     paging the files through your context. A reader — a cheaper model, when
     one is assigned — reads them whole and answers only what you asked; the
@@ -160,12 +162,28 @@ read_digest({paths, question, anchors?})
     line the reader sees carries its `<line>:<hash>`, and a bullet that
     cites one is an address patch takes. A whole-file read_file of a long
     file is refused toward this tool; a read with offset or limit is not.
-lsp({op, file, line, col})
-    Code navigation over the project via clojure-lsp (read-only). Ops:
+    `turns` instead of `paths` reads the WHOLE results of your own earlier
+    turns, by number — what a clip note cut off — so a long build log or
+    test run can be questioned without paging it back.
+mcp({action, server?, tool?, arguments?})
+    The tools of the MCP servers this project is configured with. Actions:
+    servers; tools {server}, each tool with its description and argument
+    schema; call {server, tool, arguments}. A server's policy may ask a
+    person before a call, or refuse tools it does not trust.
+wait({seconds?, until?, every?})
+    Wait for the world instead of checking it every turn. {seconds} sleeps.
+    {until, every?, seconds?} runs `until` — the run's own configured test
+    or acceptance command, nothing else — every `every` seconds until it
+    passes or `seconds` run out, all in one turn. Bounded at half an hour.
+lsp({op, file, line, col, new_name?})
+    Code navigation over the project via clojure-lsp. Ops:
     definition|references|hover need file (project-relative), line, col;
     diagnostics needs only file. line/col are 0-based ints. definition
     returns 'path:line:col'; references one per line; hover the symbol's
-    info; diagnostics 'line:col severity: message' per problem.
+    info; diagnostics 'line:col severity: message' per problem. rename
+    needs file, line, col and new_name: clojure-lsp renames the symbol
+    everywhere it is used, and every file it touches is written for you
+    through write_file — the one way to rename that cannot miss a use.
 write_file({path, content})
     Write a whole file in the project, creating directories as needed.
     Overwrites. Use this for NEW files; to change an existing file, prefer
@@ -331,6 +349,9 @@ manifest({action, ...})
                            saving a new name adds a loop that config
                            (:run :loop) can select. For a new manifest;
                            for an edit, patch.
+      revert {name, version, rationale}
+                           Back to an older version, compiled and checked
+                           like a save and stored as a new version.
 intervene({kind, branch?, text?, basis?})
     Steer a run that is happening right now. `kind` is one of message,
     review, cull, fork, retract, extend, pause, resume; `message` is the one
@@ -341,17 +362,32 @@ intervene({kind, branch?, text?, basis?})
     does with one directive before sending another. `basis`, as for
     `remember`, names the turns or artifacts the directive rests on; each
     must exist, or nothing is sent.
-experiment({name, change, hypothesis, kind?, target?, predicts?})
+experiment({name, change, hypothesis, kind?, target?, predicts?, until?})
     Bind a change you are making to what you expect it to do, so the next
     round can tell you whether it worked. Start one whenever you edit a cell,
     manifest, prompt or threshold; name the edit with kind and target, and
     the one signal you expect to move with predicts ("parse-error down"). A change with no stated expectation cannot
     be wrong, and a change that cannot be wrong teaches nothing.
+    `until` says when the edit should come out again ("remove once the
+    provider fixes its tool-call echo"); later supervisors see it while the
+    version is current.
 verdict({name})
     Read an experiment back: better / worse / unchanged / too early, with the
     fitness per turn before and after. `worse` and `unchanged` both mean
     revert — a change nobody can justify is debt, and "it did not hurt" is not
     a reason to carry one.
+finding({action, id?, reason?, note?})
+    Answer the reviewer's findings on the task you hold. Each finding sent
+    back has an id. Actions: list; dispute {id, reason} when a finding is
+    wrong — say what shows it; resolve {id, note} when you fixed it. The
+    next review reads your answers and rules on each.
+papercut({action, title?, body?, id?, experiment?, resolution?})
+    Friction with the HARNESS itself — a tool that misled you, a gate that
+    fired wrongly, two instructions that disagree — recorded so it gets
+    fixed for every later run rather than worked around in this one. Not
+    for bugs in the project. Actions: report {title, body}; list; close {id,
+    experiment, resolution}, which needs the experiment whose verdict shows
+    the fix helped.
 battery({action, run_id?})
     The held-out cases every cell, manifest and policy save is replayed
     against first: an edit under which a case target that passes today

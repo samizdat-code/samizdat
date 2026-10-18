@@ -36,6 +36,8 @@
     :summary "Whether a replacement is small enough to accept: |new| <= max(|original|, floor)."}
    {:name samizdat.tape/apply-fold
     :summary "Collapse a finished conversation into one block plus a verbatim tail, or reject it. Pure: you supply the summary; the harness never calls it on its own."}
+   {:name samizdat.agent.budget/reserve!
+    :summary "Reserve a call's worst case against the run's token budget, atomically across branches; false when spend plus what calls in flight hold plus this one would pass it. The :budget/admit cell calls it before every turn's model call and ends the branch :exhausted when it refuses (gates.edn :token-budget). release! gives it back; a reply with no usage keeps it as its price (unpriced)."}
    {:name samizdat.agent.compaction/fold-pays?
     :summary "Whether folding a window now costs less than carrying it at the cached-token price for the turns left. The measure cell asks for a fold below the ladder when it does (gates.edn :cost-fold; the weight is the provider's :cached-token-weight)."}
    {:name samizdat.agent.compaction/task-span
@@ -241,7 +243,25 @@
 
  {:group "Policy as data"
   :entries
-  [{:name samizdat.agent.gates/threshold
+  [{:name samizdat.store.userspace/last-shipped-generation
+    :summary "Generations: every run's end records which project versions were current and how it ended. The newest one a run shipped on is the set known to work together; when gates.edn :generation-fallback :error-runs runs in a row have errored since, the supervisor's brief names every version that moved and the one to go back to. To boot the shipped workflow without touching the project's files, start with SAMIZDAT_PRISTINE=1 or config :userspace {:mode :shipped}."}
+   {:name samizdat.store.userspace/removal-conditions
+    :summary "The current versions whose edit said when it should come out — `experiment {..., until}` records it on the version it measures. The supervisor's brief lists them so an override stops being carried once its reason has gone; a later version of the same name is a different edit and drops off the list."}
+   {:name samizdat.mcp.client/call
+    :summary "MCP over stdio: config.edn :mcp {:servers {name {:command [argv] :env {VAR value|{:from VAR}} :policy :allow|:read-only|:prompt|:deny :trusted-tools [names]}} :trusted-roots [dirs]}. The `mcp` tool lists servers and tools and calls one under its policy; a project's own config.edn may name servers only for a root a person's config lists in :trusted-roots. One process per server, kept, re-listed when it says its tools changed, stopped with the system."}
+   {:name samizdat.agent.gitdiff/tree-id
+    :summary "The working tree's content as one id, untracked files included, without touching the tree. The configured checks the operator marked deterministic (config :run :verify-deterministic?, an acceptance :check's :deterministic? true) are answered from their last run on the same tree id instead of being rerun (gates.edn :verify-memo); the result says :reused?."}
+   {:name samizdat.agent.worktree/isolated
+    :summary "Run one owner in a git worktree of its own, from the tree as it stands, and apply its change back only if it shipped — or report the paths that no longer apply. The team fan-out does this per worker when gates.edn :isolation :mode is :worktree; a conflict reopens the part for the supervise step to re-task."}
+   {:name samizdat.agent.findings/fold
+    :summary "The board review's findings ledger: each finding gets a stable id (a digest of its normalised text) kept on the task. The owner answers one with `finding dispute|resolve`; the next review is shown what it said and the answers, and rules on each — a disputed finding raised again is upheld, one not raised again is withdrawn. An unchanged diff with nothing answered is not re-judged (gates.edn :review-ledger)."}
+   {:name samizdat.store.papercuts/report!
+    :summary "Papercuts: friction a branch reports about the harness with the `papercut` tool, kept across runs. A report that repeats an open one (same title words, or enough shared words — gates.edn :papercut) adds to its count instead of opening another. The supervisor's brief lists the open ones; `papercut close` needs the experiment whose verdict reads better or cheaper, so a closed papercut is a measured fix."}
+   {:name samizdat.agent.loop/modes-text
+    :summary "Session modes: named prompt overlays in resources/modes.edn (hurry, plain, relax ship), chosen when a run starts — config.edn :run :modes or `modes` on POST /v1/runs — and read by the model in every turn's context block, after the cached prefix. Add one with a prompt and an entry; the policy save checks each mode names a prompt the project has."}
+   {:name samizdat.agent.corrections/matching
+    :summary "Corrections: guidance a person asked for, shown in a turn's context block when the branch's recent turns match a rule's :when. :output-contains is a literal matched only against what the model itself wrote, never a tool result. The project's set is the `corrections` policy (editable with the `policy` tool, checked on save); a person's own is ~/.config/samizdat/corrections.edn and follows them across projects. A person drafts one from a complaint with /complain in the TUI (POST /v1/corrections/draft), reviews it, and saves it with /keep. Bounds are gates.edn :corrections."}
+   {:name samizdat.agent.gates/threshold
     :summary "Read one tunable from gates.edn. Every gate budget in the harness is a value here."}
    {:name samizdat.agent.gates/reload-config!
     :summary "Re-read gates.edn from userspace and recompile the steer table. The policy tool's save does this for you."}
@@ -409,7 +429,7 @@
    {:name samizdat.session/branch-fitness
     :summary "One branch's fitness per turn, by the same weights the session and every experiment are scored with — the number the cull reads and the digest shows (RFC-012 F3)."}
    {:name samizdat.session/verdict
-    :summary "What an experiment measured, and every reason the number might not be a measurement of it: `confounded` when the reading with the provider's own failures discounted disagrees with the full one, `regraded` when the run moved the weights it is being scored by, and a count of the branches that went backwards under an aggregate that did not. The deadband is measured from each side's own spread (`:band`); a gain that added more tokens per turn than it earned is `costly`, a flat change that cut them is `cheaper`, and a result under the best a kept change reached is `below-best`. An experiment started with kind/target/predicts carries the version it tested and whether the predicted signal moved."}
+    :summary "What an experiment measured, and every reason the number might not be a measurement of it: `confounded` when the reading with the provider's own failures discounted disagrees with the full one, `regraded` when the run moved the weights it is being scored by, and a count of the branches that went backwards under an aggregate that did not. The deadband is measured from each side's own spread (`:band`); a gain that added more tokens per turn than it earned is `costly`, a flat change that cut them is `cheaper`, and a result under the best a kept change reached is `below-best`. An experiment started with kind/target/predicts carries the version it tested and whether the predicted signal moved. If that target is edited again before the verdict, the verdict is `stale`: the stretch measured both edits, and it holds the slot until settled."}
    {:name samizdat.session/signal-names
     :summary "The fitness signals an experiment may predict a move in — `predicts` takes one of them and up or down."}
    {:name samizdat.events/subscribe

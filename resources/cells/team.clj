@@ -35,7 +35,9 @@
             [clojure.string :as str]
             [mycelium.cell :as cell]
             [mycelium.core :as myc]
+            [samizdat.agent.gates :as gates]
             [samizdat.agent.loop :as turn]
+            [samizdat.agent.worktree :as wt]
             [samizdat.agent.planner :as planner]
             [samizdat.agent.skills :as skills]
             [samizdat.agent.state :as state]
@@ -145,6 +147,33 @@
   [r]
   (= :done (:status r)))
 
+(defn- run-owner
+  "`run-worker`, in a worktree of its own when gates.edn :isolation :mode is
+  :worktree (karamazov-05z0.10). The owner works alone on a checkout of the
+  tree as it stands, and only a part that shipped is applied back. One whose
+  change no longer applies — another owner landed on the same lines first —
+  comes back :conflict with its task reopened, which is a part
+  :team/supervise re-tasks, from the tree as it now is. Under :shared, or
+  where no worktree can be made, it is the shared tree as before."
+  [ctx worker bid idx st prob suffix task-id]
+  (if-not (and (= :worktree (:mode (gates/threshold :isolation))) (:root ctx))
+    (run-worker ctx worker bid idx st prob suffix task-id)
+    (let [r (wt/isolated (:root ctx) (:run-id ctx) bid
+                         (fn [dir]
+                           (run-worker (cond-> ctx dir (assoc :root dir))
+                                       worker bid idx st prob suffix task-id))
+                         ok?)
+          {:keys [conflict why no-patch]} (:worktree r)]
+      (if (or conflict no-patch)
+        (do (when (:task r)
+              (try (tasks/update! (:conn ctx) (:task r) {:status "open"}) (catch Throwable _ nil)))
+            (assoc r :status :conflict
+                   :answer (str (:answer r) "\n\n"
+                                (prompt/render "worktree-conflict"
+                                               {:paths (str/join ", " conflict) :why why
+                                                :no-patch (boolean no-patch)}))))
+        r))))
+
 (cell/defcell :team/plan
   {:doc "Split the manager branch's problem into independent sub-tasks for the
         team to fan out over. If sub-tasks were already provided (config
@@ -182,7 +211,7 @@
         mailbox, the shared-tree block and the stale-write notice). Join their
         answers into the manager branch and finish. A dataflow join, not a live
         actor: workers run to completion."
-   :effects [:net :db :fs]
+   :effects [:net :db :fs :proc]
    :requires [:config :conn :run-id]
    ;; :subtasks stays optional even though :team/plan always produces it —
    ;; the handler falls back to the whole problem, and a manifest is free to
@@ -252,7 +281,7 @@
           ;; returns rather than throws, so the join never fails early.
           results (->> (map-indexed vector tasks)
                        (mapv (fn [[i s]]
-                               (cancel/spawn #(run-worker ictx worker (bid-of i) i s
+                               (cancel/spawn #(run-owner ictx worker (bid-of i) i s
                                                           (prob-of s) (worker-prompt i tasks)
                                                           (nth task-ids i nil)))))
                        (apply ebb/join vector)
@@ -288,7 +317,7 @@
         fresh branch (W<idx>r1). The retry replaces the original only if it does
         better. A bounded re-task, not an open loop — the supervisor's job is to
         catch a stalled part, not to grind. Re-joins the answers after."
-   :effects [:net :db :fs]
+   :effects [:net :db :fs :proc]
    :requires [:conn :run-id]
    ;; :results is REQUIRED and is the point — this cell exists to re-task the
    ;; parts that did not land, so a manifest wiring it without a fan-out in
@@ -312,7 +341,7 @@
                                   ;; keeps its identity and its contract rather
                                   ;; than becoming a second task for the same
                                   ;; work.
-                                  r2 (run-worker ictx worker (str "W" i "r1") i
+                                  r2 (run-owner ictx worker (str "W" i "r1") i
                                                  st st (worker-prompt i tasks)
                                                  (:task r))]
                               (if (ok? r2) r2 r))))

@@ -63,6 +63,7 @@
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [mycelium.core :as myc]
+            [samizdat.agent.budget :as budget]
             [samizdat.agent.critic :as critic]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.handoff :as handoff]
@@ -326,10 +327,14 @@
 (defn spent-tokens
   "What the run has spent against its token budget, or nil when it has none
   — a run without a budget pays for no query. Summed from the journal, so
-  the number is what was actually billed rather than a projection."
+  the number is what was actually billed rather than a projection, plus
+  what replies with no usage were charged."
   [{:keys [conn run-id token-budget]}]
   (when token-budget
-    (:total-tokens (journal/run-usage conn run-id))))
+    ;; Plus replies that reported no usage, charged their reservation
+    ;; (samizdat.agent.budget) because the journal holds nothing for them.
+    (+ (or (:total-tokens (journal/run-usage conn run-id)) 0)
+       (budget/unpriced run-id))))
 
 (defn round-max-turns
   "The turn cap this round compares against: the run's, plus whatever `extend`
@@ -1351,7 +1356,7 @@
                         (try (knowledge/record-workflow-outcome!
                               conn {:workflow loop-nm :run-id run-id
                                     :outcome :error})
-                             (userspace/record-run-outcome! :error)
+                             (userspace/record-run-outcome! :error run-id)
                              (catch Throwable _ nil))
                         (throw e))
                       ;; The run's sealed commands end with it (verify).
@@ -1370,7 +1375,7 @@
         ;; versions that were current for it — the standing the versions
         ;; listing shows a later supervisor weighing an unfamiliar edit
         ;; (karamazov-c58).
-        (userspace/record-run-outcome! outcome))
+        (userspace/record-run-outcome! outcome run-id))
       result)))
 
 (defn summary

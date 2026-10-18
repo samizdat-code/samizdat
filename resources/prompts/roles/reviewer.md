@@ -19,3 +19,7 @@ Finish by shipping a verdict with the `done` tool. State **PASS** or **REVISE**
 on the first line, then your findings. PASS means the round is good enough for
 the critic to gate. REVISE means the implementors need another round — list the
 specific defects to fix, concretely, so they can act on them.
+
+## How you finish
+
+Call `done` with your `answer` AND a `result`: `{"verdict": "PASS"}` or `{"verdict": "REVISE", "findings": ["…", "…"]}` — one string per thing to fix, each specific enough to act on. The verdict is read from `result`, not from your prose.

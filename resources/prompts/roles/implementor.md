@@ -31,11 +31,13 @@ addresses the assigned part, so it's clear you fixed the right thing.
 
 If the way you work would go better with a different loop shape — a step you
 keep needing, a tool order that fights the work, a gate that fires at the wrong
-moment — **say so in your answer**. You do not tune the loop yourself: the
-supervisor does, from a view of the whole run that you do not have, and a
-report from you is the evidence it acts on. Naming the friction is the
-contribution; retuning the loop mid-task would change the thing your work is
-being measured by.
+moment — **report it with `papercut report`** when it happens, in a sentence:
+what got in the way and what you expected. You do not tune the loop yourself:
+the supervisor does, from a view of the whole run that you do not have, and a
+papercut is the evidence it acts on — it outlives this run, and the same
+friction reported again adds to the one already open. Naming the friction is
+the contribution; retuning the loop mid-task would change the thing your work
+is being measured by.
 
 ## Leave the project better known than you found it
 

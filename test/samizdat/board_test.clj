@@ -950,3 +950,61 @@
                     ((:handler (cell/get-cell! :board/approve))
                      {:conn conn :run-id rid :config {}}
                      {:board/task t :board/plan-text "Goal: fade it"}))))))))
+
+(deftest a-disputed-finding-reaches-the-next-review
+  ;; karamazov-05z0.9: the owner is sent each finding with an id, can dispute
+  ;; it, and the next review is shown the finding and the dispute to rule on.
+  (let [judged (atom [])
+        owner-saw (atom nil)]
+    (with-redefs [llm/chat
+                  (fn [a c messages & rest]
+                    (let [text (str/join " " (map :content messages))]
+                      (cond
+                        (judge-call? messages)
+                        (do (swap! judged conj text)
+                            {:content (if (= 1 (count @judged))
+                                        "VERDICT: INCOMPLETE\nFINDINGS:\n- [high] the parser drops the last flag"
+                                        "VERDICT: COMPLETE")
+                             :finish-reason "stop"})
+                        ;; The owner's turn after the bounce: it disputes the
+                        ;; finding by id, then ships again.
+                        (and (str/includes? text "the parser drops the last flag")
+                             (not (str/includes? text "disputed.")))
+                        ;; The id as the owner is sent it — `- f-…: text` —
+                        ;; not the example in the tool's usage line.
+                        (let [id (second (re-find #"- (f-[0-9a-f]{8})[ :]" text))]
+                          (reset! owner-saw id)
+                          {:content (str "```tool-call\n{\"name\":\"finding\",\"args\":{\"action\":\"dispute\",\"id\":\""
+                                         id "\",\"reason\":\"the last flag is validated in cli/read\"}}\n```")
+                           :finish-reason "stop"})
+                        :else (apply ships-its-task a c messages rest))))]
+      (let [conn (db/open! ":memory:")
+            id (tasks/create! conn {:title "the parser"})]
+        (run-board conn {:max-turns 10})
+        (is (some? @owner-saw) "the owner was sent the finding with its id")
+        (is (= 2 (count @judged)) "the dispute brought a second review")
+        (is (str/includes? (second @judged) "the last flag is validated in cli/read")
+            "and that review read the owner's reason")
+        (is (str/includes? (second @judged) @owner-saw))
+        (is (= "done" (:status (tasks/get-task conn id))) "the judge accepted the dispute")
+        (is (= :withdrawn (:status (get (tasks/findings conn id) @owner-saw)))
+            "a finding the review dropped is withdrawn on the ledger")))))
+
+(deftest an-unchanged-review-is-not-paid-for-twice
+  ;; Same diff, same answer, nothing answered: the same findings go back
+  ;; without another judge call (gates.edn :review-ledger :reuse-unchanged?).
+  (let [judged (atom 0)]
+    (with-redefs [llm/chat (fn [a c messages & rest]
+                             (if (judge-call? messages)
+                               (do (swap! judged inc)
+                                   {:content "VERDICT: INCOMPLETE\nFINDINGS:\n- [high] no error handling"
+                                    :finish-reason "stop"})
+                               (apply ships-its-task a c messages rest)))]
+      (let [conn (db/open! ":memory:")]
+        (tasks/create! conn {:title "the handler"})
+        (run-board conn {:max-turns 10})
+        (let [rid (:id (first (db/fetch conn ["SELECT id FROM runs"])))
+              notes (journal/notes conn rid :board-review)]
+          (is (< 1 (count notes)) "reviewed more than once")
+          (is (= 1 @judged) "but the judge was asked once")
+          (is (some :reused notes) "and the record says the later ones were reused"))))))

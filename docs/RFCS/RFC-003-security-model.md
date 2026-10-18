@@ -122,6 +122,13 @@ flowchart LR
     scrub --> lsp
     lsp --> redact
 
+    mcpsrv[mcp tool: a configured MCP server subprocess]
+    mcppolicy[Server policy: allow / read-only list / ask a person / deny]
+    toolcall --> mcppolicy
+    mcppolicy --> mcpsrv
+    scrub --> mcpsrv
+    mcpsrv --> redact
+
     websearch[websearch tool: outbound HTTP to a search endpoint]
     toolcall --> websearch
     websearch --> redact

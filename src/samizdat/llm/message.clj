@@ -202,6 +202,27 @@
     (str unloaded-marker (digest-line t))
     (self-summary m)))
 
+;; The per-turn context block's markers (karamazov-05z0.2). Each regenerated
+;; part — task, memories, inbox, failures, ... — is wrapped in them, so a
+;; stale copy can be found and dropped; a part shown once is left outside.
+(def context-open "<!--turn-context-->")
+(def context-close "<!--/turn-context-->")
+
+(def ^:private context-re
+  (re-pattern (str "(?s)\\n*" (java.util.regex.Pattern/quote context-open)
+                   ".*?" (java.util.regex.Pattern/quote context-close))))
+
+(defn- strip-context-before
+  "Every turn-context block in the verbatim messages before index `end`
+  dropped. Compacted messages are already a digest line."
+  [messages end]
+  (into []
+        (map-indexed (fn [i m]
+                       (if (and (>= i frame-size) (< i end) (not (:compacted? m)))
+                         (update m :content #(str/replace (str %) context-re ""))
+                         m)))
+        messages))
+
 (defn compact
   "Compact a branch's older turns IN PLACE, so the array's shape never changes.
 
@@ -276,12 +297,25 @@
              ;; protected here, by the caller that owns it.
              due (remove #(< % frame-size)
                          (tape/due-indices messages keep compactable-roles))]
-         (reduce (fn [ms i]
-                   (tape/compact-at ms i
-                                    (replacement-for (nth ms i) turns-by-number)
-                                    opts))
-                 messages
-                 due))))))
+         (cond-> (reduce (fn [ms i]
+                           (tape/compact-at ms i
+                                            (replacement-for (nth ms i) turns-by-number)
+                                            opts))
+                         messages
+                         due)
+           ;; STALE TURN CONTEXT GOES WITH THE FRONTIER (karamazov-05z0.2).
+           ;; Once a batch has moved, the blocks older than the newest r+1
+           ;; exchanges — r being how far the window has floated since that
+           ;; move — are dropped. That set changes only when the frontier
+           ;; moves, which rewrites the history behind it anyway, so between
+           ;; moves the wire stays byte-identical and the newest block is
+           ;; always kept.
+           (>= aged (max 1 (long (or batch 1))))
+           (strip-context-before
+            (let [r (if (and (number? batch) (> batch 1)) (mod aged (long batch)) 0)
+                  assistants (keep-indexed (fn [i m] (when (= "assistant" (:role m)) i))
+                                           messages)]
+              (or (nth (reverse assistants) r nil) 0)))))))))
 
 (def result-close
   "The tag that ends a framed tool result. A constant, like the unloaded
@@ -389,5 +423,7 @@
                                 ;; to emit them.
                                 (str/replace ledger-open "")
                                 (str/replace ledger-close "")
+                                (str/replace context-open "")
+                                (str/replace context-close "")
                                 str/trim))))
         (strip-stale-ledgers messages)))

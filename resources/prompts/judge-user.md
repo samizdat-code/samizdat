@@ -19,7 +19,9 @@
 
 {{transcript}}
 {% endif %}
-## The answer it wants to ship
+{% if prior %}
+{{prior}}
+{% endif %}## The answer it wants to ship
 
 {{answer}}
 
