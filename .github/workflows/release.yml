@@ -1,0 +1,145 @@
+name: release
+
+# Build standalone binaries for macOS (arm64) and Linux (x86_64) and attach
+# them to the GitHub release when a v* tag is pushed. workflow_dispatch, and a
+# pull request that changes the release build, build the same archives as
+# workflow artifacts without publishing anything.
+#
+# The binary is samizdat.main: the server and the TUI in one, with the TUI's
+# FTXUI shim linked in. Windows is not built; the shell, sandbox and sockets
+# are POSIX.
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: ['.github/workflows/release.yml', 'ci/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the release and upload assets
+
+# The jolt version is resolved at build time, so a release is built by the
+# current compiler. The tests, the build and the smoke test all run before the
+# publish step, so a compiler that can't build this tree fails the job and
+# uploads nothing. Set the JOLT_PIN repository variable to a tag like v0.8.23
+# to pin one during an incident, without a commit.
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-macos
+          # 22.04's glibc and libstdc++, so the binary runs there and on
+          # anything newer
+          - os: ubuntu-22.04
+            target: x86_64-linux
+    runs-on: ${{ matrix.os }}
+    # the suite alone has taken 16 to 20 minutes on ubuntu
+    timeout-minutes: 60
+    # jolt's git and Maven caches, where actions/cache can find them
+    env:
+      JOLT_GITLIBS_DIR: ${{ github.workspace }}/.ci-deps/gitlibs
+      JOLT_MAVEN_REPOSITORY: ${{ github.workspace }}/.ci-deps/m2
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve jolt version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOLT_PIN: ${{ vars.JOLT_PIN }}
+        run: |
+          if [ -n "$JOLT_PIN" ]; then
+            ver="$JOLT_PIN"
+            echo "jolt: pinned to $ver"
+          else
+            ver=$(gh api repos/jolt-lang/jolt/releases/latest --jq .tag_name)
+            [ -n "$ver" ] && [ "$ver" != "null" ] || { echo "could not resolve latest jolt"; exit 1; }
+            echo "jolt: latest release is $ver"
+          fi
+          echo "JOLT_VERSION=$ver" >> "$GITHUB_ENV"
+
+      - name: Install jolt
+        run: ci/install-jolt.sh "${JOLT_VERSION}" "${{ matrix.target }}"
+
+      # Maven Central sometimes answers a runner with 403, so the jars are
+      # cached along with the git deps and only a deps.edn change fetches
+      - name: Cache deps
+        uses: actions/cache@v6
+        with:
+          path: .ci-deps
+          key: deps-${{ matrix.target }}-${{ hashFiles('deps.edn') }}
+          restore-keys: deps-${{ matrix.target }}-
+
+      # ftxui-jolt's shim is C++ built by cmake, in its gitlibs checkout; it
+      # leaves the static archive the binary links beside the shared object
+      - name: Build the TUI's shim
+        run: jolt tui-native
+
+      - name: Test
+        run: jolt test
+
+      # jolt build loads the static archives into itself to resolve their
+      # symbols while it builds, and on Linux it has no C++ runtime of its own
+      # for the shim's to resolve against, so it is preloaded
+      - name: Build binary
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then export LD_PRELOAD="$(g++ -print-file-name=libstdc++.so)"; fi
+          jolt -A:tui build -m samizdat.main -o samizdat
+
+      # Name from the ref: a tag's build carries its version, anything else
+      # gets the bare name.
+      - name: Package
+        run: |
+          case "${GITHUB_REF}" in
+            refs/tags/*) name="samizdat-${GITHUB_REF_NAME}-${{ matrix.target }}" ;;
+            *)           name="samizdat-${{ matrix.target }}" ;;
+          esac
+          mkdir -p "$name"
+          cp samizdat README.md LICENSE "$name/"
+          echo "PKG_DIR=$name" >> "$GITHUB_ENV"
+
+      # Run the packaged binary with the build's dependency checkouts hidden:
+      # a binary still finds a native library there by the path it was built
+      # from, which a user's machine doesn't have.
+      - name: Smoke test
+        run: |
+          hidden=""
+          for d in "$(pwd)/.ci-deps" "$HOME/.jolt/gitlibs" "$HOME/.jolt/mvnlibs" "$HOME/.m2"; do
+            if [ -d "$d" ]; then mv "$d" "$d.hidden"; hidden="$hidden $d"; fi
+          done
+          status=0
+          ci/smoke.sh "$PKG_DIR/samizdat" || status=$?
+          for d in $hidden; do mv "$d.hidden" "$d"; done
+          exit $status
+
+      - name: Archive
+        run: |
+          tar czf "${PKG_DIR}.tar.gz" "$PKG_DIR"
+          echo "PKG=${PKG_DIR}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Publish to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "samizdat ${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --notes "Standalone binaries for macOS (arm64) and Linux (x86_64).
+
+          Unpack the archive and run \`samizdat\` in a project's directory: it starts the server and the TUI in one process. \`samizdat --headless\` runs the server alone, and \`samizdat --connect [URL]\` the TUI alone against a running server. The first run writes its settings to \`~/.config/samizdat\` and the project's workflow to \`.samizdat/\`. The model is the first provider whose key is set: \`DEEPSEEK_API_KEY\`, \`ZHIPU_API_KEY\` (GLM), then \`OPENAI_API_KEY\`; with none, a local OpenAI-compatible server such as llama-server. \`HARNESS_PROVIDER\` or \`:roles\` in \`config.edn\` picks one.
+
+          Runtime libraries: Linux needs sqlite3, zlib and OpenSSL 3, which most distributions have. macOS needs OpenSSL 3 (\`brew install openssl@3\`).
+
+          The macOS binary is unsigned, so clear the quarantine flag in the unpacked folder before the first run: \`xattr -dr com.apple.quarantine .\`." \
+            || echo "release already exists, uploading asset"
+          gh release upload "${GITHUB_REF_NAME}" "${PKG}" --clobber
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: samizdat-${{ matrix.target }}
+          path: ${{ env.PKG }}

@@ -42,9 +42,13 @@ jolt smoke      # platform probes (sqlite, https, server)
 The binary takes the same modes: `samizdat` starts the server and the TUI,
 `samizdat --headless` the server alone, and `samizdat --connect [URL]` the TUI
 alone against a server that is already running. With the TUI in the same
-process the server's log goes to `.samizdat/samizdat.log`. The binary loads
-the FTXUI shim and the system sqlite/OpenSSL at runtime, so it expects them
-where they were at build time.
+process the server's log goes to `.samizdat/samizdat.log`. The FTXUI shim is
+linked into the binary; sqlite, zlib and OpenSSL 3 are the system's, loaded
+at runtime.
+
+Prebuilt binaries for macOS (arm64) and Linux (x86_64) are attached to each
+[release](https://github.com/yogthos/samizdat/releases). Pushing a `v*` tag
+builds them (`.github/workflows/release.yml`) with the latest jolt release.
 
 ## Configuration
 
