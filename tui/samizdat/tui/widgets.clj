@@ -413,6 +413,21 @@
   [state]
   (get-in (selected-branch state) [:context :prompt-tokens]))
 
+(defn- branch-turn
+  "The turn the selected branch has reached, or with none selected the
+  furthest any branch has, off the branch rows' :context — or nil when
+  nothing is measured. max_turns caps each BRANCH's turn number, so this is
+  what the cap is read against; the run's :usage :turns sums every branch's
+  turns and the supervisor's, and read 341 / 200 on a run whose furthest
+  branch was at 120."
+  [state]
+  (if (:branch-id state)
+    (get-in (selected-branch state) [:context :turn])
+    (some->> (get-in state [:detail :branches])
+             (keep (comp :turn :context))
+             seq
+             (reduce max))))
+
 (defn- cache-miss-clause
   "` · 33 low: forced 19, rewritten 3` — how many turns the cache failed
   and why, biggest cause first — or nothing when no turn missed."
@@ -424,8 +439,8 @@
                                           (sort-by (comp - val) by-cause))))))))
 
 (defn context
-  "What the run is spending: tokens against its budget, turns against its
-  ceiling. Gauges rather than numbers alone — a ratio is not a number to
+  "What the run is spending: tokens against its budget, the branch's turn
+  against the per-branch cap. Gauges rather than numbers alone — a ratio is not a number to
   read."
   [state props]
   (let [run (get-in state [:detail :run])
@@ -436,6 +451,7 @@
         used (get-in run [:usage :total-tokens])
         budget (:token_budget run)
         turns (get-in run [:usage :turns])
+        at (branch-turn state)
         max-turns (:max_turns run)
         ;; The window and the cache (karamazov-pdes): the selected branch's
         ;; last request against the model's context window, and the run's
@@ -454,9 +470,13 @@
                                           (when budget (str " / " budget)))]
                   [:gauge {:value (ratio used budget)
                            :class (if (> (ratio used budget) 0.85) :gauge-hot :gauge)}]
-                  [:text {:class :dim} (str "  turns  " (or turns 0)
-                                          (when max-turns (str " / " max-turns)))]
-                  [:gauge {:value (ratio turns max-turns) :class :gauge}]]
+                  [:text {:class :dim}
+                   (if at
+                     (str "  turns  " at (when max-turns (str " / " max-turns))
+                          " (run " (or turns 0) ")")
+                     (str "  turns  run " (or turns 0)
+                          (when max-turns (str ", cap " max-turns))))]
+                  [:gauge {:value (ratio at max-turns) :class :gauge}]]
                  (remove nil?
                          [(when fill?
                             [:text {:class :dim} (str "  ctx    " (fill-segment fill window))])

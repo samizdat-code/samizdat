@@ -302,6 +302,32 @@
     (is (str/includes? (texts out) "4") "turns taken, which lives on the usage map")
     (is (str/includes? (texts out) "20"))))
 
+(deftest the-turn-gauge-is-a-branch-s-turn-against-the-cap
+  ;; max_turns caps each BRANCH's turn number (:loop/route); :usage :turns
+  ;; counts every turn row in the run, every branch's and the supervisor's.
+  ;; Set against each other the panel read 341 / 200 on a run whose furthest
+  ;; branch was at 120 — a full gauge on a run nowhere near its cap.
+  (let [state {:branch-id "B1"
+               :detail {:run {:usage {:total-tokens 1 :turns 385} :max_turns 200}
+                        :branches [{:id "B1" :context {:turn 95 :prompt-tokens 1}}
+                                   {:id "SUP" :context {:turn 120 :prompt-tokens 1}}]}}
+        line (fn [out] (some #(when (str/includes? % "turns") %) (texts-of out)))
+        gauge-values (fn [out] (map (comp :value props-of) (nodes-of :gauge out)))
+        out (render :widget/context state {:title "CONTEXT"})]
+    (is (re-find #"95 */ *200" (line out)) "the selected branch's turn against the cap")
+    (is (str/includes? (line out) "385") "the run's total is still shown")
+    (is (not (re-find #"385 */ *200" (line out))) "but not against the cap")
+    (is (some #(= 0.475 %) (gauge-values out)) "the gauge is the branch's share of the cap")
+    (testing "no branch chosen: the furthest branch, the one nearest the cap"
+      (let [out (render :widget/context (dissoc state :branch-id) {:title "CONTEXT"})]
+        (is (re-find #"120 */ *200" (line out)))))
+    (testing "no branch measured: the run's total alone, no ratio drawn from it"
+      (let [out (render :widget/context
+                        {:detail {:run {:usage {:total-tokens 1 :turns 4} :max_turns 20}}}
+                        {:title "CONTEXT"})]
+        (is (str/includes? (line out) "4"))
+        (is (not (re-find #"4 */ *20" (line out))))))))
+
 (deftest the-context-panel-shows-the-branch-s-fill-and-whether-the-cache-served
   ;; karamazov-pdes: the panel showed the run's spend against its budget and
   ;; nothing about the context WINDOW — how full the branch being read is
