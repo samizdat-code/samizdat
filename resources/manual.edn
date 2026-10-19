@@ -148,9 +148,9 @@
    {:name samizdat.agent.live/apply-to
     :summary "What a person switched on a RUNNING run: the `model` and `effort` intervention kinds apply on arrival (POST /v1/runs/:id/interventions {kind: \"model\", payload: id}), and loop/call-model merges them over the run's llm config on every request, so every branch's next turn uses them. Each switch is journalled as :llm-switch. Forgotten when the run ends."}
    {:name samizdat.approval/set-mode!
-    :summary "The approval mode for this server session — :attended (ask while a front end follows the run, else refuse), :refuse, :block or :yolo (every ask allowed; a deny stays a deny) — over config.edn's and gates.edn's :approval. POST /v1/harness/approval-mode; the TUI's /mode. In memory: who is at the keyboard now is not a fact about the project."}
+    :summary "The approval mode for this server session — :attended (ask while a front end follows the run, else refuse), :refuse, :block, :auto (the installed classifier sees each ask first and may allow it; the rest go to a person as under :attended) or :yolo (every ask allowed; a deny stays a deny) — over config.edn's and gates.edn's :approval. POST /v1/harness/approval-mode; the TUI's /mode. In memory: who is at the keyboard now is not a fact about the project."}
    {:name samizdat.approval/policy
-    :summary "The approval policy in force and where each part comes from: gates.edn may choose :attended (the shipped default: :block while a front end follows the run's event stream, samizdat.events/watched?, :refuse otherwise; approval/policy given a run-id resolves it), :refuse or :block and the wait; :yolo and :on-timeout :allow only from the operator's config.edn :approval or a person's session mode. A loosening value in gates.edn is ignored."}
+    :summary "The approval policy in force and where each part comes from: gates.edn may choose :attended (the shipped default: :block while a front end follows the run's event stream, samizdat.events/watched?, :refuse otherwise; approval/policy given a run-id resolves it), :refuse or :block and the wait; :auto, :yolo and :on-timeout :allow only from the operator's config.edn :approval or a person's session mode. A loosening value in gates.edn is ignored."}
    {:name samizdat.approval/session-grants
     :summary "What a person allowed ALWAYS on a run in this session (the permission dialog's `a`): shell grant patterns like `cargo *`, merged into the policy's grants for that run, held in memory only, and dropped when the run ends. Never written to the project. Where no pattern can stand for the command — a flow gap, a compound that hides what it runs — `a` allows that exact text again for the run instead (the request carries :always-exact)."}
    {:name samizdat.security.token/issue!
@@ -489,7 +489,7 @@
   [{:name samizdat.security.confine/shell-spec
     :summary "The shell's OS confinement: writes only in the project, its scratch, /tmp and the build caches (~/.jolt, ~/.m2, ~/.cargo …); the project's .samizdat read-only; the secret regions unreadable; the harness's own ports unreachable. Operator settings in config.edn :shell {:sandbox :writable :pass-env :env-refs}."}
    {:name samizdat.security.policy/outside-reads
-    :summary "The paths a shell command names outside the project, its reference roots and the build caches. Any at all turns the command into a question for a person — allowed by a grant, an approval, or yolo."}
+    :summary "The paths a shell command names outside the project, its reference roots and the build caches. Any at all turns the command into a question for a person — allowed by a grant, an approval, auto's classifier, or yolo."}
    {:name samizdat.agent.files/workflow-refused?
     :summary "Why write_file/edit_file/patch to the role map, the roles policy or the phases policy asks a person: those decide which tools each role holds and what is refused. The rest of .samizdat/ stays writable through the validated path; the shell and eval cannot write .samizdat/ at all."}]}
 

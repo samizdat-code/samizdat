@@ -927,7 +927,7 @@
                    ;; person (dirge shows its permission mode the same way).
                    (when (:approval_mode p) sep)
                    (when-let [m (:approval_mode p)]
-                     [:text {:class (if (#{"block" "yolo"} (str m)) :perm :dim)} (str "mode:" m)])
+                     [:text {:class (if (#{"block" "auto" "yolo"} (str m)) :perm :dim)} (str "mode:" m)])
                    ;; Pushed or polled: whether the run on screen is live.
                    (when (:run-id state) sep)
                    (when (:run-id state)

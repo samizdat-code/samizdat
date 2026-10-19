@@ -458,3 +458,56 @@
         (is (seq (approval/pending "r1")) "a run that ends forgets it")
         (approval/reset!)
         (deref again 2000 nil)))))
+
+;; --- auto: a classifier first, then a person ----------------------------------
+;;
+;; Under :auto an ask goes first to the installed classifier. Its :allow runs
+;; the command, flagged so the journal tells it from a person's; anything
+;; else — :ask, no classifier, an error, no answer in time — goes on to a
+;; person exactly as :attended would. The classifier is a function installed
+;; at start, so this namespace knows nothing of which model decides.
+
+(deftest auto-is-the-operators-or-a-persons-not-the-projects
+  (is (= :refuse (:mode (policy-with {:mode :auto} nil)))
+      "gates.edn is the agent's to edit, and auto lets things through")
+  (is (= :auto (:mode (policy-with {:mode :refuse} {:mode :auto}))))
+  (try (is (= :auto (approval/set-mode! "auto")))
+       (finally (approval/set-mode! nil))))
+
+(deftest auto-asks-a-person-like-attended-when-the-classifier-does-not-allow
+  (approval/set-mode! :auto)
+  (is (= :refuse (:mode (approval/policy "r1"))) "nobody follows r1")
+  (is (:auto? (approval/policy "r1")) "but the classifier still goes first")
+  (let [w (samizdat.events/watch! "r1")]
+    (try (is (= :block (:mode (approval/policy "r1"))) "a front end follows r1: ask")
+         (finally (samizdat.events/unwatch! w)))))
+
+(deftest auto-runs-what-the-classifier-allows
+  (approval/set-mode! :auto)
+  (let [seen (atom nil)]
+    (approval/install-classifier! (fn [ctx d] (reset! seen [ctx d]) {:verdict :allow :why "reads a sibling project"}))
+    (try
+      (let [r (approval/resolve-ask {:run-id "r1"} {:effect :ask :input "ls ~/src/other"})]
+        (is (= :allow (:effect r)))
+        (is (= "reads a sibling project" (get-in r [:classified :why])) "flagged, with why")
+        (is (= "ls ~/src/other" (:input (second @seen))) "the classifier saw the ask")
+        (is (empty? (approval/pending "r1")) "nobody was asked"))
+      (testing "a deny never reaches it"
+        (reset! seen nil)
+        (is (= :deny (:effect (approval/resolve-ask {:run-id "r1"} {:effect :deny :input "rm -rf /"}))))
+        (is (nil? @seen)))
+      (finally (approval/install-classifier! nil)))))
+
+(deftest auto-falls-to-a-person-on-anything-but-an-allow
+  (approval/set-mode! :auto)
+  (doseq [[what f] [["an ask" (fn [_ _] {:verdict :ask})]
+                    ["an error" (fn [_ _] (throw (ex-info "boom" {})))]
+                    ["junk" (fn [_ _] :yes)]
+                    ["no classifier" nil]]]
+    (approval/install-classifier! f)
+    (try
+      (testing what
+        (let [r (approval/resolve-ask {:run-id "r1"} {:effect :ask :input "ls ~/src/other"})]
+          (is (= :ask (:effect r)) "nobody follows r1, so it stays an ask: refused")
+          (is (nil? (:classified r)))))
+      (finally (approval/install-classifier! nil)))))

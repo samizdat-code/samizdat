@@ -49,9 +49,11 @@
   "What happens when a run needs a person: :refuse (nobody is asked; a
   simulated user answers ask_human when the run has user context), :block
   (the question waits for a person, up to :wait-ms), :attended (:block while
-  a front end follows the run's event stream, :refuse while none does), or
-  :yolo (every ask is allowed without asking; a deny is still a deny)."
-  #{:refuse :block :attended :yolo})
+  a front end follows the run's event stream, :refuse while none does),
+  :auto (the installed classifier sees each ask first and may allow it;
+  what it does not allow goes to a person as under :attended), or :yolo
+  (every ask is allowed without asking; a deny is still a deny)."
+  #{:refuse :block :attended :auto :yolo})
 
 (def ^:private project-modes
   "The modes the project's own gates.edn may choose. Both SAFE: refusing, and
@@ -102,10 +104,14 @@
   front end follows it (samizdat.events/watched?), :refuse while none does —
   so a caller deciding whether to ask about THIS run never sees :attended."
   ([run-id]
-   (let [p (policy)]
-     (cond-> p
-       (= :attended (:mode p))
-       (assoc :mode (if (events/watched? run-id) :block :refuse)))))
+   (let [p (policy)
+         person (fn [] (if (events/watched? run-id) :block :refuse))]
+     (case (:mode p)
+       :attended (assoc p :mode (person))
+       ;; The classifier goes first (resolve-ask); what it leaves goes to a
+       ;; person on :attended's terms, so every other caller sees that.
+       :auto (assoc p :mode (person) :auto? true)
+       p)))
   ([]
    (let [g (let [t (gates/threshold :approval)] (if (map? t) t {}))
          o (or @operator {})
@@ -116,6 +122,33 @@
      {:mode mode
       :wait-ms (or (:wait-ms o) (:wait-ms g))
       :on-timeout (if (= :allow (:on-timeout o)) :allow :deny)})))
+
+(defonce ^:private classifier
+  ;; (fn [ctx decision] -> {:verdict :allow|:ask :why "…"}): what :auto asks
+  ;; first. Installed at start (install-classifier!), so this namespace knows
+  ;; nothing of which model decides.
+  (atom nil))
+
+(defn install-classifier!
+  "Install the function :auto asks about each ask before a person, or nil
+  for none — with none, :auto is :attended."
+  [f]
+  (clojure.core/reset! classifier f)
+  nil)
+
+(defn- classified-allow
+  "The classifier's verdict when it allows `decision`, else nil: no
+  classifier, an error, no answer within gates.edn :approval-classifier
+  :timeout-ms, or anything but {:verdict :allow} all leave the ask for a
+  person."
+  [ctx decision]
+  (when-let [f @classifier]
+    (let [ms (or (:timeout-ms (gates/threshold :approval-classifier)) 10000)
+          v (try (deref (future (f ctx decision)) ms nil)
+                 (catch Throwable e
+                   (log/warn "approval: the classifier failed:" (ex-message e))
+                   nil))]
+      (when (and (map? v) (= :allow (:verdict v))) v))))
 
 (defonce ^:private requests (atom {}))
 
@@ -298,8 +331,9 @@
   Never throws. This sits in the path of every shell command, and an
   approval registry that could fail would be a registry that can stop a run
   from doing anything at all."
-  [{:keys [run-id branch-id]} {:keys [effect input details reason gaps content-key] :as decision}]
-  (let [{:keys [mode wait-ms on-timeout]} (policy run-id)]
+  [{:keys [run-id branch-id] :as ctx} {:keys [effect input details reason gaps content-key] :as decision}]
+  (let [{:keys [mode wait-ms on-timeout auto?]} (policy run-id)
+        classified (delay (when auto? (classified-allow ctx decision)))]
     (cond
       (not= :ask effect) decision
       ;; The same text a person already allowed on this run: trust is of
@@ -312,6 +346,9 @@
       ;; Nobody is asked and everything that would have been is allowed.
       ;; Flagged, so the journal tells a yolo allow from a person's.
       (= :yolo mode) (assoc decision :effect :allow :yolo true)
+      ;; :auto's classifier, before any person. Flagged with its reason, so
+      ;; the journal tells its allow from a person's.
+      @classified (assoc decision :effect :allow :classified @classified)
       (not= :block mode) decision
       :else
       (try
