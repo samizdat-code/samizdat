@@ -22,7 +22,8 @@
   The first code samizdat wrote about itself: truncate-middle was authored by
   the harness in a supervised self-modification run, then wired into the shell
   tool's output truncation."
-  (:require [clojure.main :as main]
+  (:require [clojure.java.io :as io]
+            [clojure.main :as main]
             [clojure.string :as str]))
 
 (defn sh-quote
@@ -94,3 +95,18 @@
                               (when file (str " (" file (when line (str ":" line)) ")")))))
                      (:trace (Throwable->map e)))]
     (vec (if n (take n frames) frames))))
+
+(defn harness-checkout
+  "The samizdat checkout this process's code was loaded from, or nil.
+
+  Found from where samizdat's own source resolves, not from the working
+  directory. A built binary runs IN the project it works on, carries its code
+  compiled rather than as files, and has no checkout at all; asking the
+  working directory took the project for the harness, and /health reported
+  the project's commit as the harness's revision."
+  []
+  (when-let [u (io/resource "samizdat/core.clj")]
+    (let [s (str u)]
+      (when (str/starts-with? s "file:")
+        ;; .../src/samizdat/core.clj -> the directory holding src/
+        (some-> (io/file (subs s (count "file:"))) .getParentFile .getParentFile .getParentFile str)))))

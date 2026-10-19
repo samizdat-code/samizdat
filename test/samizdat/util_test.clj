@@ -35,3 +35,15 @@
   (testing "middle marker present"
     (let [result (util/truncate-middle "abcdefghijklmnopqrstuvwxyz" 10)]
       (is (str/includes? result " … ")))))
+
+(deftest the-harness-checkout-is-where-its-code-was-loaded-from
+  ;; Not the working directory: a built samizdat runs in the project it works
+  ;; on, and took that project for its own checkout — /health reported
+  ;; dodeca's commit as the harness's revision.
+  (testing "from source, the checkout holding samizdat's code"
+    (let [dir (util/harness-checkout)]
+      (is (string? dir))
+      (is (.exists (java.io.File. (str dir "/src/samizdat/core.clj"))))))
+  (testing "in a built binary, where the code is no file, none"
+    (with-redefs [clojure.java.io/resource (fn [& _] nil)]
+      (is (nil? (util/harness-checkout))))))

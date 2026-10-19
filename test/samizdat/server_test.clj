@@ -370,6 +370,12 @@
     (is (string? (:started_at id)))
     (is (= id (server/harness-identity)) "read once: the code the process loaded")))
 
+(deftest a-binary-has-no-harness-revision
+  ;; Run from inside a project's git checkout, a built binary reported that
+  ;; PROJECT's commit as its own: it read git at the working directory.
+  (with-redefs [samizdat.util/harness-checkout (constantly nil)]
+    (is (= {:revision nil :dirty nil} (#'server/read-identity)))))
+
 ;; --- who may drive the API (karamazov-3vu1.1) ----------------------------------
 ;;
 ;; The server binds loopback and has no credentials, so the one thing standing
