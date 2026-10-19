@@ -1749,6 +1749,13 @@
    ;; What the triage call may say a task IS, and how big.
    :kinds             #{"answer" "change" "investigate"}
    :sizes             #{"trivial" "small" "large"}
+   ;; The kinds a workflow is FOR, when it is not for every kind. Chosen for
+   ;; a kind not listed, the choice is dropped and the run takes :fallback.
+   ;; `answer` runs a role with no tool that writes, so a task that should
+   ;; change the project — or find something out and maybe fix it — cannot
+   ;; be done under it: run de04432c spent 117 turns on "finish the port"
+   ;; and changed nothing.
+   :serves            {"answer" #{"answer"}}
    ;; kind x size -> the run's shape. :any is every size of that kind. A
    ;; request's own :beam-width / :max-turns win over a row, and the config's
    ;; :run numbers are a ceiling a row does not raise. :reasoning-effort only

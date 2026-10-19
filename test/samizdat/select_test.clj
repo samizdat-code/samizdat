@@ -90,6 +90,27 @@
            (select/triage! {:conn nil :llm-adapter :fake :llm-config {}}
                            "explain the project in the chat")))))
 
+(deftest a-read-only-workflow-is-only-for-a-question
+  ;; Run de04432c: "look at PLAN.md to figure out what needs to be done to
+  ;; finish" triaged as investigate and picked `answer`, whose role holds no
+  ;; tool that writes. 117 turns and not one file changed. A workflow is held
+  ;; to the kinds policy says it serves; picked for another, it is dropped and
+  ;; the run takes the fallback, which can write.
+  (let [triage (fn [reply]
+                 (with-redefs [llm/chat (fn [& _] {:content reply :finish-reason "stop"})
+                               select/candidates (fn [_] [{:name "loop"} {:name "answer"}])]
+                   (select/triage! {:conn nil :llm-adapter :fake :llm-config {}} "finish the port")))]
+    (is (= {:kind :investigate :size :small :workflow nil}
+           (triage "kind: investigate\nsize: small\nworkflow: answer")))
+    (is (= {:kind :change :size :small :workflow nil}
+           (triage "kind: change\nsize: small\nworkflow: answer")))
+    (is (= {:kind :answer :size :small :workflow "answer"}
+           (triage "kind: answer\nsize: small\nworkflow: answer"))
+        "a question still gets it")
+    (is (= {:kind :investigate :size :small :workflow "loop"}
+           (triage "kind: investigate\nsize: small\nworkflow: loop"))
+        "a workflow policy does not restrict serves every kind")))
+
 (deftest a-triage-reply-is-three-lines-each-held-to-its-menu
   (let [cands [{:name "loop"} {:name "team"}]]
     (is (= {:kind :change :size :large :workflow "team"}
