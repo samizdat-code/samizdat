@@ -23,12 +23,15 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
             [ftxui.core :as ui]
+            [samizdat.tui.layout :as layout]
             [samizdat.tui.state :as st]
             [samizdat.tui.widgets :as w]))
 
 (defn- box [state]
   (fn []
-    (w/input (assoc @state :on {:input #(swap! state st/set-input %)
+    (w/input (assoc @state
+                    :settings {:editing (:editing (layout/template))}
+                    :on {:input #(swap! state st/set-input %)
                                 :history-back #(swap! state st/history-back)
                                 :history-forward #(swap! state st/history-forward)})
              {})))
@@ -83,3 +86,33 @@
       (is (= line (:input @state)) "the state holds all of it")
       (ui/send-key! s :return)
       (is (= line @sent) "and Enter sends all of it"))))
+
+(deftest the-editing-keys-reach-the-box
+  ;; The data tests show the box names :on-key and the shipped keymap binds
+  ;; these; only the toolkit can say the terminal's bytes get there.
+  (let [state (atom (st/initial "b"))]
+    (ui/with-screen [s (box state)]
+      (ui/render-text s 80 3)
+      (ui/send-char! s "one two three")
+      (testing "Option+Left, as xterm sends it, then typing lands a word back"
+        (ui/send-input! s "\u001b[1;3D")
+        (ui/send-char! s "X")
+        (is (= "one two Xthree" (:input @state))))
+      (testing "Alt+B, the other spelling, and Ctrl+Left, Linux's"
+        (ui/send-key! s :alt-b)
+        (ui/send-key! s :arrow-left-ctrl)
+        (ui/send-char! s "Y")
+        (is (= "one Ytwo Xthree" (:input @state)) "a word back each"))
+      (testing "fn+Right arrives as End: the line's end"
+        (ui/send-key! s :end)
+        (ui/send-char! s "!")
+        (is (= "one Ytwo Xthree!" (:input @state))))
+      (testing "Ctrl+W and Alt+Backspace delete a word back"
+        (ui/send-key! s :ctrl-w)
+        (is (= "one Ytwo " (:input @state)) "the word and the punctuation after it")
+        (ui/send-input! s "\u001b\u007f")
+        (is (= "one " (:input @state))))
+      (testing "Ctrl+A then Ctrl+K kills the line"
+        (ui/send-key! s :ctrl-a)
+        (ui/send-key! s :ctrl-k)
+        (is (= "" (:input @state)))))))

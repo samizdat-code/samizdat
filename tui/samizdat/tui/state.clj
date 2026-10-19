@@ -40,7 +40,8 @@
   that called them, which no test could see because each half was correct on
   its own."
   #{:decide :answer :toggle :select-run :select-branch :input :submit :start
-    :abort :resume :reply :toggle-option :option :scroll :history-back :history-forward})
+    :abort :resume :reply :toggle-option :option :scroll :history-back :history-forward
+    :take-paste})
 
 (def max-trace
   "How many steps the UI holds. The server's ring is bounded and so is this:
@@ -612,9 +613,21 @@
         (-> s (assoc :paste-done tag) (assoc-in [:pastes tag] pasted)))
       :else (assoc s :paste-done pasted))))
 
+(defn paste-end?
+  "Whether a key event is the terminal's bracket closing a paste."
+  [{:keys [type input]}]
+  (and (= :unknown type) (= "\u001b[201~" input)))
+
+(defn take-paste
+  "`[state' text]`: the closed paste, taken so it is put in once. The box
+  takes it when the paste's closing bracket reaches it, and puts it at its
+  cursor, which only the box knows."
+  [s]
+  [(dissoc s :paste-done) (:paste-done s)])
+
 (defn apply-paste
-  "Join a closed paste to the end of the box. The box's cursor is the
-  toolkit's, not the state's, so a paste lands after what is there."
+  "Join a closed paste to the end of the box — what is left when the box did
+  not take it at its cursor (`take-paste`), the focus being elsewhere."
   [s]
   (if-let [p (:paste-done s)]
     (-> s (update :input str p) (dissoc :paste-done))

@@ -247,8 +247,8 @@
                   :extra-deps
                   {jlt-commons/ftxui-jolt
                    {:git/url "https://github.com/jlt-commons/ftxui-jolt"
-                    :git/tag "v0.4.1"
-                    :git/sha "6a60adbbc644a1d237f5ca9e7763ca02c332f708"}}
+                    :git/tag "v0.5.0"
+                    :git/sha "219e063955b8475a427eca6e98dcf9263b1f0fd5"}}
                   ;; samizdat.main: the server and the TUI in one process;
                   ;; --headless for the server alone, --connect URL for the
                   ;; TUI alone against a running server.
@@ -265,8 +265,8 @@
                       :extra-deps
                       {jlt-commons/ftxui-jolt
                        {:git/url "https://github.com/jlt-commons/ftxui-jolt"
-                        :git/tag "v0.4.1"
-                        :git/sha "6a60adbbc644a1d237f5ca9e7763ca02c332f708"}}
+                        :git/tag "v0.5.0"
+                        :git/sha "219e063955b8475a427eca6e98dcf9263b1f0fd5"}}
                       :main-opts ["-m" "samizdat.tui.test-runner"]}}
 
  :tasks {serve {:doc "start the harness (HTTP + nREPL) and park"
