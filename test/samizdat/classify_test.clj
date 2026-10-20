@@ -114,6 +114,19 @@
                                                {:effect :ask :input "cd /usr/bin && jolt -M:test"}))))
       (is (not @called)))))
 
+(deftest a-command-whose-paths-the-text-hides-asks-without-a-call
+  ;; A substitution, a variable, a glob or a cd out of the project names no
+  ;; path the reach check can measure: the model would be the only judge of
+  ;; where it reaches, and a learned answer never stands in for that check.
+  (let [called (atom false)]
+    (with-redefs [llm/chat (fn [& _] (reset! called true) {:content "allow"})]
+      (doseq [c ["cat $(echo /etc/passwd)" "x=/etc; cat $x/passwd" "cat /et*/passwd"
+                 "cd .. && cat ../../etc/hosts"]]
+        (is (= :ask (:verdict (classify/classify {:llm-adapter :fake :llm-config {} :root "/work/dodeca"}
+                                                 {:effect :ask :input c})))
+            c))
+      (is (not @called)))))
+
 (deftest the-reach-is-the-ancestor-n-levels-up
   (is (= "/work" (classify/reach-root "/work/dodeca" 1)))
   (is (= "/" (classify/reach-root "/work/dodeca" 2)))

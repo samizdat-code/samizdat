@@ -25,8 +25,10 @@
   which model runs it is config :roles :classifier, else the run's own
   (workflow/role-ctx); how far outside the project a read may reach is
   gates.edn :approval-classifier :reach, and a read past that (and past
-  its :scratch directories) asks without a call. Only a reply whose first word is `allow` allows: anything else, a
-  failed call included, leaves the ask for a person."
+  its :scratch directories) asks without a call, as does a command whose
+  text hides what it reaches (policy/paths-opaque?). Only a reply whose
+  first word is `allow` allows: anything else, a failed call included,
+  leaves the ask for a person."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
@@ -118,8 +120,13 @@
           far (distinct
                (concat (remove (fn [p] (some #(within? % p) near)) outside)
                        (policy/outside-reads input (:root ctx) near)))]
-      (if (seq far)
-        {:verdict :ask :why (str/join " " far)}
+      (cond
+        (seq far) {:verdict :ask :why (str/join " " far)}
+        ;; Nothing named is not nothing reached when the text hides its
+        ;; paths: the model would be the only judge of where it reaches.
+        (policy/paths-opaque? input (:root ctx))
+        {:verdict :ask :opaque? true}
+        :else
         (ask-model ctx {:input input :reason reason :outside outside :parent parent
                         :scratch scratch
                         :rationale (rationale ctx rationale-chars)})))
