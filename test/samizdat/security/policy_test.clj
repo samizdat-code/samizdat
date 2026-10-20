@@ -626,6 +626,25 @@
       (is (empty? (out (str "echo " other))) "echo prints its argument, it does not read it"))
     (remove-dir! other)))
 
+(deftest paths-opaque-when-the-text-does-not-say-what-is-read
+  ;; outside-reads names the paths a command's words spell out. These spell
+  ;; out none and can still reach anywhere, so nothing measured off the text
+  ;; may stand for where they reach (auto's classifier asks a person).
+  (let [root (str (jolt.fs/canonicalize (str (jolt.fs/create-temp-dir))))
+        opaque? #(policy/paths-opaque? % root)]
+    (jolt.fs/create-dirs (str root "/src"))
+    (doseq [c ["cat $(echo /etc/passwd)" "cat `echo /etc/hosts`"
+               "x=/etc; cat $x/passwd" "cat ${D}/f" "diff <(cat /etc/hosts) in"
+               "cat /et*/passwd" "ls ~/.ss?" "cat ../../[a-z]*/f"
+               "cd .. && cat ../../etc/hosts" "cd && cat .zshrc" "cd ~ && ls"
+               "pushd /etc && cat passwd" "cd - && ls" "cat 'unclosed"]]
+      (is (opaque? c) c))
+    (testing "what the text does say"
+      (doseq [c ["cat /etc/passwd" "ls $HOME/src" "cat ${HOME}/x" "grep 'foo$' in"
+                 "awk '{print $1}' in" "echo '$(not run)'" "cat *.clj"
+                 "cd src && cat ../in" "cd ./src && npx foo" "jolt -M:test 2>&1 | tail"]]
+        (is (not (opaque? c)) c)))))
+
 (deftest a-read-outside-the-project-is-asked-about
   (let [root (str (jolt.fs/create-temp-dir))
         other (outside-dir)

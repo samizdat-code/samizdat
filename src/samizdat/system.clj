@@ -33,6 +33,7 @@
             [clojure.tools.logging :as log]
             [samizdat.security.listen :as listen]
             [samizdat.approval :as approval]
+            [samizdat.security.classify :as classify]
             ;; installs the java.time.* host shim tools.logging's timestamp
             ;; formatter resolves against; must load before the first log call
             [jolt.time]
@@ -279,6 +280,9 @@
      ;; The approval keys that loosen anything are the operator's alone
      ;; (approval/configure!); the project's gates.edn cannot set them.
      (approval/configure! (:approval cfg))
+     ;; What :auto asks before a person. Installed always and consulted only
+     ;; under :auto (karamazov-p1qr).
+     (approval/install-classifier! classify/classify)
      (log/info "samizdat up on port" (get-in cfg [:http :port])
                "provider" (get-in cfg [:llm :provider])
                "model" (get-in cfg [:llm :model])

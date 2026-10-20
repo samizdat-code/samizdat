@@ -1042,3 +1042,52 @@
            (remove (fn [p] (some #(inside? % p) allowed)))
            distinct
            vec))))
+
+(defn- hidden-expansion?
+  "Whether the shell would expand something in `s` into text it does not
+  show: a command or process substitution, or a variable other than HOME
+  (which `path-like` expands itself). Single quotes keep their contents
+  literal, as the shell does."
+  [s]
+  (loop [cs (seq (str s)) q nil]
+    (let [[c n] cs]
+      (cond
+        (nil? c) false
+        (= q \') (recur (rest cs) (when-not (= c \') q))
+        (and (= c \\) n) (recur (nnext cs) q)
+        (and (nil? q) (= c \')) (recur (rest cs) \')
+        (= c \") (recur (rest cs) (if q nil \"))
+        (= c \`) true
+        (and (nil? q) (#{\< \>} c) (= n \()) true
+        (and (= c \$) n (or (= n \() (= n \{) (= n \_) (Character/isLetter (char n))))
+        (let [braced? (= \{ n)
+              id (apply str (take-while #(or (= \_ %) (Character/isLetterOrDigit (char %)))
+                                        (if braced? (nnext cs) (rest cs))))]
+          (if (and (= "HOME" id) (or (not braced?) (= \} (nth cs (+ 2 (count id)) nil))))
+            (recur (rest cs) q)
+            true))
+        :else (recur (rest cs) q)))))
+
+(defn paths-opaque?
+  "Whether where `command` reaches cannot be read off its text, so
+  `outside-reads` naming nothing says nothing: an unparseable string, a
+  substitution or a variable (`hidden-expansion?`), a glob in a word that
+  looks like a path, or a `cd`/`pushd` that leaves `root` — after which a
+  relative path means somewhere `outside-reads` did not measure from."
+  [command root]
+  (let [raw (str/trim (str command))
+        {:keys [segments malformed]} (shell-split raw)
+        home (System/getenv "HOME")
+        root (canonical (or root "."))
+        resolve (fn [w] (let [p (or (path-like w home) w)]
+                          (canonical (if (str/starts-with? p "/") p (str root "/" p)))))]
+    (boolean
+     (or malformed
+         (hidden-expansion? raw)
+         (some (fn [seg]
+                 (let [[h & args :as ws] (words (exec-prefix-stripped seg))]
+                   (or (some #(some->> (path-like % home) (re-find #"[*?\[]")) ws)
+                       (and (#{"cd" "pushd"} h)
+                            (let [t (first (remove flag? args))]
+                              (or (nil? t) (= "-" t) (not (inside? root (resolve t)))))))))
+               segments)))))

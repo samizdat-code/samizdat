@@ -70,6 +70,7 @@
             [mycelium.workflow-test]
             [samizdat.agent-test]
             [samizdat.approval-test]
+            [samizdat.classify-test]
             [samizdat.base-test]
             [samizdat.boundary-test]
             [samizdat.compaction-test]
@@ -331,6 +332,7 @@
     samizdat.llm-stream-test
     samizdat.agent-test
     samizdat.approval-test
+    samizdat.classify-test
     samizdat.base-test
     samizdat.boundary-test
     samizdat.compaction-test

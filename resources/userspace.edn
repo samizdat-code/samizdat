@@ -304,4 +304,6 @@
    :workflow-select "prompts/workflow-select.md"
    :userspace-rejected "prompts/userspace-rejected.md"
    :userspace-rejections "prompts/userspace-rejections.md"
-   :workflow-select-system "prompts/workflow-select-system.md"}}
+   :workflow-select-system "prompts/workflow-select-system.md"
+   :approval-classify "prompts/approval-classify.md"
+   :approval-classify-system "prompts/approval-classify-system.md"}}

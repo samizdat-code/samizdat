@@ -265,7 +265,7 @@
                           (swap! state st/apply-project (client/project base)))
                       (say! (str "mode not set: " (:error r))))))
                 (say! (str "approval mode: " (or (get-in @state [:project :approval_mode]) "unknown")
-                           " — /mode attended (ask while a TUI watches), refuse, block, or yolo (every ask allowed)")))
+                           " — /mode attended (ask while a TUI watches), refuse, block, auto (a classifier first, then you), or yolo (every ask allowed)")))
         :tour (apply say! (onboarding/lines (:onboarding (layout/current))))
         :complain
         (cond
