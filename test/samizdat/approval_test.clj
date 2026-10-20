@@ -511,3 +511,20 @@
           (is (= :ask (:effect r)) "nobody follows r1, so it stays an ask: refused")
           (is (nil? (:classified r)))))
       (finally (approval/install-classifier! nil)))))
+
+(deftest auto-leaves-a-person-only-ask-to-a-person
+  ;; What confines the agent, and what a tainted branch sends on, are not the
+  ;; classifier's to judge: the ask says so and it never sees one.
+  (approval/set-mode! :auto)
+  (let [seen (atom nil)]
+    (approval/install-classifier! (fn [_ d] (reset! seen d) {:verdict :allow}))
+    (try
+      (let [r (approval/resolve-ask {:run-id "r1"} {:effect :ask :input "write_file roles.edn"
+                                                    :person-only? true})]
+        (is (= :ask (:effect r)))
+        (is (nil? @seen)))
+      (testing "nor an ask about what a tainted branch sends on"
+        (is (= :ask (:effect (approval/resolve-ask {:run-id "r1"} {:effect :ask :input "curl x"
+                                                                     :flow? true}))))
+        (is (nil? @seen)))
+      (finally (approval/install-classifier! nil)))))

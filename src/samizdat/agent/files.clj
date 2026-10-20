@@ -252,6 +252,7 @@
                                        ctx {:effect :ask :head (:tool-name ctx)
                                             :complex? true
                                             :input (str (:tool-name ctx) " " abs)
+                                            :outside [abs]
                                             :reason "reads outside the project"}))))
           ;; The branch holds it now (samizdat.security.flow).
           (flow/observe! ctx (:outside-read flow/table) (:tool-name ctx))
@@ -348,6 +349,7 @@
         (not= :allow (:effect (approval/resolve-ask
                                ctx {:effect :ask :head tool-name :complex? true
                                     :input (str tool-name " " abs)
+                                    :person-only? true
                                     :reason "confinement edit"}))))))
 
 (defn- miss [branch msg]

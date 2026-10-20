@@ -38,15 +38,89 @@
   (let [sent (atom nil)]
     (with-redefs [llm/chat (fn [_ _ msgs & _] (reset! sent msgs) {:content "ask\nnot sure"})]
       (let [v (classify/classify {:llm-adapter :fake :llm-config {} :root "/work/dodeca"}
-                                 {:effect :ask :input "ls ~/src/samizdat-code"
+                                 {:effect :ask :input "ls /work/samizdat-code"
                                   :reason "outside-project"
-                                  :outside ["/Users/me/src/samizdat-code"]})
+                                  :outside ["/work/samizdat-code"]})
             user (:content (last @sent))]
         (is (= :ask (:verdict v)))
         (is (= "system" (:role (first @sent))))
-        (is (str/includes? user "ls ~/src/samizdat-code"))
-        (is (str/includes? user "/Users/me/src/samizdat-code"))
+        (is (str/includes? user "ls /work/samizdat-code"))
+        (is (str/includes? user "/work/samizdat-code\n"))
         (is (str/includes? user "/work/dodeca"))))))
+
+(deftest the-call-carries-the-agents-reason-and-the-project-parent
+  (let [sent (atom nil)]
+    (with-redefs [llm/chat (fn [_ _ msgs & _] (reset! sent msgs) {:content "allow\nreads a sibling"})]
+      (classify/classify {:llm-adapter :fake :llm-config {} :root "/work/dodeca"
+                          :branch {:messages [{:role "user" :content "go"}
+                                              {:role "assistant"
+                                               :content "<think>hmm</think>Check how a5 lays out its modules."}]}}
+                         {:effect :ask :input "ls /work/a5" :reason "outside-project"
+                          :outside ["/work/a5"]})
+      (let [user (:content (last @sent))]
+        (is (str/includes? user "Check how a5 lays out its modules."))
+        (is (not (str/includes? user "hmm")) "the reasoning block is not the rationale")
+        (is (str/includes? user "/work\n") "the parent the reach is measured from")))))
+
+(deftest a-read-beyond-the-reach-asks-without-a-call
+  (let [called (atom false)]
+    (with-redefs [llm/chat (fn [& _] (reset! called true) {:content "allow"})]
+      (testing "past the project's parent"
+        (is (= :ask (:verdict (classify/classify {:llm-adapter :fake :llm-config {} :root "/work/dodeca"}
+                                                 {:effect :ask :input "ls ~/bin"
+                                                  :outside ["/home/me/bin"]}))))
+        (is (not @called)))
+      (testing "the parent and a sibling are within it"
+        (is (= :allow (:verdict (classify/classify {:llm-adapter :fake :llm-config {} :root "/work/dodeca"}
+                                                   {:effect :ask :input "ls /work /work/a5/src"
+                                                    :outside ["/work" "/work/a5/src"]}))))
+        (is @called)))))
+
+(deftest scratch-is-within-the-reach
+  (let [sent (atom nil)]
+    (with-redefs [llm/chat (fn [_ _ msgs & _] (reset! sent msgs) {:content "allow\nscratch"})]
+      (doseq [p ["/tmp/fx/run.out" "/private/tmp/fx"]]
+        (reset! sent nil)
+        (is (= :allow (:verdict (classify/classify {:llm-adapter :fake :llm-config {} :root "/work/dodeca"}
+                                                   {:effect :ask :input (str "cat " p) :outside [p]}))))
+        (is (some? @sent) p))
+      (is (str/includes? (:content (last @sent)) "/tmp") "the model is told what scratch is"))))
+
+(deftest a-parent-at-or-above-home-is-no-reach
+  ;; A project at /tmp/x or ~/x would otherwise reach the whole disk or the
+  ;; whole home directory.
+  (with-redefs [llm/chat (fn [& _] {:content "allow"})]
+    (doseq [[root p] [["/tmp" "/opt/homebrew/bin"]
+                      ["/Users/me/proj" "/Users/me/.zshrc"]
+                      ["/Users/me/src/x" "/Users/me/src/y"]]]
+      (with-redefs [classify/home (constantly "/Users/me/src")]
+        (is (= :ask (:verdict (classify/classify {:llm-adapter :fake :llm-config {} :root root}
+                                                 {:effect :ask :input (str "ls " p) :outside [p]})))
+            [root p])))))
+
+(deftest what-the-shell-may-already-read-is-within-the-reach
+  (with-redefs [llm/chat (fn [& _] {:content "allow"})]
+    (is (= :allow (:verdict (classify/classify {:llm-adapter :fake :llm-config {} :root "/work/dodeca"
+                                                :read-roots ["/work/dodeca" "/home/me/.m2"]}
+                                               {:effect :ask :input "unzip -p ~/.m2/x.jar"
+                                                :outside ["/home/me/.m2/x.jar"]}))))))
+
+(deftest a-path-the-command-names-past-the-reach-asks-without-a-call
+  ;; A compound or unlisted command reaches the classifier with no :outside:
+  ;; what it names is measured here, not left to the model.
+  (let [called (atom false)]
+    (with-redefs [llm/chat (fn [& _] (reset! called true) {:content "allow"})]
+      (is (= :ask (:verdict (classify/classify {:llm-adapter :fake :llm-config {} :root "/work/dodeca"}
+                                               {:effect :ask :input "cd /usr/bin && jolt -M:test"}))))
+      (is (not @called)))))
+
+(deftest the-reach-is-the-ancestor-n-levels-up
+  (is (= "/work" (classify/reach-root "/work/dodeca" 1)))
+  (is (= "/" (classify/reach-root "/work/dodeca" 2)))
+  (is (= "/work/dodeca" (classify/reach-root "/work/dodeca" 0)))
+  (is (classify/within? "/work" "/work"))
+  (is (classify/within? "/work" "/work/a5/x"))
+  (is (not (classify/within? "/work" "/workshop/x"))))
 
 (deftest a-failed-call-asks
   (with-redefs [llm/chat (fn [& _] (throw (ex-info "down" {})))]

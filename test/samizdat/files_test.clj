@@ -24,7 +24,8 @@
             [clojure.test :refer [deftest testing is]]
             [jolt.fs :as fs]
             [samizdat.agent.files :as files]
-            [samizdat.agent.tools]))
+            [samizdat.agent.tools]
+            [samizdat.approval :as approval]))
 
 (defn- ctx [root tool args]
   {:tool-name tool :args args :branch {:id "B1"} :root root})
@@ -665,3 +666,25 @@
         (is (empty? (files/ctx-reference-roots {:root root :config {:run {:read-declared-roots? false}}}))))
       (is (= [] (files/declared-roots (str base "/other"))) "no git, no declared roots")
       (finally (sh "/" (str "rm -rf " base))))))
+
+(deftest an-outside-read-names-its-path-and-a-confinement-edit-is-a-persons
+  ;; :auto's classifier measures an outside read by its :outside paths, and
+  ;; never judges what confines the agent.
+  (let [root (str "/tmp/samizdat-files-" (random-uuid))
+        other (str "/tmp/samizdat-other-" (random-uuid))
+        asked (atom [])]
+    (fs/create-dirs (str root "/.samizdat"))
+    (fs/create-dirs other)
+    (spit (str other "/x.txt") "x")
+    (spit (str root "/.samizdat/userspace.edn") "{}")
+    (try
+      (with-redefs [approval/resolve-ask (fn [_ d] (swap! asked conj d) d)]
+        (files/resolve-read! {:root root :tool-name "read_file"} [] (str other "/x.txt"))
+        (let [abs (str (fs/canonicalize (str other "/x.txt")))]
+          (is (= [abs] (:outside (first @asked))))
+          (is (not (:person-only? (first @asked)))))
+        (reset! asked [])
+        (files/workflow-refused? {:root root :tool-name "write_file"} root
+                                 (str (fs/canonicalize (str root "/.samizdat/userspace.edn"))))
+        (is (:person-only? (first @asked))))
+      (finally (fs/delete-tree root) (fs/delete-tree other)))))

@@ -140,10 +140,13 @@
   "The classifier's verdict when it allows `decision`, else nil: no
   classifier, an error, no answer within gates.edn :approval-classifier
   :timeout-ms, or anything but {:verdict :allow} all leave the ask for a
-  person."
+  person. So does an ask that is a person's by kind: `:person-only?` (an edit
+  to what confines the agent) or `:flow?` (what a branch that read web
+  content or a secret sends on) — the classifier judges where a command
+  reaches, not those."
   [ctx decision]
-  (when-let [f @classifier]
-    (let [ms (or (:timeout-ms (gates/threshold :approval-classifier)) 10000)
+  (when-let [f (when-not (or (:person-only? decision) (:flow? decision)) @classifier)]
+    (let [ms (:timeout-ms (gates/threshold :approval-classifier))
           v (try (deref (future (f ctx decision)) ms nil)
                  (catch Throwable e
                    (log/warn "approval: the classifier failed:" (ex-message e))

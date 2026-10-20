@@ -1741,13 +1741,22 @@
         cannot know what a narrower request would look like."}
 
  :approval-classifier
- {:value {:timeout-ms 10000}
+ {:value {:timeout-ms 10000 :reach 1 :rationale-chars 800
+          :scratch ["/tmp" "/private/tmp"]}
   :kind :policy :capability-tunable? false
-  :doc "HOW LONG :auto WAITS ON ITS CLASSIFIER before the ask goes to a
-        person (samizdat.approval/install-classifier!). No answer in time is
-        the same as no allow: the safe direction, always. The mode itself is
-        the operator's (config.edn :approval :mode) or a person's (/mode
-        auto), never this file's — it lets things through."}
+  :doc "HOW :auto's CLASSIFIER JUDGES an ask before a person sees it
+        (samizdat.approval/install-classifier!, samizdat.security.classify).
+        :timeout-ms — how long it may take; no answer in time is the same as
+        no allow, the safe direction, always. :reach — how many directories
+        above the project a read outside it may be and still go to the model
+        (1: the project's parent, so its siblings); a read past that asks a
+        person without a call. :scratch — directories that count as scratch
+        space, read and written like the project itself (/private/tmp is
+        where macOS keeps /tmp). :rationale-chars — how much of what the
+        branch said before the call the model is shown as its reason. The
+        mode itself is the operator's (config.edn :approval :mode) or a
+        person's (/mode auto), never this file's — it lets things through."
+  :provenance ["karamazov-p1qr" "run de04432c"]}
 
  :workflow-selection
  {:value
