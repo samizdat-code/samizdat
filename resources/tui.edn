@@ -256,12 +256,54 @@
  ;; What /help says about the keys, after the commands. Prose, so it lives
  ;; here with the commands it sits beside; the bindings are the core's.
  :keys ["Enter sends · Ctrl+J, Alt+Enter or Shift+Enter breaks the line · Up/Down or Ctrl+P/N walk what was sent · Ctrl+F searches it"
+        "editing: Option/Alt or Ctrl+←→ by word · fn+←→, Home/End or Ctrl+A/E to the line's ends · Ctrl+W or Alt+Backspace deletes a word back, Alt+D forward · Ctrl+U/K kill to the line's start/end"
         "a paste keeps its line breaks; one of 4+ lines shows as [N lines pasted] and is sent whole"
         "Tab completes a command · @ names a project file (Tab/↑↓ pick, Enter puts it in, Esc drops it) · PgUp/PgDn scroll · End or Down follows the bottom · Ctrl+O opens the newest fold"
         "permission: y allow · a allow always · n deny · d deny with a note · Esc deny"
         "question: ↑↓ or j/k move · Space ticks or picks · Enter picks or confirms · 1-9 jump · Esc rejects (or sends what is answered)"
         "Esc stops the agent; what you type next and Enter carry the run on with it"
         "Ctrl+C clears the line, then quits (twice while a run is going) · Ctrl+Q quits · F5 refreshes"]
+
+ ;; The compose box's editing keys (samizdat.tui.editing): a key's name, or
+ ;; the bytes a terminal sends for a key that has none, to the command it
+ ;; runs. Commands: :word-left :word-right :line-start :line-end
+ ;; :text-start :text-end :delete-word-back :delete-word-forward
+ ;; :kill-line-start :kill-line-end. A key not here is the box's own.
+ :editing
+ {:keys {;; Option+Left/Right on a Mac: ESC b / ESC f (Terminal.app, iTerm2's
+         ;; Esc+), or xterm's Alt+arrows (Ghostty, kitty, Alacritty, WezTerm,
+         ;; iTerm2's default), or the Meta spelling some send
+         :alt-b :word-left
+         :alt-f :word-right
+         "\u001b[1;3D" :word-left
+         "\u001b[1;3C" :word-right
+         "\u001b[1;9D" :word-left
+         "\u001b[1;9C" :word-right
+         ;; Ctrl+Left/Right: Linux and Windows
+         :arrow-left-ctrl :word-left
+         :arrow-right-ctrl :word-right
+         ;; fn+Left/Right on a Mac arrive as Home and End; Cmd+Left/Right as
+         ;; Ctrl+A / Ctrl+E in most terminals, which are readline's too
+         :home :line-start
+         :end :line-end
+         :ctrl-a :line-start
+         :ctrl-e :line-end
+         ;; Ctrl+Home / Ctrl+End: the whole draft
+         "\u001b[1;5H" :text-start
+         "\u001b[1;5F" :text-end
+         ;; a word back: Ctrl+W, Option/Alt+Backspace, and Ctrl+Backspace,
+         ;; which Linux terminals send as Ctrl+H (drop it if yours sends
+         ;; Ctrl+H for a plain Backspace)
+         :ctrl-w :delete-word-back
+         "\u001b\u007f" :delete-word-back
+         :ctrl-h :delete-word-back
+         ;; a word forward: Alt+D, Ctrl+Delete, Option/Alt+Delete
+         :alt-d :delete-word-forward
+         "\u001b[3;5~" :delete-word-forward
+         "\u001b[3;3~" :delete-word-forward
+         ;; to the line's start / end: Ctrl+U (Cmd+Backspace in iTerm2), Ctrl+K
+         :ctrl-u :kill-line-start
+         :ctrl-k :kill-line-end}}
 
  ;; The @-picker: how many matching files it asks the server for and shows.
  :file-picker {:max 8}
