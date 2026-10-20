@@ -175,6 +175,17 @@
        :size (on-menu (:sizes p) (:size labelled))
        :workflow (some-> (:workflow labelled) (parse-choice cands))})))
 
+(defn held-to-kind
+  "`triage` with its workflow dropped when policy's :serves says that
+  workflow is for other kinds than the one triage named. A workflow :serves
+  does not list is for every kind, and with no kind there is nothing to hold
+  it to."
+  [{:keys [kind workflow] :as triage}]
+  (let [serves (get (:serves (policy)) workflow)]
+    (if (and kind serves (not (contains? (set (map keyword serves)) kind)))
+      (assoc triage :workflow nil)
+      triage)))
+
 (defn effort
   "The run's shape for a triage — {:beam-width :max-turns :reasoning-effort
   :workflow}, any of them absent — from policy's :effort table: the row for
@@ -224,7 +235,7 @@
                                              :model (:model llm-config)
                                              :usage (:usage answer)})
                  (catch Throwable _ nil)))
-          (parse-triage (:content answer) cands))))
+          (held-to-kind (parse-triage (:content answer) cands)))))
     (catch Throwable _ nil)))
 
 (defn pick!

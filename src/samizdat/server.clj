@@ -45,6 +45,7 @@
             [samizdat.security.token :as token]
             [samizdat.system :as system]
             [samizdat.userspace :as userspace]
+            [samizdat.util :as util]
             [ruuter.core :as ruuter]))
 
 (defn json-response
@@ -102,6 +103,21 @@
 
 (defonce ^:private started-at (str (java.time.Instant/now)))
 
+(defn- read-identity
+  "The checkout's commit and whether it is dirty, read from the checkout the
+  code was loaded from (util/harness-checkout) — nil fields in a built
+  binary, which has none, even when it runs inside some project's git tree."
+  []
+  (if-let [dir (util/harness-checkout)]
+    (let [git (fn [& args]
+                (let [r (apply proc/run {:timeout-ms 5000} "git" "-C" dir args)]
+                  (when (and (not (:timeout r)) (zero? (long (or (:exit r) 1))))
+                    (str/trim (str (:out r))))))
+          rev (not-empty (git "rev-parse" "HEAD"))]
+      {:revision rev
+       :dirty (when rev (boolean (seq (git "status" "--porcelain" "--untracked-files=no"))))})
+    {:revision nil :dirty nil}))
+
 (def harness-identity
   "Which harness THIS process is: the checkout's commit and whether its tree
   had uncommitted changes, read once, on the first /health — so a checkout
@@ -110,15 +126,7 @@
   `serve` answered /health like a current one, so a client could not tell it
   was talking to old code until a run failed (karamazov-uk77). Nil fields
   where there is no checkout to read, as from a built binary."
-  (let [identity* (delay
-                   (let [dir (System/getProperty "user.dir")
-                         git (fn [& args]
-                               (let [r (apply proc/run {:timeout-ms 5000} "git" "-C" dir args)]
-                                 (when (and (not (:timeout r)) (zero? (long (or (:exit r) 1))))
-                                   (str/trim (str (:out r))))))
-                         rev (not-empty (git "rev-parse" "HEAD"))]
-                     {:revision rev
-                      :dirty (when rev (boolean (seq (git "status" "--porcelain" "--untracked-files=no"))))}))]
+  (let [identity* (delay (read-identity))]
     (fn [] (assoc @identity* :started_at started-at))))
 
 (defn- health [_req]

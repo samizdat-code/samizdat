@@ -204,8 +204,9 @@
   written into a temp dir of its own, and a shell that could write where the
   profile lives could rewrite the confinement of its next command.
 
-  `:ports`, `:settings`, `:home` and `:harness-root` default to the process's
-  own; tests pass them."
+  `:ports`, `:settings` and `:home` default to the process's own, and
+  `:harness-root` to the checkout its code was loaded from — none in a built
+  binary (util/harness-checkout); tests pass them."
   [{:keys [backend root command env ports settings home harness-root]}]
   (let [cd-cmd (str "cd " (util/sh-quote (or root ".")) " && " command)
         bash ["bash" "-c" cd-cmd]]
@@ -214,7 +215,7 @@
       (let [{:keys [scratch profile-dir]} (dirs-for! (str root))
             spec (shell-spec {:home (or home (System/getenv "HOME"))
                               :root (str root)
-                              :harness-root (or harness-root (str (fs/cwd)))
+                              :harness-root (or harness-root (util/harness-checkout))
                               :scratch scratch
                               :ports ports
                               :settings settings})

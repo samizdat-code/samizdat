@@ -397,6 +397,8 @@
   ([conn run-id branch last-claim share?]
    (context-block conn run-id branch last-claim share? nil))
   ([conn run-id branch last-claim share? modes]
+   (context-block conn run-id branch last-claim share? modes true))
+  ([conn run-id branch last-claim share? modes task?]
   (let [;; Other branches' entries, less the labelled ones: these are
         ;; samples put in front of the branch unasked (samizdat.security.flow).
         others #(flow/unlabelled (remove (fn [e] (= (:branch_id e) (:id branch))) %))
@@ -454,10 +456,14 @@
                    ;; full statement is pinned into the tape once on claim
                    ;; (tools/tasks); this is the reminder, and the end is where
                    ;; a model attends most.
-                   [:task (if-let [t (:task branch)]
-                            (prompt/render "task-current"
-                                           {:id (:id t) :title (:title t)})
-                            (prompt/prompt "task-none"))]
+                   ;; Only for a role that holds the `task` tool: "No task
+                   ;; claimed — task create" sent an answerer, which has
+                   ;; none, after a tool it could not call (run de04432c).
+                   [:task (when task?
+                            (if-let [t (:task branch)]
+                              (prompt/render "task-current"
+                                             {:id (:id t) :title (:title t)})
+                              (prompt/prompt "task-none")))]
                    ;; The run's settled state, first and complete: what is
                    ;; established and — the half nothing carried before — what
                    ;; is RULED OUT. Read from the artifacts table every turn, so
@@ -1375,7 +1381,8 @@
             (context-block conn run-id branch
                            (get-in parsed [:args :claim])
                            (get-in ctx [:config :run :share-artifacts?])
-                           (get-in ctx [:config :run :modes]))
+                           (get-in ctx [:config :run :modes])
+                           (roles/may-use? (or (:role ctx) (:role branch) :implementor) "task"))
             ;; What the block cost, durably: one note per turn per branch,
             ;; sizes by part (karamazov-o4wm.6). The branch keeps the same
             ;; vector for introspect's last-turn view; the note is what a
@@ -1393,6 +1400,11 @@
             ;; model can trust about who is speaking is the frame, not the
             ;; `---` rule — a file can carry one of those.
             body (str (message/frame-result tool (truncate (:result result) turn))
+                      ;; One call runs per reply; say which others did not.
+                      (when (seq (:dropped parsed))
+                        (str "\n\n" (prompt/render "calls-dropped"
+                                                    {:ran tool
+                                                     :dropped (str/join ", " (:dropped parsed))})))
                       (when ctx-block (str "\n\n" ctx-block))
                       (when decision (str "\n\n---\n\n" (:message decision))))
             ;; Recorded exactly once. The row id is what a later turn settles,
