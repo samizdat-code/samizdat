@@ -39,6 +39,7 @@
             [samizdat.tui.layout :as layout]
             [samizdat.tui.state :as st]
             [samizdat.tui.commands :as cmd]
+            [samizdat.tui.editing :as editing]
             [samizdat.tui.markdown :as md]
             [samizdat.tui.timeline :as tl]))
 
@@ -823,6 +824,16 @@
                                        :else
                                        "a directive for the run — Enter sends, Esc stops the agent, /help for commands"))
                       :on-change (fn [s] (when-let [f (get-in state [:on :input])] (f s)))
+                      ;; The editing keys — by word, to a line's ends, the
+                      ;; kills — run off tui.edn's :editing :keys; a key
+                      ;; it does not bind stays the box's own.
+                      ;; And a paste's closing bracket puts it at the cursor.
+                      :on-key (let [keymap (get-in state [:settings :editing :keys])]
+                                (fn [e text]
+                                  (if (st/paste-end? e)
+                                    (when-let [p (when-let [f (get-in state [:on :take-paste])] (f))]
+                                      (editing/insert text p))
+                                    (some-> (editing/command keymap e) (editing/edit text)))))
                       :on-enter on-enter
                       ;; Up past the top row, Down past the bottom one: the
                       ;; history, as at a shell prompt. Only the box knows

@@ -53,7 +53,8 @@
             [samizdat.repl.guard :as guard]
             [samizdat.repl.image :as image]
             [samizdat.security.confine :as confine]
-            [samizdat.security.sandbox :as sandbox]))
+            [samizdat.security.sandbox :as sandbox]
+            [samizdat.util :as util]))
 
 (defonce ^:private images
   ;; root -> image. Per ROOT rather than per run: two runs against the same
@@ -109,8 +110,11 @@
         (or (get @images root)
             (when-let [im (image/start!
                            {:root root :backend backend
+                            ;; The checkout the harness's code came from, not
+                            ;; the cwd: a built binary runs in the project and
+                            ;; has none (util/harness-checkout).
                             :sandbox-spec (sandbox-spec (System/getenv "HOME")
-                                                        (str (fs/cwd)))})]
+                                                        (util/harness-checkout))})]
               ;; THE PROJECT'S OWN ROOTS, in the image that evaluates for it.
               ;; The image starts as a bare `jolt nrepl-server` — no alias —
               ;; so a test tree declared only under an alias's :extra-paths was

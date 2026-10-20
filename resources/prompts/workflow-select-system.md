@@ -13,6 +13,12 @@ KIND — what the person wants back:
 When a task could be read either way, it is the one the person's own words
 ask for: "explain", "describe", "what is", "how does" ask for an answer.
 
+Judge by the outcome the words ask for, not by the reading they ask for on
+the way. "Look at PLAN.md to figure out what needs to be done to finish",
+"read the spec and get familiar with the library" — the looking is how the
+work starts; "to finish" is the work, and that is a change. A task is an
+answer only when the reply itself is all the person wants back.
+
 SIZE — how much work, not how hard it sounds:
 
 - trivial: one small edit or one quick look.

@@ -641,7 +641,11 @@
                     "```tool-call\n{\"name\": \"real\", \"args\": {\"k\": 1}}\n```")
           p (fence/parse-tool-call resp)]
       (is (= "real" (:name p)))
-      (is (= 2 (:fences p)))))
+      (is (= 2 (:fences p)))
+      (is (= ["example"] (:dropped p)) "and the calls that did not run are named")))
+  (testing "one call drops nothing"
+    (is (nil? (:dropped (fence/parse-tool-call
+                         "```tool-call\n{\"name\": \"real\", \"args\": {}}\n```")))))
 
   (testing "the model drafting inside <think> before the real call"
     ;; Not an edge case. Measured at 20.5% of 200 live deepseek-v4-flash

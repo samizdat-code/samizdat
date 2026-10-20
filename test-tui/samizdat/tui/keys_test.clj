@@ -22,6 +22,7 @@
   that a questionnaire can be answered without touching the mouse, and that
   Ctrl+C does not take a run down with one press."
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
+            [ftxui.core :as ui]
             [samizdat.api.client :as client]
             [samizdat.tui.core :as core]
             [samizdat.tui.state :as st]))
@@ -132,6 +133,29 @@
         (is (re-find #"\[9 lines pasted #1\]$" (:input @core/state)) "collapsed in the box")
         ((:submit @#'core/handlers) (:input @core/state))
         (is (= (str "see: one\ntwo\n" trace) @sent) "and sent whole")))))
+
+(deftest a-paste-lands-at-the-cursor
+  ;; A paste was joined to the END of the box: the cursor is the toolkit's,
+  ;; and the state never knew where it was. Its closing bracket now reaches
+  ;; the box, which puts the paste where the cursor is.
+  (ui/with-screen [s core/root {:on-event on-event}]
+    (ui/render-text s 120 40)
+    (ui/send-char! s "hello world")
+    (dotimes [_ 5] (ui/send-key! s :arrow-left))
+    (ui/send-input! s "\u001b[200~")
+    (ui/send-char! s "big ")
+    (ui/send-input! s "\u001b[201~")
+    (is (= "hello big world" (:input @core/state)))
+    (testing "and the cursor is after it"
+      (ui/send-char! s "X")
+      (is (= "hello big Xworld" (:input @core/state))))
+    (testing "a big paste's placeholder lands there too"
+      (ui/send-key! s :home)
+      (ui/send-input! s "\u001b[200~")
+      (doseq [c (clojure.string/join "\n" (range 8))]
+        (if (= \newline c) (ui/send-key! s :return) (ui/send-char! s (str c))))
+      (ui/send-input! s "\u001b[201~")
+      (is (= "[8 lines pasted #1]hello big Xworld" (:input @core/state))))))
 
 (deftest ctrl-f-finds-a-line-that-was-sent
   (swap! core/state #(-> % (st/remember-input "run the tests") (st/remember-input "fix it")

@@ -278,6 +278,7 @@
    :task-current "prompts/task-current.md"
    :task-folded "prompts/task-folded.md"
    :task-none "prompts/task-none.md"
+   :calls-dropped "prompts/calls-dropped.md"
    :task-reflection "prompts/task-reflection.md"
    :task-reflection-input "prompts/task-reflection-input.md"
    :task-required "prompts/task-required.md"

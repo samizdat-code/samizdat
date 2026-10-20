@@ -380,7 +380,8 @@
    :option        #(swap! state st/move-option %)
    :scroll        (fn [pane view] (swap! state st/scrolled pane view))
    :history-back    #(swap! state st/history-back)
-   :history-forward #(swap! state st/history-forward)})
+   :history-forward #(swap! state st/history-forward)
+   :take-paste      #(let [[s' text] (st/take-paste @state)] (reset! state s') text)})
 
 ;; --- the feeds ----------------------------------------------------------------
 ;;
@@ -593,8 +594,11 @@
       ;; the paste and none to the box, a Return as a line break.
       (and (= :unknown type) (= "\u001b[200~" input))
       (do (swap! state st/begin-paste) true)
-      (and (= :unknown type) (= "\u001b[201~" input))
-      (do (swap! state st/end-paste) true)
+      ;; Closed, and NOT consumed: the bracket goes on to the box, whose
+      ;; :on-key puts the paste at its cursor (widgets/input). A paste the
+      ;; box does not take is joined at the next frame (state/apply-paste).
+      (st/paste-end? event)
+      (do (swap! state st/end-paste) false)
       (st/pasting? s)
       (do (cond
             (= :character type) (swap! state st/paste-add char)

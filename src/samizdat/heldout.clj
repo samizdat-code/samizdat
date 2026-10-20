@@ -268,9 +268,10 @@
 
 (defn harness-dir
   "The samizdat checkout a child is started from: policy's :harness-dir, else
-  this process's working directory."
+  the one this process's code was loaded from (util/harness-checkout), nil
+  in a built binary."
   []
-  (or (:harness-dir (policy)) (System/getProperty "user.dir")))
+  (or (:harness-dir (policy)) (util/harness-checkout)))
 
 (defn harness-revision
   "The commit of the harness a verdict was measured on, or nil."

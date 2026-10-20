@@ -802,7 +802,12 @@
             needed-repair? (not= repaired body)
             base (cond-> {:fences n}
                    needed-repair? (assoc :auto-repaired? true)
-                   unfenced? (assoc :unfenced? true))
+                   unfenced? (assoc :unfenced? true)
+                   ;; The calls before the last, which do not run: named, so
+                   ;; the turn can say so rather than leave the model waiting
+                   ;; on a result that is never coming (run de04432c).
+                   (> n 1) (assoc :dropped (mapv #(or (second (re-find #"\"name\"\s*:\s*\"([^\"]+)\"" %)) "?")
+                                                 (pop fenced))))
             first-try (read-json body)]
         (if (:ok first-try)
           (let [parsed (:value first-try)]

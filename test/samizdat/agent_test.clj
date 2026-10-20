@@ -2886,6 +2886,49 @@
 
 ;; --- tool output is framed apart from harness text (karamazov-o4wm.3) --------
 
+(deftest a-role-without-the-task-tool-is-not-told-to-claim-one
+  ;; The answerer holds no `task` tool (roles.edn), yet every turn's block
+  ;; said "No task claimed … task create". Run de04432c's answerer read it as
+  ;; a harness order it could not follow, twice, and spent turns on it.
+  (let [c (db/open! ":memory:")]
+    (try
+      (db/migrate! c)
+      (let [rid (runs/start-run! c {:problem "p" :beam-width 1})
+            _ (runs/open-branch! c rid {:branch-id "B1" :created-at-turn 0})
+            step (fn [role]
+                   (let [b (state/new-branch {:id "B1" :problem "p"})
+                         b' (aloop/steer-step {:conn c :run-id rid :max-turns 50 :role role} b 3
+                                              {:parsed {:name "read_file" :args {:path "x"}}
+                                               :result {:result "x" :category :neutral}})]
+                     (:content (peek (:messages b')))))
+            none (samizdat.prompt/prompt "task-none")]
+        (is (not (str/includes? (step :answerer) none)) "an answerer is not sent for a tool it lacks")
+        (is (str/includes? (step :implementor) none) "an implementor still is"))
+      (finally (db/close c)))))
+
+(deftest calls-that-did-not-run-are-named
+  ;; One call runs per reply, the last. The others were dropped without a
+  ;; word: run de04432c's answerer sent read_file and shell together, got the
+  ;; shell's output, and spent its next turn wondering where the file went.
+  (let [c (db/open! ":memory:")]
+    (try
+      (db/migrate! c)
+      (let [rid (runs/start-run! c {:problem "p" :beam-width 1})
+            _ (runs/open-branch! c rid {:branch-id "B1" :created-at-turn 0})
+            step (fn [parsed]
+                   (:content (peek (:messages (aloop/steer-step
+                                               {:conn c :run-id rid :max-turns 50}
+                                               (state/new-branch {:id "B1" :problem "p"}) 3
+                                               {:parsed parsed
+                                                :result {:result "out" :category :neutral}})))))
+            m (step {:name "shell" :args {} :fences 2 :dropped ["read_file"]})
+            close (str/index-of m "\n</tool_result>")]
+        (is (str/includes? (subs m close) "read_file") "named, after the frame: the harness speaking")
+        (is (re-find #"(?i)did not run" (subs m close)))
+        (is (not (re-find #"(?i)did not run" (step {:name "shell" :args {} :fences 1})))
+            "nothing said when one call was sent"))
+      (finally (db/close c)))))
+
 (deftest the-turns-user-message-frames-the-tool-output-apart-from-the-harness
   ;; steer-step joined the result, the context block, a `---` rule and the
   ;; steer into one message with nothing saying where the tool stopped
