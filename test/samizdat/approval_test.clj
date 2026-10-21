@@ -547,3 +547,21 @@
           (is (string? @seen) "the ask carried an id to the classifier")
           (is (= [[@seen {:outcome label}]] @observed) (str decision))))
       (finally (approval/install-classifier! nil)))))
+
+(deftest an-ask-released-by-the-run-ending-is-no-persons-answer
+  ;; abandon! denies every waiter when the run ends. Nobody answered that, so
+  ;; it is not an outcome for the learner to be held to.
+  (let [observed (atom [])]
+    (approval/install-classifier! (fn [_ _] {:verdict :ask}))
+    (try
+      (with-redefs [approval/policy (constantly {:mode :block :auto? true :wait-ms 5000
+                                                 :on-timeout :deny})
+                    samizdat.learned/observe! (fn [_ id o] (swap! observed conj [id o]))]
+        (future (loop [] (if (seq (approval/pending "r-abandon"))
+                           (approval/abandon! "r-abandon")
+                           (do (Thread/sleep 5) (recur)))))
+        (let [d (approval/resolve-ask {:run-id "r-abandon" :conn ::conn}
+                                      {:effect :ask :input "ls ~/src/other"})]
+          (is (= :ask (:effect d)) "still refused")
+          (is (empty? @observed) "and nothing recorded as a person's answer")))
+      (finally (approval/install-classifier! nil)))))

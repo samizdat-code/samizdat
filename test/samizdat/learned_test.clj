@@ -194,3 +194,12 @@
     (graduate! c)
     (let [s (learned/state c :approval family)]
       (is (= s (clojure.edn/read-string (pr-str s)))))))
+
+(deftest standing-counts-the-pairs-before-the-first-refit
+  ;; The supervisor reads standing mid-run; before any run has ended there is
+  ;; no refit to take :n from, and "3 pairs" beats " pairs".
+  (let [c (conn)]
+    (feed! c "r1" 0 3 ["ls" :parent "default"] :allow)
+    (is (= 3 (:n (first (learned/standing c)))))
+    (learned/run-ended! c "r1")
+    (is (= 3 (:n (first (learned/standing c)))))))

@@ -390,4 +390,10 @@
              :let [p (keyword point) st (state conn p family)]]
          {:point p :family family :mode (:mode st)
           :operator (get @operator p :shadow)
-          :n (:n st) :tau (:tau st) :outcome-blocked? (:outcome-blocked? st)})))
+          ;; :n is the last refit's; before the first, count what is logged.
+          :n (or (:n st)
+                 (:n (db/fetch-one conn ["SELECT COUNT(*) AS n FROM learned_decisions
+                                          WHERE point = ? AND family = ?
+                                            AND learner_label IS NOT NULL AND llm_label IS NOT NULL"
+                                         point family])))
+          :tau (:tau st) :outcome-blocked? (:outcome-blocked? st)})))

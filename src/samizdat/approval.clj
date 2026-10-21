@@ -297,7 +297,7 @@
   (let [gone (filter #(= run-id (:run-id %)) (vals @requests))]
     (swap! requests #(apply dissoc % (map :id gone)))
     (doseq [{:keys [promise]} gone]
-      (when promise (deliver promise {:decision :deny :note "the run ended"})))
+      (when promise (deliver promise {:decision :deny :note "the run ended" :abandoned true})))
     (count gone)))
 
 (defn content-approved?
@@ -401,7 +401,8 @@
               (:note answer) (assoc :note (:note answer)))
 
             :else
-            (do (answered! :ask)
+            ;; A run that ended released the wait; nobody answered that.
+            (do (when-not (:abandoned answer) (answered! :ask))
                 (assoc decision :note (:note answer)))))
         (catch Throwable e
           (log/warn "approval: asking failed, refusing as usual:" (ex-message e))
