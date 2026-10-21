@@ -28,12 +28,19 @@
   its :scratch directories) asks without a call, as does a command whose
   text hides what it reaches (policy/paths-opaque?). Only a reply whose
   first word is `allow` allows: anything else, a failed call included,
-  leaves the ask for a person."
+  leaves the ask for a person.
+
+  The model's call is a learned decision point (samizdat.learned, RFC-015):
+  every verdict is logged beside what the learner predicted, and once the
+  learner has matched the model on this project's record, and the operator
+  turned that on, the learner answers the occurrences it is sure of. Only
+  the call: the reach and opacity checks before it are never learned over."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
             [samizdat.agent.gates :as gates]
             [samizdat.llm.client :as llm]
+            [samizdat.learned :as learned]
             [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]
             [samizdat.security.policy :as policy]
@@ -86,6 +93,8 @@
         t (str/trim (message/strip-think-blocks (str (:content m))))]
     (if (> (count t) n) (str (subs t 0 n) "…") t)))
 
+(learned/register! :approval {:labels [:allow :ask]})
+
 (defn- ask-model
   "The model's verdict on an ask the reach check left to it."
   [ctx {:keys [input reason outside parent scratch rationale]}]
@@ -106,9 +115,43 @@
                         {:temperature 0.0})]
     (verdict-of (:content reply))))
 
+(defn- path-class
+  "Where the paths an ask reaches outside the project lie, for the learner's
+  key: :none, all in :scratch, all in a :read-root, else under the :parent."
+  [outside scratch read-roots]
+  (let [all-in (fn [dirs] (every? (fn [p] (some #(within? % p) dirs)) outside))]
+    (cond (empty? outside) :none
+          (all-in scratch) :scratch
+          (all-in read-roots) :read-root
+          :else :parent)))
+
+(defn occurrence
+  "The learned decision point's view of an ask: keyed by its head, where it
+  reaches and the rule that held it, for the model that would answer it."
+  [ctx {:keys [input head reason outside occurrence]} scratch]
+  (let [first-word #(apply str (take-while (complement #{\space}) (str/trim (str %))))
+        head (or (some-> head str not-empty) (first-word input))]
+    {:id (or occurrence (str (random-uuid)))
+     :key [head (path-class outside scratch (:read-roots ctx)) (first-word reason)]
+     :head head
+     :features [(count outside)]
+     :family (str (:model (:llm-config (workflow/role-ctx ctx :classifier))))}))
+
+(defn- decided
+  "The verdict on an ask the checks left to the model: the model's, or the
+  learner's where it has earned it (samizdat.learned/decide)."
+  [ctx decision scratch ask]
+  (if-not (:conn ctx)
+    (ask)
+    (let [r (learned/decide ctx :approval (occurrence ctx decision scratch)
+                            {:llm ask :label-of :verdict})]
+      (if (= :learner (:by r))
+        {:verdict (:label r) :learned (:p r)}
+        (:llm r)))))
+
 (defn classify
   "The verdict on `decision`, an ask, for the run in `ctx`."
-  [ctx {:keys [input reason outside]}]
+  [ctx {:keys [input reason outside] :as decision}]
   (try
     (let [{:keys [reach rationale-chars scratch]} (gates/threshold :approval-classifier)
           parent (reach-of (:root ctx) reach)
@@ -127,9 +170,10 @@
         (policy/paths-opaque? input (:root ctx))
         {:verdict :ask :opaque? true}
         :else
-        (ask-model ctx {:input input :reason reason :outside outside :parent parent
-                        :scratch scratch
-                        :rationale (rationale ctx rationale-chars)})))
+        (decided ctx decision scratch
+                 #(ask-model ctx {:input input :reason reason :outside outside :parent parent
+                                  :scratch scratch
+                                  :rationale (rationale ctx rationale-chars)}))))
     (catch Throwable e
       (log/warn "classify: the call failed:" (ex-message e))
       {:verdict :ask :why (ex-message e)})))

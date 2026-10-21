@@ -1016,7 +1016,41 @@
   questioned whole instead of paged back."
   ["ALTER TABLE turns ADD COLUMN full_result TEXT"])
 
+(def v46
+  "LEARNED DECISIONS (RFC-015, karamazov-dcnj): one row per occurrence of a
+  decision point an LLM answers — what the learner predicted before the LLM
+  answered, what the LLM said, which of the two was used, whether it was an
+  audit, and the outcome when one arrives later (a person's answer). The
+  evidence for every agreement figure and threshold. `learned_points` holds
+  each point's mode per model family, with its last report and its CUSUM, as
+  EDN."
+  ["CREATE TABLE IF NOT EXISTS learned_decisions (
+     id TEXT PRIMARY KEY,
+     run_id TEXT,
+     branch_id TEXT,
+     point TEXT NOT NULL,
+     family TEXT NOT NULL,
+     key TEXT NOT NULL,
+     head TEXT,
+     features TEXT,
+     learner_label TEXT,
+     learner_p REAL,
+     llm_label TEXT,
+     outcome TEXT,
+     decided_by TEXT NOT NULL,
+     audited INTEGER NOT NULL DEFAULT 0,
+     created_at TEXT NOT NULL,
+     resolved_at TEXT)"
+   "CREATE INDEX IF NOT EXISTS idx_learned_point ON learned_decisions(point, family, created_at)"
+   "CREATE TABLE IF NOT EXISTS learned_points (
+     point TEXT NOT NULL,
+     family TEXT NOT NULL,
+     mode TEXT NOT NULL DEFAULT 'shadow',
+     state TEXT NOT NULL DEFAULT '{}',
+     updated_at TEXT NOT NULL,
+     PRIMARY KEY (point, family))"])
+
 (def migrations
   "Ordered. Index 0 is migration 1; PRAGMA user_version holds the count applied."
   [v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24
-   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40 v41 v42 v43 v44 v45])
+   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40 v41 v42 v43 v44 v45 v46])

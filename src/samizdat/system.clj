@@ -34,6 +34,7 @@
             [samizdat.security.listen :as listen]
             [samizdat.approval :as approval]
             [samizdat.security.classify :as classify]
+            [samizdat.learned :as learned]
             ;; installs the java.time.* host shim tools.logging's timestamp
             ;; formatter resolves against; must load before the first log call
             [jolt.time]
@@ -283,6 +284,9 @@
      ;; What :auto asks before a person. Installed always and consulted only
      ;; under :auto (karamazov-p1qr).
      (approval/install-classifier! classify/classify)
+     ;; Which learned decision points may answer once they graduate: the
+     ;; operator's, like :approval :mode :auto (RFC-015).
+     (learned/configure! (:learned cfg))
      (log/info "samizdat up on port" (get-in cfg [:http :port])
                "provider" (get-in cfg [:llm :provider])
                "model" (get-in cfg [:llm :model])

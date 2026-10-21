@@ -71,6 +71,7 @@
             [samizdat.agent-test]
             [samizdat.approval-test]
             [samizdat.classify-test]
+            [samizdat.learned-test]
             [samizdat.base-test]
             [samizdat.boundary-test]
             [samizdat.compaction-test]
@@ -88,7 +89,6 @@
             [samizdat.acceptance-test]
             [samizdat.checklist-test]
             [samizdat.select-test]
-            [samizdat.stats-test]
             [samizdat.session-test]
             [samizdat.reflect-test]
             [samizdat.reflex-test]
@@ -333,6 +333,7 @@
     samizdat.agent-test
     samizdat.approval-test
     samizdat.classify-test
+    samizdat.learned-test
     samizdat.base-test
     samizdat.boundary-test
     samizdat.compaction-test
@@ -350,7 +351,6 @@
     samizdat.acceptance-test
     samizdat.checklist-test
     samizdat.select-test
-    samizdat.stats-test
     samizdat.session-test
     samizdat.reflect-test
     samizdat.reflex-test

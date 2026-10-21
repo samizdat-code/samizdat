@@ -46,7 +46,8 @@
   them is the analysis step and it is a separate pass, because a rig that both
   produced and judged its own numbers would be the confounded comparison
   RFC-010 already warns about."
-  (:require [samizdat.perturb :as perturb]
+  (:require [augur.beta :as beta]
+            [samizdat.perturb :as perturb]
             [clojure.edn :as edn]
             [clojure.pprint]
             [clojure.java.io :as io]
@@ -64,7 +65,6 @@
             [samizdat.prompt :as prompt]
             [samizdat.server :as server]
             [samizdat.session :as session]
-            [samizdat.stats :as stats]
             [samizdat.store.db :as db]
             [samizdat.store.journal :as journal]
             [samizdat.userspace :as userspace]
@@ -1124,6 +1124,14 @@
       (nil? (:status row)) [nil nil]
       :else [(= :completed (:status row)) :loop])))
 
+(defn- pass-posterior
+  "The Beta posterior on an arm's pass rate after k passes of n, under
+  Jeffreys' prior: it keeps the upper end of 0 of n open and the lower end
+  of n of n. The Goldilocks zone read off it is thinkingbox's, 6.25% to
+  93.75%: a rate at 0% or 100% carries no signal."
+  [k n]
+  (beta/from-counts k n (beta/jeffreys)))
+
 (defn reliability
   "The pass statistics of one arm's rows (karamazov-a6mj.5): k passes of n
   decided rows, the 95% credible interval on the rate, P(in the Goldilocks
@@ -1140,14 +1148,14 @@
      :undecided (- (count rows) n)
      :by (cond (empty? bys) nil (= 1 (count bys)) (first bys) :else :mixed)
      :rate (when (pos? n) (/ (double k) n))
-     :interval (when (pos? n) (mapv #(/ (Math/round (* 1000.0 %)) 1000.0) (stats/cred-int k n)))
-     :p-goldilocks (when (pos? n) (/ (Math/round (* 1000.0 (stats/prob-in-zone k n))) 1000.0))
+     :interval (when (pos? n) (mapv #(/ (Math/round (* 1000.0 %)) 1000.0) (beta/interval (pass-posterior k n) 0.95)))
+     :p-goldilocks (when (pos? n) (/ (Math/round (* 1000.0 (beta/prob-between (pass-posterior k n) 0.0625 0.9375))) 1000.0))
      :pass-at-k (when (pos? n)
                   (into {} (for [kk [1 3 5] :when (<= kk n)]
-                             [kk (/ (Math/round (* 1000.0 (stats/pass-at-k n k kk))) 1000.0)])))
+                             [kk (/ (Math/round (* 1000.0 (beta/pass-at-k n k kk))) 1000.0)])))
      :pass-power-k (when (pos? n)
                      (into {} (for [kk [1 3 5]]
-                                [kk (/ (Math/round (* 1000.0 (stats/pass-power-k n k kk))) 1000.0)])))}))
+                                [kk (/ (Math/round (* 1000.0 (beta/pass-power-k n k kk))) 1000.0)])))}))
 
 (defn summarize
   "Per arm: n, ship rate, green rate, acceptance, the reliability statistics
@@ -1174,7 +1182,8 @@
                              :when (not= a b)
                              :let [ra (rel a) rb (rel b)]
                              :when (and (pos? (:n ra)) (pos? (:n rb)))]
-                         [[a b] (/ (Math/round (* 1000.0 (stats/prob-a-gt-b (:k ra) (:n ra) (:k rb) (:n rb))))
+                         [[a b] (/ (Math/round (* 1000.0 (beta/prob-greater (pass-posterior (:k ra) (:n ra))
+                                                                 (pass-posterior (:k rb) (:n rb)))))
                                    1000.0)]))]
     (cond-> (into {}
           (for [[arm rs] by-arm]

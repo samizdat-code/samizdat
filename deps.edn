@@ -81,6 +81,15 @@
          :git/tag "v0.0.11"
          :git/sha "0f9c50b80e227c1aa045f47e88a0f4d150d6e70b"}
 
+        ;; statistics: Beta and Gamma posteriors with forgetting, layered
+        ;; priors, a forecast ledger, calibration, scoring — the core of
+        ;; bayesian-news-model taken out, no dependencies of its own. The
+        ;; arena's reliability statistics read it (karamazov-gvdk).
+        io.github.jlt-commons/augur
+        {:git/url "https://github.com/jlt-commons/augur"
+         :git/tag "v0.4.1"
+         :git/sha "dcdaad70c26f12ec1681eb4eee98463de15be0a3"}
+
          org.clojure/data.json
          {:git/url "https://github.com/clojure/data.json"
           :git/sha "94463ffb54482427fd9b31f264b06bff6dcfd557"}

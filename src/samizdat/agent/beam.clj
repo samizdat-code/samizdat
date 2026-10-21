@@ -61,6 +61,7 @@
   branches against one branch at five times the turn budget, and
   `samizdat.bench.beam` is the comparison."
   (:require [clojure.string :as str]
+            [samizdat.learned :as learned]
             [clojure.tools.logging :as log]
             [mycelium.core :as myc]
             [samizdat.agent.budget :as budget]
@@ -1376,6 +1377,9 @@
         ;; listing shows a later supervisor weighing an unfamiliar edit
         ;; (karamazov-c58).
         (userspace/record-run-outcome! outcome run-id))
+      ;; Each learned decision point earns or loses its cascade on the
+      ;; record so far, this run included (RFC-015).
+      (learned/run-ended! conn run-id)
       result)))
 
 (defn summary

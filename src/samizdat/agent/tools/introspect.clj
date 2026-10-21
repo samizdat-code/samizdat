@@ -41,6 +41,7 @@
   surface grows by a plug-in file rather than by editing the aggregator.
   Render fns are exposed (not private) so a test can call them directly."
   (:require [clojure.string :as str]
+            [samizdat.learned :as learned]
             [mycelium.cell :as cell]
             [samizdat.agent.tools.base :as base]
             [samizdat.cells :as cells]
@@ -343,7 +344,20 @@
                                       :surfaces (store-us/drift
                                                  conn {:since (runs/nth-recent-start conn window-runs)
                                                        :top-names top-names})}))
-                    (prompt/render "drift" {:no-db true}))))))
+                    (prompt/render "drift" {:no-db true}))
+                  ;; Which LLM decisions a learner has taken over, and on
+                  ;; what record (RFC-015).
+                  "\n\n=== LEARNED DECISIONS ===\n\n"
+                  (if conn
+                    (prompt/render "learned-standing"
+                                   {:points (mapv (fn [p] (-> p
+                                                              (update :point name)
+                                                              (update :mode name)
+                                                              (update :operator name)
+                                                              (update :tau #(when (seq %) (pr-str %)))
+                                                              (assoc :blocked (:outcome-blocked? p))))
+                                                  (learned/standing conn))})
+                    (prompt/render "learned-standing" {:no-db true}))))))
 
 (defn- session-section
   "What the role's eval session has defined, rendered, or nil when it has no

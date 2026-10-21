@@ -21,7 +21,9 @@
   Anything but a clear allow is an ask — the safe direction."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
+            [samizdat.learned :as learned]
             [samizdat.llm.client :as llm]
+            [samizdat.store.db :as db]
             [samizdat.security.classify :as classify]))
 
 (deftest a-reply-is-an-allow-only-when-it-says-so-first
@@ -139,3 +141,25 @@
   (with-redefs [llm/chat (fn [& _] (throw (ex-info "down" {})))]
     (is (= :ask (:verdict (classify/classify {:llm-adapter :fake :llm-config {}}
                                              {:effect :ask :input "ls /"}))))))
+
+(deftest the-models-verdict-is-a-learned-occurrence
+  ;; RFC-015: every verdict the model gives is logged beside what the
+  ;; learner predicted, keyed by head, where it reaches and the rule.
+  (let [c (doto (db/open! ":memory:") db/migrate!)]
+    (learned/configure! nil)
+    (with-redefs [llm/chat (fn [& _] {:content "allow\nreads a sibling"})]
+      (is (= :allow (:verdict (classify/classify
+                               {:conn c :run-id "r1" :llm-adapter :fake :llm-config {:model "m1"}
+                                :root "/work/dodeca"}
+                               {:effect :ask :input "ls /work/a5" :reason "outside-project /work/a5"
+                                :outside ["/work/a5"] :occurrence "o1"}))))
+      (let [[row] (learned/rows c :approval "m1")]
+        (is (= "o1" (:id row)))
+        (is (= ["ls" :parent "outside-project"] (:key row)))
+        (is (= :allow (:llm-label row)))
+        (is (= :llm (:decided-by row))))
+      (testing "what the checks settle never reaches the learner"
+        (classify/classify {:conn c :run-id "r1" :llm-adapter :fake :llm-config {:model "m1"}
+                            :root "/work/dodeca"}
+                           {:effect :ask :input "cat $(echo /etc/passwd)" :occurrence "o2"})
+        (is (= ["o1"] (map :id (learned/rows c :approval "m1"))))))))

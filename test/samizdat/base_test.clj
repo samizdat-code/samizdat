@@ -328,16 +328,6 @@
                       already named rather than numbered, as
                       `undecodable-categories`."}}
 
-   "src/samizdat/stats.clj"
-   {:threshold {:all "Numerical-analysis constants, not policy: the Lanczos
-                      series length (6), the continued fraction's convergence
-                      tolerance (3e-14) and its iteration cap (300), the
-                      bisection depth (60). Retuning them at runtime cannot
-                      express a different decision, only a less accurate
-                      incomplete beta; what IS policy — the prior, the zone,
-                      the credible level — every function takes as an
-                      argument with the default the caller can override."}}
-
    "src/samizdat/agent/tournament.clj"
    {:threshold {1103515245 "The LCG multiplier — a PRNG's algorithm constants,
                             like a hash function's primes. Retuning them at

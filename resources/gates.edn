@@ -1758,6 +1758,34 @@
         person's (/mode auto), never this file's — it lets things through."
   :provenance ["karamazov-p1qr" "run de04432c"]}
 
+ :learned-decisions
+ {:value {:approval {:min-n 200 :bin-n 20 :level 0.95
+                     :agreement {:allow 0.98 :ask 0.9}
+                     :audit 0.1 :cusum {:k 0.05 :h 3.0}
+                     :forget 0.97 :strength 4.0
+                     :outcome-level 0.8 :max-rows 5000}}
+  :kind :policy :capability-tunable? false
+  :doc "WHEN A LEARNED MODEL MAY ANSWER INSTEAD OF THE LLM (samizdat.learned,
+        RFC-015), per decision point. The LLM decides and every occurrence is
+        logged with what the learner predicted; the point graduates when it
+        has :min-n pairs and, for some label, the pairs above a confidence τ
+        agree with the LLM — the lower end of the :level interval clears the
+        label's :agreement bar, and each :bin-n bin above τ clears it on its
+        mean. :allow is held far higher than :ask: a wrong allow runs what a
+        person should have seen, a wrong ask costs them a keystroke. In
+        cascade the learner answers above τ, and :audit of those go to the LLM
+        too, only to measure; a CUSUM on audited disagreement (:k the
+        disagreement rate tolerated, :h the limit) sends the point back to
+        shadow. :forget fades evidence per run; :strength is how far a key
+        with little evidence is drawn to its head's rate. :outcome-level —
+        where a person settled an ask the two disagreed on, how sure it must
+        be that the learner was the one more often wrong before that blocks
+        graduation. This file may raise any bar and lower none: the shipped
+        values are a floor (learned/stricter). Whether a graduated point may
+        answer at all is the operator's (config.edn :learned {:approval
+        :cascade}), never this file's."
+  :provenance ["karamazov-dcnj" "2610.21412"]}
+
  :workflow-selection
  {:value
   {:enabled?          true
