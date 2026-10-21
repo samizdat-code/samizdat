@@ -72,6 +72,7 @@
             [samizdat.leakage]
             [samizdat.heldout]
             [samizdat.layers]
+            [samizdat.learned]
             [samizdat.lisp]
             [samizdat.llm.client]
             [samizdat.llm.grammar]

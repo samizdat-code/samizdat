@@ -71,6 +71,7 @@
             [samizdat.agent-test]
             [samizdat.approval-test]
             [samizdat.classify-test]
+            [samizdat.learned-test]
             [samizdat.base-test]
             [samizdat.boundary-test]
             [samizdat.compaction-test]
@@ -332,6 +333,7 @@
     samizdat.agent-test
     samizdat.approval-test
     samizdat.classify-test
+    samizdat.learned-test
     samizdat.base-test
     samizdat.boundary-test
     samizdat.compaction-test

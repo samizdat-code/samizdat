@@ -43,7 +43,8 @@
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [samizdat.agent.gates :as gates]
-            [samizdat.events :as events]))
+            [samizdat.events :as events]
+            [samizdat.learned :as learned]))
 
 (def modes
   "What happens when a run needs a person: :refuse (nobody is asked; a
@@ -336,6 +337,14 @@
   from doing anything at all."
   [{:keys [run-id branch-id] :as ctx} {:keys [effect input details reason gaps content-key] :as decision}]
   (let [{:keys [mode wait-ms on-timeout auto?]} (policy run-id)
+        ;; One id for this ask, so a person's answer to it can be laid
+        ;; beside what the classifier and its learner said (samizdat.learned).
+        decision (cond-> decision
+                   (and auto? (= :ask effect) (not (:occurrence decision)))
+                   (assoc :occurrence (str (random-uuid))))
+        answered! (fn [label]
+                    (when-let [c (and (:occurrence decision) (:conn ctx))]
+                      (learned/observe! c (:occurrence decision) {:outcome label})))
         classified (delay (when auto? (classified-allow ctx decision)))]
     (cond
       (not= :ask effect) decision
@@ -372,7 +381,8 @@
               answer (await! id wait-ms {:decision (or on-timeout :deny)})]
           (cond
             (= :allow (:decision answer))
-            (do (when content-key
+            (do (answered! :allow)
+                (when content-key
                   (swap! approved-content conj [run-id content-key]))
                 (when (and (:always answer) pattern)
                   (swap! allowed update run-id (fn [ps] (vec (distinct (conj (vec ps) pattern)))))
@@ -391,7 +401,8 @@
               (:note answer) (assoc :note (:note answer)))
 
             :else
-            (assoc decision :note (:note answer))))
+            (do (answered! :ask)
+                (assoc decision :note (:note answer)))))
         (catch Throwable e
           (log/warn "approval: asking failed, refusing as usual:" (ex-message e))
           decision)))))

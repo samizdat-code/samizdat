@@ -528,3 +528,22 @@
                                                                      :flow? true}))))
         (is (nil? @seen)))
       (finally (approval/install-classifier! nil)))))
+
+(deftest a-persons-answer-to-an-auto-ask-is-the-learned-outcome
+  ;; RFC-015: the classifier's verdict and its learner's prediction are laid
+  ;; beside what the person then said, under one id per ask.
+  (let [seen (atom nil) observed (atom [])]
+    (approval/install-classifier! (fn [_ d] (reset! seen (:occurrence d)) {:verdict :ask}))
+    (try
+      (with-redefs [approval/policy (constantly {:mode :block :auto? true :wait-ms 5000
+                                                 :on-timeout :deny})
+                    samizdat.learned/observe! (fn [_ id o] (swap! observed conj [id o]))]
+        (doseq [[decision label] [[:allow :allow] [:deny :ask]]]
+          (reset! observed [])
+          (future (loop [] (if-let [p (first (approval/pending "r1"))]
+                             (approval/decide! (:id p) {:decision decision})
+                             (do (Thread/sleep 5) (recur)))))
+          (approval/resolve-ask {:run-id "r1" :conn ::conn} {:effect :ask :input "ls ~/src/other"})
+          (is (string? @seen) "the ask carried an id to the classifier")
+          (is (= [[@seen {:outcome label}]] @observed) (str decision))))
+      (finally (approval/install-classifier! nil)))))

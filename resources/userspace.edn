@@ -132,6 +132,7 @@
    :dispatch-order "prompts/dispatch-order.md"
    :dispatch-refused "prompts/dispatch-refused.md"
    :drift "prompts/drift.md"
+   :learned-standing "prompts/learned-standing.md"
    :emergency-review "prompts/emergency-review.md"
    :endpoint-unreachable "prompts/endpoint-unreachable.md"
    :eval-calls-main "prompts/eval-calls-main.md"
