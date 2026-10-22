@@ -261,6 +261,8 @@
             [samizdat.gui-graph-test]
             [samizdat.gui-style-test]
             [samizdat.gui-input-test]
+            [samizdat.gui-atlas-scene-test]
+            [samizdat.gui-atlas-view-test]
             [samizdat.gui-mathtext-test]
             [samizdat.gui-newrun-test]))
 
@@ -502,6 +504,8 @@
     samizdat.gui-graph-test
     samizdat.gui-style-test
     samizdat.gui-input-test
+    samizdat.gui-atlas-scene-test
+    samizdat.gui-atlas-view-test
     samizdat.gui-mathtext-test
     samizdat.gui-newrun-test])
 

@@ -119,8 +119,8 @@
   A front end holds no database handle, so the stored `tui` policy — the one
   the agent edits when it rearranges its own UI — is only readable through
   the server, which is bound to the project."
-  [base]
-  (GET base "/v1/harness/layout"))
+  ([base] (GET base "/v1/harness/layout"))
+  ([base name] (GET base (str "/v1/harness/layout?name=" name))))
 
 (defn project
   "Which project the harness is working on, which branch, how dirty, and
@@ -329,3 +329,38 @@
               (Thread/sleep (:interval-ms state))
               (recur state)))))
       {:stop! (fn [] (reset! running false))})))
+
+;; --- the code atlas (RFC-016) -------------------------------------------------
+
+(defn atlas-summary [base] (GET base "/v1/atlas/summary"))
+
+(defn atlas-view
+  "The project's graph through `lens` with `expanded` groups open, marking
+  the visible nodes that hold any id in `mark`."
+  [base lens expanded mark]
+  (POST base "/v1/atlas/view" {:lens (name lens) :expanded (vec expanded) :mark (vec mark)}))
+
+(defn atlas-card [base id] (GET base (str "/v1/atlas/card?id=" (url-encode id))))
+
+(defn atlas-flows [base] (GET base "/v1/atlas/flows"))
+
+(defn atlas-flow [base entry] (GET base (str "/v1/atlas/flow?entry=" (url-encode entry))))
+
+(defn atlas-units [base] (GET base "/v1/atlas/units"))
+
+(defn atlas-search [base q] (GET base (str "/v1/atlas/search?q=" (url-encode q))))
+
+(defn atlas-snapshots [base] (GET base "/v1/atlas/snapshots"))
+
+(defn atlas-diff
+  "What changed from snapshot `a` to snapshot `b`, or to now when `b` is nil."
+  [base a b]
+  (GET base (str "/v1/atlas/diff?a=" a (when b (str "&b=" b)))))
+
+(defn atlas-workflows [base] (GET base "/v1/atlas/workflows"))
+
+(defn atlas-workflow
+  "Manifest `name`'s state graph, with run `run-id`'s steps over it when given."
+  [base name run-id]
+  (GET base (str "/v1/atlas/workflows/" (url-encode name)
+                 (when run-id (str "?run=" (url-encode run-id))))))

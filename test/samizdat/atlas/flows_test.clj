@@ -114,7 +114,15 @@
     (testing "2 of 3 shared clears 0.6: the first two merge, flows and members joined"
       (is (= [{:id "unit:0" :flows #{"x" "y" "z"} :members ["a/1" "a/2" "a/3"]}
               {:id "unit:2" :flows #{"q"} :members ["a/4"]}]
-             (flows/coarsen us 0.6))))))
+             (flows/coarsen us 0.6))))
+    (testing "a merge that would pass the size cap is not made"
+      (is (= 3 (count (flows/coarsen us 0.6 2)))))
+    (testing "the most similar pair merges first, so a chain does not swallow everything"
+      (let [chain [{:id "u0" :flows #{1 2} :members ["a"]}
+                   {:id "u1" :flows #{1 2 3} :members ["b"]}
+                   {:id "u2" :flows #{1 2 3 4} :members ["c"]}]]
+        ;; u1~u2 is 0.75, u0~u1 0.67: with room for two, u1 and u2 pair up.
+        (is (= [["a"] ["b" "c"]] (map :members (flows/coarsen chain 0.6 2))))))))
 
 (deftest units-become-a-containment-hierarchy-to-zoom-through
   (let [fs (flows/all sample policy)

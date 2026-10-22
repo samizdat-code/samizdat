@@ -111,3 +111,9 @@
     (let [[newer older] (atlas/snapshots c "/p")]
       (is (= ["run-3" "run-1"] [(:run-id newer) (:run-id older)]))
       (is (= ["app.db/save!"] (:changed (atlas/diff c (:id older) (:id newer))))))))
+
+(deftest a-view-marks-the-visible-nodes-holding-what-was-asked-about
+  (is (= ["app.core"] (:marked (atlas/view "/p" {:lens :namespaces :expanded #{"app.*"}
+                                                 :mark ["app.core/handle" "nope"]} io))))
+  (is (= ["app.*"] (:marked (atlas/view "/p" {:lens :namespaces :expanded #{}
+                                              :mark ["app.db/save!"]} io)))))

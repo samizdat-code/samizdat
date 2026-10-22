@@ -1,0 +1,34 @@
+;; The GUI's settings: a LAYERED file (samizdat.layers). Each layer is merged
+;; over the one below: $SAMIZDAT_GUI_FILE, then the project's .samizdat/gui.edn
+;; (what GET /v1/harness/layout?name=gui serves — how the agent rearranges
+;; the GUI), then ~/.config/samizdat/gui.edn, then this file.
+{:atlas
+ {;; The canvas (samizdat.gui.atlas-scene). Boxes and labels are in pixels,
+  ;; so a label stays readable at every zoom; zooming spreads the layout.
+  :char-px 7.0
+  :box-height 20.0
+  :box-pad 5.0
+  :max-label-chars 26
+  :arrow-px 7.0
+  :frame-pad 60.0
+  :zoom-step 1.25
+  ;; The layered layout (samizdat.atlas.layout): calls run left to right.
+  :layer-gap 240.0
+  :node-gap 34.0
+  :sweeps 4
+  ;; The focus card and the stacks beside it.
+  :neighbours-shown 12
+  :stack-source-lines 6
+  :card-source-lines 60
+  ;; What the canvas opens on: the containment lens, the top groups closed
+  ;; (1 opens them).
+  :lens :namespaces
+  :open-depth 0
+  :colors {:fn [0.23 0.42 0.62] :method [0.30 0.46 0.58] :multi [0.36 0.36 0.62]
+           :macro [0.52 0.36 0.56] :var [0.34 0.44 0.40] :def [0.34 0.40 0.48]
+           :cell [0.20 0.50 0.46] :test [0.40 0.40 0.30] :ns [0.30 0.32 0.38]
+           :group [0.24 0.26 0.32] :unit [0.28 0.34 0.44] :state [0.20 0.48 0.42]
+           :end [0.40 0.24 0.24] :manifest [0.24 0.26 0.32] :default [0.32 0.34 0.40]
+           :text [0.94 0.94 0.96] :edge [0.42 0.44 0.50] :selected [1.0 1.0 1.0]
+           :hover [0.75 0.78 0.85] :mark [0.96 0.62 0.18]
+           :added [0.26 0.72 0.36] :changed [0.90 0.72 0.16] :removed [0.86 0.26 0.24]}}}

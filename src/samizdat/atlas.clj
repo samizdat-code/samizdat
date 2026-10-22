@@ -123,7 +123,8 @@
 (defn- units [root io]
   (cached root io :units
           (fn [_] (flows/coarsen (flows/units (all-flows root io))
-                                 (or (:unit-similarity (policy)) 1.0)))))
+                                 (or (:unit-similarity (policy)) 1.0)
+                                 (:max-unit-size (policy))))))
 
 (defn- unit-graph [root io]
   (cached root io :unit-graph #(flows/unit-graph % (units root io))))
@@ -148,9 +149,10 @@
   "`root`'s graph at a zoom level: {:nodes [{:id :label :kind :size
   :expandable?}] :edges [{:from :to :count}]}, through the :namespaces lens
   (containment) or the :units lens (functions grouped by the flows they
-  serve), with the groups in `expanded` open."
+  serve), with the groups in `expanded` open. :marked lists the visible
+  nodes holding any id in `mark` — a flow's slice, a diff's changes."
   ([root opts] (view root opts nil))
-  ([root {:keys [lens expanded]} io]
+  ([root {:keys [lens expanded mark]} io]
    (let [gr (if (= :units (keyword lens)) (unit-graph root io) (graph root io))
          {:keys [nodes edges]} (g/lift gr (set expanded))]
      {:nodes (mapv (fn [id]
@@ -159,7 +161,9 @@
                         :size (max 1 (count (g/leaves gr id)))
                         :expandable? (boolean (seq (g/children gr id)))}))
                    nodes)
-      :edges edges})))
+      :edges edges
+      :marked (vec (sort (distinct (keep #(when (g/node gr %) (g/representative gr (set expanded) %))
+                                         mark))))})))
 
 (defn- source-of
   [root io {:keys [file line end-line]}]

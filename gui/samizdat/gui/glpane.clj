@@ -189,9 +189,11 @@
   (when (seq verts)
     (gl/gl-draw-arrays mode first-vert (quot (count verts) 5))))
 
-(defn- upload-and-draw! [{:keys [lines tris]}]
+(defn- upload-and-draw!
+  "Lines, then triangles over them, then `over` lines above both (labels)."
+  [{:keys [lines tris over]}]
   (let [{:keys [prog vao vbo vp-loc w h]} @st
-        all (into (vec lines) tris)
+        all (-> (vec lines) (into tris) (into over))
         ptr (gl/write-floats all)]
     (gl/gl-use-program prog)
     (gl/gl-bind-vertex-array vao)
@@ -201,7 +203,8 @@
     (ffi/free ptr)
     (gl/gl-uniform-2f vp-loc (double w) (double h))
     (draw! gl/GL-LINES lines 0)
-    (draw! gl/GL-TRIANGLES tris (quot (count lines) 5))))
+    (draw! gl/GL-TRIANGLES tris (quot (count lines) 5))
+    (draw! gl/GL-LINES over (quot (+ (count lines) (count tris)) 5))))
 
 (defn- view
   "The current graph, positions, and world->px transform for `source`'s
@@ -217,14 +220,24 @@
 (defn- render! [source]
   (gl/gl-clear-color 0.11 0.11 0.13 1.0)
   (gl/gl-clear gl/GL-COLOR-BUFFER-BIT)
-  (when-let [{:keys [g positions t selected]} (view (source))]
-    (upload-and-draw! (scene-verts g positions t selected))))
+  (let [src (source)]
+    ;; A source may bring its own scene (the code atlas does): `:draw` gets
+    ;; the pane's size, drag, hover and HiDPI factor and returns the verts.
+    (if-let [draw (:draw src)]
+      (when-let [v (draw (select-keys @st [:w :h :pan :hover :scale]))]
+        (upload-and-draw! v))
+      (when-let [{:keys [g positions t selected]} (view src)]
+        (upload-and-draw! (scene-verts g positions t selected))))))
 
 (defn pick
-  "The node id under pixel [x y], or nil."
+  "The node id under pixel [x y], or nil. A source with its own `:pick` is
+  asked, with what `:draw` was given, so what is drawn is what is hit."
   [source x y]
-  (when-let [{:keys [positions t]} (view (source))]
-    (graph/nearest positions t [x y] pick-radius)))
+  (let [src (source)]
+    (if-let [p (:pick src)]
+      (p (select-keys @st [:w :h :pan :scale]) x y)
+      (when-let [{:keys [positions t]} (view src)]
+        (graph/nearest positions t [x y] pick-radius)))))
 
 (defn unmount!
   "Forget the widget, because it is being destroyed.
@@ -252,6 +265,12 @@
     ;; runs the work inline when no loop is running, so headless callers
     ;; and tests still queue directly.
     (ui/on-gui #(glx/queue-render area))))
+
+(defn size
+  "The pane's size in device pixels as its last resize reported it, and the
+  device scale: [w h scale]."
+  []
+  [(:w @st) (:h @st) (:scale @st 1.0)])
 
 (defn reset-pan! []
   (swap! st assoc :pan [0.0 0.0])

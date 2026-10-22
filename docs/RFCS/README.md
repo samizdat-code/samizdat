@@ -24,6 +24,7 @@ These are design documents, not a change log. Past defects live in
 | [013](RFC-013-cancellation.md) | Concurrency | One task tree and one event flow; mycelium is the machine, ebb is the scheduler |
 | [014](RFC-014-validation-and-procedure.md) | Validation and procedure | Whether a change to the loop may go live, and what may follow what |
 | [015](RFC-015-learned-decisions.md) | Learned decisions | When a learned model may answer instead of the LLM, and how it loses that |
+| [016](RFC-016-code-atlas.md) | The code atlas | The project as the smaller programs inside it: call graph, flows, units, state graphs, history |
 
 ## How to read a layer boundary
 

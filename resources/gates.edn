@@ -1793,7 +1793,7 @@
                     {:uncalled? true :kind [:fn :multi]}]
           :sinks [{:label-matches "!$"} {:leaf? true}]
           :max-paths 200 :max-depth 40 :max-flows 2000
-          :unit-similarity 0.5
+          :unit-similarity 0.5 :max-unit-size 60
           :butterfly-depth 2
           :max-source-lines 400
           :snapshot? true}
@@ -1809,8 +1809,11 @@
         entry has 3 paths and the largest 150,600, so the caps are what keep
         a listing readable, not what keeps it correct. :unit-similarity is
         how far two groups of functions' flow sets must overlap (shared over
-        joined) to merge into one unit in the zoomed-out view: 1.0 keeps every
-        distinct set apart (762 units here, 441 of one function). :snapshot?
+        joined) to merge into one unit in the zoomed-out view, most similar
+        first: 1.0 keeps every distinct set apart (601 units here, 327 of one
+        function); 0.5 gives 211. :max-unit-size stops a merge past that many
+        functions — without it, merging along a chain of overlaps put 1794 of
+        them into one unit at 0.5. :snapshot?
         stores the graph at each run's end when it changed, which is what the
         atlas's history and diff read."
   :provenance ["karamazov-f73x"]}

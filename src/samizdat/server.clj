@@ -187,8 +187,8 @@
   (json-response {:gates (gates/describe) :thresholds (gates/config)}))
 
 (defn layout-body
-  "What this project has AUTHORED of the terminal UI's settings, as EDN text,
-  or nil.
+  "What this project has AUTHORED of a front end's settings — the terminal
+  UI's by default, or `name`'s (gui.edn) — as EDN text, or nil.
 
   tui.edn is a layered settings file (samizdat.layers), and the front end
   assembles it itself: its own env file and project file, then this, then a
@@ -201,15 +201,21 @@
   Served because a front end may run on another machine than the project it
   watches. Text, not parsed: a client that is going to read it anyway gains
   nothing from a round trip through JSON."
-  []
-  {:layout (or (when-let [r (userspace/project-root)]
-                 (let [f (java.io.File. (str r "/.samizdat/tui.edn"))]
-                   (when (.isFile f) (slurp f))))
-               (let [b (userspace/body :policy "tui")]
-                 (when (not= b (userspace/template :policy "tui")) b)))})
+  ([] (layout-body "tui"))
+  ([name]
+   {:layout (or (when-let [r (userspace/project-root)]
+                  (let [f (java.io.File. (str r "/.samizdat/" name ".edn"))]
+                    (when (.isFile f) (slurp f))))
+                (let [b (userspace/body :policy name)]
+                  (when (not= b (userspace/template :policy name)) b)))}))
 
-(defn- layout-table [_req]
-  (json-response (layout-body)))
+(defn- layout-table
+  "?name= picks which front end's layer (tui, gui, webui); tui by default."
+  [req]
+  (let [n (or (query-param req "name") "tui")]
+    (if (contains? userspace/layered-policies n)
+      (json-response (layout-body n))
+      (json-response 400 {:error {:message (str "not a layered settings file: " n)}}))))
 
 ;; {:at ms :root path :snapshot m} — see gates.edn :git-snapshot-ttl-ms for why
 ;; a cache exists at all.
@@ -318,8 +324,9 @@
     (json-response 409 {:error {:message "no project is bound" :type "no_project"}})))
 
 (defn- atlas-view [req]
-  (let [{:keys [lens expanded]} (body-json req)]
-    (atlas-answer #(atlas/view % {:lens (keyword (or lens "namespaces")) :expanded (set expanded)}))))
+  (let [{:keys [lens expanded mark]} (body-json req)]
+    (atlas-answer #(atlas/view % {:lens (keyword (or lens "namespaces")) :expanded (set expanded)
+                                  :mark mark}))))
 
 (defn- atlas-diff [req]
   (atlas-answer #(atlas/diff (system/conn) (long-param req "a") (long-param req "b") % nil)))

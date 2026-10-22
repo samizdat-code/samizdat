@@ -128,6 +128,10 @@
             (.mkdirs (java.io.File. root ".samizdat"))
             (spit (java.io.File. root ".samizdat/tui.edn") "{:prose-turns 9}")
             (is (= "{:prose-turns 9}" (:layout (server/layout-body))))
+            (testing "the GUI's layer is served the same way, by name"
+              (is (nil? (:layout (server/layout-body "gui"))))
+              (spit (java.io.File. root ".samizdat/gui.edn") "{:atlas {:zoom-step 2.0}}")
+              (is (= "{:atlas {:zoom-step 2.0}}" (:layout (server/layout-body "gui")))))
             (finally (userspace/bind-root! prev-root)))))
       (finally
         (userspace/bind! prev)

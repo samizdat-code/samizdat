@@ -39,6 +39,7 @@
             [glimmer-gtk.core]
             [glimmer.ratom :as r]
             [samizdat.gui.api :as api]
+            [samizdat.gui.atlas :as atlas]
             [samizdat.gui.glpane :as glpane]
             [samizdat.gui.graph :as graph]
             [samizdat.gui.mathtext :as mt]
@@ -73,7 +74,8 @@
            :form {:problem "" :max-turns "" :beam-width "" :seed-run ""
                   :model "" :reasoning-effort ""}
            :models []                   ; what the provider serves, for the picker
-           :draft ""}))                 ; intervention input text
+           :draft ""                    ; intervention input text
+           :mode :runs}))               ; :runs, or :atlas — the code atlas
 
 (defonce poller (atom nil))
 
@@ -296,6 +298,15 @@
       (refresh-models!)))
   (notice! nil))
 
+(defn- toggle-atlas!
+  "Switch the body between the run's solution space and the code atlas.
+  Either way the :gl-area is replaced, so glpane is told, as for the form."
+  []
+  (let [mode (:mode (swap! state update :mode #(if (= :atlas %) :runs :atlas)))]
+    (glpane/unmount!)
+    (glpane/reset-pan!)
+    (when (= :atlas mode) (atlas/start! (:base-url @state)))))
+
 (defn- copy-current-problem!
   "Fill the statement from the selected run. Each generation of a campaign
   is the previous prompt edited — retyping several paragraphs to change one
@@ -399,6 +410,9 @@
                :on-click toggle-compose!}]
      [:button {:label "refresh" :tooltip "re-fetch the run list"
                :on-click refresh-runs!}]
+     [:button {:label (if (= :atlas (:mode @state)) "runs" "atlas")
+               :tooltip "the project's call graph, its flows and its workflows"
+               :on-click toggle-atlas!}]
      [:button {:label "◀" :on-click #(cycle-run! 1)}]
      [:label {:label (if run
                        (str (subs (str run) 0 8) " · " (or (:status row) "?"))
@@ -647,6 +661,11 @@
      [header]
      [:separator]
      [new-run-panel]]
+    (if (= :atlas (:mode @state))
+      [:vbox {:spacing 8 :margin 8}
+       [header]
+       [:separator]
+       [atlas/root (:run @state)]]
     [:vbox {:spacing 8 :margin 8}
      [header]
      [legend]
@@ -656,10 +675,13 @@
       [log-panel]]
      [status-line]
      [:separator]
-     [input-bar]]))
+     [input-bar]])))
 
-(defn -main [& _]
+(defn -main
+  "`--atlas` opens on the code atlas instead of the runs."
+  [& args]
   (refresh-runs!)
+  (when (some #{"--atlas"} args) (toggle-atlas!))
   (ui/run root :title "samizdat" :width 1100 :height 720)
   ;; ui/run returns only after the last window closed and the loop exited.
   ;; Stop the poller there (review2 #16): otherwise it keeps hitting the

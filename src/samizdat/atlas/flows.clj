@@ -197,25 +197,37 @@
 
 (defn coarsen
   "`units` merged wherever two serve flows that overlap at least
-  `similarity` (shared over joined), transitively: each merged unit keeps
-  the first one's id and joins the flows and members. 1.0 merges only
-  identical flow sets, which units never have."
-  [units similarity]
-  (let [n (count units)
-        v (vec units)
-        parent (volatile! (vec (range n)))
-        root-of (fn root-of [i] (let [p (@parent i)] (if (= p i) i (root-of p))))]
-    (doseq [i (range n) j (range (inc i) n)
-            :when (>= (jaccard (:flows (v i)) (:flows (v j))) similarity)]
-      (let [a (root-of i) b (root-of j)]
-        (when (not= a b) (vswap! parent assoc (max a b) (min a b)))))
-    (->> (range n)
-         (group-by root-of)
-         (sort-by key)
-         (mapv (fn [[root is]]
-                 {:id (:id (v root))
-                  :flows (reduce into #{} (map #(:flows (v %)) is))
-                  :members (vec (sort (mapcat #(:members (v %)) is)))})))))
+  `similarity` (shared over joined), most similar pairs first, transitively,
+  but never into a unit of more than `max-size` members — without the cap,
+  merging along a chain of overlaps swallows all the shared code into one
+  unit. Each merged unit keeps its first unit's id and joins the flows and
+  members. 1.0 merges only identical flow sets, which units never have."
+  ([units similarity] (coarsen units similarity nil))
+  ([units similarity max-size]
+   (let [n (count units)
+         v (vec units)
+         cap (or max-size Long/MAX_VALUE)
+         pairs (sort-by (fn [[s i j]] [(- s) i j])
+                        (for [i (range n) j (range (inc i) n)
+                              :let [s (jaccard (:flows (v i)) (:flows (v j)))]
+                              :when (>= s similarity)]
+                          [s i j]))
+         parent (volatile! (vec (range n)))
+         size (volatile! (mapv (comp count :members) v))
+         root-of (fn root-of [i] (let [p (@parent i)] (if (= p i) i (root-of p))))]
+     (doseq [[_ i j] pairs]
+       (let [a (root-of i) b (root-of j)]
+         (when (and (not= a b) (<= (+ (@size a) (@size b)) cap))
+           (let [[lo hi] [(min a b) (max a b)]]
+             (vswap! parent assoc hi lo)
+             (vswap! size assoc lo (+ (@size a) (@size b)))))))
+     (->> (range n)
+          (group-by root-of)
+          (sort-by key)
+          (mapv (fn [[root is]]
+                  {:id (:id (v root))
+                   :flows (reduce into #{} (map #(:flows (v %)) is))
+                   :members (vec (sort (mapcat #(:members (v %)) is)))}))))))
 
 (defn unit-graph
   "`gr` with its functions held by `units` instead of their namespaces, so
