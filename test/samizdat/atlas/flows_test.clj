@@ -130,6 +130,10 @@
     (is (= "unit:0" (:parent (g/node ug "a/handle"))))
     (is (= :unit (:kind (g/node ug "unit:0"))))
     (is (= "-main" (:label (g/node ug "unit:0"))) "named for the member the rest is entered through")
+    (testing "a unit entered many ways names three, once each, and counts the rest"
+      (let [many (g/build (map #(f (str "e" (mod % 4)) {:id (str "a/x" %)}) (range 6)) [])
+            u (flows/unit-graph many [{:id "u" :flows #{} :members (mapv #(str "a/x" %) (range 6))}])]
+        (is (= "e0, e1, e2 +1" (:label (g/node u "u"))))))
     (is (= {:from "unit:0" :to "unit:1" :count 1}
            (first (filter #(= ["unit:0" "unit:1"] [(:from %) (:to %)])
                           (:edges (g/lift ug #{}))))))))

@@ -133,7 +133,12 @@
          [:label {:markup (mt/dim (if run-id (str "steps of run " (prefix run-id 8)) "no run selected"))
                   :xalign 0.0}]]
         (concat
-         (when (= :workflow (:canvas s)) [(button "◂ back to the code" (:show-code act))])
+         (when (= :workflow (:canvas s))
+           [(button "◂ back to the code" (:show-code act))
+            (when (and run-id (empty? (get-in s [:wf-view :visited])))
+              [:label {:markup (mt/dim (str "this server holds no steps for run " (prefix run-id 8)
+                                            ": steps are kept in memory, for runs since it started"))
+                       :xalign 0.0 :wrap true}])])
          (for [{nm :name :keys [description]} (:workflows s)]
            (button nm #((:open-workflow act) nm run-id) (scene/clip-label description 200))))))
 

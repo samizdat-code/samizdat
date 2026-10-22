@@ -1791,7 +1791,7 @@
                     :exclude ["(^|/)test/" "_test\\.clj[cs]?$" "(^|/)dev/"]}
           :entries [{:label "-main"} {:kind :method} {:kind :cell}
                     {:uncalled? true :kind [:fn :multi]}]
-          :sinks [{:label-matches "!$"} {:leaf? true}]
+          :sinks [{:label-matches "!$"} {:leaf? true :kind [:fn :method :multi]}]
           :max-paths 200 :max-depth 40 :max-flows 2000
           :unit-similarity 0.5 :max-unit-size 60
           :butterfly-depth 2

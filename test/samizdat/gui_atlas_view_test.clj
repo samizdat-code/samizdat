@@ -82,7 +82,12 @@
 
 (deftest a-workflow-is-opened-with-the-selected-runs-steps
   (let [h (v/sidebar-view act (assoc s :tab :workflows :workflows [{:name "beam" :description "d"}]) "run-1")]
-    (is (= [[:open-workflow "beam" "run-1"]] (click! h "beam")))))
+    (is (= [[:open-workflow "beam" "run-1"]] (click! h "beam"))))
+  (testing "a run whose steps this server does not hold says so, rather than drawing nothing"
+    (let [h (v/sidebar-view act (assoc s :tab :workflows :canvas :workflow :workflow "beam"
+                                       :wf-view {:nodes [] :edges [] :visited #{}})
+                            "run-1")]
+      (is (str/includes? (pr-str h) "holds no steps")))))
 
 (deftest the-toolbar
   (let [h (v/toolbar-view act s)]

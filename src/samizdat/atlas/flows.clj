@@ -232,14 +232,17 @@
 (defn unit-graph
   "`gr` with its functions held by `units` instead of their namespaces, so
   graph/lift zooms through units. A unit is labelled for the members the
-  rest of it is entered through (those no other member calls)."
+  rest of it is entered through (those no other member calls): three names,
+  each once, and how many more."
   [gr units]
   (let [unit-of (into {} (for [u units, m (:members u)] [m (:id u)]))
         heads (fn [{:keys [members]}]
                 (let [ms (set members)]
                   (filter (fn [m] (not-any? ms (g/callers gr m))) members)))
-        label (fn [u] (let [hs (map #(:label (g/node gr %)) (heads u))]
-                        (str/join ", " (or (seq hs) [(:label (g/node gr (first (:members u))))]))))
+        label (fn [u] (let [hs (distinct (map #(:label (g/node gr %)) (heads u)))
+                            hs (or (seq hs) [(:label (g/node gr (first (:members u))))])
+                            [shown more] (split-at 3 hs)]
+                        (str (str/join ", " shown) (when (seq more) (str " +" (count more))))))
         nodes (concat (for [u units]
                         {:id (:id u) :label (label u) :kind :unit
                          :flows (vec (sort (:flows u))) :size (count (:members u))})

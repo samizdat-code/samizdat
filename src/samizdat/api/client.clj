@@ -63,9 +63,13 @@
           (some->> (token/read-for (parse-long port)) (str "Bearer ") (hash-map "Authorization")))
         {})))
 
-(defn- GET [base path]
-  (try (result (http/get (str base path) (assoc opts :headers (auth-headers base))))
-       (catch Throwable e {:ok false :error (ex-message e)})))
+(defn- GET
+  ([base path] (GET base path nil))
+  ([base path socket-timeout-ms]
+   (try (result (http/get (str base path)
+                          (cond-> (assoc opts :headers (auth-headers base))
+                            socket-timeout-ms (assoc :socket-timeout socket-timeout-ms))))
+        (catch Throwable e {:ok false :error (ex-message e)}))))
 
 (defn- POST
   ([base path body] (POST base path body nil))
@@ -331,36 +335,45 @@
       {:stop! (fn [] (reset! running false))})))
 
 ;; --- the code atlas (RFC-016) -------------------------------------------------
+;;
+;; The first call against a project reads every source and computes every
+;; flow, which on this repository is several seconds past the default
+;; socket timeout, so the atlas's calls wait longer.
 
-(defn atlas-summary [base] (GET base "/v1/atlas/summary"))
+(def ^:private atlas-wait {:ms 120000})
+
+(defn- AGET [base path] (GET base path (:ms atlas-wait)))
+
+(defn atlas-summary [base] (AGET base "/v1/atlas/summary"))
 
 (defn atlas-view
   "The project's graph through `lens` with `expanded` groups open, marking
   the visible nodes that hold any id in `mark`."
   [base lens expanded mark]
-  (POST base "/v1/atlas/view" {:lens (name lens) :expanded (vec expanded) :mark (vec mark)}))
+  (POST base "/v1/atlas/view" {:lens (name lens) :expanded (vec expanded) :mark (vec mark)}
+        (:ms atlas-wait)))
 
-(defn atlas-card [base id] (GET base (str "/v1/atlas/card?id=" (url-encode id))))
+(defn atlas-card [base id] (AGET base (str "/v1/atlas/card?id=" (url-encode id))))
 
-(defn atlas-flows [base] (GET base "/v1/atlas/flows"))
+(defn atlas-flows [base] (AGET base "/v1/atlas/flows"))
 
-(defn atlas-flow [base entry] (GET base (str "/v1/atlas/flow?entry=" (url-encode entry))))
+(defn atlas-flow [base entry] (AGET base (str "/v1/atlas/flow?entry=" (url-encode entry))))
 
-(defn atlas-units [base] (GET base "/v1/atlas/units"))
+(defn atlas-units [base] (AGET base "/v1/atlas/units"))
 
-(defn atlas-search [base q] (GET base (str "/v1/atlas/search?q=" (url-encode q))))
+(defn atlas-search [base q] (AGET base (str "/v1/atlas/search?q=" (url-encode q))))
 
-(defn atlas-snapshots [base] (GET base "/v1/atlas/snapshots"))
+(defn atlas-snapshots [base] (AGET base "/v1/atlas/snapshots"))
 
 (defn atlas-diff
   "What changed from snapshot `a` to snapshot `b`, or to now when `b` is nil."
   [base a b]
-  (GET base (str "/v1/atlas/diff?a=" a (when b (str "&b=" b)))))
+  (AGET base (str "/v1/atlas/diff?a=" a (when b (str "&b=" b)))))
 
-(defn atlas-workflows [base] (GET base "/v1/atlas/workflows"))
+(defn atlas-workflows [base] (AGET base "/v1/atlas/workflows"))
 
 (defn atlas-workflow
   "Manifest `name`'s state graph, with run `run-id`'s steps over it when given."
   [base name run-id]
-  (GET base (str "/v1/atlas/workflows/" (url-encode name)
+  (AGET base (str "/v1/atlas/workflows/" (url-encode name)
                  (when run-id (str "?run=" (url-encode run-id))))))
