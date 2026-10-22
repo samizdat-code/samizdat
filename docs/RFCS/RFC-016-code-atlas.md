@@ -135,6 +135,49 @@ Without the cap, merging along chains of overlap pulls most of the shared
 code into one unit. The 227 is one flow set shared exactly by that many
 functions, which the cap does not split.
 
+## Evaluation (karamazov-f73x.5)
+
+Two projects, read with the shipped policy:
+
+| | samizdat | stratify |
+|---|---|---|
+| Files read, unread | 230+, 0 | all, 0 |
+| Nodes / call edges | 4314 / 7990 | 541 / 651 |
+| Read, cold | 3.8 s | 0.6 s |
+| Entries | 251 | 85 |
+| All flows | 2.8 s | 87 ms |
+| Paths per entry, median / max | 3 / 82,031 (`samizdat.core/-main`) | 3 / 184 |
+| Units (0.5, cap 60) | 211 | 66 |
+
+**Where it helped.**
+- Callers and callees match the source wherever they were checked:
+  `extract-graph`'s single caller in stratify, and `resolve-ask`'s callers
+  here.
+- A flow's slice answers "what does this entry point need" directly. For
+  stratify's `-main` it is 99 of 541 functions.
+- Each tool's `run-tool` method being its own flow is what made the
+  methods-as-nodes decision.
+- The workflow graph puts the manifest and its cells' code one click apart.
+
+**Where it was noise, and what changed because of it.**
+- **Opening every namespace at once is unreadable.** That is 255 boxes in a
+  few layers, and fitting them into the pane piled the boxes on top of each
+  other. So zoom is now pixels per layout unit, the canvas starts with the
+  top groups closed, and "fit" is a button.
+- **The leaf-sink rule caught every `defonce` atom.** It now applies to
+  functions only.
+- **Single-linkage units chained 1794 functions together.** This led to the
+  size cap.
+- **The first view of a large project took longer than the client's 10 s
+  timeout.** The atlas's calls now wait up to two minutes.
+- **The workflow overlay is empty for any run older than the server
+  process,** because step events are kept only in memory (`samizdat.steps`).
+  The panel says so. Making the overlay durable is karamazov-f73x.11.
+- **Public functions that nothing calls count as entries.** Some are dead
+  code and some are reached by name (`requiring-resolve`, a symbol in EDN).
+  Both are worth seeing, but they are not the same thing, and the policy
+  cannot tell them apart.
+
 ## Not done
 
 - Other languages (karamazov-f73x.10). The extractor seam is
