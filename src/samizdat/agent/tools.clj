@@ -78,6 +78,7 @@
             [samizdat.agent.tools.wait]
             [samizdat.agent.tools.papercuts]
             [samizdat.agent.tools.battery]
+            [samizdat.agent.tools.atlas]
             [samizdat.agent.tools.policy]
             [samizdat.agent.tools.prompts]
             [samizdat.agent.tools.propose]

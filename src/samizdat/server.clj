@@ -37,6 +37,8 @@
             [samizdat.api.runs :as api-runs]
             [samizdat.api.stream :as stream]
             [samizdat.approval :as approval]
+            [samizdat.atlas :as atlas]
+            [samizdat.manifests :as manifests]
             [samizdat.config :as config]
             [samizdat.engine.proc :as proc]
             [samizdat.llm.client :as llm-client]
@@ -299,6 +301,43 @@
 (defn- files-table [req]
   (json-response (files-body (query-param req "q") (long-param req "limit"))))
 
+;; --- the code atlas (RFC-016) ------------------------------------------------
+;;
+;; The project's call graph, flows and workflow state graphs, for the GUI.
+;; Every answer is computed from the project as it is on disk now.
+
+(defn- atlas-root [] (get-in (system/config) [:run :root]))
+
+(defn- atlas-answer
+  "`(f root)` as JSON: 409 with no project bound, 404 when f finds nothing."
+  [f]
+  (if-let [root (atlas-root)]
+    (if-some [v (f root)]
+      (json-response v)
+      (json-response 404 {:error {:message "not in the atlas" :type "not_found"}}))
+    (json-response 409 {:error {:message "no project is bound" :type "no_project"}})))
+
+(defn- atlas-view [req]
+  (let [{:keys [lens expanded]} (body-json req)]
+    (atlas-answer #(atlas/view % {:lens (keyword (or lens "namespaces")) :expanded (set expanded)}))))
+
+(defn- atlas-diff [req]
+  (atlas-answer #(atlas/diff (system/conn) (long-param req "a") (long-param req "b") % nil)))
+
+(defn- atlas-workflows [_req]
+  (json-response (mapv #(select-keys % [:name :description]) (manifests/catalog (system/conn)))))
+
+(defn- atlas-workflow [req]
+  (let [nm (get-in req [:params :name])
+        run (query-param req "run")]
+    (try
+      (json-response (cond-> (atlas/state-graph nm)
+                       run (assoc :overlay (let [o (atlas/state-overlay nm run)]
+                                             (update o :transitions
+                                                     #(mapv (fn [[[a b] n]] {:from a :to b :count n}) %))))))
+      (catch Throwable e
+        (json-response 404 {:error {:message (ex-message e) :type "not_found"}})))))
+
 ;; --- routing ----------------------------------------------------------------
 ;;
 ;; ruuter route maps: {:method :path :response}. A path segment starting with
@@ -473,6 +512,22 @@
           ;; handlers use — a short noun phrase, not a sentence.
           (json-response 409 {:error {:message "approval not open"}}))))}
    {:method :get :path "/v1/interventions/kinds" :response (fn [_] (json-response (control/kinds)))}
+   ;; The code atlas (RFC-016): the project's call graph and its flows.
+   {:method :get :path "/v1/atlas/summary" :response (fn [_] (atlas-answer atlas/summary))}
+   {:method :post :path "/v1/atlas/view" :response #(atlas-view %)}
+   {:method :get :path "/v1/atlas/card" :response
+    (fn [req] (atlas-answer #(atlas/card % (query-param req "id"))))}
+   {:method :get :path "/v1/atlas/flows" :response (fn [_] (atlas-answer atlas/flow-list))}
+   {:method :get :path "/v1/atlas/flow" :response
+    (fn [req] (atlas-answer #(atlas/flow-detail % (query-param req "entry"))))}
+   {:method :get :path "/v1/atlas/units" :response (fn [_] (atlas-answer atlas/unit-list))}
+   {:method :get :path "/v1/atlas/search" :response
+    (fn [req] (atlas-answer #(atlas/search % (query-param req "q"))))}
+   {:method :get :path "/v1/atlas/snapshots" :response
+    (fn [_] (atlas-answer #(atlas/snapshots (system/conn) %)))}
+   {:method :get :path "/v1/atlas/diff" :response #(atlas-diff %)}
+   {:method :get :path "/v1/atlas/workflows" :response #(atlas-workflows %)}
+   {:method :get :path "/v1/atlas/workflows/:name" :response #(atlas-workflow %)}
    ;; Anything unmatched, a known path under the wrong method included.
    {:path :not-found :response #(not-found %)}])
 

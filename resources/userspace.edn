@@ -81,6 +81,7 @@
    :checklist-missing "prompts/checklist-missing.md"
    :introspect-branch "prompts/introspect-branch.md"
    :lsp-tool "prompts/lsp-tool.md"
+   :atlas-tool "prompts/atlas-tool.md"
    :mcp-tool "prompts/mcp-tool.md"
    :memory-index "prompts/memory-index.md"
    :mode-hurry "prompts/mode-hurry.md"

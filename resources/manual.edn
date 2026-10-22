@@ -541,6 +541,25 @@
    {:name samizdat.metrics/review
     :summary "Structured code-quality findings for the changed sources, or none — what the diff critics merge into their verdict."}]}
 
+ {:group "The code atlas: what calls what, and the programs inside the project (RFC-016)"
+  :entries
+  [{:name samizdat.atlas/graph
+    :summary "The project's call graph, read from source with the host reader (samizdat.atlas.clojure): a node per definition under its namespace, namespaces under prefix groups (`samizdat.agent.*`), each defmethod its own node its multimethod dispatches to, each defcell a node named for its cell id; an edge per call or reference, with its sites. Reread per file only when the file changed. The `atlas` tool asks it questions."}
+   {:name samizdat.atlas/flow-list
+    :summary "The project as the smaller programs inside it: one flow per entry (gates.edn :atlas :entries — a -main, a method, a cell, a public fn nothing calls), with its slice (everything it reaches), its exact path count and the sinks (:sinks) it reaches."}
+   {:name samizdat.atlas/flow-detail
+    :summary "One flow in full: its paths from entry to end, cycles folded into a step, listed up to :max-paths and folded on shared prefixes into a trie."}
+   {:name samizdat.atlas/unit-list
+    :summary "Units of functionality: functions grouped by the set of flows they serve, merged where those sets overlap at least :unit-similarity. The zoomed-out lens of the GUI's atlas."}
+   {:name samizdat.atlas/view
+    :summary "The graph at a zoom level: the nodes visible with some groups open, calls lifted to them and counted (samizdat.atlas.graph/lift), through the :namespaces or :units lens. POST /v1/atlas/view."}
+   {:name samizdat.atlas/card
+    :summary "One definition's card: source, callers and callees with call sites, the flows it serves, its neighbourhood to :butterfly-depth. GET /v1/atlas/card?id=."}
+   {:name samizdat.atlas/state-graph
+    :summary "A workflow manifest as a state graph, each state carrying its cell id, which is that cell's node in the call graph. state-overlay lays a run's recorded steps over it. GET /v1/atlas/workflows/:name?run=."}
+   {:name samizdat.atlas/snapshot!
+    :summary "Store the project's graph (kind, parent and source hash per node, edges, entries) when it differs from the last stored; taken at each run's end when gates.edn :atlas :snapshot?. samizdat.atlas/diff compares two, or one with now."}]}
+
  {:group "Acceptance criteria: the operator's definition of done"
   :entries
   [{:name samizdat.agent.acceptance/normalize

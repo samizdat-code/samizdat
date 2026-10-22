@@ -167,6 +167,7 @@
    ;; readily as a file's body can.
    "glob"        {:reach :host-bytes}
    "lsp"         {:reach :host-bytes}
+   "atlas"       {:reach :host-bytes}
    ;; A process the person's config.edn names (a project's own config only
    ;; where the person trusted its root), under the scrubbed environment plus
    ;; the variables its entry names; each call passes the server's policy,

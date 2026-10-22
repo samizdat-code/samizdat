@@ -62,6 +62,7 @@
   `samizdat.bench.beam` is the comparison."
   (:require [clojure.string :as str]
             [samizdat.learned :as learned]
+            [samizdat.atlas :as atlas]
             [clojure.tools.logging :as log]
             [mycelium.core :as myc]
             [samizdat.agent.budget :as budget]
@@ -1380,6 +1381,8 @@
       ;; Each learned decision point earns or loses its cascade on the
       ;; record so far, this run included (RFC-015).
       (learned/run-ended! conn run-id)
+      ;; The code graph as this run left it, for the atlas's history.
+      (atlas/run-ended! conn (userspace/project-root) run-id)
       result)))
 
 (defn summary

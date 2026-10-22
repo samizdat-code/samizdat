@@ -184,6 +184,14 @@ lsp({op, file, line, col, new_name?})
     needs file, line, col and new_name: clojure-lsp renames the symbol
     everywhere it is used, and every file it touches is written for you
     through write_file — the one way to rename that cannot miss a use.
+atlas({op, id?, q?, entry?})
+    The project's call graph and the flows through it (entry point to end),
+    read from the source as it is now. search {q} finds definitions by name
+    (an id is `ns/name`); callers / callees {id} list them with call sites;
+    impact {id} is everything that transitively reaches it and how many
+    flows; flows {id} the entry points whose flow reaches it; flow {entry}
+    the paths from an entry; card {id} its source, doc and counts; changes
+    what was added, removed or changed since the last stored snapshot.
 write_file({path, content})
     Write a whole file in the project, creating directories as needed.
     Overwrites. Use this for NEW files; to change an existing file, prefer

@@ -72,6 +72,15 @@
             [samizdat.approval-test]
             [samizdat.classify-test]
             [samizdat.learned-test]
+            [samizdat.atlas.graph-test]
+            [samizdat.atlas.clojure-test]
+            [samizdat.atlas.flows-test]
+            [samizdat.atlas.states-test]
+            [samizdat.atlas.snapshot-test]
+            [samizdat.atlas.layout-test]
+            [samizdat.atlas-test]
+            [samizdat.atlas-api-test]
+            [samizdat.atlas-tool-test]
             [samizdat.base-test]
             [samizdat.boundary-test]
             [samizdat.compaction-test]
@@ -334,6 +343,15 @@
     samizdat.approval-test
     samizdat.classify-test
     samizdat.learned-test
+    samizdat.atlas.graph-test
+    samizdat.atlas.clojure-test
+    samizdat.atlas.flows-test
+    samizdat.atlas.states-test
+    samizdat.atlas.snapshot-test
+    samizdat.atlas.layout-test
+    samizdat.atlas-test
+    samizdat.atlas-api-test
+    samizdat.atlas-tool-test
     samizdat.base-test
     samizdat.boundary-test
     samizdat.compaction-test

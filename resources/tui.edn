@@ -322,7 +322,7 @@
           :error    "(x_x)"
           :done     "(^_^)"}
   :tools {"read_file" :reading "read_digest" :reading "grep" :reading
-          "glob" :reading "lsp" :reading "fetch_turn" :reading
+          "glob" :reading "lsp" :reading "atlas" :reading "fetch_turn" :reading
           "write_file" :writing "edit_file" :writing "patch" :writing
           "shell" :shell "eval" :shell}}
 

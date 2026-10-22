@@ -73,6 +73,7 @@
             [samizdat.heldout]
             [samizdat.layers]
             [samizdat.learned]
+            [samizdat.atlas]
             [samizdat.lisp]
             [samizdat.llm.client]
             [samizdat.llm.grammar]

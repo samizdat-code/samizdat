@@ -1786,6 +1786,35 @@
         :cascade}), never this file's."
   :provenance ["karamazov-dcnj" "2610.21412"]}
 
+ :atlas
+ {:value {:sources {:include ["\\.clj[cs]?$"]
+                    :exclude ["(^|/)test/" "_test\\.clj[cs]?$" "(^|/)dev/"]}
+          :entries [{:label "-main"} {:kind :method} {:kind :cell}
+                    {:uncalled? true :kind [:fn :multi]}]
+          :sinks [{:label-matches "!$"} {:leaf? true}]
+          :max-paths 200 :max-depth 40 :max-flows 2000
+          :unit-similarity 0.5
+          :butterfly-depth 2
+          :max-source-lines 400
+          :snapshot? true}
+  :kind :policy :capability-tunable? false
+  :doc "THE CODE ATLAS (samizdat.atlas, RFC-016): how the project's call graph
+        is read and cut into flows. :sources picks the files read (regexes on
+        the path git lists). A FLOW starts at an entry and runs to an end;
+        :entries and :sinks are rules, each a map whose every field must hold
+        of a definition (:label, :label-matches, :id, :id-matches, :kind,
+        :private?, :uncalled? — public and nothing calls it, :leaf? — calls
+        nothing). Paths are counted exactly and listed only up to :max-paths
+        per flow and :max-depth steps; measured on this repository the median
+        entry has 3 paths and the largest 150,600, so the caps are what keep
+        a listing readable, not what keeps it correct. :unit-similarity is
+        how far two groups of functions' flow sets must overlap (shared over
+        joined) to merge into one unit in the zoomed-out view: 1.0 keeps every
+        distinct set apart (762 units here, 441 of one function). :snapshot?
+        stores the graph at each run's end when it changed, which is what the
+        atlas's history and diff read."
+  :provenance ["karamazov-f73x"]}
+
  :workflow-selection
  {:value
   {:enabled?          true

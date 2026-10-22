@@ -214,7 +214,7 @@
 
 (defn- doc-of [head form]
   (cond (#{'defn 'defn- 'defmacro 'defmulti} head) (when (string? (nth form 2 nil)) (nth form 2))
-        (#{'def 'defonce} head) (when (and (= 4 (count form)) (string? (nth form 2))) (nth form 2))
+        (#{'def 'defonce} head) (when (and (string? (nth form 2 nil)) (nthnext form 3)) (nth form 2))
         :else nil))
 
 ;; --- bodies ------------------------------------------------------------------
@@ -351,18 +351,22 @@
      :calls (concat dispatches calls)
      :error (when err {:file path :message err})}))
 
-(defn extract
-  "The code graph of Clojure `files` ({:path :text} each). A reference
-  resolves to its first candidate that is a definition read here; one to a
-  library this did not read is dropped by graph/build."
-  [files]
-  (let [per (mapv extract-file files)
-        nodes (vals (into {} (map (juxt :id identity)) (mapcat :nodes per)))
+(defn link
+  "The code graph of `per-file` extract-file results. A reference resolves
+  to its first candidate that is a definition read here; one into a library
+  this did not read is dropped by graph/build."
+  [per-file]
+  (let [nodes (vals (into {} (map (juxt :id identity)) (mapcat :nodes per-file)))
         known (set (map :id nodes))
         edges (keep (fn [{:keys [from candidates site]}]
                       (when-let [to (first (filter known candidates))]
                         (when (not= from to)
                           {:from from :to to :sites [site]})))
-                    (mapcat :calls per))]
+                    (mapcat :calls per-file))]
     (with-meta (g/build nodes edges)
-      {:errors (vec (keep :error per))})))
+      {:errors (vec (keep :error per-file))})))
+
+(defn extract
+  "The code graph of Clojure `files` ({:path :text} each)."
+  [files]
+  (link (mapv extract-file files)))

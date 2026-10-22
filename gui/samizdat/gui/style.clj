@@ -70,7 +70,7 @@
     (cond
       (#{"thesis" "done" "give_up" "branch_theses" "complete"} t) :claim
       (#{"edit_file" "write_file" "reload_cells" "cells" "manifest"} t) :edit
-      (#{"read_file" "grep" "lsp" "fetch_artifact" "fetch_turn" "introspect" "doc" "skill"} t) :read
+      (#{"read_file" "grep" "lsp" "atlas" "fetch_artifact" "fetch_turn" "introspect" "doc" "skill"} t) :read
       (#{"shell" "eval"} t) :run
       :else :meta)))
 
