@@ -44,6 +44,7 @@
             [samizdat.agent.resume :as resume]
             [samizdat.api.client :as api-client]
             [samizdat.api.control :as api-control]
+            [samizdat.cancel :as cancel]
             [samizdat.api.openai :as openai]
             [samizdat.api.runs :as api-runs]
             [samizdat.cells :as cells]
@@ -162,6 +163,62 @@
           (is gone? "no stranded active entry after an instant run"))
         (is (= 409 (:status (api-control/abort! c rid)))
             "abort on a finished run refuses rather than rewriting status")))))
+
+(deftest a-start-that-misses-the-deadline-aborts-before-a-late-turn
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          release (promise)
+          finished (promise)
+          turns (atom 0)]
+      (with-redefs [lexicon/policy (let [policy lexicon/policy]
+                                     (fn [k]
+                                       (if (= k :run-start-deadline-ms) 20 (policy k))))
+                    beam/run! (fn [{:keys [abort on-start]}]
+                                (try
+                                  @release
+                                  (on-start rid)
+                                  (when-not @abort (swap! turns inc))
+                                  {:run-id rid :status :completed}
+                                  (finally (deliver finished true))))]
+        (let [r (api-control/start-run! {:conn c :config {:llm {:provider :local}}}
+                                        {:problem "p"})]
+          (is (= 503 (:status r)))
+          (is (str/includes? (get-in r [:body :error :message]) "cancelled")
+              "the refusal says the late startup was cancelled")
+          (deliver release true)
+          (is (true? (deref finished 2000 false)) "the deferred startup finished")
+          (let [row (runs/get-run c rid)]
+            (is (= "aborted" (:status row)) "the late row is closed, not left running")
+            (is (some? (:ended_at row))))
+          (is (zero? @turns) "no turn executes after the start deadline")
+          (is (loop [n 0]
+                (cond (nil? (get @api-control/active rid)) true
+                      (< n 100) (do (Thread/sleep 10) (recur (inc n)))
+                      :else false))
+              "the cancelled run leaves no active registration"))))))
+
+(deftest a-start-timeout-without-a-run-row-still-cancels-the-task
+  (with-db [c]
+    (let [release (promise)
+          cancelled (promise)]
+      (with-redefs [lexicon/policy (let [policy lexicon/policy]
+                                     (fn [k]
+                                       (if (= k :run-start-deadline-ms) 20 (policy k))))
+                    beam/run! (fn [_]
+                                (try
+                                  @release
+                                  (cancel/check!)
+                                  (deliver cancelled false)
+                                  {:run-id "never-created" :status :completed}
+                                  (catch Throwable e
+                                    (deliver cancelled (cancel/control-signal? e))
+                                    (throw e))))]
+        (let [r (api-control/start-run! {:conn c :config {:llm {:provider :local}}}
+                                        {:problem "p"})]
+          (is (= 503 (:status r)) "cancelling a task with no row does not throw")
+          (deliver release true)
+          (is (true? (deref cancelled 2000 false))
+              "the spawned task observed its cancellation"))))))
 
 (deftest abort-refuses-when-the-run-won-the-finish-race
   ;; provenance R2-4: the transient window provenance A-3 could not close — the run's own

@@ -179,10 +179,13 @@
                                           :quarantine quarantine
                                           :abort abort
                                           :on-start (fn [rid]
-                                                      (swap! active assoc rid
-                                                             {:abort abort
-                                                              :cancel (fn [] (some-> @cancel* (apply [])))})
-                                                      (deliver promised rid))})]
+                                                      (if @abort
+                                                        (runs/finish-run! conn rid :aborted nil)
+                                                        (do
+                                                          (swap! active assoc rid
+                                                                 {:abort abort
+                                                                  :cancel (fn [] (some-> @cancel* (apply [])))})
+                                                          (deliver promised rid))))})]
                         (swap! active dissoc (:run-id r))
                         ;; Release anything parked on a question this run
                         ;; asked. Without it an aborted or finished run
@@ -222,10 +225,13 @@
       ;; service it. Answering 200 with an error body made a caller that checks
       ;; the status code read this as a started run, which is why gui.api's
       ;; start-run! had to unwrap the body to find out otherwise.
-      {:status 503
-       :body {:error {:message (str/trim
-                                (prompt/render "run-start-timeout"
-                                               {:seconds (quot start-deadline 1000)}))}}})))))))
+      (do
+        (reset! abort true)
+        ((:cancel started))
+        {:status 503
+         :body {:error {:message (str/trim
+                                  (prompt/render "run-start-timeout"
+                                                 {:seconds (quot start-deadline 1000)}))}}}))))))))
 
 (defn abort!
   "Stop a run without asking it to cooperate. Cancels the run task, which is
