@@ -105,6 +105,14 @@
           (is (false? (:ok r)))
           (is (str/includes? (:error r) "refused")))))))
 
+(deftest approval-decisions-carry-session-grants
+  (with-redefs [http/post (fn [url opts]
+                            (is (= "http://x:1/v1/approvals/a1" url))
+                            (is (str/includes? (:body opts) "\"decision\":\"allow\""))
+                            (is (str/includes? (:body opts) "\"always\":true"))
+                            (ok {:status "decided"}))]
+    (is (:ok (api/decide! "http://x:1" "a1" {:decision :allow :always true})))))
+
 (deftest poll-fold-advances-cursor-and-backs-off
   (testing "events advance the cursor and reset the interval"
     (let [s (api/poll-step {:cursor 10 :interval-ms 24000}

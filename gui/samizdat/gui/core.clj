@@ -39,6 +39,7 @@
             [glimmer-gtk.core]
             [glimmer.ratom :as r]
             [samizdat.gui.api :as api]
+            [samizdat.gui.approval :as approval]
             [samizdat.gui.glpane :as glpane]
             [samizdat.gui.graph :as graph]
             [samizdat.gui.mathtext :as mt]
@@ -58,22 +59,24 @@
       (str "http://127.0.0.1:" (or (System/getenv "HARNESS_PORT") "3985"))))
 
 (defonce state
-  (r/atom {:base-url (default-base-url)
-           :runs []                     ; known runs, newest first
-           :run nil                     ; selected run id
-           :graph (graph/empty-graph)   ; folded scene graph
-           :event-count 0
-           :selected nil                ; selected branch node
-           :branch-log nil              ; branch-detail body for :selected
-           :branch-log-error nil        ; why it is missing, when it failed
-           :connected? false
-           :notice nil                  ; transient feedback line
-           :budget ""                   ; resume budget-extension entry
-           :composing? false            ; the new-run form is open
-           :form {:problem "" :max-turns "" :beam-width "" :seed-run ""
-                  :model "" :reasoning-effort ""}
-           :models []                   ; what the provider serves, for the picker
-           :draft ""}))                 ; intervention input text
+  (r/atom (approval/reset-run
+           {:base-url (default-base-url)
+            :runs []                     ; known runs, newest first
+            :run nil                     ; selected run id
+            :graph (graph/empty-graph)   ; folded scene graph
+            :event-count 0
+            :selected nil                ; selected branch node
+            :branch-log nil              ; branch-detail body for :selected
+            :branch-log-error nil        ; why it is missing, when it failed
+            :connected? false
+            :notice nil                  ; transient feedback line
+            :budget ""                   ; resume budget-extension entry
+            :composing? false            ; the new-run form is open
+            :form {:problem "" :max-turns "" :beam-width "" :seed-run ""
+                   :model "" :reasoning-effort ""}
+            :models []                   ; what the provider serves, for the picker
+            :draft ""                    ; intervention input text
+            :input ""})))                ; approval note or custom answer
 
 (defonce poller (atom nil))
 
@@ -166,11 +169,15 @@
       ;; :hover too, and glpane's own mark: a hover from the run just left
       ;; kept describing a node that no longer existed (code-review-2026-08
       ;; #5).
-      (swap! state assoc :run run-id :graph (graph/empty-graph) :event-count 0
-             :selected nil :branch-log nil :branch-log-error nil :notice nil
-             :hover nil)
+      (swap! state (fn [s]
+                     (-> s
+                         (assoc :run run-id :graph (graph/empty-graph) :event-count 0
+                                :selected nil :branch-log nil :branch-log-error nil :notice nil
+                                :hover nil)
+                         approval/reset-run)))
       (glpane/clear-hover!)
       (glpane/request-render!)
+      (approval/refresh! state api/approvals glpane/unmount!)
       (when run-id
         (reset! poller
                 (api/start-poller!
@@ -181,6 +188,8 @@
                            (fn [s] (-> s
                                        (update :graph #(reduce graph/apply-event % evs))
                                        (update :event-count + (count evs)))))
+                    (when (some approval/approval-event? evs)
+                      (approval/refresh! state api/approvals glpane/unmount!))
                     ;; Compare against the selected node's BRANCH: an artifact
                     ;; node's id is "<branch>@<turn>", which matches no event's
                     ;; branch_id, so artifact panels never refreshed at all.
@@ -283,12 +292,6 @@
 
 (defn- toggle-compose! []
   (let [composing? (:composing? (swap! state update :composing? not))]
-    ;; `root` renders a different tree while the form is open, one with no
-    ;; :gl-area in it, so opening the form DESTROYS the pane's widget. The
-    ;; poller keeps calling request-render! throughout, and glpane holds the
-    ;; widget as a raw pointer it has no way to learn is dead, so it has to be
-    ;; told. Closing the form mounts a fresh :gl-area whose on-realize
-    ;; repopulates it.
     (when composing?
       (glpane/unmount!)
       ;; On open rather than at startup: the list is only needed by the form,
@@ -636,27 +639,40 @@
    [:button {:label "send" :on-click send-intervention!}]])
 
 (defn root []
-  (if (:composing? @state)
-    ;; The form takes the whole body rather than squeezing in beside the
-    ;; graph: a problem statement is paragraphs. The poller keeps running
-    ;; while this is open, but the GL pane does NOT survive it — there is no
-    ;; :gl-area in this branch, so opening the form destroys the widget and
-    ;; closing it builds a new one. toggle-compose! tells glpane so, because
-    ;; the pointer it caches would otherwise outlive the widget.
-    [:vbox {:spacing 8 :margin 8}
-     [header]
-     [:separator]
-     [new-run-panel]]
-    [:vbox {:spacing 8 :margin 8}
-     [header]
-     [legend]
-     [:separator]
-     [:hbox {:spacing 8 :vexpand true}
-      [graph-pane]
-      [log-panel]]
-     [status-line]
-     [:separator]
-     [input-bar]]))
+  (let [http {:approvals api/approvals :decide! api/decide!}
+        approval-handlers
+        {:decide (fn [id decision] (approval/decide! state http id decision))
+         :answer (fn [id answers] (approval/answer! state http id answers))
+         :reply (fn [kind id] (approval/start-reply! state kind id))
+         :cancel-reply (fn [] (approval/cancel-reply! state))
+         :option (fn [i] (approval/move-option! state i))
+         :toggle (fn [i] (approval/toggle-option! state i))
+         :input (fn [text] (approval/set-input! state text))
+         :submit-reply (fn [] (approval/submit-reply! state http))}]
+    (cond
+      (:composing? @state)
+      [:vbox {:spacing 8 :margin 8}
+       [header]
+       [:separator]
+       [new-run-panel]]
+
+      (seq (:approvals @state))
+      [:vbox {:spacing 8 :margin 8}
+       [header]
+       [:separator]
+       (approval/view @state approval-handlers)]
+
+      :else
+      [:vbox {:spacing 8 :margin 8}
+       [header]
+       [legend]
+       [:separator]
+       [:hbox {:spacing 8 :vexpand true}
+        [graph-pane]
+        [log-panel]]
+       [status-line]
+       [:separator]
+       [input-bar]])))
 
 (defn -main [& _]
   (refresh-runs!)
