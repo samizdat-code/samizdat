@@ -53,6 +53,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
+            [samizdat.store.db :as db]
             [samizdat.store.outcomes :as outcomes]
             [samizdat.store.userspace :as store]))
 
@@ -1214,36 +1215,36 @@
 (defn- restore-file! [path text]
   (if (some? text)
     (write-file! path text)
-    (let [f (io/file (str path))]
-      (when (.isFile f) (.delete f)))))
+    (java.nio.file.Files/deleteIfExists (.toPath (io/file (str path))))))
 
 (defn- save-file-version!
   "Write the live file before appending history, restoring both file and role
   map when either side fails. A crash between the two is recovered on the next
   read by the ordinary file-edit recording path."
   [kind name new-body append!]
-  (let [map-before (file-text (map-path))
-        path (atom nil)
-        before (atom nil)]
-    (try
-      (let [p (save-path kind name)]
-        (reset! path p)
-        (reset! before (file-text p))
-        (write-file! p new-body)
-        (let [v (append!)]
-          (swap! synced assoc [kind name] (str new-body))
-          (invalidate!)
-          v))
-      (catch Throwable e
-        (try
-          (when @path (restore-file! @path @before))
-          (restore-file! (map-path) map-before)
-          (reset! last-good-map (parse-map :project map-before))
-          (invalidate!)
-          (catch Throwable rollback-error
-            (throw (ex-info "userspace save failed and its rollback did not complete"
-                            {:save-error e :rollback-error rollback-error}))))
-        (throw e)))))
+  (db/with-writer
+    (let [map-before (file-text (map-path))
+          path (atom nil)
+          before (atom nil)]
+      (try
+        (let [p (save-path kind name)]
+          (reset! before (file-text p))
+          (reset! path p)
+          (write-file! p new-body)
+          (let [v (append!)]
+            (swap! synced assoc [kind name] (str new-body))
+            (invalidate!)
+            v))
+        (catch Throwable e
+          (try
+            (when @path (restore-file! @path @before))
+            (restore-file! (map-path) map-before)
+            (reset! last-good-map (parse-map :project map-before))
+            (invalidate!)
+            (catch Throwable rollback-error
+              (throw (ex-info "userspace save failed and its rollback did not complete"
+                              {:save-error e :rollback-error rollback-error}))))
+          (throw e))))))
 
 (defn save!
   "Append a new version of `kind`/`name` for the current project. Returns the

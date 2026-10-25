@@ -798,7 +798,12 @@
         (is (not (str/includes? (:result r) "t2")))
         (is (not (str/includes? (:result r) "another branch")))
         (is (str/includes? (:result r) "fetch_turn")
-            "the search results name the way to open a whole turn")))))
+            "the search results name the way to open a whole turn"))
+      (let [r (tools/run-tool {:branch b :conn c :run-id rid
+                               :tool-name "fetch_turn"
+                               :args {:query (apply str (repeat 4000 "x"))}})]
+        (is (<= (count (:result r)) 1200)
+            "an oversized query is bounded like the rows")))))
 
 ;; --- the ship gate's test rung: done is not terminal until tests pass --------
 

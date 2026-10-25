@@ -76,19 +76,23 @@
   (let [{:keys [branch conn run-id]} ctx
         bid (or (some-> (base/arg ctx :branch) str str/trim not-empty)
                 (:id branch))
-        {:keys [limit max-limit preview-chars]} (gates/threshold :journal-recall)
+        {:keys [limit max-limit preview-chars max-query-chars max-terms]}
+        (gates/threshold :journal-recall)
         limit (min (long (or (base/arg ctx :limit) limit)) (long max-limit))
         before (some-> (base/arg ctx :before) str str/trim parse-long)
+        bounded-query (subs query 0 (min (count query) (long max-query-chars)))
         rows (mapv #(update % :preview message/strip-think-blocks)
-                   (journal/search-turns conn run-id bid query
+                   (journal/search-turns conn run-id bid bounded-query
                                          {:limit limit :before before
-                                          :preview-chars preview-chars}))]
+                                          :preview-chars preview-chars
+                                          :max-terms max-terms}))]
     (when (not= bid (:id branch))
       (flow/receive! ctx [(flow/encode (flow/label-of (assoc ctx :branch {:id bid})))]
                      "fetch_turn"))
     (base/ok branch
              (prompt/render "fetch-turn-results"
-                            {:query query :branch bid :rows rows
+                            {:query (str bounded-query (when (< (count bounded-query) (count query)) "…"))
+                             :branch bid :rows rows
                              :more (= limit (count rows))}))))
 
 (defmethod base/run-tool "fetch_turn" [{:keys [branch conn run-id] :as ctx}]

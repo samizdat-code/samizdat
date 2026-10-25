@@ -406,6 +406,20 @@
       (is (= ["factory"] (versions-of :policy "gates")))
       (is (empty? (us/versions :manifest "mine"))))))
 
+(deftest a-snapshot-failure-never-deletes-the-last-good-file
+  (with-project [root _c]
+    (us/seed-project! shipped)
+    (let [target (str (file root "gates.edn"))
+          before (slurp target)
+          original (var-get #'us/file-text)]
+      (with-redefs [us/file-text (fn [path]
+                                   (if (= path target)
+                                     (throw (ex-info "cannot read target" {}))
+                                     (original path)))]
+        (is (thrown? Exception (us/save! :policy "gates" "candidate"))))
+      (is (.isFile (io/file target)) "the last good file was not deleted")
+      (is (= before (slurp target))))))
+
 (deftest a-failed-revert-restores-the-current-file
   (with-project [root _c]
     (us/seed-project! shipped)

@@ -64,11 +64,16 @@
   check!)
 
 (defn control-signal?
-  "Whether `e` is a cancellation rather than a failure: ebb's Cancelled, or
-  the InterruptedException an interrupted host call throws. Every catch on
-  the FSM path rethrows these untouched (the :rethrow? opt)."
+  "Whether `e` or one of its causes is a cancellation rather than a failure:
+  ebb's Cancelled, or the InterruptedException an interrupted host call throws.
+  Every catch on the FSM path rethrows these untouched (the :rethrow? opt)."
   [e]
-  (boolean (or (ebb/cancelled? e) (instance? InterruptedException e))))
+  (loop [cause e]
+    (cond
+      (or (ebb/cancelled? cause) (instance? InterruptedException cause)) true
+      (and (instance? Throwable cause) (.getCause ^Throwable cause))
+      (recur (.getCause ^Throwable cause))
+      :else false)))
 
 (defn pre-check
   "The :pre interceptor: check for a cancel, then hand the state through

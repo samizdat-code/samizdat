@@ -431,10 +431,11 @@
 (defn apply-eviction
   "Apply a deterministic fold and stamp its cumulative journal addresses on
   the marker. The metadata never reaches the provider; the next fold reads it."
-  [messages window marker summary role turns]
-  (let [out (apply-summary messages window marker summary role)
-        i (first (keep-indexed (fn [i m] (when (:compaction? m) i)) out))]
-    (if i (assoc-in out [i :evicted-turns] turns) out)))
+  [messages [start end :as window] marker summary role turns]
+  (let [out (apply-summary messages window marker summary role)]
+    (if (< start (count out))
+      (assoc-in out [start :evicted-turns] turns)
+      out)))
 
 ;; --- the task fold (karamazov-d5wo.5) -----------------------------------------
 ;;

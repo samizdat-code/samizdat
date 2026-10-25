@@ -432,14 +432,14 @@
 (defn- continuation-eligible?
   [result config attempt]
   (let [{:keys [enabled? min-chars max-attempts]} (:continuation config)
-        text (some-> result :partial-response :content message/strip-think-blocks)]
+        text (some-> result :partial-response :content message/answer)]
     (and (get-in config [:continuation :enabled?] true)
          (< (long attempt) (long (or max-attempts 1)))
          (not (str/blank? text))
          (>= (count text) (long (or min-chars 1000))))))
 
 (defn- continuation-messages [messages response]
-  (let [text (:content response)]
+  (let [text (message/answer (:content response))]
     (into (vec messages)
           [{:role "assistant" :content text}
            {:role "user"
@@ -541,7 +541,7 @@
                                   {:outcome :fatal :reason :harness-error
                                    :error (str "harness: " m)}))]
                           (cond-> outcome
-                            partial (assoc :partial-response partial)))))
+                            partial (assoc :outcome :retry :partial-response partial)))))
              errors (conj errors (:error result))]
          (cond
            (= :ok (:outcome result))
@@ -550,20 +550,23 @@
              (:response result))
 
            (or (= :fatal (:outcome result)) (>= attempt retries))
-           (if (continuation-eligible? result config continuation-attempt)
-             (let [partial (:partial-response result)]
+           (let [partial (:partial-response result)
+                 seed (when partial
+                        (if continuation-seed
+                          (merge-continuation continuation-seed partial)
+                          partial))]
+             (if (continuation-eligible? result config continuation-attempt)
                (chat-one adapter config (continuation-messages messages partial)
                          (assoc opts
                                 :continuation-attempt (inc continuation-attempt)
-                                :continuation-seed (or continuation-seed partial))))
-             (throw (ex-info (str (adapter/display-name adapter) " call failed: "
-                                  (last errors))
-                             (cond-> {:provider (adapter/id adapter)
-                                      :attempts (inc attempt)
-                                      :reason (or (:reason result) :call-failed)
-                                      :errors errors}
-                               (:partial-response result)
-                               (assoc :partial-response (:partial-response result))))))
+                                :continuation-seed seed))
+               (throw (ex-info (str (adapter/display-name adapter) " call failed: "
+                                    (last errors))
+                               (cond-> {:provider (adapter/id adapter)
+                                        :attempts (inc attempt)
+                                        :reason (or (:reason result) :call-failed)
+                                        :errors errors}
+                                 seed (assoc :partial-response seed))))))
 
            ;; A retryable error whose own reset is beyond the in-run window is
            ;; a cap in a rate-limit's clothing: waiting it out would blow the
@@ -628,22 +631,31 @@
               last-e nil]
          (if-not c
            (throw last-e)
-           (let [r (if (and (seq more) (pos? (or (:slow-start-ms c) 0)))
+           (let [active (atom true)
+                 candidate-opts (cond-> opts
+                                  (:on-delta opts)
+                                  (update :on-delta
+                                          (fn [publish]
+                                            (fn [delta]
+                                              (when @active (publish delta))))))
+                 r (if (and (seq more) (pos? (or (:slow-start-ms c) 0)))
                      (let [[tag v] (cancel/with-deadline
-                                     (ebb/via ebb/blk (chat-one a c messages opts))
+                                     (ebb/via ebb/blk (chat-one a c messages candidate-opts))
                                      (:slow-start-ms c))]
                        (case tag
                          :timeout {:e (ex-info "slow start" {:reason :slow-start})}
                          :err {:e v}
                          :ok {:ok v}))
-                     (try {:ok (chat-one a c messages opts)}
+                     (try {:ok (chat-one a c messages candidate-opts)}
                           (catch Throwable e
                             (if (cancel/control-signal? e) (throw e) {:e e}))))]
              (cond
-               (and (:e r) (cancel/control-signal? (:e r))) (throw (:e r))
+               (and (:e r) (cancel/control-signal? (:e r)))
+               (do (reset! active false) (throw (:e r)))
                (contains? r :ok) (:ok r)
                :else
-               (do (swap! retired conj [scope (model-key c)])
+               (do (reset! active false)
+                   (swap! retired conj [scope (model-key c)])
                    (log/warn "llm: retiring" (:provider c) (:model c) "for this run:"
                              (ex-message (:e r)))
                    (recur more (:e r))))))))

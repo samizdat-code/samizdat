@@ -2274,3 +2274,75 @@
                    (client/chat-one (registry/adapter-for :deepseek) {:max-retries 0
                                               :continuation {:enabled? true :min-chars 1 :max-attempts 1}} [])))
       (is (= 1 @calls) "reasoning alone cannot anchor a continuation"))))
+
+(deftest unfinished-reasoning-cannot-anchor-a-continuation
+  (let [calls (atom 0)]
+    (with-redefs [client/post-once
+                  (fn [& _]
+                    (swap! calls inc)
+                    (throw (ex-info "cut" {:partial-response
+                                           {:content "<think>unfinished reasoning"}})))]
+      (is (thrown? Exception
+                   (client/chat-one (registry/adapter-for :deepseek)
+                                    {:max-retries 0
+                                     :continuation {:enabled? true :min-chars 1 :max-attempts 1}} [])))
+      (is (= 1 @calls)))))
+
+(deftest ordinary-retries-happen-before-continuation
+  (let [calls (atom 0)]
+    (with-redefs [client/post-once
+                  (fn [& _]
+                    (let [n (swap! calls inc)]
+                      (if (< n 3)
+                        (throw (ex-info "cut" {:partial-response {:content "a"}}))
+                        {:outcome :ok :response {:content "c"}})))]
+      (is (= "ac" (:content (client/chat-one (registry/adapter-for :deepseek)
+                                             {:max-retries 1
+                                              :continuation {:enabled? true :min-chars 1 :max-attempts 1}}
+                                             []))))
+      (is (= 3 @calls) "two ordinary attempts, then one continuation"))))
+
+(deftest repeated-continuations-accumulate-content-and-usage
+  (let [calls (atom 0)]
+    (with-redefs [client/post-once
+                  (fn [& _]
+                    (let [n (swap! calls inc)]
+                      (if (< n 3)
+                        (throw (ex-info "cut" {:partial-response
+                                               {:content (str (char (+ 96 n)))
+                                                :usage {:prompt-tokens 1 :completion-tokens 1 :total-tokens 2}
+                                                :elapsed-ms 1}}))
+                        {:outcome :ok :response {:content "c"
+                                                 :usage {:prompt-tokens 1 :completion-tokens 1 :total-tokens 2}
+                                                 :elapsed-ms 1}})))]
+      (let [r (client/chat-one (registry/adapter-for :deepseek)
+                               {:max-retries 0
+                                :continuation {:enabled? true :min-chars 1 :max-attempts 2}} [])]
+        (is (= "abc" (:content r)))
+        (is (= 3 (get-in r [:usage :prompt-tokens])))
+        (is (= 3 (:elapsed-ms r)))
+        (is (= 3 @calls))))))
+
+(deftest a-cancelled-stream-is-never-continued-or-retired
+  (let [a (registry/adapter-for :deepseek)
+        body (json/write-str
+              {:id "c1" :model "m" :object "chat.completion"
+               :choices [{:index 0 :message {:role "assistant" :content "partial"}
+                          :finish_reason nil}]})
+        calls (atom 0)]
+    (with-redefs [stream/post
+                  (fn [& _]
+                    (swap! calls inc)
+                    (throw (ex-info "cancelled" {:partial-body body}
+                                    (InterruptedException.))))]
+      (is (thrown? Exception
+                   (client/chat a
+                                {:base-url "http://x"
+                                 :features #{:stream}
+                                 :max-retries 0
+                                 :continuation {:enabled? true :min-chars 1 :max-attempts 1}
+                                 :fallbacks [{:adapter a :config {:base-url "http://x"
+                                                                  :features #{:stream}
+                                                                  :model "backup"}}]}
+                                [] {:on-delta (fn [_])})))
+      (is (= 1 @calls) "a control signal starts no continuation or fallback"))))

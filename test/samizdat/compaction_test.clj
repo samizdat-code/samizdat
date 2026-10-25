@@ -774,6 +774,17 @@
       (is (> (count second-refs) (count first-refs))
           "and it adds the newly evicted turns"))))
 
+(deftest eviction-stamps-the-marker-it-inserts-not-an-older-one
+  (let [msgs [{:role "system" :content "old" :compaction? true :evicted-turns [1]}
+              {:role "user" :content "keep"}
+              {:role "assistant" :content "call 2" :turn 2}
+              {:role "user" :content "result 2" :turn 2}
+              {:role "assistant" :content "call 3" :turn 3}
+              {:role "user" :content "result 3" :turn 3}]
+        out (cmp/apply-eviction msgs [3 5] "M:" "new" "system" [2 3])]
+    (is (= [1] (:evicted-turns (nth out 0))) "the older marker keeps its references")
+    (is (= [2 3] (:evicted-turns (nth out 3))) "the new marker carries the new references")))
+
 (deftest eviction-refuses-history-without-a-journal-address
   (cells/load-cells!)
   (let [msgs (update (evictable-conversation) 5 dissoc :turn)

@@ -2229,7 +2229,8 @@
                          revision is journaled with why and changes nothing."}
 
  :journal-recall
- {:value {:limit 8 :preview-chars 220 :max-limit 60}
+ {:value {:limit 8 :preview-chars 220 :max-limit 60
+          :max-query-chars 1000 :max-terms 12}
   :kind :policy :capability-tunable? false
   :provenance ["karamazov-3h4c"]
   :doc "Bounded turn search for fetch_turn: literal terms over the journal's

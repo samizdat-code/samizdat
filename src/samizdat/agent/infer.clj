@@ -123,12 +123,15 @@
      :threshold-chars (max (long min-compaction-chars)
                            (long (* compaction-chars scale)))}))
 
-(defonce ^:private render-cache (atom {}))
+(defonce ^:private render-cache
+  ;; Weak keys: an idle run's tape ids may be collected; entries never retain
+  ;; the id itself, so completed runs do not pin their full histories.
+  (atom (java.util.WeakHashMap.)))
 
 (defn clear-render-cache!
   "Forget every covered prefix, for tests and an explicit fresh start."
   []
-  (reset! render-cache {}))
+  (reset! render-cache (java.util.WeakHashMap.)))
 
 (defn render
   "The tape as it goes to the wire, with only a verified stable prefix reused.
@@ -139,7 +142,7 @@
                                 (gates/threshold :context-squeeze))
         {:keys [entry messages]} (hydration/compact (get @render-cache id)
                                                     messages turns budget)]
-    (swap! render-cache assoc id entry)
+    (.put ^java.util.Map @render-cache id entry)
     messages))
 
 ;; --- prefix identity ---------------------------------------------------------
