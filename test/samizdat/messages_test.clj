@@ -24,6 +24,8 @@
   mark-read! is what consumes."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.string :as str]
+            [samizdat.agent.hydration :as hydration]
+            [samizdat.llm.message :as llm-message]
             [samizdat.agent.tools :as tools]
             [samizdat.store.db :as db]
             [samizdat.store.messages :as messages]))
@@ -105,3 +107,45 @@
           "from_branch holds the branch id, not a str'd branch map"))
     ;; and the sender-exclusion the store builds on actually works
     (is (empty? (messages/inbox @conn run "b1")))))
+
+(def ^:private hydration-opts
+  {:keep-pairs 2 :threshold-chars 1 :batch 2 :floor 120})
+
+(defn- hydration-conversation []
+  (into [{:role "system" :content "sys"} {:role "user" :content "go"}]
+        (mapcat (fn [t]
+                  [{:role "assistant" :content (str "call " t) :turn t}
+                   {:role "user" :content (apply str (repeat 800 "x")) :turn t}])
+                (range 1 7))))
+
+(deftest hydration-reuses-only-a-verified-stable-prefix
+  (let [msgs (hydration-conversation)
+        turns (mapv (fn [t] {:turn t :tool-name "eval" :result (str "result " t)})
+                    (range 1 7))
+        previous (:entry (hydration/compact nil msgs turns hydration-opts))
+        repeated (hydration/compact previous msgs turns hydration-opts)]
+    (is (= (:messages previous) (llm-message/compact msgs turns hydration-opts)))
+    (is (= (:messages repeated) (:messages previous)))
+    (is (= (count msgs) (:reused-prefix repeated))
+        "an identical render reuses the whole entry")
+    (is (every? true? (map identical? (:messages previous) (:messages repeated))))
+    (let [msgs' (conj msgs {:role "assistant" :content "call 7" :turn 7}
+                      {:role "user" :content "result 7" :turn 7})
+          turns' (conj turns {:turn 7 :tool-name "eval" :result "result 7"})
+          next-entry (hydration/compact previous msgs' turns' hydration-opts)]
+      (is (= (:messages next-entry) (llm-message/compact msgs' turns' hydration-opts))
+          "an appended tape is byte-identical to an uncached render")
+      (is (pos? (:reused-prefix next-entry)))
+      (is (every? true? (map identical?
+                             (take (:reused-prefix next-entry) (:messages previous))
+                             (take (:reused-prefix next-entry) (:messages next-entry)))))
+      (testing "an edit, an option change, and changed turn evidence each invalidate reuse"
+        (is (= 2 (:reused-prefix
+                  (hydration/compact previous (assoc msgs 2 {:role "assistant" :content "edited" :turn 1})
+                                     turns hydration-opts)))
+            "only the protected frame precedes the edit")
+        (is (zero? (:reused-prefix
+                    (hydration/compact previous msgs turns (assoc hydration-opts :keep-pairs 3)))))
+        (is (zero? (:reused-prefix
+                    (hydration/compact previous msgs (assoc turns 0 {:turn 1 :tool-name "other"})
+                                       hydration-opts))))))))

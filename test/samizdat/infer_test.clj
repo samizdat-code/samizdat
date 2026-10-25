@@ -454,6 +454,20 @@
       ((infer/complete-fn {:llm-adapter ::a :llm-config {:max-tokens 100}}) base-tape)
       (is (= [100 200] @calls)))))
 
+(deftest complete-fn-renders-the-request-once
+  (infer/clear-render-cache!)
+  (let [calls (atom 0)
+        real samizdat.agent.hydration/compact]
+    (with-redefs [samizdat.agent.hydration/compact
+                  (fn [& args]
+                    (swap! calls inc)
+                    (apply real args))
+                  samizdat.llm.client/chat
+                  (fn [_ _ _ _] {:content (fenced "verify" "{\"claim\": \"c\"}")})]
+      ((infer/complete-fn {:llm-adapter ::a :llm-config {}}) base-tape))
+    (is (= 1 @calls) "fingerprint and provider request share one render")
+    (infer/clear-render-cache!)))
+
 (deftest a-periodic-no-call-is-told-it-is-looping-and-clamped
   (with-redefs [journal/record-turn! (fn [& _] nil)]
     (let [b (state/new-branch {:id "B1" :problem "p"})
