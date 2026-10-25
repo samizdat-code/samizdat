@@ -45,6 +45,7 @@
             [samizdat.agent.resume :as resume]
             [samizdat.api.client :as api-client]
             [samizdat.api.control :as api-control]
+            [samizdat.approval :as approval]
             [samizdat.cancel :as cancel]
             [samizdat.api.openai :as openai]
             [samizdat.api.runs :as api-runs]
@@ -1041,6 +1042,57 @@
           (Thread/sleep 50)
           (is (zero? @drove) "no second driver"))
         (finally (swap! api-control/active dissoc rid))))))
+
+(deftest a-successful-resume-releases-its-approvals
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          driver-finished (promise)]
+      (try
+        (with-redefs [resume/resume! (fn [_]
+                                       (approval/request! {:run-id rid :branch-id "B1"
+                                                           :kind :shell :input "make change"})
+                                       (deliver driver-finished true)
+                                       {:status :completed})]
+          (let [r (api-control/resume! {:conn c :config {:llm {:provider :local}}} rid {})]
+            (is (= "resuming" (get-in r [:body :status])))
+            (is (true? (deref driver-finished 2000 false)) "the resume driver completed")
+            (is (loop [n 0]
+                  (cond (and (nil? (get @api-control/active rid))
+                             (empty? (approval/pending rid))) true
+                        (< n 200) (do (Thread/sleep 10) (recur (inc n)))
+                        :else false))
+                "the driver finished its cleanup")
+            (is (empty? (approval/pending rid)))
+            (is (nil? (get @api-control/active rid)))))
+        (finally
+          (swap! api-control/active dissoc rid)
+          (approval/abandon! rid))))))
+
+(deftest a-throwing-resume-releases-its-approvals
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          driver-finished (promise)]
+      (try
+        (with-redefs [resume/resume! (fn [_]
+                                       (try
+                                         (approval/request! {:run-id rid :branch-id "B1"
+                                                             :kind :shell :input "make change"})
+                                         (throw (ex-info "resume driver failed" {}))
+                                         (finally (deliver driver-finished true))))]
+          (let [r (api-control/resume! {:conn c :config {:llm {:provider :local}}} rid {})]
+            (is (= "resuming" (get-in r [:body :status])))
+            (is (true? (deref driver-finished 2000 false)) "the resume driver threw")
+            (is (loop [n 0]
+                  (cond (and (nil? (get @api-control/active rid))
+                             (empty? (approval/pending rid))) true
+                        (< n 200) (do (Thread/sleep 10) (recur (inc n)))
+                        :else false))
+                "the driver finished its cleanup")
+            (is (empty? (approval/pending rid)))
+            (is (nil? (get @api-control/active rid)))))
+        (finally
+          (swap! api-control/active dissoc rid)
+          (approval/abandon! rid))))))
 
 (deftest a-resume-keeps-the-runs-own-provider-and-model
   ;; It rebuilt the model from the config's default, so a run started on

@@ -339,19 +339,19 @@
                           (swap! active assoc run-id
                                  {:abort abort
                                   :cancel (fn [] (some-> @cancel* (apply [])))})
-                          (let [r (resume/resume! {:conn conn :config config
-                                                   :llm-adapter adapter
-                                                   :llm-config llm-config
-                                                   :run-id run-id :abort abort
-                                                   :max-turns max-turns})]
-                            (swap! active dissoc run-id)
-                            r)
+                          (resume/resume! {:conn conn :config config
+                                           :llm-adapter adapter
+                                           :llm-config llm-config
+                                           :run-id run-id :abort abort
+                                           :max-turns max-turns})
                           (catch Throwable e
                             (if (cancel/control-signal? e)
                               (log/info "resume aborted:" (ex-message e))
                               (log/error "resume failed:" (ex-message e)))
+                            {:status :error :error (ex-message e)})
+                          (finally
                             (swap! active dissoc run-id)
-                            {:status :error :error (ex-message e)})))))]
+                            (approval/abandon! run-id))))))]
         (reset! cancel* (:cancel started)))
       ;; The budget this resume is running under, from what the caller asked
       ;; for, falling back to the row as it stood BEFORE the future started.
