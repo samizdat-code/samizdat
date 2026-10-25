@@ -284,7 +284,7 @@
         (is (= :exhausted (:status r)))
         (is (some? (:residual r)))
         (is (= 2 (count (journal/branch-turns c (:run-id r) "B1"))))
-        (is (= "failed" (:status (runs/get-run c (:run-id r)))))))))
+        (is (= "exhausted" (:status (runs/get-run c (:run-id r)))))))))
 
 (deftest editing-the-stored-definition-changes-the-next-run
   ;; The acceptance in one test: save a v2 of the loop from the REPL and the

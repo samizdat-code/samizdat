@@ -27,6 +27,7 @@
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest testing is use-fixtures]]
+            [samizdat.acp.agent :as agent]
             [samizdat.agent.select :as select]
             [samizdat.agent.verify :as verify]
             [samizdat.agent.beam :as beam]
@@ -589,6 +590,31 @@
                                       {:branch (assoc b :extended-turns 3)
                                        :turn 5})))
         "an extension grants real turns, not a reflection loop")))
+
+(deftest single-branch-exhaustion-matches-the-beam-and-acp
+  (cells/load-cells!)
+  (with-db [c]
+    (let [single-rid (runs/start-run! c {:problem "single"})
+          beam-rid (runs/start-run! c {:problem "beam"})
+          b (assoc (branch "B1")
+                   :thesis {:goal "prove P" :subClaims ["lemma A"]})
+          finish (:handler (cell/get-cell :loop/finish))
+          exhaust (:handler (cell/get-cell :beam/exhaust))]
+      (runs/open-branch! c single-rid {:branch-id "B1"})
+      (runs/open-branch! c beam-rid {:branch-id "B1"})
+      (let [result (finish {:conn c :run-id single-rid}
+                           {:branch b :verdict :exhausted :turn 3})
+            single-row (runs/get-run c single-rid)]
+        (exhaust {:conn c :run-id beam-rid :max-turns 3}
+                 {:branches [b] :active [b]})
+        (is (= "exhausted" (:status single-row)))
+        (is (= "exhausted" (:status (runs/get-run c beam-rid))))
+        (is (= "max_turn_requests" (agent/stop-reason "exhausted")))
+        (is (= :exhausted (:status result)))
+        (is (= :exhausted (:verdict result)))
+        (is (= {:branch "B1" :goal "prove P" :proved []
+                :outstanding ["lemma A"] :best nil}
+               (:residual result)))))))
 
 (deftest a-human-cull-closes-the-row-and-keeps-the-branch-in-the-record
   ;; blt.11: the drain marked :status :culled in the data map but nothing

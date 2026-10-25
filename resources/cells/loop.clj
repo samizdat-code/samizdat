@@ -436,5 +436,5 @@
                             (str "turn cap of " turn " reached"))
         (journal/note! conn run-id :residual
                        {:branch-id (:id branch) :data residual})
-        (runs/finish-run! conn run-id :failed nil)
+        (runs/finish-run! conn run-id :exhausted nil)
         (assoc data :status :exhausted :residual residual)))))
