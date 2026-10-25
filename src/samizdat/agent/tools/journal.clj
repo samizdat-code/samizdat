@@ -78,7 +78,7 @@
                 (:id branch))
         {:keys [limit max-limit preview-chars max-query-chars max-terms]}
         (gates/threshold :journal-recall)
-        limit (min (long (or (base/arg ctx :limit) limit)) (long max-limit))
+        limit (max 0 (min (long (or (base/arg ctx :limit) limit)) (long max-limit)))
         before (some-> (base/arg ctx :before) str str/trim parse-long)
         bounded-query (subs query 0 (min (count query) (long max-query-chars)))
         rows (mapv #(update % :preview message/strip-think-blocks)
@@ -93,7 +93,7 @@
              (prompt/render "fetch-turn-results"
                             {:query (str bounded-query (when (< (count bounded-query) (count query)) "…"))
                              :branch bid :rows rows
-                             :more (= limit (count rows))}))))
+                             :more (and (pos? limit) (= limit (count rows)))}))))
 
 (defmethod base/run-tool "fetch_turn" [{:keys [branch conn run-id] :as ctx}]
   ;; The other half of compaction. Unloading a branch's early turns to one

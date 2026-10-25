@@ -803,7 +803,14 @@
                                :tool-name "fetch_turn"
                                :args {:query (apply str (repeat 4000 "x"))}})]
         (is (<= (count (:result r)) 1200)
-            "an oversized query is bounded like the rows")))))
+            "an oversized query is bounded like the rows"))
+      (let [r (tools/run-tool {:branch b :conn c :run-id rid
+                               :tool-name "fetch_turn"
+                               :args {:query "needle" :limit -1}})]
+        (is (str/includes? (:result r) "No matching turns")
+            "a negative limit cannot become SQLite's unlimited LIMIT")
+        (is (not (str/includes? (:result r) "More matches"))
+            "a zero-sized page does not claim that more rows exist")))))
 
 ;; --- the ship gate's test rung: done is not terminal until tests pass --------
 
