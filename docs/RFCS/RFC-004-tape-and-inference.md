@@ -187,6 +187,24 @@ averages ~900 chars, less than the tail re-prefill an every-turn strip
 would cost on a local model (karamazov-05z0.2). `:learned` is shown once and
 sits outside the markers.
 
+### Deterministic eviction and covered-prefix hydration
+
+`:compaction :strategy :evict` offers a deterministic alternative to a model
+summary, with `:summary` retained as the shipped default. Eviction keeps
+cumulative `:evicted-turns` metadata across repeated folds, preserves pinned
+messages, and refuses any folded message without a journal address. The full
+record is reopened with exact `fetch_turn({turn})` or bounded literal
+`fetch_turn({query})`, which never searches reasoning. These are userspace
+policies, not new tape semantics.
+
+`llm.message/compaction-plan` is the pure authority for the existing in-place
+compaction. `agent.hydration/compact` may reuse a previous rendered prefix only
+when source messages, turn evidence, and normalized options match, and only
+before the first current rewrite. Its result is byte-identical to
+`llm.message/compact`; object identity is reused solely to avoid repeated work.
+`infer/render` owns one cache entry per tape id, and `complete-fn` uses one
+render for both the wire fingerprint and provider request.
+
 ### The opening block
 
 A branch's first user turn is `prompts/problem.md`: the problem, and — when
