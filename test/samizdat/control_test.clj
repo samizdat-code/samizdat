@@ -28,7 +28,9 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest testing is use-fixtures]]
             [samizdat.agent.select :as select]
+            [samizdat.agent.verify :as verify]
             [samizdat.agent.beam :as beam]
+            [samizdat.repl :as repl]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.roles :as roles]
             [samizdat.lexicon :as lexicon]
@@ -553,6 +555,29 @@
             "the verdict is visible to settle's bookkeeping, so tick keeps it")
         (let [row (first (filter #(= "B2" (:id %)) (runs/branches c rid)))]
           (is (= "culled" (:status row)) "the row is closed, not a zombie"))))))
+
+(deftest a-resume-initialization-crash-is-recorded-and-cleaned-up
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p" :max-turns 10 :beam-width 1})
+          rounds-entered (atom false)]
+      (with-redefs [repl/new-session (fn []
+                                       (is (= "running" (:status (runs/get-run c rid)))
+                                           "the failure is after mark-running!")
+                                       (is (verify/sealed? rid)
+                                           "the failure is after the run was sealed")
+                                       (throw (ex-info "resume eval session failed after sealing" {})))
+                    beam/run-rounds (fn [& _]
+                                      (reset! rounds-entered true)
+                                      {:status :completed})]
+        (is (thrown-with-msg?
+             Exception #"resume eval session failed after sealing"
+             (resume/resume! {:conn c :config {:run {:verify-cmd "true"}}
+                              :llm-adapter :a :llm-config {} :run-id rid}))))
+      (is (not @rounds-entered) "initialization failed before the round driver")
+      (let [row (runs/get-run c rid)]
+        (is (= "failed" (:status row)))
+        (is (some? (:ended_at row)))
+        (is (not (verify/sealed? rid)))))))
 
 (deftest a-resumed-branch-still-holds-its-task
   ;; karamazov-blt.21: the claim survives the crash on its ROW, but the

@@ -28,6 +28,7 @@
             [samizdat.agent.resume :as resume]
             [samizdat.store.knowledge :as knowledge]
             [samizdat.store.runs :as runs]
+            [samizdat.repl :as repl]
             [samizdat.store.userspace :as store]
             [samizdat.userspace :as us]
             [samizdat.workflow :as workflow]))
@@ -200,6 +201,28 @@
       (finally (db/close c)))))
 
 ;; --- what the driver still owns ----------------------------------------------
+
+(deftest an-initialization-crash-is-recorded-and-cleaned-up
+  (let [c (db/open! ":memory:")
+        started (atom nil)]
+    (try
+      (with-redefs [repl/new-session (fn []
+                                       (is (verify/sealed? @started)
+                                           "the failure is after the run was sealed")
+                                       (throw (ex-info "eval session failed after sealing" {})))
+                    llm/chat (fn [& _] {:content "" :finish-reason "stop"})]
+        (is (thrown-with-msg?
+             Exception #"eval session failed after sealing"
+             (beam/run! {:conn c :config {:run {:loop "loop" :verify-cmd "true"}}
+                         :llm-adapter :a :llm-config {:max-tokens 100}
+                         :problem "p" :max-turns 3
+                         :on-start (fn [rid] (reset! started rid))}))))
+      (let [row (runs/get-run c @started)]
+        (is (some? @started) "the caller got the row before initialization failed")
+        (is (= "failed" (:status row)))
+        (is (some? (:ended_at row)))
+        (is (not (verify/sealed? @started))))
+      (finally (db/close c)))))
 
 (deftest a-crash-mid-round-is-recorded-before-it-is-rethrown
   ;; gen-11 threw here and the exception reached a tty and nowhere else; the
