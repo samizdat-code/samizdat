@@ -611,6 +611,10 @@ fetch_turn({turn, branch?})
     was made, what was said, and what came back. Your own turns by default;
     pass `branch` to read a specific turn of another branch — the way to
     open a failure a health report names.
+fetch_turn({query, branch?, limit?, before?})
+    Find earlier turns by literal text in their calls, answers, results, or
+    tool names, then reopen one by turn number. Reasoning is not searched.
+    Results are bounded previews, newest first; `before` pages older turns.
 ```
 
 Once your history gets long, your older messages are replaced in place by a

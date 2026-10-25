@@ -724,3 +724,61 @@
 (deftest a-fold-on-the-tape-does-not-pay-to-read-the-window-again
   (is (= 1500.0 (cmp/fold-cost {:window-tokens 10000 :after-tokens 1500 :window-cached? true})))
   (is (= 11500.0 (cmp/fold-cost {:window-tokens 10000 :after-tokens 1500}))))
+
+(defn- evictable-conversation []
+  (into [{:role "system" :content "sys"} {:role "user" :content "go"}]
+        (mapcat (fn [t]
+                  [{:role "assistant" :content (str "call " t) :turn t}
+                   {:role "user" :content (apply str (repeat 3000 "x")) :turn t}])
+                (range 1 9))))
+
+(defn- fold-with-strategy [strategy calls data]
+  (with-redefs [gates/threshold (let [orig gates/threshold]
+                                  (fn [k]
+                                    (if (= k :compaction)
+                                      (assoc (orig k) :strategy strategy)
+                                      (orig k))))
+                samizdat.llm.client/chat (fn [& _]
+                                           (swap! calls inc)
+                                           (throw (ex-info "eviction must not call the model" {})))
+                samizdat.store.journal/note! (fn [& _] nil)]
+    ((:handler (cell/get-cell! :compaction/fold))
+     {:conn ::conn :run-id "r1" :llm-adapter ::adapter
+      :llm-config {:context-window 128000}}
+     data)))
+
+(deftest deterministic-eviction-keeps-cumulative-turn-addresses
+  (cells/load-cells!)
+  (let [calls (atom 0)
+        msgs (assoc (evictable-conversation) 7
+                    {:role "user" :content "PINNED" :turn 99 :pinned? true})
+        first-fold (fold-with-strategy
+                    :evict calls
+                    {:compaction/tier :fold :compaction/before 999999
+                     :branch {:messages msgs}})
+        first-marker (first (filter :evicted-turns (get-in first-fold [:branch :messages])))
+        first-refs (:evicted-turns first-marker)]
+    (is (seq first-refs))
+    (is (not (contains? (set first-refs) 99)) "a pinned message was not evicted")
+    (is (some #(= "PINNED" (:content %)) (get-in first-fold [:branch :messages])))
+    (is (zero? @calls) "no summarizer or other model call")
+    (let [grown (update-in first-fold [:branch :messages] into
+                           (mapcat (fn [t]
+                                     [{:role "assistant" :content (str "later " t) :turn t}
+                                      {:role "user" :content (apply str (repeat 3000 "y")) :turn t}])
+                                   (range 9 13)))
+          second-fold (fold-with-strategy :evict calls (assoc grown :compaction/before 999999))
+          second-refs (first (keep :evicted-turns (get-in second-fold [:branch :messages])))]
+      (is (every? (set second-refs) first-refs)
+          "a later eviction does not forget the earlier references")
+      (is (> (count second-refs) (count first-refs))
+          "and it adds the newly evicted turns"))))
+
+(deftest eviction-refuses-history-without-a-journal-address
+  (cells/load-cells!)
+  (let [msgs (update (evictable-conversation) 5 dissoc :turn)
+        data {:compaction/tier :fold :compaction/before 999999
+              :branch {:messages msgs}}
+        out (fold-with-strategy :evict (atom 0) data)]
+    (is (= msgs (get-in out [:branch :messages]))
+        "an unaddressable message is never dropped by deterministic eviction")))

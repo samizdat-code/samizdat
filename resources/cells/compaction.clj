@@ -343,29 +343,37 @@
                                   :action "prune-only" :why "no window to fold"})
               data)
           (let [folded (cmp/unpinned-in msgs [s e])
+                evict? (= :evict (:strategy p))
+                refs (when evict? (cmp/evictable-turns folded))
                 budget (cmp/summary-budget
                         (cmp/estimate-tokens folded (:chars-per-token p))
                         (:summary p))
-                ;; On the tape only when the summary runs on the branch's own
-                ;; model: a :summarizer on another model has no prefix of
-                ;; this conversation to reuse.
-                summary (if (and (= :tape (:summarize-via p))
-                                 (= summarizer-config llm-config))
+                summary (cond
+                          refs (prompt/render "eviction-summary"
+                                              {:turns (str/join ", " refs)
+                                               :count (count refs)})
+                          evict? nil
+                          (and (= :tape (:summarize-via p))
+                               (= summarizer-config llm-config))
                           (summarize-on-tape! ctx branch tail budget)
-                          (summarize! summarizer summarizer-config folded budget))
+                          :else (summarize! summarizer summarizer-config folded budget))
                 ok? (and summary
-                         (cmp/validate-summary
-                          summary
-                          {:sections (template-sections)
-                           :min-sections (:min-summary-sections p)
-                           :empties (:empty-bodies p)}))]
+                         (or refs
+                             (cmp/validate-summary
+                              summary
+                              {:sections (template-sections)
+                               :min-sections (:min-summary-sections p)
+                               :empties (:empty-bodies p)})))]
             (if-not ok?
               (do (note! conn run-id data
                          {:tier (some-> (:compaction/tier data) name)
                           :action "prune-only"
-                          :why (if summary "summary rejected" "summarizer produced nothing")})
+                          :why (cond
+                                 (and evict? (not refs)) "history lacks journal addresses"
+                                 summary "summary rejected"
+                                 :else "summarizer produced nothing")})
                   data)
-              (let [kept (distil! conn run-id summary (:distil p))
+              (let [kept (if refs 0 (distil! conn run-id summary (:distil p)))
                     ;; Which role carries the marker: the operator's word
                     ;; (gates.edn :fold-role "system"/"user"), else what the
                     ;; startup probe learned about this endpoint's template
@@ -375,9 +383,12 @@
                            (if (or (nil? pol) (= :auto pol))
                              (or (:fold-role llm-config) "system")
                              (name pol)))
-                    out (cmp/apply-summary msgs [s e]
-                                           (prompt/prompt "compaction-marker") summary
-                                           role)
+                    out (if refs
+                          (cmp/apply-eviction msgs [s e]
+                                              (prompt/prompt "compaction-marker") summary role refs)
+                          (cmp/apply-summary msgs [s e]
+                                             (prompt/prompt "compaction-marker") summary
+                                             role))
                     after (cmp/estimate-tokens out (:chars-per-token p))]
                 (if (>= after (:compaction/before data))
                   (do (note! conn run-id data {:action "no-progress"

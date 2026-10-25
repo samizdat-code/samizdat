@@ -5,6 +5,7 @@
   "Reading the run's own record: fetch_artifact, fetch_turn."
   (:require
             [clojure.string :as str]
+            [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
             [samizdat.security.flow :as flow]
             [samizdat.prompt :as prompt]
@@ -71,6 +72,25 @@
                  "\n\nCLAIM\n" (:claim a)
                  "\n\nENCODING\n" (:code a))))))))
 
+(defn- fetch-turn-search [ctx query]
+  (let [{:keys [branch conn run-id]} ctx
+        bid (or (some-> (base/arg ctx :branch) str str/trim not-empty)
+                (:id branch))
+        {:keys [limit max-limit preview-chars]} (gates/threshold :journal-recall)
+        limit (min (long (or (base/arg ctx :limit) limit)) (long max-limit))
+        before (some-> (base/arg ctx :before) str str/trim parse-long)
+        rows (mapv #(update % :preview message/strip-think-blocks)
+                   (journal/search-turns conn run-id bid query
+                                         {:limit limit :before before
+                                          :preview-chars preview-chars}))]
+    (when (not= bid (:id branch))
+      (flow/receive! ctx [(flow/encode (flow/label-of (assoc ctx :branch {:id bid})))]
+                     "fetch_turn"))
+    (base/ok branch
+             (prompt/render "fetch-turn-results"
+                            {:query query :branch bid :rows rows
+                             :more (= limit (count rows))}))))
+
 (defmethod base/run-tool "fetch_turn" [{:keys [branch conn run-id] :as ctx}]
   ;; The other half of compaction. Unloading a branch's early turns to one
   ;; line each is only honest if a line can be opened again; before this,
@@ -78,46 +98,49 @@
   ;;
   ;; :neutral for the same reason as fetch_artifact — a lookup establishes
   ;; nothing, and reporting success would clear the failure count.
-  (if-let [m (base/missing ctx :turn)]
-    (base/malformed branch m)
-    (let [raw (str/trim (str (base/arg ctx :turn)))
-          n (parse-long (str/replace raw #"^t" ""))
-          ;; An explicit :branch reads ANOTHER branch's turn — the diagnosis
-          ;; affordance the run-health digest's failure exemplars point at:
-          ;; the supervisor is handed "turn 3 (T0, ...)" and has to be able
-          ;; to open it, or the digest points at records its reader cannot
-          ;; reach. Deliberate and auditable (the fetch is itself a journalled
-          ;; turn); the DEFAULT stays own-branch, so sibling isolation — what
-          ;; crosses between peers is the settled-state block — still holds
-          ;; unless a branch asks for a specific other turn by name.
-          bid (or (some-> (base/arg ctx :branch) str str/trim not-empty)
-                  (:id branch))
-          t (when (and conn run-id n)
-              (journal/branch-turn conn run-id bid n))]
-      (if-not t
-        ;; :mechanics for the same reason as fetch_artifact's miss. The words
-        ;; are prompts/fetch-turn-miss.md — the prose ratchet's rule.
-        (base/malformed branch
-                        (prompt/render "fetch-turn-miss"
-                                       {:turn raw
-                                        :branch bid
-                                        :cross (not= bid (:id branch))}))
-        (do
-         ;; Another branch's turn carries what that branch had read.
-         (when (not= bid (:id branch))
-           (flow/receive! ctx [(flow/encode (flow/label-of (assoc ctx :branch {:id bid})))]
-                          "fetch_turn"))
-         (base/ok branch
-            (str "t" (:turn t)
-                 (when (not= bid (:id branch)) (str " [" bid "]"))
-                 " " (:tool_name t)
-                 " → " (or (:category t) "neutral")
-                 (when (seq (str (:args t))) (str "\n\nARGUMENTS\n" (:args t)))
-                 ;; Reasoning is stripped: it is 96% of stored assistant text
-                 ;; and is dropped from every prior turn on the way to the
-                 ;; wire anyway. Reloading it here would undo that in one call.
-                 (when-let [said (some-> (:assistant_text t)
-                                         message/strip-think-blocks
-                                         not-empty)]
-                   (str "\n\nWHAT YOU SAID\n" said))
-                 "\n\nRESULT\n" (:result t))))))))
+  (if-let [query (and (nil? (base/arg ctx :turn))
+                      (some-> (base/arg ctx :query) str str/trim not-empty))]
+    (fetch-turn-search ctx query)
+    (if-let [m (base/missing ctx :turn)]
+      (base/malformed branch m)
+      (let [raw (str/trim (str (base/arg ctx :turn)))
+            n (parse-long (str/replace raw #"^t" ""))
+            ;; An explicit :branch reads ANOTHER branch's turn — the diagnosis
+            ;; affordance the run-health digest's failure exemplars point at:
+            ;; the supervisor is handed "turn 3 (T0, ...)" and has to be able
+            ;; to open it, or the digest points at records its reader cannot
+            ;; reach. Deliberate and auditable (the fetch is itself a journalled
+            ;; turn); the DEFAULT stays own-branch, so sibling isolation — what
+            ;; crosses between peers is the settled-state block — still holds
+            ;; unless a branch asks for a specific other turn by name.
+            bid (or (some-> (base/arg ctx :branch) str str/trim not-empty)
+                    (:id branch))
+            t (when (and conn run-id n)
+                (journal/branch-turn conn run-id bid n))]
+        (if-not t
+          ;; :mechanics for the same reason as fetch_artifact's miss. The words
+          ;; are prompts/fetch-turn-miss.md — the prose ratchet's rule.
+          (base/malformed branch
+                          (prompt/render "fetch-turn-miss"
+                                         {:turn raw
+                                          :branch bid
+                                          :cross (not= bid (:id branch))}))
+          (do
+            ;; Another branch's turn carries what that branch had read.
+            (when (not= bid (:id branch))
+              (flow/receive! ctx [(flow/encode (flow/label-of (assoc ctx :branch {:id bid})))]
+                             "fetch_turn"))
+            (base/ok branch
+               (str "t" (:turn t)
+                    (when (not= bid (:id branch)) (str " [" bid "]"))
+                    " " (:tool_name t)
+                    " → " (or (:category t) "neutral")
+                    (when (seq (str (:args t))) (str "\n\nARGUMENTS\n" (:args t)))
+                    ;; Reasoning is stripped: it is 96% of stored assistant text
+                    ;; and is dropped from every prior turn on the way to the
+                    ;; wire anyway. Reloading it here would undo that in one call.
+                    (when-let [said (some-> (:assistant_text t)
+                                            message/strip-think-blocks
+                                            not-empty)]
+                      (str "\n\nWHAT YOU SAID\n" said))
+                    "\n\nRESULT\n" (:result t)))))))))

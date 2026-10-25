@@ -777,6 +777,26 @@
                        ORDER BY id LIMIT 1"
                       run-id branch-id turn]))
 
+(defn search-turns
+  "Search one branch's user-facing turn text, returning bounded previews.
+  Every whitespace-separated term is a literal; reasoning is never searched."
+  [conn run-id branch-id query {:keys [limit before preview-chars]}]
+  (let [terms (remove str/blank? (str/split (str query) #"\s+"))
+        text "coalesce(assistant_text, '') || ' ' || coalesce(args, '') || ' ' || coalesce(result, '') || ' ' || coalesce(tool_name, '')"
+        predicates (vec (repeat (count terms) (str "instr(lower(" text "), lower(?)) > 0")))
+        limit (min 60 (max 1 (long (or limit 8))))
+        preview-chars (min 220 (max 1 (long (or preview-chars 220))))
+        sql (str "SELECT turn, tool_name, "
+                 "substr(coalesce(nullif(result, ''), nullif(assistant_text, ''), tool_name, ''), 1, ?) AS preview "
+                 "FROM turns WHERE run_id = ? AND branch_id = ? "
+                 (when (seq predicates) (str "AND " (str/join " AND " predicates) " "))
+                 (when before "AND turn < ? ")
+                 "ORDER BY turn DESC LIMIT ?")
+        args (concat [preview-chars run-id branch-id] terms (when before [before]) [limit])]
+    (if (seq terms)
+      (db/fetch conn (into [sql] args))
+      [])))
+
 (defn last-turn
   "The highest turn number `branch-id` has recorded in the run, 0 when it has
   none — where a branch that is resumed across passes picks up its count."

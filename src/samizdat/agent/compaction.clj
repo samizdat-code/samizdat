@@ -411,6 +411,31 @@
                   (pinned-in messages [start end])
                   (drop end messages))))))
 
+(defn evicted-turns
+  "Every journal address carried by messages, including earlier evictions."
+  [messages]
+  (vec (sort (distinct
+              (mapcat (fn [{:keys [turn evicted-turns]}]
+                        (or evicted-turns (when (integer? turn) [turn])))
+                      messages)))))
+
+(defn evictable-turns
+  "The addresses a deterministic fold would retain, or nil when any message
+  has no journal record to recover it from."
+  [messages]
+  (when (every? (fn [{:keys [turn evicted-turns]}]
+                  (or (integer? turn) (seq evicted-turns)))
+                messages)
+    (evicted-turns messages)))
+
+(defn apply-eviction
+  "Apply a deterministic fold and stamp its cumulative journal addresses on
+  the marker. The metadata never reaches the provider; the next fold reads it."
+  [messages window marker summary role turns]
+  (let [out (apply-summary messages window marker summary role)
+        i (first (keep-indexed (fn [i m] (when (:compaction? m) i)) out))]
+    (if i (assoc-in out [i :evicted-turns] turns) out)))
+
 ;; --- the task fold (karamazov-d5wo.5) -----------------------------------------
 ;;
 ;; A closed task is a natural place to fold: what it did is settled, and the

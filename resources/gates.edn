@@ -2228,6 +2228,14 @@
                          the outcome but nowhere in the source. A refused
                          revision is journaled with why and changes nothing."}
 
+ :journal-recall
+ {:value {:limit 8 :preview-chars 220 :max-limit 60}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-3h4c"]
+  :doc "Bounded turn search for fetch_turn: literal terms over the journal's
+        user-facing text, never reasoning. A result is a pointer to a whole
+        turn, not the whole turn itself."}
+
  :memory
  {:value
   {:kind-salience {:working 0.3 :episodic 0.45 :procedural 0.5
@@ -3379,6 +3387,11 @@
    ;; :summarizer role on another model always goes :fresh: it holds no
    ;; prefix of this conversation.
    :summarize-via :fresh
+
+   ;; :summary asks a model and distils memories; :evict is deterministic and
+   ;; keeps cumulative turn addresses for fetch_turn instead. Unaddressable
+   ;; messages are never evicted (karamazov-3h4c).
+   :strategy :summary
 
    ;; Rough token estimate. Bytes over this, the same method the session
    ;; meter uses, so the two cannot disagree about what they are measuring.
