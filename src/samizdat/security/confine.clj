@@ -109,7 +109,7 @@
          (str/replace (str (hash canon)) "-" "n"))))
 
 (defn confined-env
-  "The environment that points jolt's caches at `confined-home`."
+  "The environment that points jolt's caches and gh's config at `confined-home`."
   [home root]
   (let [d (confined-home home root)]
     {"JOLT_CACHE_DIR" (str d "/aot-cache")
@@ -117,7 +117,8 @@
      "JOLT_MAVEN_REPOSITORY" (str d "/m2")
      "JOLT_BUILD_CACHE_DIR" (str d "/build-cache")
      "JOLT_RUNTIME_CACHE_DIR" (str d "/runtime-cache")
-     "GITLIBS" (str d "/gitlibs")}))
+     "GITLIBS" (str d "/gitlibs")
+     "GH_CONFIG_DIR" (str d "/gh-config")}))
 
 (defn protected
   "The trees under the project root nothing the agent spawns may write: its
