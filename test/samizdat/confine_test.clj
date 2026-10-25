@@ -89,9 +89,28 @@
         (doseq [k ["JOLT_CACHE_DIR" "JOLT_GITLIBS_DIR" "JOLT_MAVEN_REPOSITORY"
                    "JOLT_BUILD_CACHE_DIR" "JOLT_RUNTIME_CACHE_DIR"
                    ;; tools.deps' own gitlibs, which jolt also resolves from
-                   "GITLIBS"]]
+                   "GITLIBS" "GH_CONFIG_DIR"]]
           (is (str/starts-with? (str (get env k)) (str a "/")) k)))
       (finally (confine/set-confined-base! prev)))))
+
+(deftest gh-uses-its-confined-config-instead-of-the-operators
+  (when (and (str/starts-with? (str (System/getProperty "os.name")) "Mac OS X")
+             (fs/which "gh"))
+    (let [home (str (fs/create-temp-dir))
+          root (str (fs/create-temp-dir))
+          _ (fs/create-dirs (str home "/.config/gh"))
+          _ (spit (str home "/.config/gh/hosts.yml") "github.com:\n  oauth_token: secret\n")
+          {:keys [argv env dir]} (confine/shell-command
+                                  {:backend :seatbelt :root root :home home
+                                   :command "gh auth status"
+                                   :env {"PATH" (System/getenv "PATH") "HOME" home
+                                         "GH_PROMPT_DISABLED" "1"}})
+          r (apply proc/run {:env env :dir dir :timeout-ms 30000} argv)
+          output (str (:out r) (:err r))]
+      (is (str/includes? output "not logged") (str r))
+      (is (not (str/includes? output "secret")) (str r))
+      (is (not (str/includes? output "Operation not permitted")) (str r))
+      (fs/delete-tree home))))
 
 (deftest the-shell-setting-is-read-strictly
   (is (= :auto (:sandbox (config/shell-settings {}))))
