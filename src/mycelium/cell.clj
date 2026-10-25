@@ -177,13 +177,17 @@
    :overrides @cell-overrides})
 
 (defn registry-restore!
-  "Restore the registry to a prior snapshot: clear it, re-register every spec,
-  and put the overrides back. Used when a cell reload fails partway, so a bad
-  cell file never leaves the registry half-loaded."
+  "Restore the registry to a prior snapshot, surgically: re-register every
+  spec the snapshot keeps, then drop what it does not. No id the snapshot
+  keeps is ever unobservable mid-restore — a clear-then-repopulate window
+  read empty from under another thread (karamazov-bmce; CI 2026-10-21).
+  Used when a cell reload fails partway, so a bad cell file never leaves the
+  registry half-loaded."
   [{:keys [specs overrides]}]
-  (clear-registry!)
   (doseq [[id spec] specs]
     (register-spec! id spec))
+  (doseq [id (remove (set (keys specs)) (list-cells))]
+    (remove-cell! id))
   (reset! cell-overrides (or overrides {})))
 
 (defn recorder

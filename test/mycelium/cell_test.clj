@@ -188,3 +188,29 @@
     (let [spec (cell/get-cell :test/no-trans)]
       (is (some? spec))
       (is (nil? (:transitions spec))))))
+
+;; ===== A restore never blanks the registry (karamazov-bmce, CI 2026-10-21) =====
+
+(deftest registry-restore-keeps-snapshot-ids-visible-throughout-test
+  (testing "mid-restore, every id the snapshot keeps is still registered —
+            no clear-then-repopulate window another thread can read empty"
+    (defmethod cell/cell-spec :test/restore-a [_]
+      {:id :test/restore-a :handler (fn [_ d] d)})
+    (defmethod cell/cell-spec :test/restore-b [_]
+      {:id :test/restore-b :handler (fn [_ d] d)})
+    (let [snap    (cell/registry-snapshot)
+          ;; a stray registered after the snapshot — what the restore drops
+          _       (defmethod cell/cell-spec :test/restore-stray [_]
+                    {:id :test/restore-stray :handler (fn [_ d] d)})
+          saw     (atom [])
+          orig    cell/register-spec!]
+      (with-redefs [cell/register-spec!
+                    (fn [id spec]
+                      (when-not (every? (fn [sid] (or (= sid id) (cell/get-cell sid)))
+                                        (keys (:specs snap)))
+                        (swap! saw conj id))
+                      (orig id spec))]
+        (cell/registry-restore! snap))
+      (is (empty? @saw) "a snapshot id was unobservable mid-restore")
+      (is (= #{:test/restore-a :test/restore-b} (set (cell/list-cells)))))))
+
