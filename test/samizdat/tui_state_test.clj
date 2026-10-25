@@ -127,6 +127,43 @@
     (is (nil? (:branch-id s)))
     (is (nil? (:detail s)))))
 
+(deftest selecting-a-run-clears-run-scoped-dialog-and-live-state
+  (let [s (-> (st/initial "b")
+              (assoc :approvals [{:id "old-approval"}]
+                     :approval-id "old-approval"
+                     :question-cursor 1
+                     :question-answers ["old answer"]
+                     :question-selected #{0}
+                     :question-option 2
+                     :reply {:kind :deny-note :id "old-approval"}
+                     :live {"B1" {:text "old delta"}}
+                     :expanded #{"old-fold"}
+                     :input "unrelated draft"
+                     :history ["earlier input"]
+                     :project {:name "project"})
+              (st/select-run "r2"))]
+    (is (empty? (:approvals s)))
+    (is (nil? (:approval-id s)))
+    (is (zero? (:question-cursor s)))
+    (is (= [] (:question-answers s)))
+    (is (= #{} (:question-selected s)))
+    (is (zero? (:question-option s)))
+    (is (nil? (:reply s)))
+    (is (empty? (:live s)) "the old run's streaming delta is not visible")
+    (is (= #{} (:expanded s)))
+    (is (nil? (st/dialog-action s {:char "y"}))
+        "the old approval cannot be decided after the switch")
+    (is (= "unrelated draft" (:input s)))
+    (is (= ["earlier input"] (:history s)))
+    (is (= {:name "project"} (:project s)))))
+
+(deftest an-event-for-another-run-is-dropped-before-any-state-change
+  (let [s (assoc (st/initial "b") :run-id "new-run" :branch-id "B1" :journal-cursor 17)
+        [after wants] (st/apply-event s {:id "99" :event "turn"
+                                         :data {:run_id "old-run" :branch_id "B1"}})]
+    (is (= s after) "in particular, the old event cannot advance the journal cursor")
+    (is (= #{} wants) "and it cannot request a refresh for the selected run")))
+
 (deftest selecting-a-branch-drops-the-turns-of-the-last-one
   (let [s (-> (st/initial "b")
               (assoc :branch-id "B1" :branch {:turns [{:turn 1}]})

@@ -28,7 +28,8 @@
   user put a panel anywhere without anything being rewired."
   (:refer-clojure :exclude [newline])
   (:require [clojure.string :as str]
-            [samizdat.api.sse :as sse]))
+            [samizdat.api.sse :as sse]
+            [samizdat.approval-view :as approval-view]))
 
 (def handler-keys
   "Every action a widget may ask the loop to take.
@@ -237,34 +238,11 @@
 
     :else (-> s connected (assoc :branch (dissoc body :since)))))
 
-(defn apply-approvals
-  "Fold the questions waiting on a person.
+(defn apply-approvals [s r]
+  (approval-view/apply-approvals s r))
 
-  The cursor and the answers collected so far are reset when the question at
-  the head CHANGES — a questionnaire half answered must survive the poll that
-  arrives in the middle of answering it, and a new question must not inherit
-  the previous one's position."
-  [s {:keys [ok body] :as r}]
-  (if-not ok
-    (disconnected s r)
-    (let [as (vec (:approvals body))
-          head (:id (first as))]
-      (cond-> (assoc (connected s) :approvals as)
-        (not= head (:approval-id s))
-        (assoc :approval-id head :question-cursor 0 :question-answers []
-               :question-selected #{} :question-option 0 :reply nil)))))
-
-(defn answer-question
-  "Record an answer and move to the next question, or say the set is done.
-
-  Returns `[state done?]` — the caller sends the answers only when done?, so
-  a half-answered questionnaire is never submitted."
-  [s answers]
-  (let [total (count (:questions (first (:approvals s))))
-        next-i (count answers)]
-    [(assoc s :question-answers (vec answers) :question-cursor (min next-i (dec total))
-            :question-selected #{} :question-option 0 :reply nil)
-     (>= next-i total)]))
+(defn answer-question [s answers]
+  (approval-view/answer-question s answers))
 
 (defn apply-turn-text
   "Fold one turn's full row — the prose the branch listing leaves out.
@@ -328,41 +306,30 @@
   run's panels showing the old run's steps and then skipped everything
   before the stale number."
   [s run-id]
-  (assoc s
-         :run-id run-id
-         :detail nil
-         :branch-id nil
-         :branch nil
-         :trace []
-         :steps-cursor 0
-         :trace-dropped 0
-         :journal-cursor 0
-         ;; Turn numbers restart per branch, so prose kept across a switch
-         ;; would caption the new run's turn 3 with the old run's words.
-         :turn-text {}))
+  (-> s
+      (assoc :run-id run-id
+             :detail nil
+             :branch-id nil
+             :branch nil
+             :trace []
+             :steps-cursor 0
+             :trace-dropped 0
+             :journal-cursor 0
+             ;; Turn numbers restart per branch, so prose kept across a switch
+             ;; would caption the new run's turn 3 with the old run's words.
+             :turn-text {})
+      approval-view/reset-run))
 
 (defn select-branch
   "A person's choice of branch: the auto-follow in apply-detail leaves it."
   [s branch-id]
   (assoc s :branch-id branch-id :branch nil :turn-text {} :branch-auto? false))
 
-(defn current-question
-  "The question on screen: the head questionnaire's, at the cursor. nil with
-  none."
-  [s]
-  (let [qs (vec (:questions (first (:approvals s))))]
-    (when (seq qs)
-      (nth qs (min (or (:question-cursor s) 0) (dec (count qs)))))))
+(defn current-question [s]
+  (approval-view/current-question s))
 
-(defn reply-kind
-  "What the compose box's next Enter is, while a dialog holds it: the deny
-  note, a typed answer, or nil — a directive. An open-ended question (no
-  options) takes its answer there without being asked: the box has the
-  focus, and a second text box inside the dialog had to be clicked first."
-  [s]
-  (or (:kind (:reply s))
-      (let [q (current-question s)]
-        (when (and q (empty? (:options q))) :custom-answer))))
+(defn reply-kind [s]
+  (approval-view/reply-kind s))
 
 (defn- questionnaire-key
   "A key over a questionnaire with options (dirge's `question`): the cursor
@@ -425,24 +392,17 @@
               "d" [:reply :deny-note (:id a)]
               nil))))
 
-(defn move-option
-  "Put the questionnaire's cursor on row `i`."
-  [s i]
-  (assoc s :question-option i))
+(defn move-option [s i]
+  (approval-view/move-option s i))
 
-(defn start-reply
-  "Give the compose box to a dialog: its next Enter is the deny note or the
-  custom answer, not a directive."
-  [s kind id]
-  (assoc s :reply {:kind kind :id id} :input ""))
+(defn start-reply [s kind id]
+  (approval-view/start-reply s kind id))
 
-(defn cancel-reply [s] (assoc s :reply nil))
+(defn cancel-reply [s]
+  (approval-view/cancel-reply s))
 
-(defn toggle-option
-  "Tick or untick option `i` of a multi-select question."
-  [s i]
-  (update s :question-selected (fn [sel] (let [sel (set sel)]
-                                           (if (contains? sel i) (disj sel i) (conj sel i))))))
+(defn toggle-option [s i]
+  (approval-view/toggle-option s i))
 
 (defn toggle-fold [s id]
   (update s :expanded (fn [e] (let [e (set e)]
@@ -790,23 +750,27 @@
 (defn apply-event
   "Fold one pushed event into the state. Returns [state wants]: `wants` is
   the set of things the event changed that the stream does not carry —
-  :detail, :branch, :approvals, :runs — for the caller to fetch, coalesced."
+  :detail, :branch, :approvals, :runs — for the caller to fetch, coalesced.
+  An event naming another run changes nothing and requests nothing."
   [s {:keys [id event data]}]
   (let [;; Off the wire an event's data is the JSON text it was sent as.
-        data (if (string? data) (:data (sse/parse-data data)) data)
-        s (cond-> s id (assoc :journal-cursor (or (parse-long (str id)) (:journal-cursor s))))]
-    (case event
-      "step" [(update s :trace (fn [t] (let [t (conj (vec t) (step-entry data))]
-                                         (if (> (count t) max-trace)
-                                           (subvec t (- (count t) max-trace))
-                                           t))))
-              #{}]
-      "approval" [s #{:approvals}]
-      "delta" [(live-delta s data) #{}]
-      ;; A branch's turn row is in: it holds what the live preview showed.
-      [(cond-> s (= "turn" event) (update :live dissoc (:branch_id data)))
-       (cond-> (get refresh-for event #{:detail})
-         (and (:branch_id data) (= (:branch_id data) (:branch-id s))) (conj :branch))])))
+        data (if (string? data) (:data (sse/parse-data data)) data)]
+    (if (and (contains? data :run_id)
+             (not= (str (:run_id data)) (str (:run-id s))))
+      [s #{}]
+      (let [s (cond-> s id (assoc :journal-cursor (or (parse-long (str id)) (:journal-cursor s))))]
+        (case event
+          "step" [(update s :trace (fn [t] (let [t (conj (vec t) (step-entry data))]
+                                             (if (> (count t) max-trace)
+                                               (subvec t (- (count t) max-trace))
+                                               t))))
+                  #{}]
+          "approval" [s #{:approvals}]
+          "delta" [(live-delta s data) #{}]
+          ;; A branch's turn row is in: it holds what the live preview showed.
+          [(cond-> s (= "turn" event) (update :live dissoc (:branch_id data)))
+           (cond-> (get refresh-for event #{:detail})
+             (and (:branch_id data) (= (:branch_id data) (:branch-id s))) (conj :branch))])))))
 
 (defn stream-status
   "Note the event stream's state: `status` 200 is up, anything else down."
