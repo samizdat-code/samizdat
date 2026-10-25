@@ -1211,6 +1211,40 @@
 
 ;; --- writes ------------------------------------------------------------------
 
+(defn- restore-file! [path text]
+  (if (some? text)
+    (write-file! path text)
+    (let [f (io/file (str path))]
+      (when (.isFile f) (.delete f)))))
+
+(defn- save-file-version!
+  "Write the live file before appending history, restoring both file and role
+  map when either side fails. A crash between the two is recovered on the next
+  read by the ordinary file-edit recording path."
+  [kind name new-body append!]
+  (let [map-before (file-text (map-path))
+        path (atom nil)
+        before (atom nil)]
+    (try
+      (let [p (save-path kind name)]
+        (reset! path p)
+        (reset! before (file-text p))
+        (write-file! p new-body)
+        (let [v (append!)]
+          (swap! synced assoc [kind name] (str new-body))
+          (invalidate!)
+          v))
+      (catch Throwable e
+        (try
+          (when @path (restore-file! @path @before))
+          (restore-file! (map-path) map-before)
+          (reset! last-good-map (parse-map :project map-before))
+          (invalidate!)
+          (catch Throwable rollback-error
+            (throw (ex-info "userspace save failed and its rollback did not complete"
+                            {:save-error e :rollback-error rollback-error}))))
+        (throw e)))))
+
 (defn save!
   "Append a new version of `kind`/`name` for the current project. Returns the
   new version number, or nil when no project is bound.
@@ -1224,14 +1258,12 @@
   ([kind name new-body] (save! kind name new-body nil))
   ([kind name new-body rationale]
    (if-let [c (conn)]
-     (let [v (store/save! c kind name new-body "project" rationale)]
-       ;; The file is what runs, so it is written; the version above is its
-       ;; history, and marking it synced keeps the read that follows from
-       ;; recording the same text a second time as a file edit.
-       (when (files?)
-         (write-file! (save-path kind name) new-body)
-         (swap! synced assoc [kind name] (str new-body)))
-       (invalidate!)
+     (let [v (if (files?)
+               (save-file-version! kind name new-body
+                                   #(store/save! c kind name new-body "project" rationale))
+               (let [v (store/save! c kind name new-body "project" rationale)]
+                 (invalidate!)
+                 v))]
        (log/info "userspace" (clojure.core/name kind) name "saved as version" v)
        v)
      (do (log/warn "userspace save ignored — no project store is bound:"
@@ -1244,13 +1276,14 @@
   ([kind name version] (revert! kind name version nil))
   ([kind name version rationale]
    (when-let [c (conn)]
-     (let [v (store/revert! c kind name version rationale)]
-       (when (and v (files?))
-         (let [b (:body (store/load-latest c kind name))]
-           (write-file! (save-path kind name) b)
-           (swap! synced assoc [kind name] (str b))))
-       (invalidate!)
-       v))))
+     (if (files?)
+       (when-let [b (:body (store/load-version c kind name version))]
+         (save-file-version!
+          kind name b
+          #(store/revert! c kind name version rationale)))
+       (let [v (store/revert! c kind name version rationale)]
+         (invalidate!)
+         v)))))
 
 (defn record-run-outcome!
   "Stamp a run's ending — :shipped, :failed or :error (samizdat.store.outcomes)
