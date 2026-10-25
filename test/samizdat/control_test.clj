@@ -579,6 +579,22 @@
         (is (some? (:ended_at row)))
         (is (not (verify/sealed? rid)))))))
 
+(deftest a-resume-cancellation-is-not-a-run-failure
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p" :max-turns 10 :beam-width 1})]
+      (with-redefs [beam/run-rounds (fn [& _]
+                                      (throw (InterruptedException. "resume cancelled")))]
+        (is (thrown-with-msg?
+             InterruptedException #"resume cancelled"
+             (resume/resume! {:conn c :config {} :llm-adapter :a
+                              :llm-config {} :run-id rid}))))
+      (let [row (runs/get-run c rid)]
+        (is (= "running" (:status row)) "cancellation does not choose a run outcome")
+        (is (nil? (:ended_at row)))
+        (is (nil? (journal/last-note c rid :run-failed))
+            "no spurious crash failure reaches the journal")
+        (is (not (verify/sealed? rid)) "cleanup still runs")))))
+
 (deftest a-resumed-branch-still-holds-its-task
   ;; karamazov-blt.21: the claim survives the crash on its ROW, but the
   ;; rebuilt branch came back with no :task — told "No task claimed", free to

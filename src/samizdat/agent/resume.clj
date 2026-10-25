@@ -126,6 +126,7 @@
             [samizdat.agent.state :as state]
             [samizdat.agent.storm :as storm]
             [samizdat.agent.tools.tasks :as task-tool]
+            [samizdat.cancel :as cancel]
             [samizdat.repl :as repl]
             [samizdat.repl.route :as route]
             [samizdat.store.journal :as journal]
@@ -425,11 +426,12 @@
       ;; The seal made above ends with the resumed run (verify/unseal-run!).
       (beam/run-rounds ctx branches start-turn))
     (catch Throwable e
-      (doseq [f [(fn []
-                   (journal/note! conn run-id :run-failed
-                                  {:data {:error (ex-message e) :where "resume!"}}))
-                 (fn [] (runs/finish-run! conn run-id :failed nil))]]
-        (try (f) (catch Throwable _ nil)))
+      (when-not (cancel/control-signal? e)
+        (doseq [f [(fn []
+                     (journal/note! conn run-id :run-failed
+                                    {:data {:error (ex-message e) :where "resume!"}}))
+                   (fn [] (runs/finish-run! conn run-id :failed nil))]]
+          (try (f) (catch Throwable _ nil))))
       (throw e))
     (finally
       (try (run-state/run-ended! run-id) (catch Throwable _ nil))
