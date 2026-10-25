@@ -824,7 +824,8 @@
         :max-tokens  (or (env-long "HARNESS_MAX_TOKENS") 16384)
         :timeout-ms  (or (env-long "HARNESS_TIMEOUT_MS") 300000)
         :conn-timeout-ms (or (env-long "HARNESS_CONN_TIMEOUT_MS") 15000)
-        :max-response-ms (or (env-long "HARNESS_MAX_RESPONSE_MS") 600000)}
+        :max-response-ms (or (env-long "HARNESS_MAX_RESPONSE_MS") 600000)
+        :continuation {:enabled? true :min-chars 1000 :max-attempts 1}}
        llm
        (dissoc overrides :provider)
        {:provider type :provider-name alias}))))

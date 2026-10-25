@@ -370,3 +370,70 @@
           (is (= :neutral (:category r)) (:result r))
           (is (str/includes? (slurp f) ":record"))
           (is (= "project" (last (versions-of :manifest "loop")))))))))
+
+(deftest a-file-write-failure-does-not-append-a-version
+  (with-project [root c]
+    (us/seed-project! shipped)
+    (let [before (slurp (file root "gates.edn"))]
+      (with-redefs [us/write-file! (fn [& _] (throw (ex-info "disk full" {})))]
+        (is (thrown? Exception (us/save! :policy "gates" "candidate"))))
+      (is (= before (slurp (file root "gates.edn"))))
+      (is (= ["factory"] (versions-of :policy "gates")))
+      (is (= before (:body (store/load-latest c :policy "gates")))))))
+
+(deftest a-store-failure-restores-the-file-and-role-map-after-writing
+  (with-project [root _c]
+    (us/seed-project! shipped)
+    (let [calls (atom [])
+          old-file (slurp (file root "gates.edn"))
+          old-map (slurp (file root "userspace.edn"))
+          original-write (var-get #'us/write-file!)]
+      (with-redefs [us/write-file! (fn [path text]
+                                     (swap! calls conj :file)
+                                     (original-write path text))
+                    store/save! (fn [& _]
+                                  (swap! calls conj :store)
+                                  (throw (ex-info "database read-only" {})))]
+        (is (thrown? Exception (us/save! :policy "gates" "candidate")))
+        (is (thrown? Exception (us/save! :manifest "mine" "{:mine true}")))
+        (is (= [:file :store] (take 2 @calls))
+            "the live file is attempted before history, so its failure can be undone")
+        (is (= [:file :file :store] (take 3 (drop 4 @calls)))
+            "a new role also writes its map and candidate before history"))
+      (is (= old-file (slurp (file root "gates.edn"))))
+      (is (= old-map (slurp (file root "userspace.edn"))))
+      (is (not (.exists (file root "manifests/mine.edn"))))
+      (is (= ["factory"] (versions-of :policy "gates")))
+      (is (empty? (us/versions :manifest "mine"))))))
+
+(deftest a-snapshot-failure-never-deletes-the-last-good-file
+  (with-project [root _c]
+    (us/seed-project! shipped)
+    (let [target (str (file root "gates.edn"))
+          before (slurp target)
+          original (var-get #'us/file-text)]
+      (with-redefs [us/file-text (fn [path]
+                                   (if (= path target)
+                                     (throw (ex-info "cannot read target" {}))
+                                     (original path)))]
+        (is (thrown? Exception (us/save! :policy "gates" "candidate"))))
+      (is (.isFile (io/file target)) "the last good file was not deleted")
+      (is (= before (slurp target))))))
+
+(deftest a-failed-revert-restores-the-current-file
+  (with-project [root _c]
+    (us/seed-project! shipped)
+    (us/save! :policy "gates" "{:a 1}" "one")
+    (us/save! :policy "gates" "{:a 2}" "two")
+    (let [calls (atom [])
+          original-write (var-get #'us/write-file!)]
+      (with-redefs [us/write-file! (fn [path text]
+                                     (swap! calls conj :file)
+                                     (original-write path text))
+                    store/revert! (fn [& _]
+                                    (swap! calls conj :store)
+                                    (throw (ex-info "database read-only" {})))]
+        (is (thrown? Exception (us/revert! :policy "gates" 2 "try again"))))
+      (is (= [:file :store] (take 2 @calls)))
+      (is (= "{:a 2}" (slurp (file root "gates.edn"))))
+      (is (= 3 (:version (store/load-latest _c :policy "gates")))))))

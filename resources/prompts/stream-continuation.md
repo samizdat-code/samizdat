@@ -1,0 +1,1 @@
+Your previous reply was cut off mid-stream after {{chars}} characters. The connection ended, not your answer. Continue exactly from where the reply stopped, without restarting or repeating what was already written.

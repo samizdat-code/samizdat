@@ -142,6 +142,7 @@
         started (System/currentTimeMillis)
         deadline (when (and max-response-ms (pos? max-response-ms)) (+ started max-response-ms))
         conn (open t socket-timeout conn-timeout)
+        latest (atom nil)
         hand-on (fn [d] (try (on-delta d) (catch Throwable _ nil)))]
     (try
       ((:send! conn) (request-bytes t headers (str body)))
@@ -150,6 +151,7 @@
           (throw (jolt.host/throwable "java.net.SocketTimeoutException"
                                       (str "Response exceeded the total time limit of "
                                            max-response-ms "ms"))))
+        (reset! latest acc)
         (let [got ((:recv! conn))
               {:keys [state events]} (if got (sse/feed st got) {:state st :events []})
               [acc done?] (reduce (fn [[acc done?] {:keys [data]}]
@@ -162,10 +164,15 @@
                                               [(accumulate acc c) done?])
                                           [acc done?]))))
                                   [acc false] events)]
+          (reset! latest acc)
           (cond
             (and (nil? got) (nil? (:status state)))
             (throw (jolt.host/throwable "java.net.SocketException"
                                         "Connection closed before a response"))
+
+            (and (or (nil? got) (:done? state)) (not done?)
+                 (not (:raw? state)) (not (:error acc)))
+            (throw (ex-info "provider stream ended before [DONE]" {}))
 
             (or (nil? got) done? (:done? state))
             {:status (:status state)
@@ -175,4 +182,9 @@
                      (json/write-str (completion acc)))}
 
             :else (recur state acc))))
+      (catch Throwable e
+        (if-let [acc @latest]
+          (throw (ex-info "provider stream interrupted"
+                          {:partial-body (json/write-str (completion acc))} e))
+          (throw e)))
       (finally ((:close! conn))))))

@@ -1631,3 +1631,41 @@
       (is (= #{["progress-stalled" 9.0 1 1] ["stuck" 1.0 0 0]}
              (set (map (juxt :gate #(double (:value %)) :held :fired) rows)))))))
 
+(deftest journal-search-is-literal-scoped-and-bounded
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          opts {:preview-chars 220 :limit 8}]
+      (journal/record-turn! c rid {:branch-id "B1" :turn 1 :tool-name "check"
+                                   :result "100% ready" :category "success"})
+      (journal/record-turn! c rid {:branch-id "B1" :turn 2 :tool-name "read_file"
+                                   :args "{\"path\":\"src/a.clj\"}" :result "quoted \"path\""})
+      (journal/record-turn! c rid {:branch-id "B1" :turn 3 :tool-name "eval"
+                                   :assistant-text "needle in the answer" :result ""})
+      (journal/record-turn! c rid {:branch-id "B1" :turn 4 :tool-name "eval"
+                                   :reasoning-text "needle in private reasoning" :result "unrelated"})
+      (journal/record-turn! c rid {:branch-id "B2" :turn 5 :tool-name "eval"
+                                   :result "needle on another branch"})
+      (journal/record-turn! c rid {:branch-id "B1" :turn 6 :tool-name "eval"
+                                   :result (str "needle " (apply str (repeat 500 "x")))})
+      (is (= [6 3] (mapv :turn (journal/search-turns c rid "B1" "needle" (assoc opts :limit 2))))
+          "newest first, limited, and never reasoning or a sibling")
+      (is (= [3] (mapv :turn (journal/search-turns c rid "B1" "needle" (assoc opts :limit 2 :before 6)))))
+      (is (= [1] (mapv :turn (journal/search-turns c rid "B1" "100%" opts)))
+          "percent is literal, not a wildcard")
+      (is (= [2] (mapv :turn (journal/search-turns c rid "B1" "\"path\"" opts)))
+          "quotes are literal too")
+      (is (= 220 (count (:preview (first (journal/search-turns c rid "B1" "needle" (assoc opts :limit 1))))))
+          "a huge result cannot come back whole")
+      (is (= "needle in the answer"
+             (:preview (first (journal/search-turns c rid "B1" "needle" (assoc opts :before 4)))))
+          "an empty result falls back to visible assistant text")
+      (journal/record-turn! c rid {:branch-id "B1" :turn 7 :tool-name "eval"
+                                   :assistant-text "visible answer" :result " \n"})
+      (is (= "visible answer"
+             (:preview (first (journal/search-turns c rid "B1" "visible" opts))))
+          "a whitespace-only result does not hide the assistant preview")
+      (journal/record-turn! c rid {:branch-id "B1" :turn 8 :tool-name "check"
+                                   :result "under_score"})
+      (is (= [8] (mapv :turn (journal/search-turns c rid "B1" "under_score" opts)))
+          "underscore is literal too"))))
+

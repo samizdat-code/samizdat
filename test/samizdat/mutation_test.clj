@@ -537,3 +537,32 @@
   (cells/load-cells! (:dirs (opts)))
   (write-cells! (str @root "/cells") "(fn [_ d] (update d :n + 10))")
   (is (= :committed (:status (mut/apply-cell-edit! (opts))))))
+
+(deftest a-proposal-file-failure-leaves-no-committed-version
+  (write-cells! (str @root "/cells") "(fn [_ d] (update d :n inc))")
+  (let [c (db/open! ":memory:")
+        original (slurp (str @root "/cells/mini.clj"))
+        project-file (str @root "/.samizdat/cells/mini.clj")
+        prev-root (us/bind-root! @root)]
+    (try
+      (us/bind! c)
+      (fs/create-dirs (str @root "/.samizdat/cells"))
+      (spit project-file original)
+      (spit (str @root "/.samizdat/userspace.edn") "{:cells [\"cells/mini.clj\"]}")
+      (store/seed! c :cell "mini" original)
+      (cells/load-cells!)
+      (with-redefs [us/write-file! (fn [& _] (throw (ex-info "disk full" {})))]
+        (let [r (mut/propose-cell!
+                 (assoc (opts) :name "mini" :conn c
+                        :body (str "(ns cells.mini (:require [mycelium.cell :as cell]))\n"
+                                   "(cell/defcell :mini/start {:doc \"start\" :pure true :requires []}\n"
+                                   "  (fn [_ d] (update d :n + 7)))\n"
+                                   "(cell/defcell :mini/end {:doc \"end\" :pure true :requires []}\n"
+                                   "  (fn [_ d] (assoc d :verdict :done)))\n")))]
+          (is (= :rolled-back (:status r)))))
+      (is (= [1] (mapv :version (us/versions :cell "mini")))
+          "the rejected candidate never entered history")
+      (is (= original (slurp project-file)))
+      (is (= 1 (:n ((:handler (cell/get-cell :mini/start)) {} {:n 0})))
+          "the last known-good cell remains live")
+      (finally (us/unbind!) (us/bind-root! prev-root) (db/close c)))))

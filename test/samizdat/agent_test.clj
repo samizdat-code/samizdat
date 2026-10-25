@@ -780,6 +780,38 @@
                                  :tool-name "fetch_turn" :args {:turn 3}})]
           (is (= :mechanics (:category r)) "S0 has no turn 3 of its own"))))))
 
+(deftest fetch-turn-searches-literal-text-without-opening-the-firehose
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          b (state/new-branch {:id "B1" :problem "p"})]
+      (journal/record-turn! c rid {:branch-id "B1" :turn 2 :tool-name "eval"
+                                   :result "needle in the result"})
+      (journal/record-turn! c rid {:branch-id "B1" :turn 4 :tool-name "eval"
+                                   :result "needle in the newest result"})
+      (journal/record-turn! c rid {:branch-id "B2" :turn 5 :tool-name "eval"
+                                   :result "needle in another branch"})
+      (let [r (tools/run-tool {:branch b :conn c :run-id rid
+                               :tool-name "fetch_turn"
+                               :args {:query "needle" :limit 1}})]
+        (is (= :neutral (:category r)))
+        (is (str/includes? (:result r) "t4"))
+        (is (not (str/includes? (:result r) "t2")))
+        (is (not (str/includes? (:result r) "another branch")))
+        (is (str/includes? (:result r) "fetch_turn")
+            "the search results name the way to open a whole turn"))
+      (let [r (tools/run-tool {:branch b :conn c :run-id rid
+                               :tool-name "fetch_turn"
+                               :args {:query (apply str (repeat 4000 "x"))}})]
+        (is (<= (count (:result r)) 1200)
+            "an oversized query is bounded like the rows"))
+      (let [r (tools/run-tool {:branch b :conn c :run-id rid
+                               :tool-name "fetch_turn"
+                               :args {:query "needle" :limit -1}})]
+        (is (str/includes? (:result r) "No matching turns")
+            "a negative limit cannot become SQLite's unlimited LIMIT")
+        (is (not (str/includes? (:result r) "More matches"))
+            "a zero-sized page does not claim that more rows exist")))))
+
 ;; --- the ship gate's test rung: done is not terminal until tests pass --------
 
 (deftest done-is-a-hard-gate-on-a-green-test-run

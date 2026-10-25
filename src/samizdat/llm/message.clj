@@ -223,7 +223,7 @@
                          m)))
         messages))
 
-(defn compact
+(defn compaction-plan
   "Compact a branch's older turns IN PLACE, so the array's shape never changes.
 
   A branch's context is its own narrative, and past a certain length most of
@@ -255,67 +255,50 @@
   encodings are one `fetch_artifact` away. Applied on the way to the wire, so
   the branch's own history is untouched and a resume replays what was really
   sent at the time."
-  ([messages turns] (compact messages turns nil))
+  ([messages turns] (compaction-plan messages turns nil))
   ([messages turns {:keys [keep-pairs threshold-chars floor batch]}]
    (let [messages (vec messages)
+         turns (vec (or turns []))
          keep-pairs (or keep-pairs (default-keep-pairs))
          threshold (or threshold-chars (default-compaction-threshold))
          batch (or batch (default-compaction-batch))
-         ;; THE FRONTIER MOVES IN STEPS (karamazov-pdes). Applied on every
-         ;; render from the untouched tape, "once per message" still moved
-         ;; the boundary one exchange per turn, and the verbatim window
-         ;; behind it was re-prefilled on every call. So the number of
-         ;; exchanges compacted is always a multiple of `batch`: the window
-         ;; is widened by the remainder, and the boundary holds still for
-         ;; batch-1 turns out of every batch. A batch of one, or none, is
-         ;; the old behaviour.
          aged (- (count (filter #(= "assistant" (:role %)) messages)) keep-pairs)
          keep (if (and (number? batch) (> batch 1) (pos? aged))
                 (+ keep-pairs (mod aged (long batch)))
                 keep-pairs)
-         total (reduce + 0 (map (comp count str :content) messages))]
-     ;; Nothing to do below the threshold, and nothing to do when the tape is
-     ;; the frame plus at most nothing: there is no message past it.
-     (if (or (< total threshold) (<= (count messages) frame-size))
-       messages
-       ;; The frame is never a candidate: the system prompt and the problem
-       ;; statement are the two things whose stability the whole prefix cache
-       ;; rests on, and they are also the two a branch cannot do without.
-       (let [turns-by-number (into {} (map (juxt :turn identity)) (or turns []))
-             ;; Everything past the last `keep-pairs` exchanges, counted in
-             ;; ASSISTANT turns — the tape's own definition of a turn, and one
-             ;; that does not shift when the harness inserts a message of its
-             ;; own.
-             ;; Both roles: in samizdat a "user" message is usually a TOOL
-             ;; RESULT, and those are the bulk of a long branch's context.
-             ;; Compacting assistant turns alone would leave almost all of it
-             ;; verbatim.
-             opts {:floor (or floor tape/default-floor) :roles compactable-roles}
-             ;; Indices 0 and 1 are the frame — the system prompt and the
-             ;; problem. tape/due-indices deliberately knows nothing about
-             ;; which leading messages are load-bearing, so the frame is
-             ;; protected here, by the caller that owns it.
-             due (remove #(< % frame-size)
-                         (tape/due-indices messages keep compactable-roles))]
-         (cond-> (reduce (fn [ms i]
-                           (tape/compact-at ms i
-                                            (replacement-for (nth ms i) turns-by-number)
-                                            opts))
-                         messages
-                         due)
-           ;; STALE TURN CONTEXT GOES WITH THE FRONTIER (karamazov-05z0.2).
-           ;; Once a batch has moved, the blocks older than the newest r+1
-           ;; exchanges — r being how far the window has floated since that
-           ;; move — are dropped. That set changes only when the frontier
-           ;; moves, which rewrites the history behind it anyway, so between
-           ;; moves the wire stays byte-identical and the newest block is
-           ;; always kept.
-           (>= aged (max 1 (long (or batch 1))))
-           (strip-context-before
-            (let [r (if (and (number? batch) (> batch 1)) (mod aged (long batch)) 0)
-                  assistants (keep-indexed (fn [i m] (when (= "assistant" (:role m)) i))
-                                           messages)]
-              (or (nth (reverse assistants) r nil) 0)))))))))
+         total (reduce + 0 (map (comp count str :content) messages))
+         active? (and (>= total threshold) (> (count messages) frame-size))
+         turns-by-number (into {} (map (juxt :turn identity)) turns)
+         opts {:floor (or floor tape/default-floor) :roles compactable-roles}
+         due (if active?
+               (remove #(< % frame-size)
+                       (tape/due-indices messages keep compactable-roles))
+               [])
+         strip-before (if (and active? (>= aged (max 1 (long (or batch 1)))))
+                        (let [r (if (and (number? batch) (> batch 1)) (mod aged (long batch)) 0)
+                              assistants (keep-indexed (fn [i m] (when (= "assistant" (:role m)) i))
+                                                       messages)]
+                          (or (nth (reverse assistants) r nil) 0))
+                        0)
+         rendered (cond-> (reduce (fn [ms i]
+                                    (tape/compact-at ms i
+                                                     (replacement-for (nth ms i) turns-by-number)
+                                                     opts))
+                                  messages
+                                  due)
+                    (pos? strip-before) (strip-context-before strip-before))]
+     {:source messages
+      :turns turns
+      :options {:keep-pairs keep-pairs :threshold-chars threshold
+                :batch batch :floor (:floor opts)}
+      :messages rendered
+      :rewrites (into (set due) (range frame-size strip-before))})))
+
+(defn compact
+  "Compact a branch's older turns in place. Compatibility wrapper for the
+  pure plan used by covered-prefix hydration; output is identical."
+  ([messages turns] (:messages (compaction-plan messages turns)))
+  ([messages turns opts] (:messages (compaction-plan messages turns opts))))
 
 (def result-close
   "The tag that ends a framed tool result. A constant, like the unloaded

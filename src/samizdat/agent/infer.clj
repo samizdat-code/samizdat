@@ -55,6 +55,7 @@
   cell's job, in resources, where the supervisor can rewrite it."
   (:require [clojure.tools.logging :as log]
             [samizdat.agent.gates :as gates]
+            [samizdat.agent.hydration :as hydration]
             [samizdat.events :as events]
             [samizdat.cancel :as cancel]
             [samizdat.agent.tools.base :as tools]
@@ -122,20 +123,27 @@
      :threshold-chars (max (long min-compaction-chars)
                            (long (* compaction-chars scale)))}))
 
-(defn render
-  "The tape as it goes to the wire: older turns compacted, recent ones
-  verbatim. The tape's own array is untouched, so the journal and a resume
-  still hold everything that was really said.
+(defonce ^:private render-cache
+  ;; Weak keys: an idle run's tape ids may be collected; entries never retain
+  ;; the id itself, so completed runs do not pin their full histories.
+  (atom (java.util.WeakHashMap.)))
 
-  The compaction budget is read HERE rather than inside the compactor:
-  llm.message is pure message shaping and stays that way, so the numbers that
-  decide how much history survives are supplied by the caller that knows about
-  policy. gates.edn :context-budget owns them."
-  [{:keys [messages turns squeeze]}]
-  (message/compact messages turns
-                   (squeezed-budget (gates/threshold :context-budget)
-                                    squeeze
-                                    (gates/threshold :context-squeeze))))
+(defn clear-render-cache!
+  "Forget every covered prefix, for tests and an explicit fresh start."
+  []
+  (reset! render-cache (java.util.WeakHashMap.)))
+
+(defn render
+  "The tape as it goes to the wire, with only a verified stable prefix reused.
+  The source tape remains untouched, and the result equals llm.message/compact."
+  [{:keys [id messages turns squeeze]}]
+  (let [budget (squeezed-budget (gates/threshold :context-budget)
+                                squeeze
+                                (gates/threshold :context-squeeze))
+        {:keys [entry messages]} (hydration/compact (get @render-cache id)
+                                                    messages turns budget)]
+    (.put ^java.util.Map @render-cache id entry)
+    messages))
 
 ;; --- prefix identity ---------------------------------------------------------
 
@@ -372,12 +380,11 @@
   ([ctx] (complete-fn ctx nil))
   ([ctx {:keys [journal?] :or {journal? true}}]
    (fn [{:keys [id prefill force-tool] :as tape}]
-     ;; The fingerprint of what this call sends, taken once: a retry below
-     ;; re-renders the same tape. It rides the response beside :prefilled,
-     ;; because that is the value the loop already threads from the call to
-     ;; the journal (karamazov-o4wm.1). The grammar is decided once for the
-     ;; same reason: a retry of a forced turn is still forced.
-     (let [wire (wire-fingerprint (message/prepare (render tape)))
+     ;; Fingerprint and request share one render, retries included. It rides
+     ;; the response beside :prefilled, because that is the value the loop
+     ;; already threads from the call to the journal (karamazov-o4wm.1).
+     (let [rendered (render tape)
+           wire (wire-fingerprint (message/prepare rendered))
            ;; Which force goes out, if any — decided once, here, from the
            ;; endpoint's features and policy (force-mechanism).
            {:keys [grammar] forced-prefill :prefill forced-tool :force-tool}
@@ -391,14 +398,13 @@
            tools (when (config/supports? (:llm-config ctx) :native-tools)
                    (not-empty (toolspec/for-messages (:messages tape)
                                                      (gates/threshold :forceable-tools)
-                                                     (gates/threshold :native-tool-description-chars))))]
+                                                     (gates/threshold :native-tool-description-chars))))
+           ;; One offset stream for the whole call, retries included. A probe
+           ;; (journal? false) has no watcher because it is not a visible turn.
+           watch (when (and journal? (:run-id ctx) id)
+                   (delta-publisher (:run-id ctx) (str id) forced-prefill))]
      (loop [attempt 1]
-       (let [;; Somebody may be watching the run: its calls stream, and what
-             ;; the model writes goes onto the bus as it is written. Not a
-             ;; probe's (journal? false): a bounce is not a turn anyone sees.
-             watch (when (and journal? (:run-id ctx) id)
-                     (delta-publisher (:run-id ctx) (str id) forced-prefill))
-             base (or (:max-tokens (:llm-config ctx))
+       (let [base (or (:max-tokens (:llm-config ctx))
                       ;; No configured cap: the FIRST attempt keeps the
                       ;; provider's default, but a retry exists to buy room —
                       ;; doubling nothing was a same-budget repeat (blt.38).
@@ -408,7 +414,7 @@
              r (try
                  {:ok true
                   :response (assoc (llm/chat (:llm-adapter ctx) (:llm-config ctx)
-                                      (render tape)
+                                      rendered
                                       (cond-> {}
                                         budget (assoc :max-tokens budget)
                                         ;; The one force mechanism force-mechanism

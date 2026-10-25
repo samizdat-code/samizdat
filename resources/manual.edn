@@ -169,6 +169,8 @@
     :summary "A top-level Clojure form by its id (defn route) or unique bare name, and a place in it by sdiff's printed path (body › binding cap) or any end of that path only one place has. read_file {path, form, at?} reads it; a miss or an ambiguity lists the candidates."}
    {:name samizdat.basis/unresolved
     :summary "What a claim rests on, checked: remember and intervene take a basis — turns (t12, B2:t7), artifacts (a#3, s#2), tasks (sz-…) or memories (k-…) — and refuse when any does not exist in the record, naming each. The basis travels with the memory's cause and the directive's text. Ported from sdiff's validate-ref."}
+   {:name samizdat.llm.client/chat-one
+    :summary "Interrupted streams: EOF before [DONE] preserves partial output, and :llm :continuation {:enabled? true :min-chars 1000 :max-attempts 1} resumes it once when visible answer text can anchor a continuation. Usage and elapsed time are summed. Reasoning-only or blank output is never continued. :slow-start-ms on a fallback candidate bounds the primary's first answer; cancellation starts no fallback."}
    {:name samizdat.llm.client/chat
     :summary "A role in config.edn :roles may name a LIST of providers, e.g. {:critic [:glm :deepseek-flash]}: the first runs, and a model whose call fails (its retries spent) is retired for the rest of the run so later calls start at the next one still standing. All failing is the last error; all retired are tried again in order. A cancel is never a failure."}
    {:name samizdat.agent.judge/rubric-problems
@@ -398,6 +400,8 @@
     :summary "Every note of one kind on a run, oldest first. What the stream reads :stage-error notes with — each is a crash a stage survived, and all of them are the supervisor's to look at. Beside them it reads :run-error, the crash that ended a run, which a resume of that run shows the supervisor: {:error :type :node :trace}, :node the cell that threw and :trace its frames innermost first (gates.edn :run-error-frames). jolt eliminates tail calls, so a function whose LAST act was the failing call leaves no frame: a short trace is missing its tail callers, not wrong, and :node still names the cell. A :model note is written the turn a branch first learns which model the provider says is answering, and again only if that changes: {:requested :reported :was}, on the branch and turn. requested != reported is the provider substituting a model behind a 200, which nothing else shows."}
    {:name samizdat.store.interventions/kinds
     :summary "Every directive that can be queued against a run, with what each does — a person's at the control API, the supervisor's through `intervene`, the reflex's. Three boundaries own them: a branch's steer boundary (message, review), the beam's round top (cull, fork, retract, extend, pause, resume), and the feature loop's directives stage (switch, budget, stop). Each drain leaves alone what it does not own."}
+   {:name samizdat.store.journal/search-turns
+    :summary "Bounded literal search over one branch's journal: assistant text, arguments, results and tool names, never reasoning. fetch_turn({query, branch?, limit?, before?}) returns newest previews and a way to open each whole turn; deterministic eviction keeps cumulative turn references under gates.edn :compaction :strategy :evict."}
    {:name samizdat.store.journal/artifacts
     :summary "Every artifact this run banked, across all branches."}
    {:name samizdat.store.journal/branch-turns

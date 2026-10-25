@@ -51,6 +51,7 @@
             [samizdat.llm.message :as message]
             [samizdat.llm.ratelimit :as ratelimit]
             [samizdat.llm.stream :as stream]
+            [samizdat.prompt :as prompt]
             [samizdat.util :as util]
             [samizdat.session :as session]))
 
@@ -224,7 +225,7 @@
 (defn- decode [body]
   (try (json/read-str body :key-fn keyword) (catch Throwable _ nil)))
 
-(declare post-once*)
+(declare post-once* partial-response)
 
 (defn- request-headers
   "The adapter's auth headers with the provider's declared :headers over
@@ -313,10 +314,19 @@
               :body payload
               :socket-timeout (:timeout-ms config default-timeout-ms)
               :conn-timeout (:conn-timeout-ms config default-conn-timeout-ms)}
-        resp (if streamed?
-               (stream/post url (assoc opts :max-response-ms (:max-response-ms config))
-                            (:on-delta request))
-               (http/post url (assoc opts :throw-exceptions false)))
+        resp (try
+               (if streamed?
+                 (stream/post url (assoc opts :max-response-ms (:max-response-ms config))
+                              (:on-delta request))
+                 (http/post url (assoc opts :throw-exceptions false)))
+               (catch Throwable e
+                 (when-let [partial (:partial-body (ex-data e))]
+                   (when-let [r (partial-response adapter config request
+                                                  (- (System/currentTimeMillis) started)
+                                                  use-prefill? partial)]
+                     (throw (ex-info (or (ex-message e) "provider stream interrupted")
+                                     {:partial-response r} e))))
+                 (throw e)))
         elapsed (- (System/currentTimeMillis) started)
         status (:status resp)
         decoded (decode (:body resp))]
@@ -403,6 +413,49 @@
                        (subs (str (:body resp)) 0 (min 300 (count (str (:body resp))))))}))
       (failure adapter status decoded resp))))
 
+(defn- partial-response
+  "Parse a cut stream at the adapter boundary, retaining only a completion
+  that carries content or reasoning."
+  [adapter config request elapsed use-prefill? body]
+  (when-let [parsed (adapter/parse-chat adapter (decode body))]
+    (let [merged (message/merge-reasoning (:content parsed) (:reasoning parsed))]
+      (when-not (str/blank? merged)
+        {:content merged
+         :reasoning (:reasoning parsed)
+         :finish-reason (:finish-reason parsed)
+         :usage (:usage parsed)
+         :model-requested (:model config)
+         :model (:model parsed)
+         :prefilled (when use-prefill? (:prefill request))
+         :elapsed-ms elapsed}))))
+
+(defn- continuation-eligible?
+  [result config attempt]
+  (let [{:keys [enabled? min-chars max-attempts]} (:continuation config)
+        text (some-> result :partial-response :content message/answer)]
+    (and (get-in config [:continuation :enabled?] true)
+         (< (long attempt) (long (or max-attempts 1)))
+         (not (str/blank? text))
+         (>= (count text) (long (or min-chars 1000))))))
+
+(defn- continuation-messages [messages response]
+  (let [text (message/answer (:content response))]
+    (into (vec messages)
+          [{:role "assistant" :content text}
+           {:role "user"
+            :content (prompt/render "stream-continuation" {:chars (count text)})}])))
+
+(defn- merge-usage [a b]
+  (reduce-kv (fn [usage k v]
+               (assoc usage k (if (number? v) (+ (get usage k 0) v) v)))
+             (or a {}) b))
+
+(defn- merge-continuation [seed response]
+  (-> response
+      (update :content #(str (:content seed) %))
+      (update :usage merge-usage (:usage seed))
+      (update :elapsed-ms #(+ (or % 0) (or (:elapsed-ms seed) 0)))))
+
 ;; --- the public surface -----------------------------------------------------
 
 (defn chat-one
@@ -416,7 +469,8 @@
   ([adapter config messages] (chat-one adapter config messages nil))
   ([adapter config messages {:keys [max-tokens temperature max-retries prefill force-tool
                                     cache-key reasoning-effort grammar reasoning-budget
-                                    on-delta tools]}]
+                                    on-delta tools continuation-attempt continuation-seed]
+                           :as opts}]
    (let [request {:messages (message/prepare messages)
                   :max-tokens (or max-tokens (:max-tokens config))
                   :temperature (or temperature (:temperature config))
@@ -463,7 +517,8 @@
          call-config (assoc config
                             :timeout-ms
                             (effective-read-timeout-ms config (:max-tokens request)))
-         retries (or max-retries (:max-retries config) default-max-retries)]
+         retries (or max-retries (:max-retries config) default-max-retries)
+         continuation-attempt (or continuation-attempt 0)]
      (loop [attempt 0, errors []]
        ;; Before every attempt, not only between them: a cancel that landed
        ;; while the previous attempt or its backoff ran ends the ladder here
@@ -472,51 +527,46 @@
        (let [result (try
                       (post-once adapter call-config request)
                       (catch Throwable e
-                        (let [m (str (ex-message e))]
-                          (if (re-find #"(?i)read timed out" m)
-                            ;; The provider accepted the request and never
-                            ;; finished the body inside the budget-sized
-                            ;; window. Buffered all-or-nothing, so a retry
-                            ;; reproduces it at the same budget — fatal, and
-                            ;; tagged so the loop does not read it as a
-                            ;; transient blip.
-                            {:outcome :fatal :reason :timeout
-                             :error (str "read timeout: " m)}
-                            (cond
-                              ;; A cancel is the run being told to stop, and
-                              ;; the ladder is not the place to answer it.
-                              (cancel/control-signal? e) (throw e)
-                              ;; A real transport failure — connection reset,
-                              ;; refused, TLS error, connect timeout — is an
-                              ;; IOException, and is what retrying exists for.
-                              (instance? java.io.IOException e)
-                              {:outcome :retry :error (str "transport: " m)}
-                              ;; Anything else was raised by the harness's own
-                              ;; code inside the call. Run 74ddebb8 retried an
-                              ;; ebb fork-in-finally error as `transport:` 2004
-                              ;; times and read it as an unreliable provider
-                              ;; (karamazov-q8dy); a retry only reproduces a bug.
-                              :else
-                              {:outcome :fatal :reason :harness-error
-                               :error (str "harness: " m)})))))
+                        (let [m (str (ex-message e))
+                              partial (:partial-response (ex-data e))
+                              outcome
+                              (if (re-find #"(?i)read timed out" m)
+                                {:outcome :fatal :reason :timeout
+                                 :error (str "read timeout: " m)}
+                                (cond
+                                  (cancel/control-signal? e) (throw e)
+                                  (instance? java.io.IOException e)
+                                  {:outcome :retry :error (str "transport: " m)}
+                                  :else
+                                  {:outcome :fatal :reason :harness-error
+                                   :error (str "harness: " m)}))]
+                          (cond-> outcome
+                            partial (assoc :outcome :retry :partial-response partial)))))
              errors (conj errors (:error result))]
          (cond
            (= :ok (:outcome result))
-           (:response result)
+           (if-let [seed continuation-seed]
+             (merge-continuation seed (:response result))
+             (:response result))
 
            (or (= :fatal (:outcome result)) (>= attempt retries))
-           (throw (ex-info (str (adapter/display-name adapter) " call failed: "
-                                (last errors))
-                           {:provider (adapter/id adapter)
-                            :attempts (inc attempt)
-                            ;; A KEYWORD reason beside the prose, carried from
-                            ;; where the trouble was DETECTED. An empty reply
-                            ;; and a refused connection want different
-                            ;; responses — more tokens versus wait and retry —
-                            ;; and deriving that from a sentence downstream is
-                            ;; how a counter ends up measuring the wording.
-                            :reason (or (:reason result) :call-failed)
-                            :errors errors}))
+           (let [partial (:partial-response result)
+                 seed (when partial
+                        (if continuation-seed
+                          (merge-continuation continuation-seed partial)
+                          partial))]
+             (if (continuation-eligible? result config continuation-attempt)
+               (chat-one adapter config (continuation-messages messages partial)
+                         (assoc opts
+                                :continuation-attempt (inc continuation-attempt)
+                                :continuation-seed seed))
+               (throw (ex-info (str (adapter/display-name adapter) " call failed: "
+                                    (last errors))
+                               (cond-> {:provider (adapter/id adapter)
+                                        :attempts (inc attempt)
+                                        :reason (or (:reason result) :call-failed)
+                                        :errors errors}
+                                 seed (assoc :partial-response seed))))))
 
            ;; A retryable error whose own reset is beyond the in-run window is
            ;; a cap in a rate-limit's clothing: waiting it out would blow the
@@ -581,12 +631,31 @@
               last-e nil]
          (if-not c
            (throw last-e)
-           (let [r (try {:ok (chat-one a c messages opts)}
-                        (catch Throwable e
-                          (if (cancel/control-signal? e) (throw e) {:e e})))]
-             (if (contains? r :ok)
-               (:ok r)
-               (do (swap! retired conj [scope (model-key c)])
+           (let [active (atom true)
+                 candidate-opts (cond-> opts
+                                  (:on-delta opts)
+                                  (update :on-delta
+                                          (fn [publish]
+                                            (fn [delta]
+                                              (when @active (publish delta))))))
+                 r (if (and (seq more) (pos? (or (:slow-start-ms c) 0)))
+                     (let [[tag v] (cancel/with-deadline
+                                     (ebb/via ebb/blk (chat-one a c messages candidate-opts))
+                                     (:slow-start-ms c))]
+                       (case tag
+                         :timeout {:e (ex-info "slow start" {:reason :slow-start})}
+                         :err {:e v}
+                         :ok {:ok v}))
+                     (try {:ok (chat-one a c messages candidate-opts)}
+                          (catch Throwable e
+                            (if (cancel/control-signal? e) (throw e) {:e e}))))]
+             (cond
+               (and (:e r) (cancel/control-signal? (:e r)))
+               (do (reset! active false) (throw (:e r)))
+               (contains? r :ok) (:ok r)
+               :else
+               (do (reset! active false)
+                   (swap! retired conj [scope (model-key c)])
                    (log/warn "llm: retiring" (:provider c) (:model c) "for this run:"
                              (ex-message (:e r)))
                    (recur more (:e r))))))))

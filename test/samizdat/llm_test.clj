@@ -35,6 +35,7 @@
             [samizdat.llm.fence :as fence]
             [samizdat.llm.message :as message]
             [samizdat.llm.registry :as registry]
+            [samizdat.llm.stream :as stream]
             [samizdat.tape :as tape]))
 
 ;; --- fence extraction -------------------------------------------------------
@@ -2201,3 +2202,147 @@
   (is (:truncated (fence/signals {:finish-reason "insufficient_system_resource"} nil)))
   (is (:truncated (fence/signals {:finish-reason "length"} nil)))
   (is (not (:truncated (fence/signals {:finish-reason "stop"} nil)))))
+
+(deftest a-partial-stream-body-is-parsed-at-the-adapter-boundary
+  (let [a (registry/adapter-for :deepseek)
+        body (json/write-str
+              {:id "c1" :model "m" :object "chat.completion"
+               :choices [{:index 0 :message {:role "assistant" :content "partial"}
+                          :finish_reason nil}]})]
+    (with-redefs [stream/post (fn [& _]
+                                (throw (ex-info "cut" {:partial-body body})))]
+      (try
+        (#'client/post-once* a {:base-url "http://x" :features #{:stream}
+                                :model "m" :timeout-ms 1000}
+                             {:messages [] :on-delta (fn [_])} "http://x")
+        (is false "the cut is not a successful answer")
+        (catch clojure.lang.ExceptionInfo e
+          (is (= "partial" (get-in (ex-data e) [:partial-response :content]))))))))
+
+(deftest chat-one-continues-a-cut-and-merges-usage
+  (let [calls (atom [])]
+    (with-redefs [client/post-once
+                  (fn [_ config request]
+                    (swap! calls conj {:config config :request request})
+                    (if (= 1 (count @calls))
+                      (throw (ex-info "cut" {:partial-response
+                                             {:content "partial "
+                                              :usage {:prompt-tokens 5 :completion-tokens 2 :total-tokens 7}
+                                              :elapsed-ms 10}}))
+                      {:outcome :ok
+                       :response {:content "finished" :finish-reason "stop"
+                                  :usage {:prompt-tokens 7 :completion-tokens 3 :total-tokens 10}
+                                  :elapsed-ms 20}}))]
+      (let [r (client/chat-one (registry/adapter-for :deepseek)
+                               {:max-retries 0
+                                :continuation {:enabled? true :min-chars 1 :max-attempts 1}}
+                               [{:role "user" :content "go"}])]
+        (is (= "partial finished" (:content r)))
+        (is (= {:prompt-tokens 12 :completion-tokens 5 :total-tokens 17}
+               (select-keys (:usage r) [:prompt-tokens :completion-tokens :total-tokens])))
+        (is (= 30 (:elapsed-ms r)))
+        (is (= 2 (count @calls)))
+        (let [messages (get-in (second @calls) [:request :messages])]
+          (is (= "partial" (:content (nth messages 1))))
+          (is (= "user" (:role (nth messages 2))))
+          (is (str/includes? (:content (nth messages 2)) "cut off")))))))
+
+(deftest continuation-is-bounded-and-optional
+  (let [calls (atom 0)
+        cut (fn [& _]
+              (swap! calls inc)
+              (throw (ex-info "cut" {:partial-response {:content "partial"}})))]
+    (with-redefs [client/post-once cut]
+      (is (thrown? Exception
+                   (client/chat-one (registry/adapter-for :deepseek) {:max-retries 0
+                                              :continuation {:enabled? false :max-attempts 1}} [])))
+      (is (= 1 @calls) "disabled continuation never re-asks")
+      (reset! calls 0)
+      (is (thrown? Exception
+                   (client/chat-one (registry/adapter-for :deepseek) {:max-retries 0
+                                              :continuation {:enabled? true :min-chars 1 :max-attempts 1}} [])))
+      (is (= 2 @calls) "one continuation, not an unbounded ladder"))))
+
+(deftest continuation-requires-visible-answer-text
+  (let [calls (atom 0)]
+    (with-redefs [client/post-once
+                  (fn [& _]
+                    (swap! calls inc)
+                    (throw (ex-info "cut" {:partial-response
+                                           {:content "<think>reasoning only</think>"}})))]
+      (is (thrown? Exception
+                   (client/chat-one (registry/adapter-for :deepseek) {:max-retries 0
+                                              :continuation {:enabled? true :min-chars 1 :max-attempts 1}} [])))
+      (is (= 1 @calls) "reasoning alone cannot anchor a continuation"))))
+
+(deftest unfinished-reasoning-cannot-anchor-a-continuation
+  (let [calls (atom 0)]
+    (with-redefs [client/post-once
+                  (fn [& _]
+                    (swap! calls inc)
+                    (throw (ex-info "cut" {:partial-response
+                                           {:content "<think>unfinished reasoning"}})))]
+      (is (thrown? Exception
+                   (client/chat-one (registry/adapter-for :deepseek)
+                                    {:max-retries 0
+                                     :continuation {:enabled? true :min-chars 1 :max-attempts 1}} [])))
+      (is (= 1 @calls)))))
+
+(deftest ordinary-retries-happen-before-continuation
+  (let [calls (atom 0)]
+    (with-redefs [client/post-once
+                  (fn [& _]
+                    (let [n (swap! calls inc)]
+                      (if (< n 3)
+                        (throw (ex-info "cut" {:partial-response {:content "a"}}))
+                        {:outcome :ok :response {:content "c"}})))]
+      (is (= "ac" (:content (client/chat-one (registry/adapter-for :deepseek)
+                                             {:max-retries 1
+                                              :continuation {:enabled? true :min-chars 1 :max-attempts 1}}
+                                             []))))
+      (is (= 3 @calls) "two ordinary attempts, then one continuation"))))
+
+(deftest repeated-continuations-accumulate-content-and-usage
+  (let [calls (atom 0)]
+    (with-redefs [client/post-once
+                  (fn [& _]
+                    (let [n (swap! calls inc)]
+                      (if (< n 3)
+                        (throw (ex-info "cut" {:partial-response
+                                               {:content (str (char (+ 96 n)))
+                                                :usage {:prompt-tokens 1 :completion-tokens 1 :total-tokens 2}
+                                                :elapsed-ms 1}}))
+                        {:outcome :ok :response {:content "c"
+                                                 :usage {:prompt-tokens 1 :completion-tokens 1 :total-tokens 2}
+                                                 :elapsed-ms 1}})))]
+      (let [r (client/chat-one (registry/adapter-for :deepseek)
+                               {:max-retries 0
+                                :continuation {:enabled? true :min-chars 1 :max-attempts 2}} [])]
+        (is (= "abc" (:content r)))
+        (is (= 3 (get-in r [:usage :prompt-tokens])))
+        (is (= 3 (:elapsed-ms r)))
+        (is (= 3 @calls))))))
+
+(deftest a-cancelled-stream-is-never-continued-or-retired
+  (let [a (registry/adapter-for :deepseek)
+        body (json/write-str
+              {:id "c1" :model "m" :object "chat.completion"
+               :choices [{:index 0 :message {:role "assistant" :content "partial"}
+                          :finish_reason nil}]})
+        calls (atom 0)]
+    (with-redefs [stream/post
+                  (fn [& _]
+                    (swap! calls inc)
+                    (throw (ex-info "cancelled" {:partial-body body}
+                                    (InterruptedException.))))]
+      (is (thrown? Exception
+                   (client/chat a
+                                {:base-url "http://x"
+                                 :features #{:stream}
+                                 :max-retries 0
+                                 :continuation {:enabled? true :min-chars 1 :max-attempts 1}
+                                 :fallbacks [{:adapter a :config {:base-url "http://x"
+                                                                  :features #{:stream}
+                                                                  :model "backup"}}]}
+                                [] {:on-delta (fn [_])})))
+      (is (= 1 @calls) "a control signal starts no continuation or fallback"))))

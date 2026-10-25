@@ -110,3 +110,22 @@
                      {:error {:code "1302" :message "请求过快"}}])]
     (is (= {:error {:code "1302" :message "请求过快"}}
            (select-keys (stream/completion acc) [:error])))))
+
+(deftest an-sse-stream-that-closes-before-done-keeps-its-partial-completion
+  (with-server (fn [_]
+                 (let [ch (async/chan 2)]
+                   (future
+                     (rsse/send! ch {:data (json/write-str (chunk {:content "partial answer"}))})
+                     (async/close! ch))
+                   {:status 200 :headers {"Content-Type" "text/event-stream"} :body ch}))
+    (fn [port]
+      (try
+        (stream/post (str "http://127.0.0.1:" port "/v1/chat/completions")
+                     {:headers {} :body "{}" :socket-timeout 5000 :conn-timeout 2000}
+                     (fn [_]))
+        (is false "a stream without [DONE] is a cut, not a short answer")
+        (catch clojure.lang.ExceptionInfo e
+          (is (string? (:partial-body (ex-data e))))
+          (is (= "partial answer"
+                 (get-in (json/read-str (:partial-body (ex-data e)) :key-fn keyword)
+                         [:choices 0 :message :content]))))))))
