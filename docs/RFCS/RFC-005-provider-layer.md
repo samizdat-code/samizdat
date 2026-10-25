@@ -141,6 +141,24 @@ A reply with neither content nor reasoning is an **error**, not an empty answer:
 it usually means the model spent its whole budget thinking, and reporting it as
 a successful empty turn would send the loop round again with nothing.
 
+### Interrupted streams and slow starts
+
+An SSE stream that closes before `[DONE]` is a cut, not a shorter successful
+answer. `llm.stream/post` preserves the accumulated completion as
+`:partial-body`; the adapter boundary turns that into `:partial-response`.
+
+After ordinary retries are exhausted, `chat-one` may continue a cut on the same
+provider when the partial reply contains visible answer text. `:llm
+:continuation` defaults to `{:enabled? true :min-chars 1000 :max-attempts 1}`.
+The continuation appends the partial assistant reply and a resource-owned nudge,
+merges the resulting response, sums numeric usage and elapsed time, and never
+continues reasoning-only or blank output. A cancellation is never a retry.
+
+`:llm :slow-start-ms` is unset by default. When it is positive and a fallback
+exists, a primary that exceeds the bound is retired and the next candidate
+starts through the ordinary fallback ladder. The deadline uses
+`cancel/with-deadline`; a control signal starts no fallback.
+
 ### Provider features
 
 What an endpoint can do is data on the config, not a predicate in code:
@@ -267,6 +285,8 @@ a test asserts it.
 | Prior reasoning is never fed back. | `prepare` calls `strip-think-blocks` for assistant roles. |
 | Only one settled-state ledger goes over the wire. | `strip-stale-ledgers`. |
 | A hosted provider's body does not change when a local-only knob is present. | `llm-test/the-local-endpoint-gets-prefix-cache-reuse-and-nobody-else-does`. |
+| EOF before `[DONE]` is a cut, never a short success. | `llm-stream-test/an-sse-stream-that-closes-before-done-keeps-its-partial-completion`. |
+| Continuation is bounded, and cancellation never starts another candidate. | `llm-test` continuation cases; `llm-fallback-test/a-cancel-during-slow-start-starts-no-fallback`. |
 
 ## Known gaps
 

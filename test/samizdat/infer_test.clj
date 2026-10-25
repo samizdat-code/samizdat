@@ -468,6 +468,24 @@
     (is (= 1 @calls) "fingerprint and provider request share one render")
     (infer/clear-render-cache!)))
 
+(deftest delta-offsets-stay-monotonic-across-a-retry
+  (let [published (atom [])
+        calls (atom 0)]
+    (with-redefs [events/publish! (fn [event] (swap! published conj event))
+                  samizdat.llm.client/chat
+                  (fn [_ _ _ opts]
+                    (let [n (swap! calls inc)]
+                      ((:on-delta opts) {:text (str "part" n)})
+                      (if (= 1 n)
+                        {:content "no call" :finish-reason "length"}
+                        {:content (fenced "verify" "{\"claim\": \"c\"}")
+                         :finish-reason "stop"})))]
+      ((infer/complete-fn {:llm-adapter ::a :llm-config {:max-tokens 100}
+                           :run-id "r"}) base-tape))
+    (let [offsets (mapv :text-at @published)]
+      (is (= offsets (distinct offsets)) "one publisher, not one offset stream per attempt")
+      (is (= offsets (sort offsets))))))
+
 (deftest a-periodic-no-call-is-told-it-is-looping-and-clamped
   (with-redefs [journal/record-turn! (fn [& _] nil)]
     (let [b (state/new-branch {:id "B1" :problem "p"})

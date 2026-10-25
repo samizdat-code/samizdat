@@ -79,3 +79,27 @@
         llm (config/role-llm c {:provider :local} :critic)]
     (is (= "deepseek-flash" (:model llm)))
     (is (= ["glm-5.3"] (mapv :model (:fallback-llms llm))))))
+
+(deftest a-slow-primary-yields-to-the-next-fallback
+  (let [calls (atom [])
+        primary (assoc (cfg "a") :fallback-scope "R" :slow-start-ms 1
+                       :fallbacks [{:adapter :b-adapter :config (cfg "b")}])]
+    (with-redefs [client/chat-one
+                  (fn [_ c _ _]
+                    (swap! calls conj (:model c))
+                    (if (= "a" (:model c))
+                      (do (Thread/sleep 30) {:content "late"})
+                      {:content "backup"}))]
+      (is (= "backup" (:content (client/chat :a-adapter primary [{:role "user" :content "q"}]))))
+      (is (= ["a" "b"] @calls)))))
+
+(deftest a-cancel-during-slow-start-starts-no-fallback
+  (let [calls (atom [])
+        primary (assoc (cfg "a") :fallback-scope "R" :slow-start-ms 1
+                       :fallbacks [{:adapter :b-adapter :config (cfg "b")}])]
+    (with-redefs [client/chat-one (fn [_ c _ _]
+                                    (swap! calls conj (:model c))
+                                    (throw (ex-info "cancelled" {:samizdat.cancel/signal true})))
+                  samizdat.cancel/control-signal? (fn [e] (contains? (ex-data e) :samizdat.cancel/signal))]
+      (is (thrown? Exception (client/chat :a-adapter primary [])))
+      (is (= ["a"] @calls)))))

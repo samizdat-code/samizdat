@@ -395,14 +395,13 @@
            tools (when (config/supports? (:llm-config ctx) :native-tools)
                    (not-empty (toolspec/for-messages (:messages tape)
                                                      (gates/threshold :forceable-tools)
-                                                     (gates/threshold :native-tool-description-chars))))]
+                                                     (gates/threshold :native-tool-description-chars))))
+           ;; One offset stream for the whole call, retries included. A probe
+           ;; (journal? false) has no watcher because it is not a visible turn.
+           watch (when (and journal? (:run-id ctx) id)
+                   (delta-publisher (:run-id ctx) (str id) forced-prefill))]
      (loop [attempt 1]
-       (let [;; Somebody may be watching the run: its calls stream, and what
-             ;; the model writes goes onto the bus as it is written. Not a
-             ;; probe's (journal? false): a bounce is not a turn anyone sees.
-             watch (when (and journal? (:run-id ctx) id)
-                     (delta-publisher (:run-id ctx) (str id) forced-prefill))
-             base (or (:max-tokens (:llm-config ctx))
+       (let [base (or (:max-tokens (:llm-config ctx))
                       ;; No configured cap: the FIRST attempt keeps the
                       ;; provider's default, but a retry exists to buy room —
                       ;; doubling nothing was a same-budget repeat (blt.38).

@@ -169,6 +169,8 @@
     :summary "A top-level Clojure form by its id (defn route) or unique bare name, and a place in it by sdiff's printed path (body › binding cap) or any end of that path only one place has. read_file {path, form, at?} reads it; a miss or an ambiguity lists the candidates."}
    {:name samizdat.basis/unresolved
     :summary "What a claim rests on, checked: remember and intervene take a basis — turns (t12, B2:t7), artifacts (a#3, s#2), tasks (sz-…) or memories (k-…) — and refuse when any does not exist in the record, naming each. The basis travels with the memory's cause and the directive's text. Ported from sdiff's validate-ref."}
+   {:name samizdat.llm.client/chat-one
+    :summary "Interrupted streams: EOF before [DONE] preserves partial output, and :llm :continuation {:enabled? true :min-chars 1000 :max-attempts 1} resumes it once when visible answer text can anchor a continuation. Usage and elapsed time are summed. Reasoning-only or blank output is never continued. :slow-start-ms on a fallback candidate bounds the primary's first answer; cancellation starts no fallback."}
    {:name samizdat.llm.client/chat
     :summary "A role in config.edn :roles may name a LIST of providers, e.g. {:critic [:glm :deepseek-flash]}: the first runs, and a model whose call fails (its retries spent) is retired for the rest of the run so later calls start at the next one still standing. All failing is the last error; all retired are tried again in order. A cancel is never a failure."}
    {:name samizdat.agent.judge/rubric-problems
