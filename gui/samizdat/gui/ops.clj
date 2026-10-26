@@ -15,7 +15,7 @@
 ;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 (ns samizdat.gui.ops
-  "The decisions and toolkit-free start coordination behind gui.core's
+  "The decisions and toolkit-free action coordination behind gui.core's
   wiring, extracted so they are testable without loading a toolkit:
   glimmer/GTK deps live only under the :gui alias, so the suite stays
   headless and cannot require gui.core itself.")
@@ -59,6 +59,28 @@
   (when (seq runs)
     (when-not (some #(= current (:id %)) runs)
       (some-> runs first :id))))
+
+(defn apply-intervention
+  "Fold an intervention response. Success clears only the unchanged sent
+  draft; failure preserves whatever is in the entry."
+  [s {:keys [ok error]} sent-draft branch]
+  (if ok
+    (cond-> (assoc s :notice
+                   (str "queued for " (or branch "the run")
+                        " — applies at the next turn boundary"))
+      (= sent-draft (:draft s)) (assoc :draft ""))
+    (assoc s :notice (str "failed: " (or error "request failed")))))
+
+(defn send-intervention!
+  [state branch intervene]
+  (let [{:keys [base-url run draft]} @state]
+    (swap! state assoc :notice (str "sending to " (or branch "the run") "…"))
+    (future
+      (let [response (try (intervene base-url run
+                                     {:branch-id branch :kind "message" :payload draft})
+                          (catch Throwable e {:ok false :error (ex-message e)}))]
+        (swap! state apply-intervention response draft branch)
+        response))))
 
 (defn apply-start
   "Fold a start response, preserving the form on failure and releasing the

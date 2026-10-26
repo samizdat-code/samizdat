@@ -242,24 +242,13 @@
   run), applied by the server at the next turn boundary. Bound to both the
   send button and Enter in the entry (:on-activate)."
   []
-  (let [{:keys [base-url run draft] :as st} @state
+  (let [{:keys [run draft] :as st} @state
         branch (selected-branch-id st)]
     (cond
       (str/blank? draft) nil
       (nil? run) (notice! "no run selected")
       :else
-      ;; Clear the entry immediately so Enter feels instant; the POST
-      ;; reports back when it lands.
-      (do (swap! state assoc :draft "")
-          (notice! (str "sending to " (or branch "the run") "…"))
-          (future
-            (let [r (api/intervene! base-url run
-                                    {:branch-id branch :kind "message"
-                                     :payload draft})]
-              (notice! (if (:ok r)
-                         (str "queued for " (or branch "the run")
-                              " — applies at the next turn boundary")
-                         (str "failed: " (:error r))))))))))
+      (ops/send-intervention! state branch api/intervene!))))
 
 (defn- abort-run! []
   (when-let [run (:run @state)]

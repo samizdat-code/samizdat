@@ -77,6 +77,68 @@
   (when-let [f (:on-click (second (labelled form label)))]
     (f)))
 
+(deftest successful-intervention-clears-an-unchanged-draft
+  (let [state (atom {:base-url "http://x:1" :run "r1" :draft "try modulus 25"})
+        pending (ops/send-intervention!
+                 state "B1"
+                 (fn [_ _ _] {:ok true}))]
+    (is (= {:ok true} (deref pending 1000 ::timeout)))
+    (is (= "" (:draft @state)))))
+
+(deftest refused-intervention-preserves-the-draft
+  (let [state (atom {:base-url "http://x:1" :run "finished-run"
+                     :draft "try the vendored parser"})
+        started (promise)
+        answer (promise)
+        calls (atom [])
+        pending (ops/send-intervention!
+                 state nil
+                 (fn [base run request]
+                   (swap! calls conj [base run request])
+                   (deliver started true)
+                   @answer))]
+    (is (= true (deref started 1000 ::timeout)))
+    (is (= "try the vendored parser" (:draft @state)) "the draft stays while the request is in flight")
+    (deliver answer {:ok false :status 409 :error "HTTP 409"})
+    (is (= {:ok false :status 409 :error "HTTP 409"}
+           (deref pending 1000 ::timeout)))
+    (is (= [["http://x:1" "finished-run"
+             {:branch-id nil :kind "message" :payload "try the vendored parser"}]]
+           @calls))
+    (is (= "try the vendored parser" (:draft @state)))
+    (is (re-find #"HTTP 409" (str (:notice @state))))))
+
+(deftest intervention-errors-preserve-the-draft
+  (let [state (atom {:base-url "http://x:1" :run "r1" :draft "keep this directive"})
+        started (promise)
+        pending (ops/send-intervention!
+                 state "B1"
+                 (fn [_ _ _]
+                   (deliver started true)
+                   (throw (ex-info "connection refused" {}))))]
+    (is (= true (deref started 1000 ::timeout)))
+    (is (= "keep this directive" (:draft @state)))
+    (is (= {:ok false :error "connection refused"}
+           (deref pending 1000 ::timeout)))
+    (is (= "keep this directive" (:draft @state)))
+    (is (re-find #"connection refused" (str (:notice @state))))))
+
+(deftest successful-intervention-preserves-newer-typing
+  (let [state (atom {:base-url "http://x:1" :run "r1" :draft "first directive"})
+        started (promise)
+        answer (promise)
+        pending (ops/send-intervention!
+                 state "B1"
+                 (fn [_ _ _]
+                   (deliver started true)
+                   @answer))]
+    (is (= true (deref started 1000 ::timeout)))
+    (is (= "first directive" (:draft @state)))
+    (swap! state assoc :draft "first directive\nsecond, newer directive")
+    (deliver answer {:ok true})
+    (is (= {:ok true} (deref pending 1000 ::timeout)))
+    (is (= "first directive\nsecond, newer directive" (:draft @state)))))
+
 (deftest a-deferred-second-new-run-sends-one-request-and-releases-the-guard
   (doseq [[outcome response] [["success" {:ok true :body {:run_id "12345678-r7"}}]
                               ["failure" {:ok false :error "HTTP 503"}]]]
