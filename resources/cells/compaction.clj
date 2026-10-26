@@ -27,6 +27,7 @@
             [clojure.tools.logging :as log]
             [mycelium.cell :as cell]
             [samizdat.agent.compaction :as cmp]
+            [samizdat.agent.context-edit :as context-edit]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.infer :as infer]
             [samizdat.llm.client :as llm]
@@ -344,6 +345,7 @@
               data)
           (let [folded (cmp/unpinned-in msgs [s e])
                 evict? (= :evict (:strategy p))
+                edit? (= :edit (:strategy p))
                 refs (when evict? (cmp/evictable-turns folded))
                 budget (cmp/summary-budget
                         (cmp/estimate-tokens folded (:chars-per-token p))
@@ -352,13 +354,13 @@
                           refs (prompt/render "eviction-summary"
                                               {:turns (str/join ", " refs)
                                                :count (count refs)})
-                          evict? nil
+                          (or evict? edit?) nil
                           (and (= :tape (:summarize-via p))
                                (= summarizer-config llm-config))
                           (summarize-on-tape! ctx branch tail budget)
                           :else (summarize! summarizer summarizer-config folded budget))
-                ok? (and summary
-                         (or refs
+                ok? (or refs edit?
+                        (and summary
                              (cmp/validate-summary
                               summary
                               {:sections (template-sections)
@@ -383,12 +385,13 @@
                            (if (or (nil? pol) (= :auto pol))
                              (or (:fold-role llm-config) "system")
                              (name pol)))
-                    out (if refs
-                          (cmp/apply-eviction msgs [s e]
-                                              (prompt/prompt "compaction-marker") summary role refs)
-                          (cmp/apply-summary msgs [s e]
-                                             (prompt/prompt "compaction-marker") summary
-                                             role))
+                    out (cond
+                          refs (cmp/apply-eviction msgs [s e]
+                                                   (prompt/prompt "compaction-marker") summary role refs)
+                          edit? (:messages (context-edit/fold folded))
+                          :else (cmp/apply-summary msgs [s e]
+                                                   (prompt/prompt "compaction-marker") summary
+                                                   role))
                     after (cmp/estimate-tokens out (:chars-per-token p))]
                 (if (>= after (:compaction/before data))
                   (do (note! conn run-id data {:action "no-progress"

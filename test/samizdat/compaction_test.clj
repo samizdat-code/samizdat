@@ -13,8 +13,11 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
             [samizdat.agent.compaction :as cmp]
+            [samizdat.agent.context-edit :as context-edit]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.loop]
+            [samizdat.agent.tools.base :as base]
+            [samizdat.agent.tools.journal]
             [samizdat.cells :as cells]
             [samizdat.manifests :as manifests]
             [mycelium.cell :as cell]
@@ -774,6 +777,20 @@
       (is (> (count second-refs) (count first-refs))
           "and it adds the newly evicted turns"))))
 
+(deftest edit-strategy-drops-only-addressable-messages-without-a-model
+  (cells/load-cells!)
+  (let [calls (atom 0)
+        msgs (assoc (evictable-conversation) 5
+                    {:role "user" :content "UNADDRESSED"})
+        out (fold-with-strategy :edit calls
+                                {:compaction/tier :fold :compaction/before 999999
+                                 :branch {:messages msgs}})
+        remaining (get-in out [:branch :messages])]
+    (is (zero? @calls))
+    (is (some #(= "UNADDRESSED" (:content %)) remaining))
+    (is (not-any? #(contains? #{2 3 4} (:turn %)) remaining)
+        "the fold window leaves history only as a projection; originals stay in the journal")))
+
 (deftest eviction-stamps-the-marker-it-inserts-not-an-older-one
   (let [msgs [{:role "system" :content "old" :compaction? true :evicted-turns [1]}
               {:role "user" :content "keep"}
@@ -793,3 +810,58 @@
         out (fold-with-strategy :evict (atom 0) data)]
     (is (= msgs (get-in out [:branch :messages]))
         "an unaddressable message is never dropped by deterministic eviction")))
+
+(def ^:private editable-messages
+  [{:id "m1" :role "assistant" :content "call 1" :tool-calls [{:id "c1"}]}
+   {:id "m2" :role "user" :content "result 1" :tool-call-id "c1"}
+   {:id "m3" :role "assistant" :content "old answer"}
+   {:id "m4" :role "user" :content "next"}])
+
+(deftest context-edits-compose-and-preserve-originals
+  (let [staged (context-edit/stage editable-messages
+                                   {:drop #{"m1" "m2"}
+                                    :edits {"m3" "new answer"}
+                                    :restore #{"m1" "m2"}
+                                    :notes ["keep this"]})
+        out (context-edit/apply-edit staged editable-messages 0 "head")]
+    (is (= ["m1" "m2" "m3" "m4"] (mapv :id (take 4 (:messages out)))))
+    (is (= "new answer" (:content (nth (:messages out) 2))))
+    (is (= "[context note]\nkeep this" (:content (last (:messages out)))))
+    (is (= 1 (:revision out)))
+    (is (= editable-messages (:source staged)) "the source remains immutable for recall")))
+
+(deftest context-edit-rejects-stale-state-and-broken-tool-pairs
+  (let [staged (context-edit/stage editable-messages {:drop #{"m1"}})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"revision"
+                          (context-edit/apply-edit staged editable-messages 2 "head")))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"head"
+                          (context-edit/apply-edit staged editable-messages 0 "other")))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"tool"
+                          (context-edit/apply-edit staged editable-messages 0 "head")))))
+
+(deftest context-edit-tool-composes-restores-and-rejects-stale-revisions
+  (context-edit/forget-run! "edit-tool")
+  (let [run-id "edit-tool"
+        branch {:id "B1" :messages editable-messages}
+        call (fn [branch args]
+               (base/run-tool {:tool-name "context_edit" :run-id run-id
+                               :branch branch :args args}))
+        first-out (call branch {:drop ["m1" "m2"] :edits {"m3" "new answer"}
+                                :revision 0 :head "m4"})
+        second-out (call (:branch first-out)
+                         {:restore ["m1" "m2"] :notes ["remember this"]
+                          :revision 1 :head "m4"})
+        stale-out (call (:branch second-out)
+                        {:drop ["m4"] :revision 0 :head "m4"})]
+    (is (= :neutral (:category first-out)))
+    (is (= 1 (get-in first-out [:branch :context-revision])))
+    (is (= ["m1" "m2" "m3" "m4"]
+           (mapv :id (take 4 (get-in second-out [:branch :messages]))))
+        "a later restore addresses the immutable source, not the dropped projection")
+    (is (= "new answer" (:content (nth (get-in second-out [:branch :messages]) 2)))
+        "a restore does not discard unrelated earlier edits")
+    (is (= "[context note]\nremember this"
+           (:content (last (get-in second-out [:branch :messages])))))
+    (is (= :mechanics (:category stale-out)))
+    (is (re-find #"revision" (:result stale-out)))
+    (is (= 2 (get-in stale-out [:branch :context-revision])))))

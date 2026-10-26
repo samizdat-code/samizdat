@@ -615,6 +615,11 @@ fetch_turn({query, branch?, limit?, before?})
     Find earlier turns by literal text in their calls, answers, results, or
     tool names, then reopen one by turn number. Reasoning is not searched.
     Results are bounded previews, newest first; `before` pages older turns.
+context_edit({drop?, edits?, restore?, notes?, revision, head})
+    Edit only your current context projection; the journal stays unchanged.
+    Drop or restore arrays of message/turn ids, map ids to replacement content,
+    and add short context notes. Use the revision and head returned by your last
+    edit. Tool calls and their results must be dropped or restored together.
 ```
 
 Once your history gets long, your older messages are replaced in place by a
