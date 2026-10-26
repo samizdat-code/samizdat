@@ -33,6 +33,18 @@
     (is (= [] (:trace s)))
     (is (= #{} (:expanded s)))))
 
+(deftest clearing-a-sent-draft-compares-the-expanded-current-input
+  (let [sent "look at: one\ntwo\nthree\nfour"
+        placeholder "look at: [4 lines pasted #1]"
+        s (assoc (st/initial "b") :input placeholder
+                 :pastes {"[4 lines pasted #1]" "one\ntwo\nthree\nfour"})]
+    (is (= "" (:input (st/clear-sent-draft s sent))))
+    (is (empty? (:pastes (st/clear-sent-draft s sent))))
+    (let [changed (st/set-input s (str placeholder " plus more"))]
+      (is (= changed (st/clear-sent-draft changed sent))
+          "newer typing is not erased"))
+    (is (= s (st/clear-sent-draft s "a different directive")))))
+
 (deftest steps-append-to-the-trace-and-carry-the-cursor
   (let [s (-> (st/initial "b")
               (st/apply-steps {:ok true :body {:steps [{:seq 1 :node "start"}

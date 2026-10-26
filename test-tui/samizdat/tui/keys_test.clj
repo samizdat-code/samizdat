@@ -110,6 +110,7 @@
       (swap! core/state assoc :input "the whole line, typed after the last frame"
              :detail {:run {:status "running"}})
       ((:submit handlers) "the whole li")
+      (settle #(some? @steered))
       (is (= "the whole line, typed after the last frame" @steered)))))
 
 (deftest a-paste-keeps-its-newlines-and-a-big-one-collapses
@@ -132,6 +133,7 @@
         (paste! (str "\n" trace))
         (is (re-find #"\[9 lines pasted #1\]$" (:input @core/state)) "collapsed in the box")
         ((:submit @#'core/handlers) (:input @core/state))
+        (settle #(some? @sent))
         (is (= (str "see: one\ntwo\n" trace) @sent) "and sent whole")))))
 
 (deftest a-paste-lands-at-the-cursor

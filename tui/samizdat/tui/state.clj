@@ -600,6 +600,13 @@
   [s text]
   (reduce (fn [t [tag body]] (str/replace t tag body)) (str text) (:pastes s)))
 
+(defn clear-sent-draft
+  "Clear the compose box only when its expanded value is still the sent text."
+  [s sent]
+  (if (= (expand-pastes s (:input s)) sent)
+    (clear-input s)
+    s))
+
 (defn newline-key?
   "Whether a key event means a line break in the compose box: Ctrl+J, Alt+Enter
   (ESC then CR, as most terminals send it) or Shift+Enter where the terminal

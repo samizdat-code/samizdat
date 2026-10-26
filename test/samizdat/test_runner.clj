@@ -244,6 +244,7 @@
             [samizdat.tui-layout-test]
             [samizdat.tui-readmodel-test]
             [samizdat.tui-state-test]
+            [samizdat.tui-actions-test]
             [samizdat.tui-widgets-test]
             [samizdat.tui-editing-test]
             [samizdat.store-test]
@@ -325,6 +326,7 @@
     samizdat.tui-layout-test
     samizdat.tui-readmodel-test
     samizdat.tui-state-test
+    samizdat.tui-actions-test
     samizdat.tui-widgets-test
     samizdat.tui-editing-test
     samizdat.store-test
