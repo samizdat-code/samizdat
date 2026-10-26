@@ -442,6 +442,28 @@
       (is (= "x" (:input s)))
       (is (not-empty (str (:error s)))))))
 
+(deftest a-deferred-second-start-sends-one-request-and-releases-the-guard
+  (doseq [[outcome response] [["success" {:ok true :body {:run_id "r7"}}]
+                              ["failure" {:ok false :error "HTTP 503"}]]]
+    (testing outcome
+      (let [state (atom (st/set-input (st/initial "b") "build a parser"))
+            calls (atom [])
+            requested (promise)
+            answer (promise)
+            start-run (fn [base body]
+                        (swap! calls conj [base body])
+                        (deliver requested true)
+                        @answer)
+            pending (st/start! state "build a parser" start-run (fn []))]
+        (is (true? @requested))
+        (is (true? (:starting? @state)))
+        (is (nil? (st/start! state "build a parser" start-run (fn []))))
+        (is (= 1 (count @calls)))
+        (deliver answer response)
+        (is (= response @pending))
+        (is (false? (:starting? @state)))
+        (is (= 1 (count @calls)))))))
+
 (deftest a-notice-is-not-an-error
   ;; The status line paints :error red. "starting…" is not a failure and must
   ;; not read as one, so it travels in its own field.

@@ -69,6 +69,7 @@
             :branch-log nil              ; branch-detail body for :selected
             :branch-log-error nil        ; why it is missing, when it failed
             :connected? false
+            :starting? false             ; a new-run POST is in flight
             :notice nil                  ; transient feedback line
             :budget ""                   ; resume budget-extension entry
             :composing? false            ; the new-run form is open
@@ -331,30 +332,22 @@
     (form-field! field (str (nth opts (mod (inc i) (count opts)))))))
 
 (defn- start-new-run! []
-  (let [{:keys [base-url form]} @state
+  (let [{:keys [form]} @state
         {:keys [body error]} (newrun/request form)]
     (if error
       (notice! error)
-      (do (notice! (str "starting — " (newrun/summary body) "…"))
-          (future
-            (let [r (api/start-run! base-url body)
-                  id (get-in r [:body :run_id])]
-              (if (and (:ok r) id)
-                (do (swap! state assoc :composing? false
-                           :form {:problem "" :max-turns "" :beam-width ""
-                                  :seed-run "" :model "" :reasoning-effort ""})
+      (ops/start! state body (str "starting — " (newrun/summary body) "…")
+                  api/start-run!
+                  (fn [id]
                     ;; Attach before refreshing the list: the poller is what
                     ;; the user is waiting to see, and the list is cosmetic.
                     (connect-to! id)
-                    (notice! (str "started " (subs (str id) 0 8)))
-                    (refresh-runs!))
-                (notice! (str "could not start: "
-                              (or (:error r) "no run id came back"))))))))))
+                    (refresh-runs!))))))
 
 ;; --- components ---------------------------------------------------------------
 
 (defn- new-run-panel []
-  (let [{:keys [form]} @state]
+  (let [{:keys [form starting?]} @state]
     [:frame {:label "new run" :vexpand true}
      [:vbox {:spacing 8 :margin 8 :vexpand true}
       [:label {:markup (mt/dim "the problem the beam will work on — state what counts as a shippable answer, and that only engine-confirmed claims count")
@@ -387,7 +380,8 @@
                  :tooltip "reasoning_effort — \"none\" turns thinking off, empty leaves the model's own default"
                  :on-click #(cycle-field! :reasoning-effort efforts)}]]
       [:hbox {:spacing 8}
-       [:button {:label "start run" :on-click start-new-run!}]
+       [:button {:label "start run" :sensitive (not starting?)
+                 :on-click start-new-run!}]
        [:button {:label "from current run" :tooltip "copy the selected run's statement and seed from it"
                  :on-click copy-current-problem!}]
        [:button {:label "cancel" :on-click toggle-compose!}]]]]))

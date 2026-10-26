@@ -114,15 +114,7 @@
   UI that stopped redrawing for that long is the frozen-but-alive
   failure this project keeps finding."
   [text]
-  (let [{:keys [base]} @state]
-    (if-let [problem (st/steer-payload text)]
-      (do (swap! state st/note-notice "starting…")
-          (future
-            (swap! state st/apply-start
-                   (client/start-run! base (merge {:problem problem}
-                                                  (:next-llm @state))))
-            (poll-once!)))
-      (swap! state st/note-error "type a problem statement first"))))
+  (st/start! state text client/start-run! poll-once!))
 
 ;; `if-not run-id` rather than `when run-id`: both of these used to do
 ;; NOTHING AND SAY NOTHING with no run selected, which is indistinguishable

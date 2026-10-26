@@ -20,7 +20,8 @@
   "Approval hiccup and its asynchronous HTTP coordination, without GTK."
   (:require [clojure.test :refer [deftest testing is]]
             [samizdat.approval-view :as shared]
-            [samizdat.gui.approval :as approval]))
+            [samizdat.gui.approval :as approval]
+            [samizdat.gui.ops :as ops]))
 
 (def ^:private permission
   {:id "p1" :kind :shell :input "frobnicate --all\nand every argument"
@@ -75,6 +76,45 @@
 (defn- click [form label]
   (when-let [f (:on-click (second (labelled form label)))]
     (f)))
+
+(deftest a-deferred-second-new-run-sends-one-request-and-releases-the-guard
+  (doseq [[outcome response] [["success" {:ok true :body {:run_id "12345678-r7"}}]
+                              ["failure" {:ok false :error "HTTP 503"}]]]
+    (testing outcome
+      (let [draft {:problem "build a parser" :max-turns "4" :beam-width "2"
+                   :seed-run "r0" :model "model" :reasoning-effort "high"}
+            state (atom {:base-url "http://x:1" :composing? true :form draft})
+            calls (atom [])
+            attached (atom [])
+            requested (promise)
+            answer (promise)
+            start-run (fn [base body]
+                        (swap! calls conj [base body])
+                        (deliver requested true)
+                        @answer)
+            pending (ops/start! state {:problem "build a parser"} "starting…"
+                                start-run #(swap! attached conj %))]
+        (is (true? @requested))
+        (is (true? (:starting? @state)))
+        (is (nil? (ops/start! state {:problem "build a parser"} "starting…"
+                              start-run #(swap! attached conj %))))
+        (is (= 1 (count @calls)))
+        (deliver answer response)
+        (is (= response @pending))
+        (is (false? (:starting? @state)))
+        (is (= 1 (count @calls)))
+        (if (:ok response)
+          (do
+            (is (false? (:composing? @state)))
+            (is (= {:problem "" :max-turns "" :beam-width "" :seed-run ""
+                    :model "" :reasoning-effort ""}
+                   (:form @state)))
+            (is (= ["12345678-r7"] @attached)))
+          (do
+            (is (true? (:composing? @state)))
+            (is (= draft (:form @state)))
+            (is (empty? @attached))
+            (is (re-find #"HTTP 503" (str (:notice @state))))))))))
 
 (deftest connection-refreshes-approvals-and-approval-events-request-refresh
   (let [state (atom {:base-url "http://x:1" :run "r1"})

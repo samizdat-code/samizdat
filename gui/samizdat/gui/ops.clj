@@ -15,11 +15,10 @@
 ;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 (ns samizdat.gui.ops
-  "The pure decisions behind gui.core's fetch/scroll wiring — extracted so
-  they are testable without loading a toolkit: glimmer/GTK deps live only
-  under the :gui alias, so the suite stays headless and cannot require
-  gui.core itself. Each fn answers one review-2026-08-2 finding:
-  scroll-props #6, refetch-after? #7, tail-target #8.")
+  "The decisions and toolkit-free start coordination behind gui.core's
+  wiring, extracted so they are testable without loading a toolkit:
+  glimmer/GTK deps live only under the :gui alias, so the suite stays
+  headless and cannot require gui.core itself.")
 
 (defn scroll-props
   "Props for the inspector's :scrolled wrapper. `:scroll-top` belongs ONLY
@@ -60,3 +59,38 @@
   (when (seq runs)
     (when-not (some #(= current (:id %)) runs)
       (some-> runs first :id))))
+
+(defn apply-start
+  "Fold a start response, preserving the form on failure and releasing the
+  in-flight guard on every outcome."
+  [s {:keys [ok body error]}]
+  (let [id (:run_id body)
+        s (assoc s :starting? false)]
+    (if (and ok id)
+      (assoc s :composing? false
+             :form {:problem "" :max-turns "" :beam-width ""
+                    :seed-run "" :model "" :reasoning-effort ""}
+             :notice (str "started " (subs (str id) 0 8)))
+      (assoc s :notice (str "could not start: " (or error "no run id came back"))))))
+
+(defn start!
+  "Claim and submit one new run. A repeat while the request is in flight
+  returns nil without issuing another request."
+  [state body notice start-run on-success]
+  (let [claim (atom nil)]
+    (swap! state
+           (fn [s]
+             (if (:starting? s)
+               s
+               (do
+                 (reset! claim {:base-url (:base-url s)})
+                 (assoc s :starting? true :notice notice)))))
+    (when-let [{:keys [base-url]} @claim]
+      (future
+        (let [response (try (start-run base-url body)
+                            (catch Throwable e {:ok false :error (ex-message e)}))
+              id (get-in response [:body :run_id])]
+          (swap! state apply-start response)
+          (when (and (:ok response) id)
+            (on-success id))
+          response)))))

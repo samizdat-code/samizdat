@@ -19,9 +19,10 @@
 (ns samizdat.tui.state
   "The view state: what the pollers fold into and what the widgets read.
 
-  Every function here is pure, which is what leaves the run loop as wiring
-  and puts the TUI's actual policy — cursors, what a disconnect does, what
-  changing run resets — under test with no terminal and no server.
+  The transitions are pure and the asynchronous start coordination is
+  toolkit-free, which leaves the run loop as wiring and puts the TUI's actual
+  policy — cursors, what a disconnect does, what changing run resets — under
+  test with no terminal and no server.
 
   The state is one flat map on purpose. A widget takes what it needs from it
   and the layout never has to name data, only widgets; that is what lets a
@@ -53,6 +54,7 @@
 (defn initial [base]
   {:base base
    :connected? false
+   :starting? false
    :error nil
    ;; Whether :error is an outage, which the next poll that gets through
    ;; clears, rather than an action's refusal, which it must not.
@@ -679,10 +681,34 @@
   [s]
   (= "interrupted" (str (get-in s [:detail :run :status]))))
 
-(declare note-local)
+(declare note-local apply-start)
+
+(defn start!
+  "Claim and submit one run start. A repeat while the request is in flight
+  returns nil without issuing another request."
+  [state text start-run after]
+  (let [claim (atom nil)]
+    (swap! state
+           (fn [s]
+             (cond
+               (:starting? s) s
+               :else
+               (if-let [problem (steer-payload text)]
+                 (do
+                   (reset! claim {:base (:base s)
+                                  :body (merge {:problem problem} (:next-llm s))})
+                   (note-notice (assoc s :starting? true) "starting…"))
+                 (note-error s "type a problem statement first")))))
+    (when-let [{:keys [base body]} @claim]
+      (future
+        (let [response (try (start-run base body)
+                            (catch Throwable e {:ok false :error (ex-message e)}))]
+          (swap! state apply-start response)
+          (after)
+          response)))))
 
 (defn apply-start
-  "Fold the answer to POST /v1/runs.
+  "Fold the answer to POST /v1/runs and release the in-flight start guard.
 
   A started run becomes the selected one, so the panels attach to what was
   just asked for rather than leaving the user to find it in the picker. A
@@ -690,7 +716,8 @@
   beam does not come up inside its window, and clearing the box would make a
   retry mean retyping the paragraphs that were refused."
   [s {:keys [ok body error]}]
-  (let [id (:run_id body)]
+  (let [id (:run_id body)
+        s (assoc s :starting? false)]
     (if (and ok (not-empty (str id)))
       (-> s
           (select-run (str id))
