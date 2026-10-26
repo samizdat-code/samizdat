@@ -51,6 +51,7 @@
             [samizdat.llm.fence :as fence]
             [samizdat.llm.registry :as registry]
             [samizdat.manifests :as manifests]
+            [samizdat.peripherals :as peripherals]
             [mycelium.core :as myc]
             [samizdat.session :as session]
             [samizdat.steps :as steps]
@@ -276,6 +277,9 @@
          _ (token/issue! (get-in cfg [:http :port]))
          server (adapter/run-server handler (select-keys (:http cfg) [:port :worker-threads]))]
      (reset! system {:config cfg :conn c :server server})
+     (peripherals/start! cfg)
+     (doseq [{:keys [id phase message]} (peripherals/notices)]
+       (log/warn "peripheral" id phase "failed:" message))
      ;; What the agent's processes are kept off (security.listen).
      (listen/register! :http (get-in cfg [:http :port]))
      ;; The approval keys that loosen anything are the operator's alone
@@ -305,7 +309,8 @@
   failed start left the process bound to that project — every userspace read
   after it, in a REPL or the next test, went to a project nobody had started."
   [conn]
-  (doseq [f [#(token/revoke-all!)
+  (doseq [f [#(peripherals/stop!)
+             #(token/revoke-all!)
              #(do (steps/stop-pump!) (steps/reset!))
              #(fence/install-repair! nil)
              #(do (userspace/unbind!) (userspace/bind-root! nil))
@@ -336,6 +341,7 @@
                                (when (= ::hung (deref future 15000 ::hung))
                                  (log/warn "run" rid "did not stop within 15s;"
                                            "closing the system under it")))))]
+                       ["peripherals" #(peripherals/stop!)]
                        ["http server" #(adapter/stop-server (:server s))]
                        ["api token" #(token/revoke-all!)]
                        ;; After the server, so a request in flight can still

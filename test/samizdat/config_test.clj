@@ -21,6 +21,7 @@
             [clojure.test :refer [deftest testing is]]
             [samizdat.config :as config]
             [samizdat.layers :as layers]
+            [samizdat.peripherals :as peripherals]
             [samizdat.store.db]))
 
 (deftest provider-llm-builds-a-named-provider-config
@@ -473,3 +474,53 @@
     (is (= "***" (get-in r [:providers :vllm :api-key])))
     (is (every? #{"***"} (vals (get-in r [:llm :headers]))))
     (is (every? #{"***"} (vals (get-in r [:providers :vllm :headers]))))))
+
+(deftest peripheral-config-is-admitted-and-type-checked
+  (is (= {:enabled true :options {:channel 3}}
+         (get-in (config/load-config
+                  {:peripherals {:reference {:enabled true :options {:channel 3}}}})
+                 [:peripherals :reference])))
+  (doseq [bad [{:peripherals [:reference]}
+               {:peripherals {:reference {:enabled "yes"}}}
+               {:peripherals {:reference {:enabled true :options []}}}
+               {:peripherals {:reference {:enabled true :unexpected {}}}}]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #":peripherals"
+                          (config/load-config bad))
+        (pr-str bad))))
+
+(deftest peripherals-have-independent-exact-inverse-lifecycles
+  (let [events (atom [])
+        ids [:test/peripheral-a :test/peripheral-broken :test/peripheral-b]
+        cfg {:peripherals
+             (array-map
+              (nth ids 0) {:enabled true :options {:value 1}}
+              (nth ids 1) {:enabled true :options {}}
+              (nth ids 2) {:enabled true :options {:value 2}})}]
+    (peripherals/register! (nth ids 0)
+                           (fn [options] (swap! events conj [:start :a options]) :handle-a)
+                           (fn [handle] (swap! events conj [:stop handle])))
+    (peripherals/register! (nth ids 1)
+                           (fn [_] (throw (ex-info "refused reference" {})))
+                           (fn [_] (swap! events conj [:must-not-stop])))
+    (peripherals/register! (nth ids 2)
+                           (fn [options] (swap! events conj [:start :b options]) :handle-b)
+                           (fn [handle] (swap! events conj [:stop handle])))
+    (try
+      (peripherals/start! cfg)
+      (is (= [[:start :a {:value 1}] [:start :b {:value 2}]] @events)
+          "one refusal neither starts its inverse nor blocks the next peripheral")
+      (is (some #(and (= (nth ids 1) (:id %))
+                      (= :start (:phase %))
+                      (re-find #"refused reference" (:message %)))
+                (peripherals/notices)))
+      (peripherals/stop!)
+      (is (= [[:stop :handle-b] [:stop :handle-a]] (subvec @events 2))
+          "only acquired resources stop, in reverse acquisition order")
+      (peripherals/start! cfg)
+      (reset! events [])
+      (peripherals/restart! cfg)
+      (is (= [[:stop :handle-b] [:stop :handle-a]
+              [:start :a] [:start :b]]
+             (mapv #(if (= :start (first %)) (vec (take 2 %)) %) @events))
+          "restart releases every old handle before acquiring replacements")
+      (finally (peripherals/stop!)))))

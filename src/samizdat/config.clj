@@ -28,7 +28,8 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.walk :as walk]
-            [samizdat.layers :as layers]))
+            [samizdat.layers :as layers]
+            [samizdat.peripherals :as peripherals]))
 
 (def deep-merge
   "Merge maps left to right, recursing when BOTH values are maps; any other
@@ -586,7 +587,8 @@
   "The top-level keys a config file may set. :run stays open below this:
   cells read their own :run keys, and a list of them here would be a
   decision about behaviour made in src."
-  #{:http :nrepl :db :eval :run :providers :roles :shell :approval :userspace})
+  #{:http :nrepl :db :eval :run :providers :roles :shell :approval :userspace
+    :peripherals})
 
 (defn- refuse-unrecognized!
   "Throw naming the file and the key when a config layer sets a top-level
@@ -800,7 +802,8 @@
       ;; layer has had its say: DeepSeek off /beta answers a prefill with a
       ;; 400, whatever a file claimed.
       (update :llm #(resolve-features provider %))
-      (check-roles!)))))
+      (check-roles!)
+      (peripherals/validate-config)))))
 
 (defn provider-llm
   "The :llm config for a SPECIFIC provider — a built-in, or an alias `config`
