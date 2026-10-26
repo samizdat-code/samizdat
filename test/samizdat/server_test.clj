@@ -30,6 +30,7 @@
             [clojure.data.json :as json]
             [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.api.runs :as api-runs]
+            [samizdat.contracts :as contracts]
             [samizdat.approval :as approval]
             [samizdat.api.control :as control]
             [samizdat.server :as server]
@@ -428,3 +429,17 @@
                                         "{\"mode\":\"refuse\"}"))))
       ;; The endpoint sets the process's session mode; leave none behind.
       (finally (approval/set-mode! nil)))))
+
+(deftest run-contract-schema-and-dispatch-are-one-definition
+  (is (map? (:error (contracts/decode contracts/run-request-contract
+                                       {:problem "p" :beam_width 0}))))
+  (is (= {:problem "p" :beam_width 2}
+         (:value (contracts/decode contracts/run-request-contract
+                                    {:problem "p" :beam_width 2}))))
+  (is (= :unknown-option
+         (get-in (contracts/decode contracts/run-request-contract
+                                   {:problem "p" :unknown-option true})
+                 [:error :field])))
+  (is (= (json/read-str (json/write-str (contracts/schema contracts/run-request-contract))
+                        :key-fn keyword)
+         (:json (call :get "/v1/harness/contracts/run")))))

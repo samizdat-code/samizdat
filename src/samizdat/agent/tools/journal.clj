@@ -7,6 +7,7 @@
             [clojure.string :as str]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
+            [samizdat.contracts :as contracts]
             [samizdat.security.flow :as flow]
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
@@ -102,6 +103,8 @@
   ;;
   ;; :neutral for the same reason as fetch_artifact — a lookup establishes
   ;; nothing, and reporting success would clear the failure count.
+  (or (when-let [problem (contracts/problem contracts/fetch-turn-contract (:args ctx))]
+        (base/malformed branch problem))
   (if-let [query (and (nil? (base/arg ctx :turn))
                       (some-> (base/arg ctx :query) str str/trim not-empty))]
     (fetch-turn-search ctx query)
@@ -147,4 +150,4 @@
                                             message/strip-think-blocks
                                             not-empty)]
                       (str "\n\nWHAT YOU SAID\n" said))
-                    "\n\nRESULT\n" (:result t)))))))))
+                    "\n\nRESULT\n" (:result t))))))))))

@@ -35,6 +35,7 @@
             [samizdat.approval :as approval]
             [samizdat.cancel :as cancel]
             [samizdat.config :as config]
+            [samizdat.contracts :as contracts]
             [samizdat.llm.client :as llm]
             [samizdat.llm.registry :as registry]
             [samizdat.prompt :as prompt]
@@ -131,15 +132,10 @@
                        :type "endpoint_unreachable"}}})]))
 
 (defn- invalid-run-request
-  "A [nil HTTP-400] pair for a malformed numeric run option, else nil."
+  "A [nil HTTP-400] pair when the run request violates its contract, else nil."
   [body]
-  (some (fn [k]
-          (let [v (get body k)]
-            (when (and (some? v) (not (pos-int? v)))
-              [nil {:status 400
-                    :body {:error {:message (str k " must be a positive whole number")
-                                   :type "invalid_request_error"}}}])))
-        [:beam_width :max_turns :token_budget]))
+  (when-let [problem (:error (contracts/decode contracts/run-request-contract body))]
+    [nil {:status 400 :body {:error problem}}]))
 
 (defn start-run!
   "Kick off a run in the background and return its id immediately.

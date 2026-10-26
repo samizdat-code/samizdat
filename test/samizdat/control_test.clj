@@ -45,6 +45,7 @@
             [samizdat.agent.resume :as resume]
             [samizdat.api.client :as api-client]
             [samizdat.api.control :as api-control]
+            [samizdat.contracts :as contracts]
             [samizdat.approval :as approval]
             [samizdat.cancel :as cancel]
             [samizdat.api.openai :as openai]
@@ -157,6 +158,17 @@
        (samizdat.symbolic/widest-beam
         {:requested 0 :concurrency 1 :turn-ms 100 :deadline-ms 1000
          :turns 1 :turn-tokens 10 :token-budget 100}))))
+
+(deftest fetch-turn-contract-drives-the-tool-boundary
+  (with-db [c]
+    (let [ctx {:conn c :tool-name "fetch_turn" :branch {:id "B1"}}
+          bad (base/run-tool (assoc ctx :args {:turn 1 :unknown true}))
+          missing (base/run-tool (assoc ctx :args {}))]
+      (is (= :mechanics (:category bad)))
+      (is (str/includes? (:result bad) "unknown-option"))
+      (is (= :mechanics (:category missing)))
+      (is (map? (:error (contracts/decode contracts/fetch-turn-contract
+                                           {:query "needle" :limit 0})))))))
 
 ;; --- the drain at the boundary ----------------------------------------------
 

@@ -38,6 +38,7 @@
             [samizdat.api.stream :as stream]
             [samizdat.approval :as approval]
             [samizdat.config :as config]
+            [samizdat.contracts :as contracts]
             [samizdat.engine.proc :as proc]
             [samizdat.llm.client :as llm-client]
             [samizdat.llm.message :as message]
@@ -338,6 +339,8 @@
 (def routes
   [{:method :get :path "/health" :response #(health %)}
    {:method :get :path "/slow" :response #(slow %)}
+   {:method :get :path "/v1/harness/contracts/run" :response
+    (fn [_] (json-response (contracts/schema contracts/run-request-contract)))}
    {:method :get :path "/v1/models" :response #(models %)}
    {:method :post :path "/v1/chat/completions" :response #(chat-completions %)}
    {:method :get :path "/v1/harness/gates" :response #(gate-table %)}
