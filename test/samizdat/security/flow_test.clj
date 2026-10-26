@@ -300,3 +300,23 @@
   (doseq [c ["sort -o out.txt a.txt" "sort --output=out.txt a.txt" "echo hi > f"
              "echo hi 2>&1 > f" "jolt -M:test 2>&1 | tail" "cat a 2> err.log"]]
     (is (seq (policy/shell-gaps untrusted c)) c)))
+
+(deftest unreadable-flow-history-fails-closed
+  (let [c (db/open! ":memory:")]
+    (with-redefs [db/fetch (fn [& _] (throw (ex-info "store unavailable" {})))]
+      (is (= {:trust :untrusted :audience :operator}
+             (select-keys (flow/run-label c "run") [:trust :audience]))))))
+
+(deftest malformed-flow-history-cannot-sanitize-run-output
+  (let [c (db/open! ":memory:")
+        rid (runs/start-run! c {:problem "p"})]
+    (try
+      (db/execute! c ["INSERT INTO events (run_id, kind, data, created_at)
+                       VALUES (?, 'flow', 'not-json', ?)" rid (db/now)])
+      (is (= {:trust :untrusted :audience :operator}
+             (select-keys (flow/run-label c rid) [:trust :audience])))
+      (let [encoded (flow/carried-by-run c rid)]
+        (is (some? encoded) "run-scoped tasks and memories keep a restrictive label")
+        (is (= {:trust :untrusted :audience :operator}
+               (select-keys (flow/decode encoded) [:trust :audience]))))
+      (finally (db/close c)))))

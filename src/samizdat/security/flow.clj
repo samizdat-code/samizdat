@@ -65,6 +65,10 @@
   "What a branch starts with: read nothing it should not act on or send."
   {:trust :trusted :audience :project})
 
+(def uncertain-label
+  "The label used when flow evidence cannot be read: never a clean one."
+  {:trust :untrusted :audience :operator})
+
 (defn- rank [chain v]
   (let [i (.indexOf ^java.util.List chain v)]
     ;; A value the chain does not know is the bottom: fail closed.
@@ -196,9 +200,9 @@
 
 (defn- notes [conn run-id]
   (into []
-        (keep (fn [row]
-                (try (json/read-str (str (:data row)) :key-fn keyword)
-                     (catch Throwable _ nil))))
+        (map (fn [row]
+               (try (json/read-str (str (:data row)) :key-fn keyword)
+                    (catch Throwable _ {:label uncertain-label}))))
         (db/fetch conn ["SELECT data FROM events WHERE run_id = ? AND kind = 'flow' ORDER BY id"
                         run-id])))
 
@@ -236,7 +240,7 @@
     (or (get @labels k)
         (let [l (try (from-journal conn run-id (branch-id ctx))
                      ;; A journal that cannot be read is not a clean label.
-                     (catch Throwable _ (meet top {:trust :untrusted :audience :operator})))]
+                     (catch Throwable _ (meet top uncertain-label)))]
           (swap! labels assoc k l)
           l))))
 
@@ -306,7 +310,8 @@
   (when (and conn run-id)
     (let [noted (reduce (fn [l {:keys [label]}] (meet l (note-label label)))
                         top
-                        (try (notes conn run-id) (catch Throwable _ [])))]
+                        (try (notes conn run-id)
+                             (catch Throwable _ [{:label uncertain-label}])))]
       (reduce (fn [l [[r _] v]] (if (= r run-id) (meet l v) l)) noted @labels))))
 
 (defn carried-by-run [conn run-id] (some-> (run-label conn run-id) encode))
