@@ -17,11 +17,10 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 (ns samizdat.agent.tools.mutate
-  "The self-modification tool: after the agent edits a cell in resources/cells,
-  `reload_cells` runs the mutation protocol (checkpoint -> reload -> validate
-  -> soak -> commit or rollback). A good edit goes live on the next turn; a bad
-  one is rolled back and the reason returned, so the agent can fix it. This is
-  how the harness safely changes its own behavior at runtime.
+  "The self-modification tool: cell saves run checkpoint -> reload -> validate
+  -> soak -> per-definition live probes -> battery -> commit or rollback.
+  `reload_cells` separately reloads the project's durable cells and checks the
+  active manifest. This is how the harness safely changes its own behavior.
 
   A separate namespace requiring only base, so it plugs into the tool surface
   without dragging the mutation machinery into the aggregator."
@@ -138,7 +137,7 @@
 
 (defn- commit-cell!
   "Propose `body` as cell `name`'s new text with rationale `why`, through
-  the mutation protocol — validate, soak, store — and say how it went. The
+  the mutation protocol — validate, soak, live-probe, store — and say how it went. The
   one save path: `save`, and the structural edits (karamazov-0e2c.24)."
   [{:keys [branch conn run-id] :as ctx} name body why]
   (let [active (active-name ctx)

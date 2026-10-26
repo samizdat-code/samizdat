@@ -229,6 +229,8 @@
             r (mut/propose-cell! (assoc (opts) :name "mini" :body body))]
         (is (= :committed (:status r)))
         (is (= 1 (:version r)))
+        (is (= [:mini/start] (mapv :id (:probes r))))
+        (is (every? :ok? (:probes r)))
         (is (= 100 (:n ((:handler (cell/get-cell :mini/start)) {} {:n 0})))
             "the committed proposal is live in the registry")
         (is (= body (us/body :cell "mini"))
@@ -245,7 +247,9 @@
       (us/bind! c)
       (let [body (str "(ns cells.mini (:require [mycelium.cell :as cell]))\n"
                       "(cell/defcell :mini/start {:doc \"s\" :pure true :requires []}\n"
-                      "  (fn [_ d] (update d :n + 100)))\n")
+                      "  (fn [_ d] (update d :n + 100)))\n"
+                      "(cell/defcell :mini/end {:doc \"e\" :pure true :requires []}\n"
+                      "  (fn [_ d] (assoc d :verdict :done)))\n")
             seen (atom nil)
             commit (atom nil)
             r (mut/propose-cell! (assoc (opts) :name "mini" :body body
@@ -253,8 +257,12 @@
                                                     (reset! seen cand)
                                                     (reset! commit commit!)
                                                     true)))]
-        (is (= :pending (:status r)) "validated and soaked, then handed to the battery")
-        (is (= {:kind :cell :name "mini" :text body} @seen) "the gate reads the candidate's text")
+        (is (= :pending (:status r)) "validated, soaked and probed, then handed to the battery")
+        (is (= {:kind :cell :name "mini" :text body}
+               (select-keys @seen [:kind :name :text])))
+        (is (= [:mini/start :mini/end] (mapv :id (:probes @seen)))
+            "the deferred candidate retains every per-id probe result")
+        (is (= (:probes @seen) (:probes r)))
         (is (nil? (us/body :cell "mini")) "nothing in the project's history yet")
         (is (= 1 (:n ((:handler (cell/get-cell :mini/start)) {} {:n 0})))
             "and the registry is back on the running cell until the verdict")
