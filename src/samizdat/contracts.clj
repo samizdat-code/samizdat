@@ -42,6 +42,7 @@
     :string (string? value)
     :non-blank-string (and (string? value) (not (str/blank? value)))
     :pos-int (pos-int? value)
+    :int (integer? value)
     false))
 
 (defn- field-problem [value k spec]
@@ -89,8 +90,7 @@
 
 (defcontract run-request-contract
   {:allow-unknown? false
-   :fields {:problem {:type :non-blank-string :required true
-                      :description "The task the run should perform"}
+   :fields {:problem {:type :non-blank-string :required true}
             :beam_width {:type :pos-int :description "Maximum initial branches"}
             :max_turns {:type :pos-int :description "Maximum rounds per branch"}
             :token_budget {:type :pos-int :description "Whole-run token budget"}
@@ -106,5 +106,5 @@
    :fields {:turn {:type :any :description "Turn number, or tN"}
             :query {:type :non-blank-string :description "Literal turn search"}
             :branch {:type :non-blank-string}
-            :limit {:type :pos-int}
-            :before {:type :pos-int}}})
+            :limit {:type :int}
+            :before {:type :int}}})

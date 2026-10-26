@@ -167,8 +167,9 @@
       (is (= :mechanics (:category bad)))
       (is (str/includes? (:result bad) "unknown-option"))
       (is (= :mechanics (:category missing)))
-      (is (map? (:error (contracts/decode contracts/fetch-turn-contract
-                                           {:query "needle" :limit 0})))))))
+      (is (= {:query "needle" :limit 0}
+             (:value (contracts/decode contracts/fetch-turn-contract
+                                       {:query "needle" :limit 0})))))))
 
 ;; --- the drain at the boundary ----------------------------------------------
 
