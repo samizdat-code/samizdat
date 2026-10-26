@@ -32,7 +32,8 @@
     2. project    <root>/.samizdat/<name>.edn
     3. served     a copy handed in by the caller — the TUI's name for the
                   file the harness holds, when the harness is elsewhere
-    4. global     <config-home>/samizdat/<name>.edn (~/.config by default)
+    4. global     the selected profile's config/<name>.edn, else
+                  <config-home>/samizdat/<name>.edn (~/.config by default)
     5. shipped    resources/<name>.edn, handed in by the caller
 
   highest first, each DEEP-MERGED over the ones below it. Maps merge key by
@@ -51,7 +52,8 @@
   (:refer-clojure :exclude [resolve])
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [samizdat.profiles :as profiles]))
 
 ;; --- the merge ---------------------------------------------------------------
 
@@ -77,9 +79,12 @@
       (some-> (getenv "HOME") (str "/.config"))))
 
 (defn global-dir
-  "Where a person's own layer lives: <config-home>/samizdat, or nil."
+  "Where a person's own layer lives: the selected profile's config directory,
+  else <config-home>/samizdat, or nil."
   []
-  (some-> (config-home) (str "/samizdat")))
+  (if-let [home (:home (profiles/current))]
+    (str home "/config")
+    (some-> (config-home) (str "/samizdat"))))
 
 (def ^:private legacy-vars
   "Variables that named a file before the general rule existed. Kept, below

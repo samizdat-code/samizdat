@@ -18,6 +18,7 @@
             [samizdat.store.journal :as journal]
             [samizdat.store.userspace :as store]
             [samizdat.system :as system]
+            [samizdat.profiles :as profiles]
             [samizdat.userspace :as us]
             [samizdat.agent.state :as state]
             [samizdat.agent.tools :as tools]
@@ -125,6 +126,65 @@
       (try (us/bind! other)
            (is (re-find #"defcell :loop/assemble" (us/body :cell "loop")))
            (finally (db/close other))))))
+
+(deftest profiles-isolate-state-share-only-references-and-serialize-writers
+  (let [base (str (jfs/create-temp-dir))
+        root (str (jfs/create-temp-dir))
+        secret (str base "/operator-secret.txt")
+        shared (str base "/shared-knowledge.edn")
+        previous-conn (us/conn)
+        previous-root (us/project-root)
+        personal-conn (db/open! ":memory:")]
+    (spit secret "do-not-copy-this-secret")
+    (spit shared "0")
+    (try
+      (let [work (profiles/create! base "work"
+                                   {:project-root root
+                                    :credentials [secret]
+                                    :knowledge [shared]})
+            work-body (str "(ns cells.loop (:require [mycelium.cell :as cell]))\n"
+                           "(cell/defcell :loop/profile-test {:doc \"p\" :pure true :requires []}\n"
+                           "  (fn [_ d] d))\n")]
+        (profiles/create! base "personal" {:project-root root})
+        (is (= #{"personal" "work"} (set (map :name (profiles/list base)))))
+        (is (= (:db-path work) (str (:home work) "/samizdat.sqlite3")))
+        (is (= [(.getCanonicalPath (io/file secret))] (:credentials work)))
+        (is (not (str/includes? (slurp (str (:home work) "/profile.edn"))
+                                "do-not-copy-this-secret"))
+            "the profile stores a path, never the credential contents")
+        (profiles/use! base "work" {:conn *conn* :project-root root})
+        (us/save! :cell "loop" work-body)
+        (is (= "work" (:name (profiles/current))))
+        (profiles/use! base "personal" {:conn personal-conn :project-root root})
+        (is (not= work-body (us/body :cell "loop")))
+        (profiles/use! base "work" {:conn *conn* :project-root root})
+        (is (= work-body (us/body :cell "loop"))
+            "switching restores the selected profile's independent workflow history")
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"active"
+                              (profiles/delete! base "work")))
+        (let [writers (doall
+                       (for [_ (range 2)]
+                         (future
+                           (dotimes [_ 20]
+                             (profiles/with-shared-lock shared
+                               (let [n (parse-long (slurp shared))]
+                                 (Thread/sleep 2)
+                                 (spit shared (str (inc n)))))))))]
+          (doseq [writer writers] (is (not= :timeout (deref writer 3000 :timeout))))
+          (is (= "40" (slurp shared)) "shared writers serialize around read/modify/write"))
+        (profiles/clear!)
+        (is (true? (profiles/delete! base "personal")))
+        (is (true? (profiles/delete! base "work")))
+        (is (= [] (profiles/list base)))
+        (is (= "do-not-copy-this-secret" (slurp secret)))
+        (is (= "40" (slurp shared)) "deleting a profile never deletes shared references"))
+      (finally
+        (profiles/clear!)
+        (us/bind! previous-conn)
+        (us/bind-root! previous-root)
+        (db/close personal-conn)
+        (jfs/delete-tree base)
+        (jfs/delete-tree root)))))
 
 (deftest userspace-the-harness-never-shipped-is-first-class
   ;; A cell the supervisor wrote has no template by definition.

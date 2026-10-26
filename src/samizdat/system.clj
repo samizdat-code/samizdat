@@ -52,6 +52,7 @@
             [samizdat.llm.registry :as registry]
             [samizdat.manifests :as manifests]
             [samizdat.peripherals :as peripherals]
+            [samizdat.profiles :as profiles]
             [mycelium.core :as myc]
             [samizdat.session :as session]
             [samizdat.steps :as steps]
@@ -155,7 +156,9 @@
   "start!'s body. `opened` receives the database connection the moment it
   exists, so a start that throws after it can close it."
   [handler overrides opened]
-  (let [cfg (config/load-config overrides)
+  (let [_ (when-let [name (:profile overrides)]
+            (profiles/use! (get-in overrides [:profiles :root]) name))
+        cfg (config/load-config overrides)
          ;; THE ACCEPTANCE SPEC IS CHECKED HERE, not at the ship gate. A
          ;; malformed criterion is the operator's mistake in the operator's
          ;; file, and a run that discovered it at `done` would wedge every
@@ -231,9 +234,11 @@
          ;; The directory also tells prompt assembly whether this run's
          ;; target is the harness itself — the sections about cells,
          ;; manifests and src-vs-resources are standing instruction about the
-         ;; wrong codebase on any other project (karamazov-8zk). The same
-         ;; value the drivers take :root from.
-         _ (userspace/bind-root! (get-in cfg [:run :root]))
+         ;; wrong codebase on any other project (karamazov-8zk). Without a
+         ;; profile this is the driver's :root; a profile uses its own binding
+         ;; seeded from that project's role map so workflow edits stay isolated.
+         _ (userspace/bind-root! (or (:workflow-root (profiles/current))
+                                     (get-in cfg [:run :root])))
          _ (bind-project! c (config/userspace-settings cfg))
          ;; And which MODEL, for the prompt file layer
          ;; (.samizdat/prompts/<provider>/<model>/). The configured :model is
