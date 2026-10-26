@@ -175,5 +175,6 @@
                     (swap! session assoc :ended? true :answer (not-empty (str final_answer)))
                     {:stopReason (stop-reason status)})
                   (if (cancelled?)
-                    {:stopReason "cancelled"}
+                    (do (swap! session assoc :ended? true)
+                        {:stopReason "cancelled"})
                     (do (sleep!) (recur))))))))))))

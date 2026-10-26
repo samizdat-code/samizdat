@@ -157,11 +157,12 @@
 (defn decide!
   "Answer one of them. `decision` is :allow / :deny for a permission
   question, :answer with `answers` for a questionnaire."
-  [base approval-id {:keys [decision note answers]}]
+  [base approval-id {:keys [decision note answers always]}]
   (POST base (str "/v1/approvals/" approval-id)
         (cond-> {:decision (name (or decision :deny))}
           note (assoc :note note)
-          answers (assoc :answers answers))))
+          answers (assoc :answers answers)
+          (true? always) (assoc :always true))))
 
 (defn turn-detail
   "One turn, whole — including the model's prose, which `branch-detail`

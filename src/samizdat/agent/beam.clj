@@ -172,35 +172,42 @@
                  :repl-session (if parent
                                  (route/fork-session (:root ctx) (:repl-session parent))
                                  (repl/new-session)))]
-    ;; The suffix on the row is what seed-branch opened on — or, for an
-    ;; inheriting child, what its parent's system message already carries.
-    (runs/open-branch! conn run-id {:branch-id id :parent-id parent-id
-                                    :created-at-turn turn
-                                    :role (:role b)
-                                    :prompt-suffix (:prompt-suffix ctx)})
-    ;; A child starts from its parent's conversation or thesis, so it starts
-    ;; with what its parent had read (samizdat.security.flow).
-    (when parent-id
-      (flow/inherit! {:conn conn :run-id run-id :turn turn} parent-id id))
-    (if thesis
-      (do (runs/set-thesis! conn run-id id thesis)
-          (-> b
-              (assoc :thesis thesis)
-              ;; The nudge is prompts/fork-thesis.md — runtime-editable, the
-              ;; same seam every other harness message reads through, and it
-              ;; has to say something different to a child that inherited its
-              ;; parent's history than to one starting the problem over.
-              (state/add-message
-               "user"
-               (prompt/render "fork-thesis"
-                 {:parent parent-id
-                  :goal (:goal thesis)
-                  :technique (:technique thesis)
-                  :crossover (crossover-block conn run-id parent-id)
-                  ;; :forked-at is stamped only by state/fork-branch, so its
-                  ;; presence IS the answer to "did this child inherit?".
-                  :inherited (some? (:forked-at b))}))))
-      b)))
+    (try
+      ;; The suffix on the row is what seed-branch opened on — or, for an
+      ;; inheriting child, what its parent's system message already carries.
+      (runs/open-branch! conn run-id {:branch-id id :parent-id parent-id
+                                      :created-at-turn turn
+                                      :role (:role b)
+                                      :prompt-suffix (:prompt-suffix ctx)})
+      ;; A child starts from its parent's conversation or thesis, so it starts
+      ;; with what its parent had read (samizdat.security.flow).
+      (when parent-id
+        (flow/inherit! {:conn conn :run-id run-id :turn turn} parent-id id))
+      (if thesis
+        (do (runs/set-thesis! conn run-id id thesis)
+            (-> b
+                (assoc :thesis thesis)
+                ;; The nudge is prompts/fork-thesis.md — runtime-editable, the
+                ;; same seam every other harness message reads through, and it
+                ;; has to say something different to a child that inherited its
+                ;; parent's history than to one starting the problem over.
+                (state/add-message
+                 "user"
+                 (prompt/render "fork-thesis"
+                   {:parent parent-id
+                    :goal (:goal thesis)
+                    :technique (:technique thesis)
+                    :crossover (crossover-block conn run-id parent-id)
+                    ;; :forked-at is stamped only by state/fork-branch, so its
+                    ;; presence IS the answer to "did this child inherit?".
+                    :inherited (some? (:forked-at b))}))))
+        b)
+      (catch Throwable e
+        (try (repl/close-session (:repl-session b))
+             (catch Throwable close-error
+               (log/warn "closing branch" id "eval session after initialization failed:"
+                         (ex-message close-error))))
+        (throw e)))))
 
 (defn ensure-scored
   "Fresh critic scores for every active branch, at most one sub-LLM call per
@@ -1089,7 +1096,13 @@
   [{:keys [conn config llm-adapter llm-config problem max-turns beam-width
            token-budget abort on-start seed-run quarantine complete
            serial-turns? oversight?] :as opts}]
-  (let [;; What the CALLER asked for, kept apart from the config's numbers:
+  (let [current-run-id (atom nil)
+        current-root (atom nil)
+        current-loop (atom nil)
+        current-repl-session (atom nil)
+        initial-branches (atom [])]
+    (try
+      (let [;; What the CALLER asked for, kept apart from the config's numbers:
         ;; triage below may size a run below the config, never over an
         ;; explicit request (karamazov-1wv9).
         asked-turns max-turns
@@ -1111,7 +1124,9 @@
         ;; `eval` fell through to repl/default-session — one process-wide
         ;; namespace, never closed, shared by every run on the box. That is
         ;; the leak provenance CR1-6 fixed on the other driver only.
-        root (or (get-in config [:run :root]) (System/getProperty "user.dir"))
+        root (let [r (or (get-in config [:run :root]) (System/getProperty "user.dir"))]
+               (reset! current-root r)
+               r)
         ;; What the problem already names, found in the tree before the first
         ;; turn (samizdat.agent.orient, karamazov-fp21.3). Computed ONCE per
         ;; run and stored on the row, so a resume reopens on the opening the
@@ -1145,16 +1160,18 @@
         ;; caller that fetches run-detail immediately sees zero branches for
         ;; a moment; the journal poller handles that, and it is the honest
         ;; picture — the branches genuinely do not exist yet.
-        run-id (runs/start-run! conn {:problem problem
-                                      ;; The alias, so a resume resolves the
-                                      ;; same declaration (api.control/resume!).
-                                      :provider (or (:provider-name llm-config)
-                                                    (:provider llm-config))
-                                      :model (:model llm-config)
-                                      :max-turns max-turns
-                                      :beam-width requested-width
-                                      :token-budget token-budget
-                                      :opening-context opening})
+        run-id (let [id (runs/start-run! conn {:problem problem
+                                               ;; The alias, so a resume resolves the
+                                               ;; same declaration (api.control/resume!).
+                                               :provider (or (:provider-name llm-config)
+                                                             (:provider llm-config))
+                                               :model (:model llm-config)
+                                               :max-turns max-turns
+                                               :beam-width requested-width
+                                               :token-budget token-budget
+                                               :opening-context opening})]
+                 (reset! current-run-id id)
+                 id)
         ;; THE IMPLEMENTER'S STREAM (RFC-012). Every cell that completes is
         ;; published as a step, onto the same bus the journal already uses.
         ;; An atom because the tracer is built once and read per step.
@@ -1183,7 +1200,9 @@
         llm-config (cond-> llm-config
                      (and (:reasoning-effort effort) (nil? (:reasoning-effort llm-config)))
                      (assoc :reasoning-effort (:reasoning-effort effort)))
-        loop-nm (workflow/active-loop-name config selected)
+        loop-nm (let [nm (workflow/active-loop-name config selected)]
+                  (reset! current-loop nm)
+                  nm)
         ;; Which loop drives this run, compiled to its per-turn slice. A
         ;; manifest that will not compile can no longer refuse the request —
         ;; the caller already has the id — so it ends the run on the record
@@ -1191,15 +1210,8 @@
         ;; nobody will finish.
         {loop-version :version turn-wf :compiled iterating? :iterating?
          loop-def :definition}
-        (try (workflow/compile-turn-loop conn loop-nm
-                                         {:on-trace (events/tracer run-id*)})
-             (catch Throwable e
-               (try (journal/note! conn run-id :run-failed
-                                   {:data {:error (ex-message e) :loop loop-nm
-                                           :where "compile-turn-loop"}})
-                    (runs/finish-run! conn run-id :failed nil)
-                    (catch Throwable _ nil))
-               (throw e)))
+        (workflow/compile-turn-loop conn loop-nm
+                                    {:on-trace (events/tracer run-id*)})
         ;; The manifest's OWN instructions, appended to the base system prompt
         ;; of every branch this run opens. Read from the loaded definition
         ;; rather than the file, so an agent's edit to the manifest is what
@@ -1297,9 +1309,11 @@
                                (journal/note! conn run-id :git-baseline {:data {:ref b}}))
                              b)
              ;; One eval namespace per RUN: defs the agent makes with `eval`
-             ;; persist across its turns and die with the run. run-rounds
-             ;; closes it in the same finally that disposes the sessions.
-             :repl-session (repl/new-session)
+             ;; persist across its turns and die with the run. Both this driver
+             ;; and run-rounds can release it; close-session is idempotent.
+             :repl-session (let [session (repl/new-session)]
+                             (reset! current-repl-session session)
+                             session)
              ;; {branch-id promise} of turns cancelled at their deadline and
              ;; not yet terminated, so advance-all never runs a branch beside
              ;; its own turn (karamazov-blt.18, RFC-013).
@@ -1342,26 +1356,12 @@
                 (turn-deadline-ms) "ms turn deadline and a token budget of"
                 token-budget "over" max-turns "turns"
                 "(gates.edn :beam-contention, config :run :token-budget)"))
-    (let [initial (mapv #(open-branch! ctx (str "B" (inc %)) nil nil 0) (range width))
-          result (try (run-rounds ctx initial 1)
-                      (catch Throwable e
-                        ;; A crash is an outcome too: a workflow that crashes
-                        ;; five times showing "no runs" in the selection
-                        ;; history taught the chooser nothing (blt.38). But
-                        ;; it is ITS OWN outcome, not a failed run: filed as
-                        ;; :failed, a provider outage taught select that the
-                        ;; manifest fails this project and taught the next
-                        ;; supervisor that the current tuning fails runs —
-                        ;; evidence about the harness, charged to the thing
-                        ;; being judged (karamazov-a6mj.1).
-                        (try (knowledge/record-workflow-outcome!
-                              conn {:workflow loop-nm :run-id run-id
-                                    :outcome :error})
-                             (userspace/record-run-outcome! :error run-id)
-                             (catch Throwable _ nil))
-                        (throw e))
-                      ;; The run's sealed commands end with it (verify).
-                      (finally (run-state/run-ended! run-id)))]
+    (let [initial (mapv (fn [n]
+                          (let [b (open-branch! ctx (str "B" (inc n)) nil nil 0)]
+                            (swap! initial-branches conj b)
+                            b))
+                        (range width))
+          result (run-rounds ctx initial 1)]
       ;; HOW THIS WORKFLOW WENT, for the next run's choice. A run only ever
       ;; sees its own attempt, so `direct attempts on this project keep getting
       ;; stuck` is not something any single run can notice — it has to be
@@ -1380,7 +1380,34 @@
       ;; Each learned decision point earns or loses its cascade on the
       ;; record so far, this run included (RFC-015).
       (learned/run-ended! conn run-id)
-      result)))
+      result))
+    (catch Throwable e
+      (when-let [run-id @current-run-id]
+        (when-not (cancel/control-signal? e)
+          ;; A crash is an :error outcome, never evidence that the workflow
+          ;; failed the task. Each part of the failure record is best effort so
+          ;; none can replace the exception that actually ended initialization.
+          (doseq [f [(fn []
+                       (journal/note! conn run-id :run-failed
+                                      {:data {:error (ex-message e)
+                                              :loop @current-loop
+                                              :where "run!"}}))
+                     (fn [] (runs/finish-run! conn run-id :failed nil))
+                     (fn []
+                       (when-let [loop-nm @current-loop]
+                         (knowledge/record-workflow-outcome!
+                          conn {:workflow loop-nm :run-id run-id :outcome :error})))
+                     (fn [] (userspace/record-run-outcome! :error run-id))]]
+            (try (f) (catch Throwable _ nil)))))
+      (throw e))
+    (finally
+      (when @current-run-id
+        (try (run-state/run-ended! @current-run-id) (catch Throwable _ nil))
+        (doseq [b @initial-branches] (dispose-branch-engines! b))
+        (when-let [session @current-repl-session]
+          (try (repl/close-session session) (catch Throwable _ nil)))
+        (when-let [root @current-root]
+          (try (route/release! root) (catch Throwable _ nil))))))))
 
 (defn summary
   "One line per branch, for logs and the run response."

@@ -15,11 +15,10 @@
 ;; along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 (ns samizdat.gui.ops
-  "The pure decisions behind gui.core's fetch/scroll wiring — extracted so
-  they are testable without loading a toolkit: glimmer/GTK deps live only
-  under the :gui alias, so the suite stays headless and cannot require
-  gui.core itself. Each fn answers one review-2026-08-2 finding:
-  scroll-props #6, refetch-after? #7, tail-target #8.")
+  "The decisions and toolkit-free action coordination behind gui.core's
+  wiring, extracted so they are testable without loading a toolkit:
+  glimmer/GTK deps live only under the :gui alias, so the suite stays
+  headless and cannot require gui.core itself.")
 
 (defn scroll-props
   "Props for the inspector's :scrolled wrapper. `:scroll-top` belongs ONLY
@@ -60,3 +59,60 @@
   (when (seq runs)
     (when-not (some #(= current (:id %)) runs)
       (some-> runs first :id))))
+
+(defn apply-intervention
+  "Fold an intervention response. Success clears only the unchanged sent
+  draft; failure preserves whatever is in the entry."
+  [s {:keys [ok error]} sent-draft branch]
+  (if ok
+    (cond-> (assoc s :notice
+                   (str "queued for " (or branch "the run")
+                        " — applies at the next turn boundary"))
+      (= sent-draft (:draft s)) (assoc :draft ""))
+    (assoc s :notice (str "failed: " (or error "request failed")))))
+
+(defn send-intervention!
+  [state branch intervene]
+  (let [{:keys [base-url run draft]} @state]
+    (swap! state assoc :notice (str "sending to " (or branch "the run") "…"))
+    (future
+      (let [response (try (intervene base-url run
+                                     {:branch-id branch :kind "message" :payload draft})
+                          (catch Throwable e {:ok false :error (ex-message e)}))]
+        (swap! state (fn [s]
+                       (if (= run (:run s))
+                         (apply-intervention s response draft branch)
+                         s)))
+        response))))
+
+(defn apply-start
+  "Fold a start response, preserving the form on failure and releasing the
+  in-flight guard on every outcome."
+  [s {:keys [ok body error]}]
+  (let [id (:run_id body)
+        s (assoc s :starting? false)]
+    (if (and ok id)
+      (assoc s :composing? false
+             :form {:problem "" :max-turns "" :beam-width ""
+                    :seed-run "" :model "" :reasoning-effort ""}
+             :notice (str "started " (subs (str id) 0 8)))
+      (assoc s :notice (str "could not start: " (or error "no run id came back"))))))
+
+(defn start!
+  "Claim and submit one new run. A repeat while the request is in flight
+  returns nil without issuing another request."
+  [state body notice start-run on-success]
+  (let [[previous] (swap-vals! state
+                               (fn [s]
+                                 (if (:starting? s)
+                                   s
+                                   (assoc s :starting? true :notice notice))))]
+    (when-not (:starting? previous)
+      (future
+        (let [response (try (start-run (:base-url previous) body)
+                            (catch Throwable e {:ok false :error (ex-message e)}))
+              id (get-in response [:body :run_id])]
+          (swap! state apply-start response)
+          (when (and (:ok response) id)
+            (on-success id))
+          response)))))

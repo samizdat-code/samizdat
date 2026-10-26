@@ -36,6 +36,8 @@
 (def intervene!     client/intervene!)
 (def abort!         client/abort!)
 (def resume!        client/resume!)
+(def approvals      client/approvals)
+(def decide!        client/decide!)
 (def poll-step      client/poll-step)
 (def start-poller!  client/start-poller!)
 

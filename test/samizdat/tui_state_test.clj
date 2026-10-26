@@ -33,6 +33,18 @@
     (is (= [] (:trace s)))
     (is (= #{} (:expanded s)))))
 
+(deftest clearing-a-sent-draft-compares-the-expanded-current-input
+  (let [sent "look at: one\ntwo\nthree\nfour"
+        placeholder "look at: [4 lines pasted #1]"
+        s (assoc (st/initial "b") :input placeholder
+                 :pastes {"[4 lines pasted #1]" "one\ntwo\nthree\nfour"})]
+    (is (= "" (:input (st/clear-sent-draft s sent))))
+    (is (empty? (:pastes (st/clear-sent-draft s sent))))
+    (let [changed (st/set-input s (str placeholder " plus more"))]
+      (is (= changed (st/clear-sent-draft changed sent))
+          "newer typing is not erased"))
+    (is (= s (st/clear-sent-draft s "a different directive")))))
+
 (deftest steps-append-to-the-trace-and-carry-the-cursor
   (let [s (-> (st/initial "b")
               (st/apply-steps {:ok true :body {:steps [{:seq 1 :node "start"}
@@ -126,6 +138,43 @@
     (is (nil? (:branch s)))
     (is (nil? (:branch-id s)))
     (is (nil? (:detail s)))))
+
+(deftest selecting-a-run-clears-run-scoped-dialog-and-live-state
+  (let [s (-> (st/initial "b")
+              (assoc :approvals [{:id "old-approval"}]
+                     :approval-id "old-approval"
+                     :question-cursor 1
+                     :question-answers ["old answer"]
+                     :question-selected #{0}
+                     :question-option 2
+                     :reply {:kind :deny-note :id "old-approval"}
+                     :live {"B1" {:text "old delta"}}
+                     :expanded #{"old-fold"}
+                     :input "unrelated draft"
+                     :history ["earlier input"]
+                     :project {:name "project"})
+              (st/select-run "r2"))]
+    (is (empty? (:approvals s)))
+    (is (nil? (:approval-id s)))
+    (is (zero? (:question-cursor s)))
+    (is (= [] (:question-answers s)))
+    (is (= #{} (:question-selected s)))
+    (is (zero? (:question-option s)))
+    (is (nil? (:reply s)))
+    (is (empty? (:live s)) "the old run's streaming delta is not visible")
+    (is (= #{} (:expanded s)))
+    (is (nil? (st/dialog-action s {:char "y"}))
+        "the old approval cannot be decided after the switch")
+    (is (= "unrelated draft" (:input s)))
+    (is (= ["earlier input"] (:history s)))
+    (is (= {:name "project"} (:project s)))))
+
+(deftest an-event-for-another-run-is-dropped-before-any-state-change
+  (let [s (assoc (st/initial "b") :run-id "new-run" :branch-id "B1" :journal-cursor 17)
+        [after wants] (st/apply-event s {:id "99" :event "turn"
+                                         :data {:run_id "old-run" :branch_id "B1"}})]
+    (is (= s after) "in particular, the old event cannot advance the journal cursor")
+    (is (= #{} wants) "and it cannot request a refresh for the selected run")))
 
 (deftest selecting-a-branch-drops-the-turns-of-the-last-one
   (let [s (-> (st/initial "b")
@@ -404,6 +453,81 @@
       (is (nil? (:run-id s)))
       (is (= "x" (:input s)))
       (is (not-empty (str (:error s)))))))
+
+(deftest a-deferred-second-start-sends-one-request-and-releases-the-guard
+  (doseq [[outcome response] [["success" {:ok true :body {:run_id "r7"}}]
+                              ["failure" {:ok false :error "HTTP 503"}]]]
+    (testing outcome
+      (let [state (atom (st/set-input (st/initial "b") "build a parser"))
+            calls (atom [])
+            requested (promise)
+            answer (promise)
+            start-run (fn [base body]
+                        (swap! calls conj [base body])
+                        (deliver requested true)
+                        @answer)
+            pending (st/start! state "build a parser" start-run (fn []))]
+        (is (true? @requested))
+        (is (true? (:starting? @state)))
+        (is (nil? (st/start! state "build a parser" start-run (fn []))))
+        (is (= 1 (count @calls)))
+        (deliver answer response)
+        (is (= response @pending))
+        (is (false? (:starting? @state)))
+        (is (= 1 (count @calls)))))))
+
+(deftest a-blank-repeat-does-not-replace-the-starting-notice
+  (let [state (atom (assoc (st/initial "b") :starting? true :notice "starting…"))
+        before @state]
+    (is (nil? (st/start! state "   "
+                         (fn [& _] (throw (ex-info "must not start" {})))
+                         (fn []))))
+    (is (= before @state))))
+
+(deftest simultaneous-starts-launch-only-one-request
+  (let [state (atom (st/set-input (st/initial "b") "build a parser"))
+        calls (atom 0)
+        requested (promise)
+        second-request (promise)
+        answer (promise)
+        entered (atom 0)
+        both (promise)
+        release (promise)
+        swap* swap!
+        swap-vals* swap-vals!
+        pause (fn []
+                (when (= 2 (swap! entered inc)) (deliver both true))
+                (deref both 1000 nil)
+                (deref release 1000 nil))
+        pause-transition (fn [f]
+                           (fn [s & args]
+                             (let [next-state (apply f s args)]
+                               (when (and (not (:starting? s)) (:starting? next-state))
+                                 (pause))
+                               next-state)))
+        start-run (fn [_ _]
+                    (let [n (swap! calls inc)]
+                      (deliver requested true)
+                      (when (= 2 n) (deliver second-request true))
+                      @answer))]
+    (with-redefs [swap! (fn [a f & args]
+                          (apply swap* a (pause-transition f) args))
+                  swap-vals! (fn [a f & args]
+                               (apply swap-vals* a (pause-transition f) args))]
+      (let [a (future (st/start! state "build a parser" start-run (fn [])))
+            b (future (st/start! state "build a parser" start-run (fn [])))]
+        (is (= true (deref both 1000 ::timeout)))
+        (deliver release true)
+        (let [pending-a (deref a 1000 ::timeout)
+              pending-b (deref b 1000 ::timeout)]
+          (is (not= ::timeout pending-a))
+          (is (not= ::timeout pending-b))
+          (is (= true (deref requested 1000 ::timeout)))
+          (deref second-request 100 nil)
+          (is (= 1 @calls))
+          (deliver answer {:ok false :error "HTTP 503"})
+          (doseq [pending [pending-a pending-b]]
+            (when (future? pending) @pending)))))))
 
 (deftest a-notice-is-not-an-error
   ;; The status line paints :error red. "starting…" is not a failure and must

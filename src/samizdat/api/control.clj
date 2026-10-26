@@ -161,6 +161,7 @@
   (let [adapter (registry/adapter-for (:provider llm-config))
         abort (atom false)
         promised (promise)
+        startup-owner (atom :pending)
         cancel* (atom nil)
         ;; The run is a TASK (RFC-013): abort cancels it, and the cancel is
         ;; observed at the round's next step or a turn's next check. The abort
@@ -179,10 +180,13 @@
                                           :quarantine quarantine
                                           :abort abort
                                           :on-start (fn [rid]
-                                                      (swap! active assoc rid
-                                                             {:abort abort
-                                                              :cancel (fn [] (some-> @cancel* (apply [])))})
-                                                      (deliver promised rid))})]
+                                                      (if (compare-and-set! startup-owner :pending :delivering)
+                                                        (do
+                                                          (swap! active assoc rid
+                                                                 {:abort abort
+                                                                  :cancel (fn [] (some-> @cancel* (apply [])))})
+                                                          (deliver promised rid))
+                                                        (runs/finish-run! conn rid :aborted nil)))})]
                         (swap! active dissoc (:run-id r))
                         ;; Release anything parked on a question this run
                         ;; asked. Without it an aborted or finished run
@@ -210,7 +214,10 @@
         ;; now creates the row and fires on-start before that call, so the
         ;; wait here is the insert and the opening-context walk.
         start-deadline (lexicon/policy :run-start-deadline-ms)
-        run-id (deref promised start-deadline nil)]
+        run-id (if-let [rid (deref promised start-deadline nil)]
+                 rid
+                 (when-not (compare-and-set! startup-owner :pending :timed-out)
+                   @promised))]
     (if run-id
       ;; Wrapped in :body like resume, so one route shape serves both the
       ;; success and the refusal and neither has to be special-cased.
@@ -222,10 +229,13 @@
       ;; service it. Answering 200 with an error body made a caller that checks
       ;; the status code read this as a started run, which is why gui.api's
       ;; start-run! had to unwrap the body to find out otherwise.
-      {:status 503
-       :body {:error {:message (str/trim
-                                (prompt/render "run-start-timeout"
-                                               {:seconds (quot start-deadline 1000)}))}}})))))))
+      (do
+        (reset! abort true)
+        ((:cancel started))
+        {:status 503
+         :body {:error {:message (str/trim
+                                  (prompt/render "run-start-timeout"
+                                                 {:seconds (quot start-deadline 1000)}))}}}))))))))
 
 (defn abort!
   "Stop a run without asking it to cooperate. Cancels the run task, which is
@@ -318,43 +328,49 @@
           [before _] (swap-vals! active #(if (contains? % run-id) % (assoc % run-id {:abort abort})))]
       (if (contains? before run-id)
         (refuse "is still running")
-      (do
-      ;; What a person typed after interrupting it (Esc in the TUI): queued
-      ;; as a directive before the resume starts, so the first boundary of
-      ;; the resumed run applies it. intervene! refuses a run that has ended,
-      ;; and an interrupted one has, until this resume.
-      (when-let [m (not-empty (str/trim (str (or (:message body) (get body "message")))))]
-        (interventions/submit! conn run-id {:kind "message" :payload m :issued-by "human"}))
       (let [cancel* (atom nil)
-            started (cancel/start!
-                     (cancel/spawn
-                      (fn []
-                        (try
-                          (swap! active assoc run-id
-                                 {:abort abort
-                                  :cancel (fn [] (some-> @cancel* (apply [])))})
-                          (let [r (resume/resume! {:conn conn :config config
-                                                   :llm-adapter adapter
-                                                   :llm-config llm-config
-                                                   :run-id run-id :abort abort
-                                                   :max-turns max-turns})]
-                            (swap! active dissoc run-id)
-                            r)
-                          (catch Throwable e
-                            (if (cancel/control-signal? e)
-                              (log/info "resume aborted:" (ex-message e))
-                              (log/error "resume failed:" (ex-message e)))
-                            (swap! active dissoc run-id)
-                            {:status :error :error (ex-message e)})))))]
-        (reset! cancel* (:cancel started)))
-      ;; The budget this resume is running under, from what the caller asked
-      ;; for, falling back to the row as it stood BEFORE the future started.
-      ;; Reading the row here unconditionally raced the resume that is
-      ;; rewriting it: the answer was whichever thread won, and an explicit
-      ;; max_turns extension was reported as the old budget more often than
-      ;; not.
-      {:body {:run_id run-id :status "resuming"
-              :max_turns (or max-turns (:max_turns (runs/get-run conn run-id)))}}))))))))
+            started (try
+                      ;; What a person typed after interrupting it (Esc in the TUI):
+                      ;; queue it before the resumed run's first boundary.
+                      (when-let [m (not-empty (str/trim (str (or (:message body) (get body "message")))))]
+                        (interventions/submit! conn run-id {:kind "message" :payload m :issued-by "human"}))
+                      (cancel/start!
+                       (cancel/spawn
+                        (fn []
+                          (try
+                            (swap! active assoc run-id
+                                   {:abort abort
+                                    :cancel (fn [] (some-> @cancel* (apply [])))})
+                            (resume/resume! {:conn conn :config config
+                                             :llm-adapter adapter
+                                             :llm-config llm-config
+                                             :run-id run-id :abort abort
+                                             :max-turns max-turns})
+                            (catch Throwable e
+                              (if (cancel/control-signal? e)
+                                (log/info "resume aborted:" (ex-message e))
+                                (log/error "resume failed:" (ex-message e)))
+                              {:status :error :error (ex-message e)})
+                            (finally
+                              (swap! active dissoc run-id)
+                              (approval/abandon! run-id))))))
+                      (catch Throwable e
+                        (swap! active (fn [m]
+                                        (if (identical? abort (:abort (get m run-id)))
+                                          (dissoc m run-id)
+                                          m)))
+                        (approval/abandon! run-id)
+                        (throw e)))]
+        (reset! cancel* (:cancel started))
+        ;; The budget this resume is running under, from what the caller asked
+        ;; for, falling back to the row as it stood BEFORE the future started.
+        ;; Reading the row here unconditionally raced the resume that is
+        ;; rewriting it: the answer was whichever thread won, and an explicit
+        ;; max_turns extension was reported as the old budget more often than
+        ;; not.
+        {:body {:run_id run-id :status "resuming"
+                :max_turns (or max-turns (:max_turns (runs/get-run conn run-id)))}}))))))))
+
 (defn- grant-pattern
   "The pattern from a grant payload. Accepts a map (what body-json yields), a
   bare string, or nil. Blank is not a pattern — an unset form posts empty

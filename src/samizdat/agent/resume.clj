@@ -126,7 +126,9 @@
             [samizdat.agent.state :as state]
             [samizdat.agent.storm :as storm]
             [samizdat.agent.tools.tasks :as task-tool]
+            [samizdat.cancel :as cancel]
             [samizdat.repl :as repl]
+            [samizdat.repl.route :as route]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]
             [samizdat.store.tasks :as tasks]
@@ -334,7 +336,10 @@
     ;; The row said 'interrupted' (or 'failed'); it is about to be running
     ;; again, and stalled? only watches runs whose status says so.
     (runs/mark-running! conn run-id)
-    (when (and max-turns (> max-turns (:max_turns run)))
+    (let [current-root (atom nil)
+          current-repl-session (atom nil)]
+      (try
+        (when (and max-turns (> max-turns (:max_turns run)))
       (runs/extend-budget! conn run-id max-turns)
       (doseq [b (runs/branches conn run-id)
               :when (= "exhausted" (:status b))]
@@ -349,7 +354,9 @@
           ;; and needs the same file root; the eval session is genuinely new,
           ;; because the old process's namespace died with it and nothing in
           ;; the journal can rebuild an in-image binding.
-          root (or (get-in config [:run :root]) (System/getProperty "user.dir"))
+          root (let [r (or (get-in config [:run :root]) (System/getProperty "user.dir"))]
+                 (reset! current-root r)
+                 r)
           ;; The same compiled per-turn manifest run! drives, recompiled here:
           ;; a resume enters run-rounds directly, so without this it would
           ;; silently fall back to the bare composition and finish a critic or
@@ -377,7 +384,9 @@
                ;; it always was.
                :git-baseline (or (:ref (journal/last-note conn run-id :git-baseline))
                                  (gitdiff/baseline root))
-               :repl-session (repl/new-session)
+               :repl-session (let [session (repl/new-session)]
+                               (reset! current-repl-session session)
+                               session)
                :abort abort}
           ;; :verify-cmd rides on the policy so the rebuilt window skips
           ;; verify calls exactly the way the live path never notes them.
@@ -415,5 +424,18 @@
           ;; the loop continues one past it. max-turns is the ORIGINAL budget.
           start-turn (inc (reduce max 0 (map :turn turn-rows)))]
       ;; The seal made above ends with the resumed run (verify/unseal-run!).
-      (try (beam/run-rounds ctx branches start-turn)
-           (finally (run-state/run-ended! run-id))))))
+      (beam/run-rounds ctx branches start-turn))
+    (catch Throwable e
+      (when-not (cancel/control-signal? e)
+        (doseq [f [(fn []
+                     (journal/note! conn run-id :run-failed
+                                    {:data {:error (ex-message e) :where "resume!"}}))
+                   (fn [] (runs/finish-run! conn run-id :failed nil))]]
+          (try (f) (catch Throwable _ nil))))
+      (throw e))
+    (finally
+      (try (run-state/run-ended! run-id) (catch Throwable _ nil))
+      (when-let [session @current-repl-session]
+        (try (repl/close-session session) (catch Throwable _ nil)))
+      (when-let [root @current-root]
+        (try (route/release! root) (catch Throwable _ nil))))))))

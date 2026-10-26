@@ -72,6 +72,28 @@
     (is (= {:stopReason "end_turn"} (agent/run-prompt! io session [{:type "text" :text "also check the docs"}])))
     (is (= [["run-1" "also check the docs"]] @steered))))
 
+(deftest cancellation-ends-the-run-before-the-next-prompt
+  (let [started (atom [])
+        {:keys [io steered]}
+        (fake-io {:batches [[]
+                            [{:kind "run-finished" :data {:status "done"}}]]
+                  :answer "Second answer."})
+        io (assoc io
+                  :start-run! (fn [text]
+                                (swap! started conj text)
+                                (str "run-" (count @started)))
+                  :cancelled? #(= 1 (count @started)))
+        session (atom {:id "s1"})]
+    (is (= {:stopReason "cancelled"}
+           (agent/run-prompt! io session [{:type "text" :text "first"}])))
+    (is (true? (:ended? @session)))
+    (is (nil? (:answer @session)) "a cancelled run retains no partial answer")
+    (is (= {:stopReason "end_turn"}
+           (agent/run-prompt! io session [{:type "text" :text "second"}])))
+    (is (= ["first" "second"] @started) "the next prompt starts a new run without cancelled context")
+    (is (empty? @steered) "the next prompt never intervenes on the cancelled run")
+    (is (= "run-2" (:run-id @session)))))
+
 (deftest the-protocol-routes-requests-by-method
   (let [out (atom [])
         conn (main/connection #(swap! out conj (json/read-str % :key-fn keyword)))]

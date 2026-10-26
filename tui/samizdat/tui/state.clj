@@ -19,16 +19,18 @@
 (ns samizdat.tui.state
   "The view state: what the pollers fold into and what the widgets read.
 
-  Every function here is pure, which is what leaves the run loop as wiring
-  and puts the TUI's actual policy — cursors, what a disconnect does, what
-  changing run resets — under test with no terminal and no server.
+  The transitions are pure and the asynchronous start coordination is
+  toolkit-free, which leaves the run loop as wiring and puts the TUI's actual
+  policy — cursors, what a disconnect does, what changing run resets — under
+  test with no terminal and no server.
 
   The state is one flat map on purpose. A widget takes what it needs from it
   and the layout never has to name data, only widgets; that is what lets a
   user put a panel anywhere without anything being rewired."
   (:refer-clojure :exclude [newline])
   (:require [clojure.string :as str]
-            [samizdat.api.sse :as sse]))
+            [samizdat.api.sse :as sse]
+            [samizdat.approval-view :as approval-view]))
 
 (def handler-keys
   "Every action a widget may ask the loop to take.
@@ -52,6 +54,7 @@
 (defn initial [base]
   {:base base
    :connected? false
+   :starting? false
    :error nil
    ;; Whether :error is an outage, which the next poll that gets through
    ;; clears, rather than an action's refusal, which it must not.
@@ -94,6 +97,7 @@
    :turn-text {}
    :approvals []
    :approval-id nil
+   :decision-pending nil
    :question-cursor 0
    :question-answers []
    ;; The row the keyboard is on in the question on screen: an option, or
@@ -237,34 +241,16 @@
 
     :else (-> s connected (assoc :branch (dissoc body :since)))))
 
-(defn apply-approvals
-  "Fold the questions waiting on a person.
+(defn apply-approvals [s r]
+  (approval-view/apply-approvals s r))
 
-  The cursor and the answers collected so far are reset when the question at
-  the head CHANGES — a questionnaire half answered must survive the poll that
-  arrives in the middle of answering it, and a new question must not inherit
-  the previous one's position."
-  [s {:keys [ok body] :as r}]
-  (if-not ok
-    (disconnected s r)
-    (let [as (vec (:approvals body))
-          head (:id (first as))]
-      (cond-> (assoc (connected s) :approvals as)
-        (not= head (:approval-id s))
-        (assoc :approval-id head :question-cursor 0 :question-answers []
-               :question-selected #{} :question-option 0 :reply nil)))))
+(defn answer-question [s answers]
+  (approval-view/answer-question s answers))
 
-(defn answer-question
-  "Record an answer and move to the next question, or say the set is done.
-
-  Returns `[state done?]` — the caller sends the answers only when done?, so
-  a half-answered questionnaire is never submitted."
-  [s answers]
-  (let [total (count (:questions (first (:approvals s))))
-        next-i (count answers)]
-    [(assoc s :question-answers (vec answers) :question-cursor (min next-i (dec total))
-            :question-selected #{} :question-option 0 :reply nil)
-     (>= next-i total)]))
+(defn answer-question-for [s id answers]
+  (if (= id (:approval-id s))
+    (answer-question s answers)
+    [s false]))
 
 (defn apply-turn-text
   "Fold one turn's full row — the prose the branch listing leaves out.
@@ -328,41 +314,31 @@
   run's panels showing the old run's steps and then skipped everything
   before the stale number."
   [s run-id]
-  (assoc s
-         :run-id run-id
-         :detail nil
-         :branch-id nil
-         :branch nil
-         :trace []
-         :steps-cursor 0
-         :trace-dropped 0
-         :journal-cursor 0
-         ;; Turn numbers restart per branch, so prose kept across a switch
-         ;; would caption the new run's turn 3 with the old run's words.
-         :turn-text {}))
+  (-> s
+      (assoc :run-id run-id
+             :detail nil
+             :branch-id nil
+             :branch nil
+             :trace []
+             :steps-cursor 0
+             :trace-dropped 0
+             :journal-cursor 0
+             :decision-pending nil
+             ;; Turn numbers restart per branch, so prose kept across a switch
+             ;; would caption the new run's turn 3 with the old run's words.
+             :turn-text {})
+      approval-view/reset-run))
 
 (defn select-branch
   "A person's choice of branch: the auto-follow in apply-detail leaves it."
   [s branch-id]
   (assoc s :branch-id branch-id :branch nil :turn-text {} :branch-auto? false))
 
-(defn current-question
-  "The question on screen: the head questionnaire's, at the cursor. nil with
-  none."
-  [s]
-  (let [qs (vec (:questions (first (:approvals s))))]
-    (when (seq qs)
-      (nth qs (min (or (:question-cursor s) 0) (dec (count qs)))))))
+(defn current-question [s]
+  (approval-view/current-question s))
 
-(defn reply-kind
-  "What the compose box's next Enter is, while a dialog holds it: the deny
-  note, a typed answer, or nil — a directive. An open-ended question (no
-  options) takes its answer there without being asked: the box has the
-  focus, and a second text box inside the dialog had to be clicked first."
-  [s]
-  (or (:kind (:reply s))
-      (let [q (current-question s)]
-        (when (and q (empty? (:options q))) :custom-answer))))
+(defn reply-kind [s]
+  (approval-view/reply-kind s))
 
 (defn- questionnaire-key
   "A key over a questionnaire with options (dirge's `question`): the cursor
@@ -425,24 +401,17 @@
               "d" [:reply :deny-note (:id a)]
               nil))))
 
-(defn move-option
-  "Put the questionnaire's cursor on row `i`."
-  [s i]
-  (assoc s :question-option i))
+(defn move-option [s i]
+  (approval-view/move-option s i))
 
-(defn start-reply
-  "Give the compose box to a dialog: its next Enter is the deny note or the
-  custom answer, not a directive."
-  [s kind id]
-  (assoc s :reply {:kind kind :id id} :input ""))
+(defn start-reply [s kind id]
+  (approval-view/start-reply s kind id))
 
-(defn cancel-reply [s] (assoc s :reply nil))
+(defn cancel-reply [s]
+  (approval-view/cancel-reply s))
 
-(defn toggle-option
-  "Tick or untick option `i` of a multi-select question."
-  [s i]
-  (update s :question-selected (fn [sel] (let [sel (set sel)]
-                                           (if (contains? sel i) (disj sel i) (conj sel i))))))
+(defn toggle-option [s i]
+  (approval-view/toggle-option s i))
 
 (defn toggle-fold [s id]
   (update s :expanded (fn [e] (let [e (set e)]
@@ -638,6 +607,13 @@
   [s text]
   (reduce (fn [t [tag body]] (str/replace t tag body)) (str text) (:pastes s)))
 
+(defn clear-sent-draft
+  "Clear the compose box only when its expanded value is still the sent text."
+  [s sent]
+  (if (= (expand-pastes s (:input s)) sent)
+    (clear-input s)
+    s))
+
 (defn newline-key?
   "Whether a key event means a line break in the compose box: Ctrl+J, Alt+Enter
   (ESC then CR, as most terminals send it) or Shift+Enter where the terminal
@@ -719,10 +695,33 @@
   [s]
   (= "interrupted" (str (get-in s [:detail :run :status]))))
 
-(declare note-local)
+(declare note-local apply-start)
+
+(defn start!
+  "Claim and submit one run start. A repeat while the request is in flight
+  returns nil without issuing another request."
+  [state text start-run after]
+  (if (:starting? @state)
+    nil
+    (if-let [problem (steer-payload text)]
+      (let [[previous] (swap-vals! state
+                                   (fn [s]
+                                     (if (:starting? s)
+                                       s
+                                       (note-notice (assoc s :starting? true) "starting…"))))]
+        (when-not (:starting? previous)
+          (let [base (:base previous)
+                body (merge {:problem problem} (:next-llm previous))]
+            (future
+              (let [response (try (start-run base body)
+                                  (catch Throwable e {:ok false :error (ex-message e)}))]
+                (swap! state apply-start response)
+                (after)
+                response)))))
+      (swap! state note-error "type a problem statement first"))))
 
 (defn apply-start
-  "Fold the answer to POST /v1/runs.
+  "Fold the answer to POST /v1/runs and release the in-flight start guard.
 
   A started run becomes the selected one, so the panels attach to what was
   just asked for rather than leaving the user to find it in the picker. A
@@ -730,7 +729,8 @@
   beam does not come up inside its window, and clearing the box would make a
   retry mean retyping the paragraphs that were refused."
   [s {:keys [ok body error]}]
-  (let [id (:run_id body)]
+  (let [id (:run_id body)
+        s (assoc s :starting? false)]
     (if (and ok (not-empty (str id)))
       (-> s
           (select-run (str id))
@@ -790,23 +790,27 @@
 (defn apply-event
   "Fold one pushed event into the state. Returns [state wants]: `wants` is
   the set of things the event changed that the stream does not carry —
-  :detail, :branch, :approvals, :runs — for the caller to fetch, coalesced."
+  :detail, :branch, :approvals, :runs — for the caller to fetch, coalesced.
+  An event naming another run changes nothing and requests nothing."
   [s {:keys [id event data]}]
   (let [;; Off the wire an event's data is the JSON text it was sent as.
-        data (if (string? data) (:data (sse/parse-data data)) data)
-        s (cond-> s id (assoc :journal-cursor (or (parse-long (str id)) (:journal-cursor s))))]
-    (case event
-      "step" [(update s :trace (fn [t] (let [t (conj (vec t) (step-entry data))]
-                                         (if (> (count t) max-trace)
-                                           (subvec t (- (count t) max-trace))
-                                           t))))
-              #{}]
-      "approval" [s #{:approvals}]
-      "delta" [(live-delta s data) #{}]
-      ;; A branch's turn row is in: it holds what the live preview showed.
-      [(cond-> s (= "turn" event) (update :live dissoc (:branch_id data)))
-       (cond-> (get refresh-for event #{:detail})
-         (and (:branch_id data) (= (:branch_id data) (:branch-id s))) (conj :branch))])))
+        data (if (string? data) (:data (sse/parse-data data)) data)]
+    (if (and (contains? data :run_id)
+             (not= (str (:run_id data)) (str (:run-id s))))
+      [s #{}]
+      (let [s (cond-> s id (assoc :journal-cursor (or (parse-long (str id)) (:journal-cursor s))))]
+        (case event
+          "step" [(update s :trace (fn [t] (let [t (conj (vec t) (step-entry data))]
+                                             (if (> (count t) max-trace)
+                                               (subvec t (- (count t) max-trace))
+                                               t))))
+                  #{}]
+          "approval" [s #{:approvals}]
+          "delta" [(live-delta s data) #{}]
+          ;; A branch's turn row is in: it holds what the live preview showed.
+          [(cond-> s (= "turn" event) (update :live dissoc (:branch_id data)))
+           (cond-> (get refresh-for event #{:detail})
+             (and (:branch_id data) (= (:branch_id data) (:branch-id s))) (conj :branch))])))))
 
 (defn stream-status
   "Note the event stream's state: `status` 200 is up, anything else down."

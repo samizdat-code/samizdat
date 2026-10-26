@@ -41,6 +41,7 @@
             [ftxui.render :as ftxui-render]
             [samizdat.api.client :as client]
             [samizdat.api.sse :as sse]
+            [samizdat.tui.actions :as actions]
             [samizdat.tui.commands :as cmd]
             [samizdat.tui.layout :as layout]
             [samizdat.tui.onboarding :as onboarding]
@@ -68,7 +69,16 @@
 
 ;; The handlers below force a poll after acting, and the poller is defined
 ;; further down where it belongs beside the loop.
-(declare poll-once!)
+(declare poll-once! say!)
+
+(defn- action-env []
+  {:state state
+   :client {:intervene! client/intervene!
+            :abort! client/abort!
+            :resume! client/resume!
+            :decide! client/decide!}
+   :poll! #(poll-once!)
+   :say! say!})
 
 ;; --- what the user can do ----------------------------------------------------
 
@@ -78,25 +88,7 @@
   seam the supervisor uses. On a run stopped with Esc it is what to do
   instead: the run resumes with it as its first directive."
   [text]
-  (let [{:keys [base run-id branch-id]} @state]
-    (when-let [payload (st/steer-payload text)]
-      (cond
-        (not run-id)
-        (swap! state st/note-error "no run selected")
-
-        (st/interrupted? @state)
-        (do (swap! state #(-> % st/clear-input (st/note-notice "resuming…")))
-            (future
-              (let [r (client/resume! base run-id {:message payload})]
-                (swap! state st/note-error (when-not (:ok r) (:error r)))
-                (poll-once!))))
-
-        :else
-        (let [r (client/intervene! base run-id {:branch-id branch-id
-                                                :kind "message"
-                                                :payload payload})]
-          (swap! state #(-> % (st/note-error (when-not (:ok r) (:error r)))
-                            (cond-> (:ok r) st/clear-input))))))))
+  (actions/steer! (action-env) text))
 
 (defn- start!
   "Start a run on the compose box, as its problem statement.
@@ -107,62 +99,37 @@
   it has room for one; this is one line, and the statement is the part that
   cannot be defaulted.
 
-  OFF THE UI THREAD, and that is not optional: the endpoint does not answer
-  when the run row is written — beam/run! opens every branch first — so a
-  start legitimately takes tens of seconds, which is why the client allows
-  it longer than the server's own deadline (api.client/start-timeout-ms). A
-  UI that stopped redrawing for that long is the frozen-but-alive
-  failure this project keeps finding."
+  OFF THE UI THREAD, and that is not optional: the endpoint answers after
+  beam/run! creates the run row and delivers its row-first on-start notice,
+  before workflow selection. Its configured startup deadline may still expire,
+  so the client allows longer (api.client/start-timeout-ms). A UI that stopped
+  redrawing for the request is the frozen-but-alive failure this project keeps
+  finding."
   [text]
-  (let [{:keys [base]} @state]
-    (if-let [problem (st/steer-payload text)]
-      (do (swap! state st/note-notice "starting…")
-          (future
-            (swap! state st/apply-start
-                   (client/start-run! base (merge {:problem problem}
-                                                  (:next-llm @state))))
-            (poll-once!)))
-      (swap! state st/note-error "type a problem statement first"))))
+  (st/start! state text client/start-run! poll-once!))
 
 ;; `if-not run-id` rather than `when run-id`: both of these used to do
 ;; NOTHING AND SAY NOTHING with no run selected, which is indistinguishable
 ;; from a button that is not wired to anything — and that is exactly how it
 ;; was reported.
 (defn- abort! []
-  (let [{:keys [base run-id]} @state]
-    (if-not run-id
-      (swap! state st/note-error "no run selected")
-      (let [r (client/abort! base run-id)]
-        (swap! state st/note-error (when-not (:ok r) (:error r)))))))
+  (actions/abort! (action-env)))
 
 (defn- resume! []
-  (let [{:keys [base run-id]} @state]
-    (if-not run-id
-      (swap! state st/note-error "no run selected")
-      (let [r (client/resume! base run-id)]
-        (swap! state st/note-error (when-not (:ok r) (:error r)))))))
+  (actions/resume! (action-env)))
 
 (defn- decide!
   "Answer a permission question. The branch is parked on this, so a failure
   has to be visible rather than swallowed — the run would otherwise sit
   there until the deadline with nobody knowing the click did nothing."
   [id decision]
-  ;; A decision map — {:decision :allow :always true}, {:decision :deny
-  ;; :note "…"} — or a bare keyword from an older caller.
-  (let [r (client/decide! (:base @state) id (if (map? decision) decision {:decision decision}))]
-    (swap! state st/cancel-reply)
-    (swap! state st/note-error (when-not (:ok r) (:error r)))
-    ;; Poll straight away rather than waiting out the interval: the whole
-    ;; point of this dialog is that somebody is watching it.
-    (future (poll-once!))))
+  (actions/decide! (action-env) id decision))
 
 (defn- submit-answers!
   "Send a questionnaire's answers — all of them, or (Esc half way) the ones
   given, the rest coming back to the model as unanswered."
   [id answers]
-  (let [r (client/decide! (:base @state) id {:decision :answer :answers answers})]
-    (swap! state st/note-error (when-not (:ok r) (:error r)))
-    (future (poll-once!))))
+  (actions/decide! (action-env) id {:decision :answer :answers answers}))
 
 (defn- answer!
   "Record an answer to a questionnaire, and submit once the last one is in.
@@ -172,13 +139,13 @@
   between the read and the write."
   [id _i answers]
   (let [done? (volatile! false)]
-    (swap! state (fn [s] (let [[next d] (st/answer-question s answers)]
+    (swap! state (fn [s] (let [[next d] (st/answer-question-for s id answers)]
                            (vreset! done? d)
                            next)))
     ;; The fold above is synchronous so the next key lands on the next
     ;; question; only the HTTP leaves the UI thread.
     (when @done?
-      (future (submit-answers! id answers)))))
+      (submit-answers! id answers))))
 
 ;; --- slash commands ------------------------------------------------------------
 
@@ -196,17 +163,19 @@
   while it runs — for that role, or every role — otherwise kept for the next
   run started from here (which takes no role)."
   [kind llm-key arg]
-  (let [{:keys [base run-id] :as s} @state
+  (let [{:keys [run-id] :as s} @state
         words (str/split (str/trim arg) #"\s+")]
     (cond
       (and run-id (running? s))
-      (let [r (client/intervene! base run-id {:kind kind :payload arg})]
-        (if (:ok r)
-          (say! (str kind " → " (if (= 2 (count words))
-                                  (str (second words) " for the " (first words))
-                                  (str (first words) " for every role"))
-                     " on run " (clip-line run-id 9) ", from its next request"))
-          (say! (str kind " switch refused: " (:error r)))))
+      (actions/intervene!
+       (action-env) kind arg nil
+       (fn [r]
+         (if (:ok r)
+           (str kind " → " (if (= 2 (count words))
+                             (str (second words) " for the " (first words))
+                             (str (first words) " for every role"))
+                " on run " (clip-line run-id 9) ", from its next request")
+           (str kind " switch refused: " (:error r)))))
 
       (= 2 (count words))
       (say! (str "a " kind " for one role switches a running run; no run is running here"))
@@ -301,16 +270,13 @@
           (not run-id) (say! "no run on screen to direct")
           (and (= :arg target) (not arg)) (say! (str (:name c) " needs a branch id"))
           :else
-          (let [r (client/intervene! base run-id
-                                     {:kind kind
-                                      :payload (if (= :arg target) "" (or arg ""))
-                                      :branch-id (case target
-                                                   :branch branch-id
-                                                   :arg arg
-                                                   nil)})]
-            (say! (if (:ok r)
-                    (str (:name c) " sent — " (or (get-in r [:body :note]) "queued"))
-                    (str (:name c) " refused: " (:error r))))))
+          (actions/intervene!
+           (action-env) kind (if (= :arg target) "" (or arg ""))
+           (case target :branch branch-id :arg arg nil)
+           (fn [r]
+             (if (:ok r)
+               (str (:name c) " sent — " (or (get-in r [:body :note]) "queued"))
+               (str (:name c) " refused: " (:error r))))))
         (say! (str (:name c) " is not something this TUI can do"))))))
 
 (defn- send!

@@ -27,8 +27,11 @@
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest testing is use-fixtures]]
+            [samizdat.acp.agent :as agent]
             [samizdat.agent.select :as select]
+            [samizdat.agent.verify :as verify]
             [samizdat.agent.beam :as beam]
+            [samizdat.repl :as repl]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.roles :as roles]
             [samizdat.lexicon :as lexicon]
@@ -42,6 +45,8 @@
             [samizdat.agent.resume :as resume]
             [samizdat.api.client :as api-client]
             [samizdat.api.control :as api-control]
+            [samizdat.approval :as approval]
+            [samizdat.cancel :as cancel]
             [samizdat.api.openai :as openai]
             [samizdat.api.runs :as api-runs]
             [samizdat.cells :as cells]
@@ -160,6 +165,103 @@
           (is gone? "no stranded active entry after an instant run"))
         (is (= 409 (:status (api-control/abort! c rid)))
             "abort on a finished run refuses rather than rewriting status")))))
+
+(deftest a-start-that-misses-the-deadline-aborts-before-a-late-turn
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          release (promise)
+          finished (promise)
+          turns (atom 0)]
+      (with-redefs [lexicon/policy (let [policy lexicon/policy]
+                                     (fn [k]
+                                       (if (= k :run-start-deadline-ms) 20 (policy k))))
+                    beam/run! (fn [{:keys [abort on-start]}]
+                                (try
+                                  @release
+                                  (on-start rid)
+                                  (when-not @abort (swap! turns inc))
+                                  {:run-id rid :status :completed}
+                                  (finally (deliver finished true))))]
+        (let [r (api-control/start-run! {:conn c :config {:llm {:provider :local}}}
+                                        {:problem "p"})]
+          (is (= 503 (:status r)))
+          (is (str/includes? (get-in r [:body :error :message]) "cancelled")
+              "the refusal says the late startup was cancelled")
+          (deliver release true)
+          (is (true? (deref finished 2000 false)) "the deferred startup finished")
+          (let [row (runs/get-run c rid)]
+            (is (= "aborted" (:status row)) "the late row is closed, not left running")
+            (is (some? (:ended_at row))))
+          (is (zero? @turns) "no turn executes after the start deadline")
+          (is (loop [n 0]
+                (cond (nil? (get @api-control/active rid)) true
+                      (< n 100) (do (Thread/sleep 10) (recur (inc n)))
+                      :else false))
+              "the cancelled run leaves no active registration"))))))
+
+(deftest startup-delivery-at-the-deadline-returns-the-id-not-a-late-refusal
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          observed (promise)
+          release (promise)
+          finished (promise)
+          swap* swap!
+          pause-before-registration
+          (fn [a f & args]
+            (when (and (identical? a api-control/active)
+                       (= assoc f)
+                       (= rid (first args)))
+              (deliver observed true)
+              @release)
+            (apply swap* a f args))]
+      (with-redefs [swap! pause-before-registration
+                    lexicon/policy (let [policy lexicon/policy]
+                                     (fn [k]
+                                       (if (= k :run-start-deadline-ms) 20 (policy k))))
+                    beam/run! (fn [{:keys [on-start]}]
+                                (try
+                                  (on-start rid)
+                                  {:run-id rid :status :completed}
+                                  (finally (deliver finished true))))]
+        (let [response (future
+                         (api-control/start-run! {:conn c :config {:llm {:provider :local}}}
+                                                 {:problem "p"}))]
+          (is (true? (deref observed 1000 false))
+              "the callback is paused after observing startup and before registration")
+          (Thread/sleep 60)
+          (deliver release true)
+          (let [r (deref response 1000 ::timeout)]
+            (is (nil? (:status r)) "delivery owns the start, so there is no late 503")
+            (is (= rid (get-in r [:body :run_id]))))
+          (is (true? (deref finished 1000 false)))
+          (is (loop [n 0]
+                (cond (nil? (get @api-control/active rid)) true
+                      (< n 100) (do (Thread/sleep 10) (recur (inc n)))
+                      :else false))
+              "the completed run leaves no active registration"))))))
+
+(deftest a-start-timeout-without-a-run-row-still-cancels-the-task
+  (with-db [c]
+    (let [release (promise)
+          cancelled (promise)]
+      (with-redefs [lexicon/policy (let [policy lexicon/policy]
+                                     (fn [k]
+                                       (if (= k :run-start-deadline-ms) 20 (policy k))))
+                    beam/run! (fn [_]
+                                (try
+                                  @release
+                                  (cancel/check!)
+                                  (deliver cancelled false)
+                                  {:run-id "never-created" :status :completed}
+                                  (catch Throwable e
+                                    (deliver cancelled (cancel/control-signal? e))
+                                    (throw e))))]
+        (let [r (api-control/start-run! {:conn c :config {:llm {:provider :local}}}
+                                        {:problem "p"})]
+          (is (= 503 (:status r)) "cancelling a task with no row does not throw")
+          (deliver release true)
+          (is (true? (deref cancelled 2000 false))
+              "the spawned task observed its cancellation"))))))
 
 (deftest abort-refuses-when-the-run-won-the-finish-race
   ;; provenance R2-4: the transient window provenance A-3 could not close — the run's own
@@ -531,6 +633,31 @@
                                        :turn 5})))
         "an extension grants real turns, not a reflection loop")))
 
+(deftest single-branch-exhaustion-matches-the-beam-and-acp
+  (cells/load-cells!)
+  (with-db [c]
+    (let [single-rid (runs/start-run! c {:problem "single"})
+          beam-rid (runs/start-run! c {:problem "beam"})
+          b (assoc (branch "B1")
+                   :thesis {:goal "prove P" :subClaims ["lemma A"]})
+          finish (:handler (cell/get-cell :loop/finish))
+          exhaust (:handler (cell/get-cell :beam/exhaust))]
+      (runs/open-branch! c single-rid {:branch-id "B1"})
+      (runs/open-branch! c beam-rid {:branch-id "B1"})
+      (let [result (finish {:conn c :run-id single-rid}
+                           {:branch b :verdict :exhausted :turn 3})
+            single-row (runs/get-run c single-rid)]
+        (exhaust {:conn c :run-id beam-rid :max-turns 3}
+                 {:branches [b] :active [b]})
+        (is (= "exhausted" (:status single-row)))
+        (is (= "exhausted" (:status (runs/get-run c beam-rid))))
+        (is (= "max_turn_requests" (agent/stop-reason "exhausted")))
+        (is (= :exhausted (:status result)))
+        (is (= :exhausted (:verdict result)))
+        (is (= {:branch "B1" :goal "prove P" :proved []
+                :outstanding ["lemma A"] :best nil}
+               (:residual result)))))))
+
 (deftest a-human-cull-closes-the-row-and-keeps-the-branch-in-the-record
   ;; blt.11: the drain marked :status :culled in the data map but nothing
   ;; closed the row or carried the branch through settle/tick — it vanished
@@ -553,6 +680,45 @@
             "the verdict is visible to settle's bookkeeping, so tick keeps it")
         (let [row (first (filter #(= "B2" (:id %)) (runs/branches c rid)))]
           (is (= "culled" (:status row)) "the row is closed, not a zombie"))))))
+
+(deftest a-resume-initialization-crash-is-recorded-and-cleaned-up
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p" :max-turns 10 :beam-width 1})
+          rounds-entered (atom false)]
+      (with-redefs [repl/new-session (fn []
+                                       (is (= "running" (:status (runs/get-run c rid)))
+                                           "the failure is after mark-running!")
+                                       (is (verify/sealed? rid)
+                                           "the failure is after the run was sealed")
+                                       (throw (ex-info "resume eval session failed after sealing" {})))
+                    beam/run-rounds (fn [& _]
+                                      (reset! rounds-entered true)
+                                      {:status :completed})]
+        (is (thrown-with-msg?
+             Exception #"resume eval session failed after sealing"
+             (resume/resume! {:conn c :config {:run {:verify-cmd "true"}}
+                              :llm-adapter :a :llm-config {} :run-id rid}))))
+      (is (not @rounds-entered) "initialization failed before the round driver")
+      (let [row (runs/get-run c rid)]
+        (is (= "failed" (:status row)))
+        (is (some? (:ended_at row)))
+        (is (not (verify/sealed? rid)))))))
+
+(deftest a-resume-cancellation-is-not-a-run-failure
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p" :max-turns 10 :beam-width 1})]
+      (with-redefs [beam/run-rounds (fn [& _]
+                                      (throw (InterruptedException. "resume cancelled")))]
+        (is (thrown-with-msg?
+             InterruptedException #"resume cancelled"
+             (resume/resume! {:conn c :config {} :llm-adapter :a
+                              :llm-config {} :run-id rid}))))
+      (let [row (runs/get-run c rid)]
+        (is (= "running" (:status row)) "cancellation does not choose a run outcome")
+        (is (nil? (:ended_at row)))
+        (is (nil? (journal/last-note c rid :run-failed))
+            "no spurious crash failure reaches the journal")
+        (is (not (verify/sealed? rid)) "cleanup still runs")))))
 
 (deftest a-resumed-branch-still-holds-its-task
   ;; karamazov-blt.21: the claim survives the crash on its ROW, but the
@@ -917,6 +1083,129 @@
           (Thread/sleep 50)
           (is (zero? @drove) "no second driver"))
         (finally (swap! api-control/active dissoc rid))))))
+
+(deftest a-successful-resume-releases-its-approvals
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          driver-finished (promise)]
+      (try
+        (with-redefs [resume/resume! (fn [_]
+                                       (approval/request! {:run-id rid :branch-id "B1"
+                                                           :kind :shell :input "make change"})
+                                       (deliver driver-finished true)
+                                       {:status :completed})]
+          (let [r (api-control/resume! {:conn c :config {:llm {:provider :local}}} rid {})]
+            (is (= "resuming" (get-in r [:body :status])))
+            (is (true? (deref driver-finished 2000 false)) "the resume driver completed")
+            (is (loop [n 0]
+                  (cond (and (nil? (get @api-control/active rid))
+                             (empty? (approval/pending rid))) true
+                        (< n 200) (do (Thread/sleep 10) (recur (inc n)))
+                        :else false))
+                "the driver finished its cleanup")
+            (is (empty? (approval/pending rid)))
+            (is (nil? (get @api-control/active rid)))))
+        (finally
+          (swap! api-control/active dissoc rid)
+          (approval/abandon! rid))))))
+
+(deftest a-throwing-resume-releases-its-approvals
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          driver-finished (promise)]
+      (try
+        (with-redefs [resume/resume! (fn [_]
+                                       (try
+                                         (approval/request! {:run-id rid :branch-id "B1"
+                                                             :kind :shell :input "make change"})
+                                         (throw (ex-info "resume driver failed" {}))
+                                         (finally (deliver driver-finished true))))]
+          (let [r (api-control/resume! {:conn c :config {:llm {:provider :local}}} rid {})]
+            (is (= "resuming" (get-in r [:body :status])))
+            (is (true? (deref driver-finished 2000 false)) "the resume driver threw")
+            (is (loop [n 0]
+                  (cond (and (nil? (get @api-control/active rid))
+                             (empty? (approval/pending rid))) true
+                        (< n 200) (do (Thread/sleep 10) (recur (inc n)))
+                        :else false))
+                "the driver finished its cleanup")
+            (is (empty? (approval/pending rid)))
+            (is (nil? (get @api-control/active rid)))))
+        (finally
+          (swap! api-control/active dissoc rid)
+          (approval/abandon! rid))))))
+
+(deftest a-resume-message-submission-failure-releases-the-active-claim
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})]
+      (try
+        (with-redefs [interventions/submit!
+                      (fn [& _] (throw (ex-info "directive store unavailable" {})))]
+          (is (thrown-with-msg? Exception #"directive store unavailable"
+                                (api-control/resume! {:conn c :config {:llm {:provider :local}}}
+                                                     rid {:message "carry on"}))))
+        (is (nil? (get @api-control/active rid))
+            "a driver that was never spawned cannot own the claim forever")
+        (finally
+          (swap! api-control/active dissoc rid)
+          (approval/abandon! rid))))))
+
+(deftest a-resume-spawn-failure-releases-the-claim-and-approvals
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})]
+      (approval/request! {:run-id rid :branch-id "B1" :kind :shell :input "make change"})
+      (try
+        (with-redefs [cancel/start!
+                      (fn [& _] (throw (ex-info "resume thread unavailable" {})))]
+          (is (thrown-with-msg? Exception #"resume thread unavailable"
+                                (api-control/resume! {:conn c :config {:llm {:provider :local}}}
+                                                     rid {}))))
+        (is (nil? (get @api-control/active rid)))
+        (is (empty? (approval/pending rid))
+            "a question left by the failed setup cannot strand the next resume")
+        (finally
+          (swap! api-control/active dissoc rid)
+          (approval/abandon! rid))))))
+
+(deftest a-post-spawn-response-failure-leaves-the-driver-registered
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          driver-started (promise)
+          release-driver (promise)
+          driver-finished (promise)
+          get-run* runs/get-run
+          start* cancel/start!]
+      (try
+        (with-redefs [resume/resume!
+                      (fn [_]
+                        (approval/request! {:run-id rid :branch-id "B1"
+                                            :kind :shell :input "make change"})
+                        (deliver driver-started true)
+                        @release-driver
+                        (deliver driver-finished true)
+                        {:status :completed})
+                      cancel/start!
+                      (fn [task]
+                        (let [started (start* task)]
+                          (deref driver-started 1000 nil)
+                          started))
+                      runs/get-run
+                      (fn [& args]
+                        (if (deref driver-started 0 false)
+                          (throw (ex-info "response row unavailable" {}))
+                          (apply get-run* args)))]
+          (is (thrown-with-msg? Exception #"response row unavailable"
+                                (api-control/resume! {:conn c :config {:llm {:provider :local}}}
+                                                     rid {}))))
+        (is (some? (get @api-control/active rid))
+            "the started driver retains ownership until its own finally")
+        (is (= 1 (count (approval/pending rid)))
+            "a response failure cannot deny the live driver's question")
+        (finally
+          (deliver release-driver true)
+          (deref driver-finished 1000 nil)
+          (swap! api-control/active dissoc rid)
+          (approval/abandon! rid))))))
 
 (deftest a-resume-keeps-the-runs-own-provider-and-model
   ;; It rebuilt the model from the config's default, so a run started on

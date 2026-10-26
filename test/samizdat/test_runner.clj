@@ -244,10 +244,12 @@
             [samizdat.tui-layout-test]
             [samizdat.tui-readmodel-test]
             [samizdat.tui-state-test]
+            [samizdat.tui-actions-test]
             [samizdat.tui-widgets-test]
             [samizdat.tui-editing-test]
             [samizdat.store-test]
             [samizdat.gui-api-test]
+            [samizdat.gui-approval-test]
             [samizdat.gui-ops-test]
             [samizdat.gui-graph-test]
             [samizdat.gui-style-test]
@@ -324,6 +326,7 @@
     samizdat.tui-layout-test
     samizdat.tui-readmodel-test
     samizdat.tui-state-test
+    samizdat.tui-actions-test
     samizdat.tui-widgets-test
     samizdat.tui-editing-test
     samizdat.store-test
@@ -480,6 +483,7 @@
     samizdat.adapter-test
     samizdat.proc-test
     samizdat.gui-api-test
+    samizdat.gui-approval-test
     samizdat.gui-ops-test
     samizdat.gui-graph-test
     samizdat.gui-style-test
