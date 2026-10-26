@@ -492,6 +492,30 @@
     (is (re-find #"update d :n inc" (slurp (str @root "/cells/mini.clj")))
         "the file is back to the last-good content")))
 
+(deftest every-changed-definition-must-pass-its-own-live-path-probe
+  (write-cells! (str @root "/cells") "(fn [_ d] (update d :n inc))")
+  (cells/load-cells! (:dirs (opts)))
+  (spit (str @root "/cells/mini.clj")
+        (str "(ns cells.mini (:require [mycelium.cell :as cell]))\n"
+             "(cell/defcell :mini/start {:doc \"start\" :pure true :requires []}\n"
+             "  (fn [_ d] (update d :n + 10)))\n"
+             "(cell/defcell :mini/end {:doc \"end\" :pure true :requires []}\n"
+             "  (fn [_ d] (throw (ex-info \"second definition broke\" {}))))\n"))
+  (let [battery-called (atom false)
+        r (mut/apply-cell-edit!
+           (assoc (opts)
+                  :soak-fn (fn [& _] nil)
+                  :battery-fn (fn [] (reset! battery-called true) {:ok? true})))]
+    (is (= :rolled-back (:status r)))
+    (is (re-find #"mini/end" (str (:reason r))) "the failed definition is named")
+    (is (= [:mini/start :mini/end] (mapv :id (:probes r))))
+    (is (:ok? (first (:probes r))) "the first definition passed against the old second")
+    (is (not (:ok? (second (:probes r)))) "the second failed on its own live path")
+    (is (false? @battery-called) "a failed probe refuses before the battery")
+    (is (= 1 (:n ((:handler (cell/get-cell :mini/start)) {} {:n 0}))))
+    (is (= :done (:verdict ((:handler (cell/get-cell :mini/end)) {} {})))
+        "the whole candidate rolled back, including the definition that passed")))
+
 (deftest the-battery-gate-sits-between-soak-and-commit
   ;; The paper's Step 3. The soak proves an edit does not CRASH; the battery
   ;; proves it does not REGRESS. Order matters: the battery costs a replay per
