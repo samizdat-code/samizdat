@@ -25,7 +25,7 @@
   [:question-cursor :question-answers :question-selected :question-option :reply :input])
 
 (defn reset-run [s]
-  (assoc (shared/reset-run s) :approval-pending nil :input ""))
+  (assoc (shared/reset-run s) :approval-pending nil :approval-refresh-token nil :input ""))
 
 (defn- event-name [x]
   (when (or (string? x) (keyword? x)) (name x)))
@@ -35,19 +35,26 @@
                  [(:kind event) (:event event) (get-in event [:data :kind])])))
 
 (defn refresh!
-  "Fetch the selected run's approvals off the UI thread. A response is folded
-  only while the run it was requested for is still selected."
+  "Fetch the selected run's approvals off the UI thread. Only the latest
+  request for the still-selected run may fold its response."
   ([state approvals] (refresh! state approvals nil))
   ([state approvals on-approval]
-   (let [{:keys [base-url run]} @state]
-     (when run
+   (let [token (Object.)
+         request (atom nil)]
+     (swap! state (fn [s]
+                    (if-let [run (:run s)]
+                      (do (reset! request {:base-url (:base-url s) :run run})
+                          (assoc s :approval-refresh-token token))
+                      s)))
+     (when-let [{:keys [base-url run]} @request]
        (future
          (let [response (try (approvals base-url run)
                              (catch Throwable e {:ok false :error (ex-message e)}))
                previous (atom nil)
                next (swap! state (fn [s]
                                    (reset! previous s)
-                                   (if (= run (:run s))
+                                   (if (and (= run (:run s))
+                                            (= token (:approval-refresh-token s)))
                                      (shared/apply-approvals s response)
                                      s)))]
            (when (and on-approval (empty? (:approvals @previous))

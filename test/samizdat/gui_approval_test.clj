@@ -105,6 +105,28 @@
     (is (nil? (:reply @state)))
     (is (nil? (:approval-pending @state)))))
 
+(deftest a-response-from-a-superseded-refresh-is-dropped
+  (let [state (asking permission)
+        calls (atom 0)
+        started [(promise) (promise)]
+        gates [(promise) (promise)]
+        fetch (fn [_ _]
+                (let [n (dec (swap! calls inc))]
+                  (deliver (nth started n) true)
+                  @(nth gates n)))
+        older (approval/refresh! state fetch)]
+    @(nth started 0)
+    (let [newer (approval/refresh! state fetch)]
+      @(nth started 1)
+      (deliver (nth gates 1) {:ok true :body {:approvals []}})
+      @newer
+      (is (empty? (:approvals @state)))
+      (deliver (nth gates 0) {:ok true :body {:approvals [permission]}})
+      @older
+      (is (= 2 @calls))
+      (is (empty? (:approvals @state)) "the older response cannot resurrect the answered approval")
+      (is (nil? (:approval-id @state))))))
+
 (deftest duplicate-decisions-are-suppressed-while-the-first-is-in-flight
   (let [state (asking permission)
         gate (promise)
