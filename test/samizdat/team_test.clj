@@ -252,7 +252,7 @@
           (is (= :completed (:status r)) (str (:answer r)))
           (is (= "alpha part\n" (slurp (java.io.File. root "alpha.txt"))))
           (is (= "beta part\n" (slurp (java.io.File. root "beta.txt"))))
-          (is (= ["W0" "W1"] (mapv :owner (take 2 @made)))
+          (is (= #{"W0" "W1"} (set (map :owner (take 2 @made))))
               "both workers had an initial checkout")
           (is (= [1 1] (mapv :attempt (take 2 @made))))
           (doseq [retry (drop 2 @made)]
