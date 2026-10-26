@@ -199,6 +199,47 @@
                       :else false))
               "the cancelled run leaves no active registration"))))))
 
+(deftest startup-delivery-at-the-deadline-returns-the-id-not-a-late-refusal
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          observed (promise)
+          release (promise)
+          finished (promise)
+          swap* swap!
+          pause-before-registration
+          (fn [a f & args]
+            (when (and (identical? a api-control/active)
+                       (= assoc f)
+                       (= rid (first args)))
+              (deliver observed true)
+              @release)
+            (apply swap* a f args))]
+      (with-redefs [swap! pause-before-registration
+                    lexicon/policy (let [policy lexicon/policy]
+                                     (fn [k]
+                                       (if (= k :run-start-deadline-ms) 20 (policy k))))
+                    beam/run! (fn [{:keys [on-start]}]
+                                (try
+                                  (on-start rid)
+                                  {:run-id rid :status :completed}
+                                  (finally (deliver finished true))))]
+        (let [response (future
+                         (api-control/start-run! {:conn c :config {:llm {:provider :local}}}
+                                                 {:problem "p"}))]
+          (is (true? (deref observed 1000 false))
+              "the callback is paused after observing startup and before registration")
+          (Thread/sleep 60)
+          (deliver release true)
+          (let [r (deref response 1000 ::timeout)]
+            (is (nil? (:status r)) "delivery owns the start, so there is no late 503")
+            (is (= rid (get-in r [:body :run_id]))))
+          (is (true? (deref finished 1000 false)))
+          (is (loop [n 0]
+                (cond (nil? (get @api-control/active rid)) true
+                      (< n 100) (do (Thread/sleep 10) (recur (inc n)))
+                      :else false))
+              "the completed run leaves no active registration"))))))
+
 (deftest a-start-timeout-without-a-run-row-still-cancels-the-task
   (with-db [c]
     (let [release (promise)

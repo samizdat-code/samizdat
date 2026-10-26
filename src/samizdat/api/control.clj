@@ -161,6 +161,7 @@
   (let [adapter (registry/adapter-for (:provider llm-config))
         abort (atom false)
         promised (promise)
+        startup-owner (atom :pending)
         cancel* (atom nil)
         ;; The run is a TASK (RFC-013): abort cancels it, and the cancel is
         ;; observed at the round's next step or a turn's next check. The abort
@@ -179,13 +180,13 @@
                                           :quarantine quarantine
                                           :abort abort
                                           :on-start (fn [rid]
-                                                      (if @abort
-                                                        (runs/finish-run! conn rid :aborted nil)
+                                                      (if (compare-and-set! startup-owner :pending :delivering)
                                                         (do
                                                           (swap! active assoc rid
                                                                  {:abort abort
                                                                   :cancel (fn [] (some-> @cancel* (apply [])))})
-                                                          (deliver promised rid))))})]
+                                                          (deliver promised rid))
+                                                        (runs/finish-run! conn rid :aborted nil)))})]
                         (swap! active dissoc (:run-id r))
                         ;; Release anything parked on a question this run
                         ;; asked. Without it an aborted or finished run
@@ -213,7 +214,10 @@
         ;; now creates the row and fires on-start before that call, so the
         ;; wait here is the insert and the opening-context walk.
         start-deadline (lexicon/policy :run-start-deadline-ms)
-        run-id (deref promised start-deadline nil)]
+        run-id (if-let [rid (deref promised start-deadline nil)]
+                 rid
+                 (when-not (compare-and-set! startup-owner :pending :timed-out)
+                   @promised))]
     (if run-id
       ;; Wrapped in :body like resume, so one route shape serves both the
       ;; success and the refusal and neither has to be special-cased.

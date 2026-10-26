@@ -79,7 +79,10 @@
       (let [response (try (intervene base-url run
                                      {:branch-id branch :kind "message" :payload draft})
                           (catch Throwable e {:ok false :error (ex-message e)}))]
-        (swap! state apply-intervention response draft branch)
+        (swap! state (fn [s]
+                       (if (= run (:run s))
+                         (apply-intervention s response draft branch)
+                         s)))
         response))))
 
 (defn apply-start

@@ -97,6 +97,7 @@
    :turn-text {}
    :approvals []
    :approval-id nil
+   :decision-pending nil
    :question-cursor 0
    :question-answers []
    ;; The row the keyboard is on in the question on screen: an option, or
@@ -317,6 +318,7 @@
              :steps-cursor 0
              :trace-dropped 0
              :journal-cursor 0
+             :decision-pending nil
              ;; Turn numbers restart per branch, so prose kept across a switch
              ;; would caption the new run's turn 3 with the old run's words.
              :turn-text {})
@@ -694,22 +696,24 @@
   "Claim and submit one run start. A repeat while the request is in flight
   returns nil without issuing another request."
   [state text start-run after]
-  (if-let [problem (steer-payload text)]
-    (let [[previous] (swap-vals! state
-                                 (fn [s]
-                                   (if (:starting? s)
-                                     s
-                                     (note-notice (assoc s :starting? true) "starting…"))))]
-      (when-not (:starting? previous)
-        (let [base (:base previous)
-              body (merge {:problem problem} (:next-llm previous))]
-          (future
-            (let [response (try (start-run base body)
-                                (catch Throwable e {:ok false :error (ex-message e)}))]
-              (swap! state apply-start response)
-              (after)
-              response)))))
-    (swap! state note-error "type a problem statement first")))
+  (if (:starting? @state)
+    nil
+    (if-let [problem (steer-payload text)]
+      (let [[previous] (swap-vals! state
+                                   (fn [s]
+                                     (if (:starting? s)
+                                       s
+                                       (note-notice (assoc s :starting? true) "starting…"))))]
+        (when-not (:starting? previous)
+          (let [base (:base previous)
+                body (merge {:problem problem} (:next-llm previous))]
+            (future
+              (let [response (try (start-run base body)
+                                  (catch Throwable e {:ok false :error (ex-message e)}))]
+                (swap! state apply-start response)
+                (after)
+                response)))))
+      (swap! state note-error "type a problem statement first"))))
 
 (defn apply-start
   "Fold the answer to POST /v1/runs and release the in-flight start guard.

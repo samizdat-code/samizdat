@@ -164,6 +164,30 @@
     (is (= "new run error" (:error @state)))
     (is (zero? @polls))))
 
+(deftest duplicate-decisions-are-suppressed-until-the-first-completes
+  (let [state (atom (-> (st/initial "http://x:1")
+                        (assoc :run-id "old-run" :approvals [{:id "approval-1"}])))
+        started (promise)
+        answer (promise)
+        calls (atom [])
+        polls (atom 0)
+        pending (actions/decide!
+                 (environment state
+                              {:decide! (deferred-call started answer calls)}
+                              polls (atom []))
+                 "approval-1" {:decision :allow})]
+    (is (= true (deref started 1000 false)))
+    (is (nil? (actions/decide!
+               (environment state
+                            {:decide! (deferred-call started answer calls)}
+                            polls (atom []))
+               "approval-1" {:decision :deny})))
+    (deliver answer {:ok true})
+    (is (= {:ok true} (deref pending 1000 ::timeout)))
+    (is (= [["http://x:1" "approval-1" {:decision :allow}]] @calls))
+    (is (nil? (:decision-pending @state)))
+    (is (= 1 @polls))))
+
 (deftest slash-intervention-is-asynchronous-and-run-guarded
   (let [state (selected "")
         started (promise)

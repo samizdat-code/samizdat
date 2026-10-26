@@ -476,6 +476,14 @@
         (is (false? (:starting? @state)))
         (is (= 1 (count @calls)))))))
 
+(deftest a-blank-repeat-does-not-replace-the-starting-notice
+  (let [state (atom (assoc (st/initial "b") :starting? true :notice "starting…"))
+        before @state]
+    (is (nil? (st/start! state "   "
+                         (fn [& _] (throw (ex-info "must not start" {})))
+                         (fn []))))
+    (is (= before @state))))
+
 (deftest simultaneous-starts-launch-only-one-request
   (let [state (atom (st/set-input (st/initial "b") "build a parser"))
         calls (atom 0)

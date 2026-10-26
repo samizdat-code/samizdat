@@ -139,6 +139,26 @@
     (is (= {:ok true} (deref pending 1000 ::timeout)))
     (is (= "first directive\nsecond, newer directive" (:draft @state)))))
 
+(deftest stale-intervention-responses-cannot-change-the-newly-selected-run
+  (doseq [[outcome response] [["success" {:ok true}]
+                              ["failure" {:ok false :error "old refusal"}]]]
+    (testing outcome
+      (let [state (atom {:base-url "http://x:1" :run "old" :draft "old draft"})
+            started (promise)
+            answer (promise)
+            pending (ops/send-intervention!
+                     state "B1"
+                     (fn [_ _ _]
+                       (deliver started true)
+                       @answer))]
+        (is (true? (deref started 1000 false)))
+        (swap! state assoc :run "new" :draft "new draft" :notice "new notice")
+        (deliver answer response)
+        (is (= response (deref pending 1000 ::timeout)))
+        (is (= "new" (:run @state)))
+        (is (= "new draft" (:draft @state)))
+        (is (= "new notice" (:notice @state)))))))
+
 (deftest a-deferred-second-new-run-sends-one-request-and-releases-the-guard
   (doseq [[outcome response] [["success" {:ok true :body {:run_id "12345678-r7"}}]
                               ["failure" {:ok false :error "HTTP 503"}]]]
@@ -255,7 +275,7 @@
     (is (nil? (:reply @state)))
     (is (nil? (:approval-pending @state)))))
 
-(deftest a-response-from-a-superseded-refresh-is-dropped
+(deftest overlapping-refreshes-coalesce-and-run-one-fresh-follow-up
   (let [state (asking permission)
         calls (atom 0)
         started [(promise) (promise)]
@@ -264,18 +284,18 @@
                 (let [n (dec (swap! calls inc))]
                   (deliver (nth started n) true)
                   @(nth gates n)))
-        older (approval/refresh! state fetch)]
-    @(nth started 0)
-    (let [newer (approval/refresh! state fetch)]
-      @(nth started 1)
-      (deliver (nth gates 1) {:ok true :body {:approvals []}})
-      @newer
-      (is (empty? (:approvals @state)))
-      (deliver (nth gates 0) {:ok true :body {:approvals [permission]}})
-      @older
-      (is (= 2 @calls))
-      (is (empty? (:approvals @state)) "the older response cannot resurrect the answered approval")
-      (is (nil? (:approval-id @state))))))
+        worker (approval/refresh! state fetch)]
+    (is (true? (deref (nth started 0) 1000 false)))
+    (approval/refresh! state fetch)
+    (is (= 1 @calls) "the second request coalesces behind the one in flight")
+    (deliver (nth gates 0) {:ok true :body {:approvals [permission]}})
+    (is (true? (deref (nth started 1) 1000 false))
+        "the coalesced request still earns a fresh follow-up")
+    (deliver (nth gates 1) {:ok true :body {:approvals []}})
+    (is (= {:ok true :body {:approvals []}} (deref worker 1000 ::timeout)))
+    (is (= 2 @calls) "a burst becomes one in-flight request and one follow-up")
+    (is (empty? (:approvals @state)) "the follow-up's fresher answer is visible")
+    (is (nil? (:approval-id @state)))))
 
 (deftest duplicate-decisions-are-suppressed-while-the-first-is-in-flight
   (let [state (asking permission)

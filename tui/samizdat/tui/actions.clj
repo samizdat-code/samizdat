@@ -81,19 +81,31 @@
 
 (defn decide!
   "Answer an approval without blocking input. Its reply editor closes locally;
-  the approval itself remains until a poll confirms the decision."
+  the approval itself remains until a poll confirms the decision. A repeated
+  decision is refused while the first is in flight."
   [{:keys [state client poll!]} id decision]
   (let [{:keys [base run-id]} @state
         decision (if (map? decision) decision {:decision decision})]
     (if-not run-id
       (swap! state st/note-error "no run selected")
-      (do
-        (swap! state (fn [s]
-                       (if (= run-id (:run-id s)) (st/cancel-reply s) s)))
-        (future
-          (let [r (response #((:decide! client) base id decision))]
-            (when (apply-current state run-id #(note-result % r)) (poll!))
-            r))))))
+      (let [[before]
+            (swap-vals! state
+                        (fn [s]
+                          (if (and (= run-id (:run-id s))
+                                   (nil? (:decision-pending s)))
+                            (-> s (assoc :decision-pending id) st/cancel-reply)
+                            s)))]
+        (when (and (= run-id (:run-id before))
+                   (nil? (:decision-pending before)))
+          (future
+            (let [r (response #((:decide! client) base id decision))]
+              (when (apply-current
+                     state run-id
+                     (fn [s]
+                       (cond-> (note-result s r)
+                         (= id (:decision-pending s)) (assoc :decision-pending nil))))
+                (poll!))
+              r)))))))
 
 (defn intervene!
   "Send a slash-command intervention and report its outcome in local notes."

@@ -25,7 +25,8 @@
   [:question-cursor :question-answers :question-selected :question-option :reply :input])
 
 (defn reset-run [s]
-  (assoc (shared/reset-run s) :approval-pending nil :approval-refresh-token nil :input ""))
+  (assoc (shared/reset-run s) :approval-pending nil
+         :approval-refresh-needed? false :input ""))
 
 (defn- event-name [x]
   (when (or (string? x) (keyword? x)) (name x)))
@@ -35,32 +36,50 @@
                  [(:kind event) (:event event) (get-in event [:data :kind])])))
 
 (defn refresh!
-  "Fetch the selected run's approvals off the UI thread. Only the latest
-  request for the still-selected run may fold its response."
+  "Fetch approvals with at most one request in flight. Requests that arrive
+  during it coalesce into one follow-up for the run selected at that point."
   ([state approvals] (refresh! state approvals nil))
   ([state approvals on-approval]
    (let [token (Object.)
          request (atom nil)]
      (swap! state (fn [s]
-                    (if-let [run (:run s)]
-                      (do (reset! request {:base-url (:base-url s) :run run})
-                          (assoc s :approval-refresh-token token))
-                      s)))
-     (when-let [{:keys [base-url run]} @request]
+                    (if-not (:run s)
+                      s
+                      (if (:approval-refresh-token s)
+                        (assoc s :approval-refresh-needed? true)
+                        (do (reset! request {:base-url (:base-url s) :run (:run s)})
+                            (assoc s :approval-refresh-token token
+                                   :approval-refresh-needed? false))))))
+     (when-let [initial @request]
        (future
-         (let [response (try (approvals base-url run)
-                             (catch Throwable e {:ok false :error (ex-message e)}))
-               previous (atom nil)
-               next (swap! state (fn [s]
-                                   (reset! previous s)
-                                   (if (and (= run (:run s))
-                                            (= token (:approval-refresh-token s)))
-                                     (shared/apply-approvals s response)
-                                     s)))]
-           (when (and on-approval (empty? (:approvals @previous))
-                      (seq (:approvals next)))
-             (on-approval))
-           response))))))
+         (loop [{:keys [base-url run]} initial]
+           (let [response (try (approvals base-url run)
+                               (catch Throwable e {:ok false :error (ex-message e)}))
+                 previous (atom nil)
+                 follow-up (atom nil)
+                 next (swap! state
+                             (fn [s]
+                               (reset! previous s)
+                               (let [s (if (and (= run (:run s))
+                                                (= token (:approval-refresh-token s)))
+                                         (shared/apply-approvals s response)
+                                         s)]
+                                 (cond
+                                   (not= token (:approval-refresh-token s)) s
+                                   (not (:approval-refresh-needed? s))
+                                   (assoc s :approval-refresh-token nil)
+                                   (:run s)
+                                   (do (reset! follow-up {:base-url (:base-url s) :run (:run s)})
+                                       (assoc s :approval-refresh-needed? false))
+                                   :else
+                                   (assoc s :approval-refresh-token nil
+                                          :approval-refresh-needed? false)))))]
+             (when (and on-approval (empty? (:approvals @previous))
+                        (seq (:approvals next)))
+               (on-approval))
+             (if-let [request @follow-up]
+               (recur request)
+               response))))))))
 
 (defn- claim-decision!
   ([state id] (claim-decision! state id nil))

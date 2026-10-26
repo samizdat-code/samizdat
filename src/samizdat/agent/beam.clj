@@ -172,35 +172,42 @@
                  :repl-session (if parent
                                  (route/fork-session (:root ctx) (:repl-session parent))
                                  (repl/new-session)))]
-    ;; The suffix on the row is what seed-branch opened on — or, for an
-    ;; inheriting child, what its parent's system message already carries.
-    (runs/open-branch! conn run-id {:branch-id id :parent-id parent-id
-                                    :created-at-turn turn
-                                    :role (:role b)
-                                    :prompt-suffix (:prompt-suffix ctx)})
-    ;; A child starts from its parent's conversation or thesis, so it starts
-    ;; with what its parent had read (samizdat.security.flow).
-    (when parent-id
-      (flow/inherit! {:conn conn :run-id run-id :turn turn} parent-id id))
-    (if thesis
-      (do (runs/set-thesis! conn run-id id thesis)
-          (-> b
-              (assoc :thesis thesis)
-              ;; The nudge is prompts/fork-thesis.md — runtime-editable, the
-              ;; same seam every other harness message reads through, and it
-              ;; has to say something different to a child that inherited its
-              ;; parent's history than to one starting the problem over.
-              (state/add-message
-               "user"
-               (prompt/render "fork-thesis"
-                 {:parent parent-id
-                  :goal (:goal thesis)
-                  :technique (:technique thesis)
-                  :crossover (crossover-block conn run-id parent-id)
-                  ;; :forked-at is stamped only by state/fork-branch, so its
-                  ;; presence IS the answer to "did this child inherit?".
-                  :inherited (some? (:forked-at b))}))))
-      b)))
+    (try
+      ;; The suffix on the row is what seed-branch opened on — or, for an
+      ;; inheriting child, what its parent's system message already carries.
+      (runs/open-branch! conn run-id {:branch-id id :parent-id parent-id
+                                      :created-at-turn turn
+                                      :role (:role b)
+                                      :prompt-suffix (:prompt-suffix ctx)})
+      ;; A child starts from its parent's conversation or thesis, so it starts
+      ;; with what its parent had read (samizdat.security.flow).
+      (when parent-id
+        (flow/inherit! {:conn conn :run-id run-id :turn turn} parent-id id))
+      (if thesis
+        (do (runs/set-thesis! conn run-id id thesis)
+            (-> b
+                (assoc :thesis thesis)
+                ;; The nudge is prompts/fork-thesis.md — runtime-editable, the
+                ;; same seam every other harness message reads through, and it
+                ;; has to say something different to a child that inherited its
+                ;; parent's history than to one starting the problem over.
+                (state/add-message
+                 "user"
+                 (prompt/render "fork-thesis"
+                   {:parent parent-id
+                    :goal (:goal thesis)
+                    :technique (:technique thesis)
+                    :crossover (crossover-block conn run-id parent-id)
+                    ;; :forked-at is stamped only by state/fork-branch, so its
+                    ;; presence IS the answer to "did this child inherit?".
+                    :inherited (some? (:forked-at b))}))))
+        b)
+      (catch Throwable e
+        (try (repl/close-session (:repl-session b))
+             (catch Throwable close-error
+               (log/warn "closing branch" id "eval session after initialization failed:"
+                         (ex-message close-error))))
+        (throw e)))))
 
 (defn ensure-scored
   "Fresh critic scores for every active branch, at most one sub-LLM call per

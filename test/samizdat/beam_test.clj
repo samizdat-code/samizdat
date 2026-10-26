@@ -224,6 +224,27 @@
         (is (not (verify/sealed? @started))))
       (finally (db/close c)))))
 
+(deftest an-initial-branch-insert-failure-closes-the-new-branch-session
+  (let [c (db/open! ":memory:")
+        created (atom 0)
+        closed (atom [])]
+    (try
+      (with-redefs [repl/new-session (fn [] (str "session-" (swap! created inc)))
+                    repl/close-session (fn [session] (swap! closed conj session))
+                    runs/open-branch! (fn [& _]
+                                        (throw (ex-info "branch insert failed" {})))
+                    llm/chat (fn [& _] {:content "" :finish-reason "stop"})]
+        (is (thrown-with-msg?
+             Exception #"branch insert failed"
+             (beam/run! {:conn c :config {:run {:loop "loop" :verify-cmd "true"}}
+                         :llm-adapter :a :llm-config {:max-tokens 100}
+                         :problem "p" :max-turns 3 :beam-width 1}))))
+      (is (= 2 @created) "the run and its first branch each acquired a session")
+      (is (= #{"session-1" "session-2"} (set @closed))
+          "the failed branch and the run both release their sessions")
+      (is (= 2 (count @closed)) "neither session needs a second cleanup path")
+      (finally (db/close c)))))
+
 (deftest a-crash-mid-round-is-recorded-before-it-is-rethrown
   ;; gen-11 threw here and the exception reached a tty and nowhere else; the
   ;; row stayed 'running' for the nine hours the run had been dead.
