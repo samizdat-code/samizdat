@@ -865,3 +865,30 @@
     (is (= :mechanics (:category stale-out)))
     (is (re-find #"revision" (:result stale-out)))
     (is (= 2 (get-in stale-out [:branch :context-revision])))))
+
+(deftest context-edit-keeps-new-unaddressable-messages-and-returns-the-live-head
+  (context-edit/forget-run! "edit-anonymous")
+  (let [run-id "edit-anonymous"
+        branch {:id "B1"
+                :messages (into [{:role "system" :content "rules"}] editable-messages)}
+        call (fn [branch args]
+               (base/run-tool {:tool-name "context_edit" :run-id run-id
+                               :branch branch :args args}))
+        first-out (call branch {:edits {"m3" "changed"} :revision 0 :head "m4"})
+        grown (update (:branch first-out) :messages conj
+                      {:role "user" :content "new unaddressable"})
+        second-out (call grown {:notes ["new note"] :revision 1 :head "m4"})
+        anonymous-drop (call (:branch second-out)
+                             {:drop [nil] :revision 2
+                              :head (get-in second-out [:branch :context-head])})]
+    (is (= :neutral (:category second-out)))
+    (is (= 1 (count (filter #(= "new unaddressable" (:content %))
+                            (get-in second-out [:branch :messages]))))
+        "a message without a turn/id is not original journal data and survives edits")
+    (is (not= "m4" (get-in second-out [:branch :context-head])))
+    (is (str/includes? (:result second-out)
+                       (str (get-in second-out [:branch :context-head])))
+        "the model receives the head the next call must supply")
+    (is (= :mechanics (:category anonymous-drop)))
+    (is (re-find #"unknown" (:result anonymous-drop))
+        "nil is not an address that can drop every unaddressable message")))

@@ -394,7 +394,8 @@
         ;; SOAK — does the edited cell actually run without throwing?
         (if-let [reason (soak-fn compile-fn loop-def soak-input)]
           (rollback! opts checkpoint reason)
-          (let [report (live-probes @candidate-ids loop-def extra-defs soak-input
+          (let [report (live-probes @candidate-ids loop-def extra-defs
+                                    (get opts :probe-input soak-input)
                                     compile-fn @(:changes checkpoint) probe-fn)]
             (if-not (:ok? report)
               (rollback! opts checkpoint (probe-reason report) (:results report))
@@ -490,7 +491,7 @@
   Returns {:status :committed :version n} or
   {:status :rolled-back :reason ...} with the registry restored and nothing
   written to the store."
-  [{:keys [name body loop-def extra-defs soak-input compile-fn probe-fn rationale conn run-id defer-fn]}]
+  [{:keys [name body loop-def extra-defs soak-input compile-fn probe-fn rationale conn run-id defer-fn] :as opts}]
   (let [compile-fn (or compile-fn myc/pre-compile)
         shadowing (shadowed-cells name body)
         unearned (unearned-marks body)
@@ -553,7 +554,8 @@
         (if-let [reason (soak compile-fn loop-def soak-input)]
           (fail reason)
           (let [report (live-probes (cells/defcell-ids body) loop-def extra-defs
-                                    soak-input compile-fn @installed probe-fn)]
+                                    (get opts :probe-input soak-input)
+                                    compile-fn @installed probe-fn)]
             (if-not (:ok? report)
               (fail (probe-reason report) (:results report))
               (if (and defer-fn

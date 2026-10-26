@@ -524,3 +524,27 @@
              (mapv #(if (= :start (first %)) (vec (take 2 %)) %) @events))
           "restart releases every old handle before acquiring replacements")
       (finally (peripherals/stop!)))))
+
+(deftest restart-does-not-duplicate-a-peripheral-whose-stop-failed
+  (let [events (atom [])
+        bad :test/peripheral-unstoppable
+        good :test/peripheral-restartable
+        cfg {:peripherals (array-map bad {:enabled true :options {}}
+                                     good {:enabled true :options {}})}]
+    (peripherals/register! bad
+                           (fn [_] (swap! events conj [:start :bad]) :bad)
+                           (fn [_] (swap! events conj [:stop :bad])
+                             (throw (ex-info "still running" {}))))
+    (peripherals/register! good
+                           (fn [_] (swap! events conj [:start :good]) :good)
+                           (fn [_] (swap! events conj [:stop :good])))
+    (try
+      (peripherals/start! cfg)
+      (let [r (peripherals/restart! cfg)]
+        (is (= [good] (:started r)))
+        (is (= [[:start :bad] [:start :good] [:stop :good] [:stop :bad] [:start :good]]
+               @events)
+            "the failed inverse is visible and its resource is not acquired twice")
+        (is (some #(and (= bad (:id %)) (= :stop (:phase %)))
+                  (peripherals/notices))))
+      (finally (peripherals/stop!)))))

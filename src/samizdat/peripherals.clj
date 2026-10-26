@@ -70,15 +70,20 @@
 (defn stop!
   "Stop acquired peripherals once each in reverse acquisition order."
   []
-  (doseq [id (reverse (:order @state))]
-    (when-let [{:keys [handle stop]} (get-in @state [:handles id])]
-      (try
-        (stop handle)
-        (catch Throwable error
-          (notice! id :stop error)))))
-  (swap! state assoc :order [] :handles {})
-  {:notices (notices)})
+  (let [failed (atom [])]
+    (doseq [id (reverse (:order @state))]
+      (when-let [{:keys [handle stop]} (get-in @state [:handles id])]
+        (try
+          (stop handle)
+          (catch Throwable error
+            (swap! failed conj id)
+            (notice! id :stop error)))))
+    (swap! state assoc :order [] :handles {})
+    {:notices (notices) :failed @failed}))
 
 (defn restart! [config]
-  (stop!)
-  (start! config))
+  (let [{:keys [failed]} (stop!)
+        config (reduce (fn [cfg id]
+                         (assoc-in cfg [:peripherals id :enabled] false))
+                       config failed)]
+    (start! config)))

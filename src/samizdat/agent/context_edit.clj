@@ -14,7 +14,7 @@
   "Stage an edit over SOURCE. Returns the immutable source and edit intent."
   [source {:keys [drop edits restore notes revision head]
            :or {drop #{} edits {} restore #{} notes [] revision 0 head "head"}}]
-  (let [ids (set (map message-id source))
+  (let [ids (set (keep message-id source))
         unknown (set/difference (set (concat drop restore (keys edits))) ids)]
     (when (seq unknown)
       (throw (ex-info (str "unknown context message ids: " (str/join ", " unknown))
@@ -90,26 +90,42 @@
 
 (defonce ^:private projections (atom {}))
 
+(defn- projected-additions [state messages]
+  (let [source (:source state)
+        known (set (keep message-id source))
+        original-anonymous (count (remove #(or (message-id %) (:context-note? %)) source))]
+    (second
+     (reduce (fn [[seen out] message]
+               (cond
+                 (:context-note? message) [seen out]
+                 (message-id message)
+                 [seen (if (contains? known (message-id message)) out (conj out message))]
+                 :else
+                 [(inc seen) (if (>= seen original-anonymous) (conj out message) out)]))
+             [0 []]
+             messages))))
+
 (defn edit!
   "Apply a context edit to a branch and remember its new projection revision."
   [run-id branch-id branch args]
   (locking projections
     (let [k [run-id branch-id]
           state (get @projections k)
-          known (set (map message-id (:source state)))
+          previous-source (or (:source state) (vec (:messages branch)))
+          previous-head (or (message-id (peek previous-source))
+                            (str "head-" (count previous-source)))
           source (if state
-                   (into (:source state)
-                         (remove #(contains? known (message-id %)) (:messages branch)))
-                   (vec (:messages branch)))
+                   (into previous-source (projected-additions state (:messages branch)))
+                   previous-source)
           revision (:revision state 0)
-          head (or (message-id (peek source)) "head")
+          head (or (message-id (peek source)) (str "head-" (count source)))
           restore (set (:restore args))
           drop (set/difference (into (:drop state #{}) (:drop args)) restore)
           edits (reduce dissoc (merge (:edits state) (:edits args)) restore)
           notes (into (:notes state []) (:notes args))
           staged (stage source (assoc args
                                       :drop drop :edits edits :restore #{} :notes notes
-                                      :revision revision :head head))
+                                      :revision revision :head previous-head))
           out (apply-edit staged (:messages branch) (:revision args) (:head args))]
       (swap! projections assoc k
              (assoc (select-keys out [:revision :source])

@@ -524,6 +524,17 @@
     (is (= :done (:verdict ((:handler (cell/get-cell :mini/end)) {} {})))
         "the whole candidate rolled back, including the definition that passed")))
 
+(deftest live-probes-use-their-own-nonterminal-input
+  (write-cells! (str @root "/cells") "(fn [_ d] (update d :n inc))")
+  (cells/load-cells! (:dirs (opts)))
+  (write-cells! (str @root "/cells")
+                "(fn [_ d] (if (:probe d) (update d :n inc) (throw (ex-info \"terminal soak input\" {}))))")
+  (let [r (mut/apply-cell-edit! (assoc (opts)
+                                      :soak-fn (fn [& _] nil)
+                                      :probe-input {:probe true :n 0}))]
+    (is (= :committed (:status r)) (str (:reason r)))
+    (is (every? :ok? (:probes r)))))
+
 (deftest the-battery-gate-sits-between-soak-and-commit
   ;; The paper's Step 3. The soak proves an edit does not CRASH; the battery
   ;; proves it does not REGRESS. Order matters: the battery costs a replay per

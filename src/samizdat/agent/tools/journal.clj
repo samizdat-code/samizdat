@@ -157,6 +157,7 @@
   (try
     (let [out (context-edit/edit! run-id (:id branch) branch args)]
       (base/ok out (str "context updated; revision " (:context-revision out)
+                        ", head " (:context-head out)
                         ". Original turns remain available through fetch_turn.")))
     (catch clojure.lang.ExceptionInfo e
       (base/malformed branch (ex-message e)))))

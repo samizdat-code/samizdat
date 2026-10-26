@@ -186,6 +186,21 @@
         (jfs/delete-tree base)
         (jfs/delete-tree root)))))
 
+(deftest profile-seeding-refuses-role-paths-outside-the-project-userspace
+  (let [base (str (jfs/create-temp-dir))
+        root (str (jfs/create-temp-dir))
+        secret (str base "/operator-secret.edn")]
+    (try
+      (spit secret "{:secret true}")
+      (jfs/create-dirs (str root "/.samizdat"))
+      (spit (str root "/.samizdat/userspace.edn")
+            (pr-str {:policies {:gates "../../operator-secret.edn"}}))
+      (let [p (profiles/create! base "isolated" {:project-root root})]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"outside"
+                              (profiles/use! base "isolated" {:project-root root})))
+        (is (not (.exists (io/file (:home p) "operator-secret.edn")))))
+      (finally (profiles/clear!) (jfs/delete-tree base) (jfs/delete-tree root)))))
+
 (deftest userspace-the-harness-never-shipped-is-first-class
   ;; A cell the supervisor wrote has no template by definition.
   (us/bind! *conn*)

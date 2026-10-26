@@ -96,6 +96,11 @@
                   :status :done :final-answer "soak")
    :turn 1})
 
+(defn- probe-input
+  "A non-terminal branch state for exercising live paths after the soak."
+  []
+  {:branch (state/new-branch {:id "probe" :problem "probe"}) :turn 0})
+
 (defmethod base/run-tool "reload_cells" [{:keys [branch] :as ctx}]
   ;; Reload the project's cells from the userspace store (plus .samizdat/cells
   ;; seeds) — the PRODUCTION loader — then prove the active loop still
@@ -153,6 +158,7 @@
             ;; just installed (karamazov-blt.2).
             :compile-fn manifests/compile-definition
             :soak-input (soak-input)
+            :probe-input (probe-input)
             :defer-fn (fn [cand commit!]
                         (heldout/defer! conn cand
                                         {:commit! commit!

@@ -71,11 +71,18 @@
     previous))
 
 (defn- copy-role-file [source target relative]
-  (let [from (io/file source relative)
-        to (io/file target relative)]
-    (when (.isFile from)
-      (.mkdirs (.getParentFile to))
-      (io/copy from to))))
+  (let [source-root (canonical source)
+        target-root (canonical target)
+        from-path (canonical (io/file source-root relative))
+        to-path (canonical (io/file target-root relative))
+        inside? (fn [root path]
+                  (str/starts-with? path (str root java.io.File/separator)))]
+    (when-not (and (inside? source-root from-path) (inside? target-root to-path))
+      (throw (ex-info "role file is outside the project or profile userspace"
+                      {:path relative :source from-path :target to-path})))
+    (when (.isFile (io/file from-path))
+      (.mkdirs (.getParentFile (io/file to-path)))
+      (io/copy (io/file from-path) (io/file to-path)))))
 
 (defn- seed-workflow! [profile project-root]
   (let [workflow-root (or (:workflow-root profile)
