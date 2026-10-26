@@ -99,12 +99,12 @@
   it has room for one; this is one line, and the statement is the part that
   cannot be defaulted.
 
-  OFF THE UI THREAD, and that is not optional: the endpoint does not answer
-  when the run row is written — beam/run! opens every branch first — so a
-  start legitimately takes tens of seconds, which is why the client allows
-  it longer than the server's own deadline (api.client/start-timeout-ms). A
-  UI that stopped redrawing for that long is the frozen-but-alive
-  failure this project keeps finding."
+  OFF THE UI THREAD, and that is not optional: the endpoint answers after
+  beam/run! creates the run row and delivers its row-first on-start notice,
+  before workflow selection. Its configured startup deadline may still expire,
+  so the client allows longer (api.client/start-timeout-ms). A UI that stopped
+  redrawing for the request is the frozen-but-alive failure this project keeps
+  finding."
   [text]
   (st/start! state text client/start-run! poll-once!))
 
@@ -139,7 +139,7 @@
   between the read and the write."
   [id _i answers]
   (let [done? (volatile! false)]
-    (swap! state (fn [s] (let [[next d] (st/answer-question s answers)]
+    (swap! state (fn [s] (let [[next d] (st/answer-question-for s id answers)]
                            (vreset! done? d)
                            next)))
     ;; The fold above is synchronous so the next key lands on the next

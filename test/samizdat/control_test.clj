@@ -1135,6 +1135,78 @@
           (swap! api-control/active dissoc rid)
           (approval/abandon! rid))))))
 
+(deftest a-resume-message-submission-failure-releases-the-active-claim
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})]
+      (try
+        (with-redefs [interventions/submit!
+                      (fn [& _] (throw (ex-info "directive store unavailable" {})))]
+          (is (thrown-with-msg? Exception #"directive store unavailable"
+                                (api-control/resume! {:conn c :config {:llm {:provider :local}}}
+                                                     rid {:message "carry on"}))))
+        (is (nil? (get @api-control/active rid))
+            "a driver that was never spawned cannot own the claim forever")
+        (finally
+          (swap! api-control/active dissoc rid)
+          (approval/abandon! rid))))))
+
+(deftest a-resume-spawn-failure-releases-the-claim-and-approvals
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})]
+      (approval/request! {:run-id rid :branch-id "B1" :kind :shell :input "make change"})
+      (try
+        (with-redefs [cancel/start!
+                      (fn [& _] (throw (ex-info "resume thread unavailable" {})))]
+          (is (thrown-with-msg? Exception #"resume thread unavailable"
+                                (api-control/resume! {:conn c :config {:llm {:provider :local}}}
+                                                     rid {}))))
+        (is (nil? (get @api-control/active rid)))
+        (is (empty? (approval/pending rid))
+            "a question left by the failed setup cannot strand the next resume")
+        (finally
+          (swap! api-control/active dissoc rid)
+          (approval/abandon! rid))))))
+
+(deftest a-post-spawn-response-failure-leaves-the-driver-registered
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          driver-started (promise)
+          release-driver (promise)
+          driver-finished (promise)
+          get-run* runs/get-run
+          start* cancel/start!]
+      (try
+        (with-redefs [resume/resume!
+                      (fn [_]
+                        (approval/request! {:run-id rid :branch-id "B1"
+                                            :kind :shell :input "make change"})
+                        (deliver driver-started true)
+                        @release-driver
+                        (deliver driver-finished true)
+                        {:status :completed})
+                      cancel/start!
+                      (fn [task]
+                        (let [started (start* task)]
+                          (deref driver-started 1000 nil)
+                          started))
+                      runs/get-run
+                      (fn [& args]
+                        (if (deref driver-started 0 false)
+                          (throw (ex-info "response row unavailable" {}))
+                          (apply get-run* args)))]
+          (is (thrown-with-msg? Exception #"response row unavailable"
+                                (api-control/resume! {:conn c :config {:llm {:provider :local}}}
+                                                     rid {}))))
+        (is (some? (get @api-control/active rid))
+            "the started driver retains ownership until its own finally")
+        (is (= 1 (count (approval/pending rid)))
+            "a response failure cannot deny the live driver's question")
+        (finally
+          (deliver release-driver true)
+          (deref driver-finished 1000 nil)
+          (swap! api-control/active dissoc rid)
+          (approval/abandon! rid))))))
+
 (deftest a-resume-keeps-the-runs-own-provider-and-model
   ;; It rebuilt the model from the config's default, so a run started on
   ;; deepseek came back on the local endpoint.

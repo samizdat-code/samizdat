@@ -328,43 +328,49 @@
           [before _] (swap-vals! active #(if (contains? % run-id) % (assoc % run-id {:abort abort})))]
       (if (contains? before run-id)
         (refuse "is still running")
-      (do
-      ;; What a person typed after interrupting it (Esc in the TUI): queued
-      ;; as a directive before the resume starts, so the first boundary of
-      ;; the resumed run applies it. intervene! refuses a run that has ended,
-      ;; and an interrupted one has, until this resume.
-      (when-let [m (not-empty (str/trim (str (or (:message body) (get body "message")))))]
-        (interventions/submit! conn run-id {:kind "message" :payload m :issued-by "human"}))
       (let [cancel* (atom nil)
-            started (cancel/start!
-                     (cancel/spawn
-                      (fn []
-                        (try
-                          (swap! active assoc run-id
-                                 {:abort abort
-                                  :cancel (fn [] (some-> @cancel* (apply [])))})
-                          (resume/resume! {:conn conn :config config
-                                           :llm-adapter adapter
-                                           :llm-config llm-config
-                                           :run-id run-id :abort abort
-                                           :max-turns max-turns})
-                          (catch Throwable e
-                            (if (cancel/control-signal? e)
-                              (log/info "resume aborted:" (ex-message e))
-                              (log/error "resume failed:" (ex-message e)))
-                            {:status :error :error (ex-message e)})
-                          (finally
-                            (swap! active dissoc run-id)
-                            (approval/abandon! run-id))))))]
-        (reset! cancel* (:cancel started)))
-      ;; The budget this resume is running under, from what the caller asked
-      ;; for, falling back to the row as it stood BEFORE the future started.
-      ;; Reading the row here unconditionally raced the resume that is
-      ;; rewriting it: the answer was whichever thread won, and an explicit
-      ;; max_turns extension was reported as the old budget more often than
-      ;; not.
-      {:body {:run_id run-id :status "resuming"
-              :max_turns (or max-turns (:max_turns (runs/get-run conn run-id)))}}))))))))
+            started (try
+                      ;; What a person typed after interrupting it (Esc in the TUI):
+                      ;; queue it before the resumed run's first boundary.
+                      (when-let [m (not-empty (str/trim (str (or (:message body) (get body "message")))))]
+                        (interventions/submit! conn run-id {:kind "message" :payload m :issued-by "human"}))
+                      (cancel/start!
+                       (cancel/spawn
+                        (fn []
+                          (try
+                            (swap! active assoc run-id
+                                   {:abort abort
+                                    :cancel (fn [] (some-> @cancel* (apply [])))})
+                            (resume/resume! {:conn conn :config config
+                                             :llm-adapter adapter
+                                             :llm-config llm-config
+                                             :run-id run-id :abort abort
+                                             :max-turns max-turns})
+                            (catch Throwable e
+                              (if (cancel/control-signal? e)
+                                (log/info "resume aborted:" (ex-message e))
+                                (log/error "resume failed:" (ex-message e)))
+                              {:status :error :error (ex-message e)})
+                            (finally
+                              (swap! active dissoc run-id)
+                              (approval/abandon! run-id))))))
+                      (catch Throwable e
+                        (swap! active (fn [m]
+                                        (if (identical? abort (:abort (get m run-id)))
+                                          (dissoc m run-id)
+                                          m)))
+                        (approval/abandon! run-id)
+                        (throw e)))]
+        (reset! cancel* (:cancel started))
+        ;; The budget this resume is running under, from what the caller asked
+        ;; for, falling back to the row as it stood BEFORE the future started.
+        ;; Reading the row here unconditionally raced the resume that is
+        ;; rewriting it: the answer was whichever thread won, and an explicit
+        ;; max_turns extension was reported as the old budget more often than
+        ;; not.
+        {:body {:run_id run-id :status "resuming"
+                :max_turns (or max-turns (:max_turns (runs/get-run conn run-id)))}}))))))))
+
 (defn- grant-pattern
   "The pattern from a grant payload. Accepts a map (what body-json yields), a
   bare string, or nil. Blank is not a pattern — an unset form posts empty

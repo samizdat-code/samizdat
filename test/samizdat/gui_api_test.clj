@@ -78,23 +78,21 @@
           (is (= "r9" (-> r :body :run_id))
               "the caller needs the id to attach the poller"))))
     (testing "starting a run waits longer than the server's own start window"
-      ;; POST /v1/runs does not answer until the beam has opened every branch:
-      ;; api.control/start-run! blocks on (deref promised 30000), and beam/run!
-      ;; only calls on-start after (mapv open-branch! (range width)). So the
-      ;; server may legitimately take up to 30s, and a client that gives up
-      ;; sooner reports a failure for a run that is actually starting — the
-      ;; row is already written, so the user is told it failed AND left with a
-      ;; live run burning provider spend. Observed at the default 10s.
+      ;; POST /v1/runs answers after beam/run! writes the run row and delivers
+      ;; its row-first on-start notification, before workflow selection. Startup
+      ;; still has a configured deadline, so a client that gives up sooner can
+      ;; report a failure while the server continues starting the run — the row
+      ;; is already written, leaving a live run burning provider spend.
       (with-redefs [http/post (fn [url opts]
                                 (swap! calls conj [url opts])
                                 (ok {:run_id "r9" :status "running"}))]
         (api/start-run! "http://x:1" {:problem "p"})
         (let [[_ opts] (last @calls)]
-          (is (> (:socket-timeout opts) 30000)
-              "must outlast the 30s the server is allowed to take"))))
-    (testing "a run the server refused to start is an error, not a run"
-      ;; start-run! answers 200 with an {:error ...} body when the beam does
-      ;; not come up inside 30s, so :ok alone does not mean a run exists.
+          (is (> (:socket-timeout opts) 120000)
+              "must outlast the configured startup deadline (120s shipped)"))))
+    (testing "a legacy 200 error body is an error, not a run"
+      ;; Older servers answered 200 with an {:error ...} body on startup
+      ;; failure; the client still rejects that shape rather than polling nil.
       (with-redefs [http/post (fn [_ _] (ok {:error "the run did not start within 30s"}))]
         (let [r (api/start-run! "http://x:1" {:problem "p"})]
           (is (false? (:ok r)))

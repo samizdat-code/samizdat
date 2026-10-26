@@ -247,6 +247,11 @@
 (defn answer-question [s answers]
   (approval-view/answer-question s answers))
 
+(defn answer-question-for [s id answers]
+  (if (= id (:approval-id s))
+    (answer-question s answers)
+    [s false]))
+
 (defn apply-turn-text
   "Fold one turn's full row — the prose the branch listing leaves out.
 

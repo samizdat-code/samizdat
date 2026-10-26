@@ -142,6 +142,7 @@
   (let [state (atom (-> (st/initial "http://x:1")
                         (assoc :run-id "old-run"
                                :approvals [{:id "old-approval"}]
+                               :approval-id "old-approval"
                                :reply {:kind :deny-note :id "old-approval"})))
         started (promise)
         answer (promise)
@@ -166,7 +167,8 @@
 
 (deftest duplicate-decisions-are-suppressed-until-the-first-completes
   (let [state (atom (-> (st/initial "http://x:1")
-                        (assoc :run-id "old-run" :approvals [{:id "approval-1"}])))
+                        (assoc :run-id "old-run" :approvals [{:id "approval-1"}]
+                               :approval-id "approval-1")))
         started (promise)
         answer (promise)
         calls (atom [])
@@ -234,3 +236,130 @@
     (deliver answer {:ok true})
     (is (= {:ok true} (deref pending 1000 ::timeout)))
     (is (= "" (:input @state)))))
+
+(deftest an-older-success-preserves-a-newer-action-refusal
+  (let [state (selected "first directive")
+        steer-started (promise)
+        steer-answer (promise)
+        abort-started (promise)
+        abort-answer (promise)
+        steer (actions/steer!
+               (environment state
+                            {:intervene! (deferred-call steer-started steer-answer (atom []))}
+                            (atom 0) (atom []))
+               "first directive")
+        abort (actions/abort!
+               (environment state
+                            {:abort! (deferred-call abort-started abort-answer (atom []))}
+                            (atom 0) (atom [])))]
+    (is (= true (deref steer-started 1000 false)))
+    (is (= true (deref abort-started 1000 false)))
+    (deliver abort-answer {:ok false :error "newer abort refusal"})
+    (is (= {:ok false :error "newer abort refusal"}
+           (deref abort 1000 ::timeout)))
+    (is (= "newer abort refusal" (:error @state)))
+    (deliver steer-answer {:ok true})
+    (is (= {:ok true} (deref steer 1000 ::timeout)))
+    (is (= "newer abort refusal" (:error @state))
+        "an older success cannot erase the refusal the user needs to see")))
+
+(deftest a-stale-decision-is-refused-after-a-same-run-head-change
+  (let [state (atom (-> (st/initial "http://x:1")
+                        (assoc :run-id "old-run"
+                               :approvals [{:id "new-approval"}]
+                               :approval-id "new-approval")))
+        calls (atom [])
+        pending (actions/decide!
+                 (environment state
+                              {:decide! (fn [& args] (swap! calls conj args) {:ok true})}
+                              (atom 0) (atom []))
+                 "old-approval" {:decision :allow})]
+    (is (nil? pending))
+    (Thread/sleep 100)
+    (is (empty? @calls))
+    (is (nil? (:decision-pending @state)))
+    (is (= [] (:question-answers @state)))))
+
+(deftest a-stale-questionnaire-answer-does-not-change-the-new-head
+  (let [answer-for (resolve 'samizdat.tui.state/answer-question-for)]
+    (is (ifn? answer-for))
+    (when answer-for
+      (let [s (-> (st/initial "http://x:1")
+                  (assoc :run-id "old-run"
+                         :approvals [{:id "new-approval"
+                                      :questions [{:question "new?"}]}]
+                         :approval-id "new-approval"
+                         :question-answers ["keep"]))
+            [next done?] (answer-for s "old-approval" ["replace"])]
+        (is (identical? s next))
+        (is (false? done?))
+        (is (= ["keep"] (:question-answers next)))))))
+
+(deftest a-successful-retry-clears-only-that-actions-earlier-refusal
+  (let [state (selected "retry this")
+        responses (atom [{:ok false :error "temporary refusal"}
+                         {:ok true}])
+        polls (atom 0)
+        env (environment state
+                         {:intervene! (fn [& _]
+                                        (let [r (first @responses)]
+                                          (swap! responses subvec 1)
+                                          r))}
+                         polls (atom []))]
+    (is (= {:ok false :error "temporary refusal"}
+           (deref (actions/steer! env "retry this") 1000 ::timeout)))
+    (is (= "temporary refusal" (:error @state)))
+    (is (= {:ok true} (deref (actions/steer! env "retry this") 1000 ::timeout)))
+    (is (nil? (:error @state))
+        "the retry owns and clears the earlier refusal")))
+
+(deftest an-older-success-cannot-clear-a-newer-refusal-for-the-same-action
+  (let [state (selected "same action")
+        first-started (promise)
+        first-answer (promise)
+        second-started (promise)
+        second-answer (promise)
+        first (actions/steer!
+               (environment state
+                            {:intervene! (deferred-call first-started first-answer (atom []))}
+                            (atom 0) (atom []))
+               "same action")
+        second (actions/steer!
+                (environment state
+                             {:intervene! (deferred-call second-started second-answer (atom []))}
+                             (atom 0) (atom []))
+                "same action")]
+    (is (= true (deref first-started 1000 false)))
+    (is (= true (deref second-started 1000 false)))
+    (deliver second-answer {:ok false :error "newer steer refusal"})
+    (is (= {:ok false :error "newer steer refusal"}
+           (deref second 1000 ::timeout)))
+    (deliver first-answer {:ok true})
+    (is (= {:ok true} (deref first 1000 ::timeout)))
+    (is (= "newer steer refusal" (:error @state)))))
+
+(deftest an-older-failure-cannot-replace-a-newer-success-for-the-same-action
+  (let [state (selected "same action")
+        first-started (promise)
+        first-answer (promise)
+        second-started (promise)
+        second-answer (promise)
+        first (actions/steer!
+               (environment state
+                            {:intervene! (deferred-call first-started first-answer (atom []))}
+                            (atom 0) (atom []))
+               "same action")
+        second (actions/steer!
+                (environment state
+                             {:intervene! (deferred-call second-started second-answer (atom []))}
+                             (atom 0) (atom []))
+                "same action")]
+    (is (= true (deref first-started 1000 false)))
+    (is (= true (deref second-started 1000 false)))
+    (deliver second-answer {:ok true})
+    (is (= {:ok true} (deref second 1000 ::timeout)))
+    (deliver first-answer {:ok false :error "stale steer refusal"})
+    (is (= {:ok false :error "stale steer refusal"}
+           (deref first 1000 ::timeout)))
+    (is (nil? (:error @state))
+        "the newer success has already settled this action")))

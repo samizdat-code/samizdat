@@ -34,8 +34,32 @@
                      s)))
     @applied))
 
-(defn- note-result [s r]
-  (st/note-error s (when-not (:ok r) (:error r))))
+(defonce ^:private action-clock (atom 0))
+
+(defn- action-token [run-id kind]
+  {:key [run-id kind] :generation (swap! action-clock inc)})
+
+(defn- note-result [s r {:keys [key generation]}]
+  (let [settled (get-in s [:action-settlements key] 0)
+        error-generation (:action-error-generation s)]
+    (if (< generation settled)
+      s
+      (let [s (assoc-in s [:action-settlements key] generation)]
+        (cond
+          (:ok r)
+          (if (and (= key (:action-error-key s))
+                   (<= (or error-generation 0) generation))
+            (-> s
+                (assoc :action-error-key nil :action-error-generation nil)
+                (st/note-error nil))
+            s)
+
+          (>= generation (or error-generation 0))
+          (-> s
+              (st/note-error (:error r))
+              (assoc :action-error-key key :action-error-generation generation))
+
+          :else s)))))
 
 (defn steer!
   "Send the compose box as a directive, or resume an interrupted run with it."
@@ -44,7 +68,8 @@
     (let [{:keys [base run-id branch-id] :as s} @state]
       (if-not run-id
         (swap! state st/note-error "no run selected")
-        (let [interrupted? (st/interrupted? s)]
+        (let [interrupted? (st/interrupted? s)
+              action (action-token run-id :steer)]
           (when interrupted? (swap! state st/note-notice "resuming…"))
           (future
             (let [r (response #(if interrupted?
@@ -53,7 +78,7 @@
                                   {:branch-id branch-id :kind "message" :payload payload})))]
               (when (apply-current state run-id
                                    (fn [s]
-                                     (cond-> (note-result s r)
+                                     (cond-> (note-result s r action)
                                        (:ok r) (st/clear-sent-draft text))))
                 (poll!))
               r)))))))
@@ -63,10 +88,11 @@
   (let [{:keys [base run-id]} @state]
     (if-not run-id
       (swap! state st/note-error "no run selected")
-      (future
-        (let [r (response #((:abort! client) base run-id))]
-          (when (apply-current state run-id #(note-result % r)) (poll!))
-          r)))))
+      (let [action (action-token run-id :abort)]
+        (future
+          (let [r (response #((:abort! client) base run-id))]
+            (when (apply-current state run-id #(note-result % r action)) (poll!))
+            r))))))
 
 (defn resume!
   ([env] (resume! env nil))
@@ -74,10 +100,11 @@
    (let [{:keys [base run-id]} @state]
      (if-not run-id
        (swap! state st/note-error "no run selected")
-       (future
-         (let [r (response #((:resume! client) base run-id opts))]
-           (when (apply-current state run-id #(note-result % r)) (poll!))
-           r))))))
+       (let [action (action-token run-id :resume)]
+         (future
+           (let [r (response #((:resume! client) base run-id opts))]
+             (when (apply-current state run-id #(note-result % r action)) (poll!))
+             r)))))))
 
 (defn decide!
   "Answer an approval without blocking input. Its reply editor closes locally;
@@ -88,21 +115,24 @@
         decision (if (map? decision) decision {:decision decision})]
     (if-not run-id
       (swap! state st/note-error "no run selected")
-      (let [[before]
+      (let [action (action-token run-id [:decide id])
+            [before]
             (swap-vals! state
                         (fn [s]
                           (if (and (= run-id (:run-id s))
+                                   (= id (:approval-id s))
                                    (nil? (:decision-pending s)))
                             (-> s (assoc :decision-pending id) st/cancel-reply)
                             s)))]
         (when (and (= run-id (:run-id before))
+                   (= id (:approval-id before))
                    (nil? (:decision-pending before)))
           (future
             (let [r (response #((:decide! client) base id decision))]
               (when (apply-current
                      state run-id
                      (fn [s]
-                       (cond-> (note-result s r)
+                       (cond-> (note-result s r action)
                          (= id (:decision-pending s)) (assoc :decision-pending nil))))
                 (poll!))
               r)))))))

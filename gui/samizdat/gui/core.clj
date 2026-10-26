@@ -199,7 +199,9 @@
                         (refresh-branch-log!)))
                     (glpane/request-render!))
                   :on-status
-                  (fn [s] (swap! state assoc :connected? (:connected? s)))}))))))
+                  (fn [s]
+                    (swap! state assoc :connected? (:connected? s))
+                    (approval/poll-status! state api/approvals glpane/unmount! s))}))))))
 
 (defn- refresh-runs!
   "Re-fetch the run list; keep the current selection when it still exists,

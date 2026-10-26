@@ -41,25 +41,26 @@
   ([state approvals] (refresh! state approvals nil))
   ([state approvals on-approval]
    (let [token (Object.)
-         request (atom nil)]
-     (swap! state (fn [s]
-                    (if-not (:run s)
-                      s
-                      (if (:approval-refresh-token s)
-                        (assoc s :approval-refresh-needed? true)
-                        (do (reset! request {:base-url (:base-url s) :run (:run s)})
-                            (assoc s :approval-refresh-token token
-                                   :approval-refresh-needed? false))))))
-     (when-let [initial @request]
+         [before after]
+         (swap-vals! state
+                     (fn [s]
+                       (cond
+                         (not (:run s)) s
+                         (:approval-refresh-token s)
+                         (assoc s :approval-refresh-needed? true)
+                         :else
+                         (assoc s :approval-refresh-token token
+                                :approval-refresh-needed? false))))]
+     (when (and (:run before)
+                (nil? (:approval-refresh-token before))
+                (= token (:approval-refresh-token after)))
        (future
-         (loop [{:keys [base-url run]} initial]
+         (loop [{:keys [base-url run]} after]
            (let [response (try (approvals base-url run)
                                (catch Throwable e {:ok false :error (ex-message e)}))
-                 previous (atom nil)
-                 follow-up (atom nil)
-                 next (swap! state
+                 [previous next]
+                 (swap-vals! state
                              (fn [s]
-                               (reset! previous s)
                                (let [s (if (and (= run (:run s))
                                                 (= token (:approval-refresh-token s)))
                                          (shared/apply-approvals s response)
@@ -69,31 +70,44 @@
                                    (not (:approval-refresh-needed? s))
                                    (assoc s :approval-refresh-token nil)
                                    (:run s)
-                                   (do (reset! follow-up {:base-url (:base-url s) :run (:run s)})
-                                       (assoc s :approval-refresh-needed? false))
+                                   (assoc s :approval-refresh-needed? false)
                                    :else
                                    (assoc s :approval-refresh-token nil
                                           :approval-refresh-needed? false)))))]
-             (when (and on-approval (empty? (:approvals @previous))
+             (when (and on-approval (empty? (:approvals previous))
                         (seq (:approvals next)))
                (on-approval))
-             (if-let [request @follow-up]
-               (recur request)
+             (if (= token (:approval-refresh-token next))
+               (recur {:base-url (:base-url next) :run (:run next)})
                response))))))))
+
+(defn poll-status!
+  "Refresh approvals on every connected journal poll, including empty batches.
+  Approval announcements live on the event bus, not in the journal."
+  [state approvals on-approval poll-state]
+  (when (:connected? poll-state)
+    (refresh! state approvals on-approval)))
 
 (defn- claim-decision!
   ([state id] (claim-decision! state id nil))
   ([state id answers]
-   (let [claim (atom nil)]
-     (swap! state
-            (fn [s]
-              (if (and (:run s) (= id (:approval-id s)) (not (:approval-pending s)))
-                (let [[next done?] (if answers (shared/answer-question s answers) [s nil])]
-                  (reset! claim {:run (:run s) :before s :done? done?})
-                  (cond-> (assoc next :notice nil)
-                    (or (nil? answers) done?) (assoc :approval-pending id)))
-                s)))
-     @claim)))
+   (let [eligible? (fn [s]
+                     (and (:run s) (= id (:approval-id s))
+                          (not (:approval-pending s))))
+         transition (fn [s]
+                      (if (eligible? s)
+                        (let [[next done?]
+                              (if answers (shared/answer-question s answers) [s nil])]
+                          (cond-> (assoc next :notice nil)
+                            (or (nil? answers) done?) (assoc :approval-pending id)))
+                        s))
+         [before after] (swap-vals! state transition)]
+     (when (and (eligible? before) (= after (transition before)))
+       {:run (:run before)
+        :before before
+        :done? (when answers
+                 (>= (count answers)
+                     (count (:questions (first (:approvals before))))))}))))
 
 (defn- clear-pending [state run id]
   (swap! state (fn [s]

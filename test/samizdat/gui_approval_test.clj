@@ -20,6 +20,7 @@
   "Approval hiccup and its asynchronous HTTP coordination, without GTK."
   (:require [clojure.test :refer [deftest testing is]]
             [samizdat.approval-view :as shared]
+            [samizdat.gui.api :as api]
             [samizdat.gui.approval :as approval]
             [samizdat.gui.ops :as ops]))
 
@@ -434,3 +435,68 @@
     (is @raced)
     (is (= "q2" (:approval-id @state)))
     (is (nil? (:approval-pending @state)))))
+
+(deftest successful-journal-polls-fetch-approvals-that-only-live-on-the-bus
+  (let [state (atom {:base-url "http://x:1" :run "r1"})
+        calls (atom 0)
+        poll-status (resolve 'samizdat.gui.approval/poll-status!)
+        fetch (fn [_ _]
+                (swap! calls inc)
+                {:ok true :body {:approvals [permission]}})]
+    (is (ifn? poll-status))
+    (when poll-status
+      (with-redefs [samizdat.api.client/journal-since
+                    (fn [& _] {:ok true :body {:events []}})]
+        (let [{:keys [stop!]} (api/start-poller!
+                               {:base "http://x:1" :run-id "r1"
+                                :on-status #(poll-status state fetch nil %)})]
+          (try
+            (is (loop [n 0]
+                  (cond (>= @calls 2) true
+                        (< n 200) (do (Thread/sleep 10) (recur (inc n)))
+                        :else false))
+                "empty journal batches still deliver periodic approval refreshes")
+            (is (= ["p1"] (mapv :id (:approvals @state))))
+            (finally (stop!))))))))
+
+(defn- raced-call
+  [original competitor a f args]
+  (let [before @a]
+    (apply f before args)
+    (reset! a (competitor before))
+    (apply original a f args)))
+
+(deftest a-retried-refresh-claim-cannot-start-a-refused-request
+  (let [state (atom {:base-url "http://x:1" :run "r1"})
+        calls (atom 0)
+        swap* swap!
+        swap-vals* swap-vals!
+        competitor #(assoc % :approval-refresh-token (Object.))
+        pending (with-redefs [swap! (fn [a f & args]
+                                      (raced-call swap* competitor a f args))
+                              swap-vals! (fn [a f & args]
+                                           (raced-call swap-vals* competitor a f args))]
+                  (approval/refresh! state (fn [& _] (swap! calls inc) {:ok true})))]
+    (is (nil? pending)
+        "a speculative request is discarded when a competing refresh wins")
+    (Thread/sleep 100)
+    (is (zero? @calls))))
+
+(deftest a-retried-decision-claim-cannot-post-a-refused-decision
+  (let [state (asking permission)
+        calls (atom [])
+        swap* swap!
+        swap-vals* swap-vals!
+        competitor #(assoc % :approval-pending "competing-decision")
+        pending (with-redefs [swap! (fn [a f & args]
+                                      (raced-call swap* competitor a f args))
+                              swap-vals! (fn [a f & args]
+                                           (raced-call swap-vals* competitor a f args))]
+                  (approval/decide! state {:decide! (fn [& args]
+                                                     (swap! calls conj args)
+                                                     {:ok true})}
+                                    "p1" {:decision :allow}))]
+    (is (nil? pending)
+        "a speculative decision is discarded when a competing decision wins")
+    (Thread/sleep 100)
+    (is (empty? @calls))))
