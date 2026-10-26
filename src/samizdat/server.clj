@@ -386,6 +386,8 @@
                   (json-response 400 {:error {:message (:problem r)}}))))}
       {:method :get :path "/v1/runs" :response
     (fn [req] (json-response (api-runs/list-runs (system/conn) (long-param req "limit"))))}
+   {:method :get :path "/v1/activity" :response
+    (fn [_] (json-response (api-runs/activity (system/conn) nil)))}
    ;; `(or (:status r) 200)`, the same shape resume uses: a handler that refuses
    ;; says so with a status, and success carries none. Answering 200 with an
    ;; error body let a caller checking only the code read a refusal as success.

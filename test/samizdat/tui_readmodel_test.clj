@@ -25,6 +25,7 @@
   every other panel work identically on a live run and a finished one."
   (:require [clojure.test :refer [deftest testing is]]
             [db.jdbc]
+            [samizdat.agent.activity :as activity]
             [samizdat.agent.live :as live]
             [samizdat.api.runs :as api-runs]
             [samizdat.store.db :as db]
@@ -50,6 +51,29 @@
       (let [board (:tasks (api-runs/get-run c rid))]
         (is (= 2 (count board)))
         (is (= #{"wire the panel" "and close it"} (set (map :title board))))))))
+
+(deftest activity-is-a-shared-journal-backed-active-run-projection
+  (with-db [c]
+    (let [active (runs/start-run! c {:problem "watch me"})
+          other (runs/start-run! c {:problem "other"})
+          finished (runs/start-run! c {:problem "done"})]
+      (runs/open-branch! c active {:branch-id "B1"})
+      (runs/open-branch! c active {:branch-id "B2"})
+      (write-turn! c active "B1" 1 "read_file" "src/a.clj")
+      (runs/finish-run! c finished :completed nil)
+      (let [s (activity/snapshot c)
+            row (first (filter #(= active (:id %)) (:runs s)))
+            preview (activity/snapshot c other)]
+        (is (= #{active other} (set (map :id (:runs s))))
+            "all clients see every active run, not terminal history")
+        (is (= 2 (:active_branches row)))
+        (is (= #{"B1" "B2"} (set (map :id (:branches row)))))
+        (is (= (journal/last-event-id c nil) (:cursor s))
+            "the same global cursor drives reconnects")
+        (is (= [other] (mapv :id (:runs preview)))
+            "a client can preview another active run by id")
+        (is (= (:id (last (journal/events-since c other 0 100)))
+               (:cursor preview)))))))
 
 (def ^:private cfg
   "A server whose default is a local model and which also declares a hosted
