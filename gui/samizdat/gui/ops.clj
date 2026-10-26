@@ -77,17 +77,14 @@
   "Claim and submit one new run. A repeat while the request is in flight
   returns nil without issuing another request."
   [state body notice start-run on-success]
-  (let [claim (atom nil)]
-    (swap! state
-           (fn [s]
-             (if (:starting? s)
-               s
-               (do
-                 (reset! claim {:base-url (:base-url s)})
-                 (assoc s :starting? true :notice notice)))))
-    (when-let [{:keys [base-url]} @claim]
+  (let [[previous] (swap-vals! state
+                               (fn [s]
+                                 (if (:starting? s)
+                                   s
+                                   (assoc s :starting? true :notice notice))))]
+    (when-not (:starting? previous)
       (future
-        (let [response (try (start-run base-url body)
+        (let [response (try (start-run (:base-url previous) body)
                             (catch Throwable e {:ok false :error (ex-message e)}))
               id (get-in response [:body :run_id])]
           (swap! state apply-start response)

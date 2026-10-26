@@ -687,25 +687,22 @@
   "Claim and submit one run start. A repeat while the request is in flight
   returns nil without issuing another request."
   [state text start-run after]
-  (let [claim (atom nil)]
-    (swap! state
-           (fn [s]
-             (cond
-               (:starting? s) s
-               :else
-               (if-let [problem (steer-payload text)]
-                 (do
-                   (reset! claim {:base (:base s)
-                                  :body (merge {:problem problem} (:next-llm s))})
-                   (note-notice (assoc s :starting? true) "starting…"))
-                 (note-error s "type a problem statement first")))))
-    (when-let [{:keys [base body]} @claim]
-      (future
-        (let [response (try (start-run base body)
-                            (catch Throwable e {:ok false :error (ex-message e)}))]
-          (swap! state apply-start response)
-          (after)
-          response)))))
+  (if-let [problem (steer-payload text)]
+    (let [[previous] (swap-vals! state
+                                 (fn [s]
+                                   (if (:starting? s)
+                                     s
+                                     (note-notice (assoc s :starting? true) "starting…"))))]
+      (when-not (:starting? previous)
+        (let [base (:base previous)
+              body (merge {:problem problem} (:next-llm previous))]
+          (future
+            (let [response (try (start-run base body)
+                                (catch Throwable e {:ok false :error (ex-message e)}))]
+              (swap! state apply-start response)
+              (after)
+              response)))))
+    (swap! state note-error "type a problem statement first")))
 
 (defn apply-start
   "Fold the answer to POST /v1/runs and release the in-flight start guard.

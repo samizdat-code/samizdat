@@ -464,6 +464,51 @@
         (is (false? (:starting? @state)))
         (is (= 1 (count @calls)))))))
 
+(deftest simultaneous-starts-launch-only-one-request
+  (let [state (atom (st/set-input (st/initial "b") "build a parser"))
+        calls (atom 0)
+        requested (promise)
+        second-request (promise)
+        answer (promise)
+        entered (atom 0)
+        both (promise)
+        release (promise)
+        swap* swap!
+        swap-vals* swap-vals!
+        pause (fn []
+                (when (= 2 (swap! entered inc)) (deliver both true))
+                (deref both 1000 nil)
+                (deref release 1000 nil))
+        pause-transition (fn [f]
+                           (fn [s & args]
+                             (let [next-state (apply f s args)]
+                               (when (and (not (:starting? s)) (:starting? next-state))
+                                 (pause))
+                               next-state)))
+        start-run (fn [_ _]
+                    (let [n (swap! calls inc)]
+                      (deliver requested true)
+                      (when (= 2 n) (deliver second-request true))
+                      @answer))]
+    (with-redefs [swap! (fn [a f & args]
+                          (apply swap* a (pause-transition f) args))
+                  swap-vals! (fn [a f & args]
+                               (apply swap-vals* a (pause-transition f) args))]
+      (let [a (future (st/start! state "build a parser" start-run (fn [])))
+            b (future (st/start! state "build a parser" start-run (fn [])))]
+        (is (= true (deref both 1000 ::timeout)))
+        (deliver release true)
+        (let [pending-a (deref a 1000 ::timeout)
+              pending-b (deref b 1000 ::timeout)]
+          (is (not= ::timeout pending-a))
+          (is (not= ::timeout pending-b))
+          (is (= true (deref requested 1000 ::timeout)))
+          (deref second-request 100 nil)
+          (is (= 1 @calls))
+          (deliver answer {:ok false :error "HTTP 503"})
+          (doseq [pending [pending-a pending-b]]
+            (when (future? pending) @pending)))))))
+
 (deftest a-notice-is-not-an-error
   ;; The status line paints :error red. "starting…" is not a failure and must
   ;; not read as one, so it travels in its own field.

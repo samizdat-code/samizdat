@@ -116,6 +116,54 @@
             (is (empty? @attached))
             (is (re-find #"HTTP 503" (str (:notice @state))))))))))
 
+(deftest simultaneous-new-run-starts-launch-only-one-request
+  (let [state (atom {:base-url "http://x:1" :composing? true
+                     :form {:problem "build a parser"}})
+        calls (atom 0)
+        requested (promise)
+        second-request (promise)
+        answer (promise)
+        entered (atom 0)
+        both (promise)
+        release (promise)
+        swap* swap!
+        swap-vals* swap-vals!
+        pause (fn []
+                (when (= 2 (swap! entered inc)) (deliver both true))
+                (deref both 1000 nil)
+                (deref release 1000 nil))
+        pause-transition (fn [f]
+                           (fn [s & args]
+                             (let [next-state (apply f s args)]
+                               (when (and (not (:starting? s)) (:starting? next-state))
+                                 (pause))
+                               next-state)))
+        start-run (fn [_ _]
+                    (let [n (swap! calls inc)]
+                      (deliver requested true)
+                      (when (= 2 n) (deliver second-request true))
+                      @answer))]
+    (with-redefs [swap! (fn [a f & args]
+                          (apply swap* a (pause-transition f) args))
+                  swap-vals! (fn [a f & args]
+                               (apply swap-vals* a (pause-transition f) args))]
+      (let [a (future (ops/start! state {:problem "build a parser"} "starting…"
+                                  start-run (fn [_])))
+            b (future (ops/start! state {:problem "build a parser"} "starting…"
+                                  start-run (fn [_])))]
+        (is (= true (deref both 1000 ::timeout)))
+        (deliver release true)
+        (let [pending-a (deref a 1000 ::timeout)
+              pending-b (deref b 1000 ::timeout)]
+          (is (not= ::timeout pending-a))
+          (is (not= ::timeout pending-b))
+          (is (= true (deref requested 1000 ::timeout)))
+          (deref second-request 100 nil)
+          (is (= 1 @calls))
+          (deliver answer {:ok false :error "HTTP 503"})
+          (doseq [pending [pending-a pending-b]]
+            (when (future? pending) @pending)))))))
+
 (deftest connection-refreshes-approvals-and-approval-events-request-refresh
   (let [state (atom {:base-url "http://x:1" :run "r1"})
         calls (atom [])]
