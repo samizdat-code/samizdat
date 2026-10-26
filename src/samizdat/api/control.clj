@@ -130,6 +130,17 @@
         :body {:error {:message (unreachable-message (:base-url probed) why)
                        :type "endpoint_unreachable"}}})]))
 
+(defn- invalid-run-request
+  "A [nil HTTP-400] pair for a malformed numeric run option, else nil."
+  [body]
+  (some (fn [k]
+          (let [v (get body k)]
+            (when (and (some? v) (not (pos-int? v)))
+              [nil {:status 400
+                    :body {:error {:message (str k " must be a positive whole number")
+                                   :type "invalid_request_error"}}}])))
+        [:beam_width :max_turns :token_budget]))
+
 (defn start-run!
   "Kick off a run in the background and return its id immediately.
 
@@ -156,7 +167,8 @@
     {:status 400
      :body {:error {:message "a run needs a non-blank `problem`"
                     :type "invalid_request_error"}}}
-  (let [[llm-config refusal] (discovered (run-llm-config config (:llm config) body))]
+  (let [[llm-config refusal] (or (invalid-run-request body)
+                                 (discovered (run-llm-config config (:llm config) body)))]
   (or refusal
   (let [adapter (registry/adapter-for (:provider llm-config))
         abort (atom false)
@@ -434,6 +446,17 @@
                  value (assoc (name k) value)
                  provider (assoc :provider (name provider)))}))))
 
+(defn- grant-run-refusal
+  "Refuse grants for unknown or permanently closed runs, else nil."
+  [conn run-id]
+  (let [run (runs/get-run conn run-id)]
+    (cond
+      (nil? run)
+      {:status 404 :body {:error {:message (str "no run " run-id)}}}
+      (contains? runs/unresumable-statuses (str (:status run)))
+      {:status 409 :body {:error {:message (str "run " run-id " is already " (:status run))
+                                    :run_id run-id}}})))
+
 (defn intervene!
   "Record a human intervention. Queued kinds (message, cull, fork, …) go on
   the directive queue and apply at the next branch boundary. The exception is
@@ -447,47 +470,46 @@
   beyond the built-ins (config.edn :providers)."
   ([conn run-id body] (intervene! conn nil run-id body))
   ([conn config run-id body]
-  (if (= "grant" (:kind body))
-    (if-let [pattern (grant-pattern (:payload body))]
-      (do (grants/grant! conn run-id pattern)
-          (log/info "grant" pattern "recorded for run" run-id)
-          {:body {:status "granted" :pattern pattern :run_id run-id
-                  :note "Applied now. Commands matching the pattern are allowed for the rest of this run; a hard deny still wins."}})
-      {:status 400
-       :body {:error {:message "a grant intervention needs payload.pattern — the shell glob to allow"
-                     :run_id run-id}}})
-    (if-let [run (let [r (runs/get-run conn run-id)]
-                   (when (or (nil? r) (runs/terminal? r))
-                     (or r ::absent)))]
-      ;; A directive against a run that does not exist or has ended would sit
-      ;; `pending` forever — the UI showing an intervention that will never
-      ;; resolve (blt.38).
-      (if (= ::absent run)
-        {:status 404 :body {:error {:message (str "no run " run-id)}}}
-        {:status 409 :body {:error {:message (str "run " run-id " is already "
-                                                  (:status run))
-                                    :run_id run-id}}})
-    (if (contains? live-kinds (:kind body))
-      (live-switch! conn config run-id body)
-    (if-not (contains? interventions/kinds (:kind body))
-      ;; provenance R3-12: this reached submit!'s throw and surfaced as the
-      ;; server's catch-all 500. An unknown kind is the client's mistake.
-      {:status 400
-       :body {:error {:message (str "Unknown intervention kind " (pr-str (:kind body))
-                                    "; known: "
-                                    (str/join ", " (sort interventions/kinds)))}
-              :run_id run-id}}
-      (let [id (interventions/submit! conn run-id
+   (let [kind (:kind body)
+         run (runs/get-run conn run-id)]
+     (cond
+       (= "grant" kind)
+       (if-let [refusal (grant-run-refusal conn run-id)]
+         refusal
+         (if-let [pattern (grant-pattern (:payload body))]
+           (do (grants/grant! conn run-id pattern)
+               (log/info "grant" pattern "recorded for run" run-id)
+               {:body {:status "granted" :pattern pattern :run_id run-id
+                       :note "Applied now. Commands matching the pattern are allowed for the rest of this run; a hard deny still wins."}})
+           {:status 400
+            :body {:error {:message "a grant intervention needs payload.pattern — the shell glob to allow"
+                           :run_id run-id}}}))
+
+       (nil? run)
+       {:status 404 :body {:error {:message (str "no run " run-id)}}}
+
+       (runs/terminal? run)
+       {:status 409 :body {:error {:message (str "run " run-id " is already " (:status run))
+                                   :run_id run-id}}}
+
+       (contains? live-kinds kind)
+       (live-switch! conn config run-id body)
+
+       (not (contains? interventions/kinds kind))
+       {:status 400
+        :body {:error {:message (str "Unknown intervention kind " (pr-str kind)
+                                     "; known: " (str/join ", " (sort interventions/kinds)))
+                       :run_id run-id}}}
+
+       :else
+       (let [id (interventions/submit! conn run-id
                                       {:branch-id (:branch_id body)
-                                       :kind (:kind body)
+                                       :kind kind
                                        :payload (:payload body)
                                        :issued-by (or (:issued_by body) "human")})]
-        {:body
-         {:id id
-          :status "pending"
-          ;; Said plainly rather than implied, because the difference between
-          ;; accepted and applied is the thing a UI most easily lies about.
-          :note "Queued. It applies at the branch's next turn boundary, not now."}})))))))
+         {:body {:id id
+                 :status "pending"
+                 :note "Queued. It applies at the branch's next turn boundary, not now."}})))))
 
 (defn kinds
   "Every directive kind with what it does — the names from the store, the

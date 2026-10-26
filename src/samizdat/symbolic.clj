@@ -885,8 +885,10 @@
                         (vec (for [w (range 1 (inc requested))
                                    :when (<= (round-ms w) deadline-ms)]
                                [w (waves w)])))]
-    (if-not (and requested (pos? requested) (or table? deadline? budget?))
-      {:width requested}
+    (if (and requested (not (pos-int? requested)))
+      {:width 1 :infeasible? true :bound #{:request}}
+      (if-not (and requested (pos? requested) (or table? deadline? budget?))
+        {:width requested}
       (let [fits (l/run* [q]
                    (l/fresh [w r rp rc rpc rt wt]
                      (fd/in w (fd/interval 1 requested))
@@ -919,4 +921,4 @@
           (let [[w r] (apply max-key first fits)]
             (cond-> {:width w :bound (if (< w requested) (bound w) #{})}
               (or deadline? table?) (assoc :rounds r)))
-          {:width 1 :infeasible? true :bound (bound 0)})))))
+          {:width 1 :infeasible? true :bound (bound 0)}))))))

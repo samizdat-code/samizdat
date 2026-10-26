@@ -118,6 +118,46 @@
           (is (= "pending" (:status (:body r))))
           (is (= 1 (count (interventions/pending c rid)))))))))
 
+(deftest grants-respect-run-lifecycle
+  (with-db [c]
+    (let [grant (fn [rid]
+                  (api-control/intervene! c rid {:kind "grant"
+                                                 :payload {:pattern "git push *"}}))]
+      (is (= 404 (:status (grant "missing-run"))))
+      (doseq [status [:completed :aborted]]
+        (let [rid (runs/start-run! c {:problem "p"})]
+          (runs/finish-run! c rid status nil)
+          (is (= 409 (:status (grant rid)))
+              (str status " must not accept a grant"))))
+      (doseq [status [:failed :interrupted]]
+        (let [rid (runs/start-run! c {:problem "p"})]
+          (runs/finish-run! c rid status nil)
+          (is (nil? (:status (grant rid)))
+              (str status " remains eligible for a pre-resume grant"))))
+      (let [rid (runs/start-run! c {:problem "p"})]
+        (is (nil? (:status (grant rid))) "a live run accepts grants")))))
+
+(deftest run-input-validation-happens-before-discovery
+  (with-db [c]
+    (let [calls (atom 0)]
+      (with-redefs [api-control/discovered
+                    (fn [config]
+                      (swap! calls inc)
+                      [config nil])]
+        (doseq [[field value] [[:beam_width 0] [:beam_width -1] [:beam_width "wide"]
+                               [:max_turns 0] [:max_turns -1] [:max_turns "many"]
+                               [:token_budget 0] [:token_budget -1] [:token_budget "many"]]]
+          (let [r (api-control/start-run! {:conn c :config {:llm {:provider :local}}}
+                                          {:problem "p" field value})]
+            (is (= 400 (:status r)) (str field " " value " is not a budget"))))
+        (is (zero? @calls) "invalid requests never reach endpoint discovery")))))
+
+(deftest widest-beam-rejects-a-zero-request
+  (is (:infeasible?
+       (samizdat.symbolic/widest-beam
+        {:requested 0 :concurrency 1 :turn-ms 100 :deadline-ms 1000
+         :turns 1 :turn-tokens 10 :token-budget 100}))))
+
 ;; --- the drain at the boundary ----------------------------------------------
 
 (deftest a-pending-directive-is-drained-and-injected
