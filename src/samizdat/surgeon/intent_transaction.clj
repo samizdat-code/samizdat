@@ -32,6 +32,19 @@
        (vec (keep lossless-node-fingerprint (node/children form-node)))
        (node/string form-node))]))
 
+(defn- duplicate-map-key [form-node]
+  (when (= :map (node/tag form-node))
+    (let [keys (->> (node/children form-node)
+                    (remove node/whitespace-or-comment?)
+                    (partition 2)
+                    (map (comp node/sexpr first)))]
+      (some (fn [[key n]] (when (> n 1) key)) (frequencies keys)))))
+
+(defn- assert-distinct-map-keys! [form-node file {:keys [change-index id]}]
+  (when-let [key (duplicate-map-key form-node)]
+    (refuse! :duplicate-map-key nil
+             {:file file :change-index change-index :change-id id :key key})))
+
 (defn- parse-one-form [source label]
   (when-not (string? source)
     (refuse! :invalid-intent-form nil {:field label :actual source}))
@@ -210,7 +223,7 @@
     (when (seq unknown)
       (refuse! :unknown-change-arguments nil {:change-index change-index :unknown unknown})))
   (let [change-id (:id change)]
-    (when (and (some? change-id) (not (keyword? change-id)))
+    (when-not (keyword? change-id)
       (refuse! :invalid-change-id nil {:change-index change-index :actual change-id}))
     (let [files (validate-files! (:in change) change-index)
           forms (validate-change-forms! (:forms change) change-index)
@@ -355,6 +368,7 @@
         all-owner-records (when target-owner (outline/top-level-form-records file source))
         owner-records (scoped-owner-records! source file change)
         scoped? (or forms owner)
+        _ (when assoc-key (assert-distinct-map-keys! (:node from) file change))
         semantic-find (when assoc-key (node/sexpr (:node from)))
         semantic-inside (when inside (node/sexpr (:node inside)))]
     (if (or (= :delete operator) target-owner)
@@ -395,7 +409,9 @@
                              candidate-source (z/string candidate)
                              candidate-value (when assoc-key (node/sexpr candidate-node))
                              key-value (when assoc-key (node/sexpr (:node assoc-key)))
-                             closing (when assoc-key (str/last-index-of candidate-source "}"))]
+                             closing (when assoc-key (str/last-index-of candidate-source "}"))
+                             _ (when assoc-key
+                                 (assert-distinct-map-keys! candidate-node file change))]
                          (when (and assoc-key (contains? candidate-value key-value))
                            (refuse! :map-key-already-present nil
                                     {:file file :owner (:name containing) :key (:source assoc-key)}))

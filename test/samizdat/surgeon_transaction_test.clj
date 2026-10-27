@@ -80,6 +80,20 @@
                       {:changes [change change]
                        :expect {:changes 2 :edits 2 :files 1}}))))))
 
+(deftest missing-change-ids-refuse-before-selection
+  (let [file "src/missing_ids.clj"
+        source "(ns missing-ids)\n(def value [(old x) :body])\n"
+        data (refusal
+               {file source}
+               {:changes [(assoc (replacement nil [file] nil "(old x)" "(new x)" 1)
+                                 :id nil)
+                          (assoc (replacement nil [file] nil ":body" ":ready" 1)
+                                 :id nil)]
+                :expect {:changes 2 :edits 2 :files 1}})]
+    (is (= :invalid-change-id (:surgeon/error data)))
+    (is (= 0 (:change-index data)))
+    (is (nil? (:future-sources data)))))
+
 (deftest frozen-selection-does-not-cascade-and-overlaps-refuse
   (let [file "src/frozen.clj"
         source "(ns frozen)\n(def value [(old x) (new y)])\n"
@@ -216,6 +230,21 @@
     (is (str/includes? future "{:a 1 :b 2 :status :ready}"))
     (is (str/includes? future ";; Keep this exact explanation."))
     (is (str/includes? future ":b 2 :status :ready}"))))
+
+(deftest assoc-entry-refuses-duplicate-map-keys-before-semantic-matching
+  (let [file "src/duplicate_map.clj"
+        duplicate-source "(ns demo)\n(def view {:a 1 :a 2})\n"
+        spec (fn [find]
+               {:changes [{:id :status :in [file] :find find
+                           :do [:assoc-entry {:key ":status" :value ":ready"}]
+                           :expect {:matches 1}}]
+                :expect {:changes 1 :edits 1 :files 1}})]
+    (doseq [[source find] [[duplicate-source "{:a 2}"]
+                           ["(ns demo)\n(def view {:a 2})\n" "{:a 1 :a 2}"]]]
+      (let [data (refusal {file source} (spec find))]
+        (is (= :duplicate-map-key (:surgeon/error data)))
+        (is (= file (:file data)))
+        (is (nil? (:future-sources data)))))))
 
 (deftest complete-future-files-must-parse
   (let [file "src/future.clj"
