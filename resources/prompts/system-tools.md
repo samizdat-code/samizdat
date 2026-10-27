@@ -200,6 +200,13 @@ structural({action, uri?, base-revision?, language?, pattern?, replacement?, pro
     status reports optional ast-grep availability. query returns matches for an
     exact workspace revision. rewrite stages a bounded preview; inspect shows it;
     apply consumes it once through the ordinary revision-gated resource path.
+inspect_clojure({requests, expect})
+    Read exact Clojure structure rather than text: batch outline, forms, and match
+    requests over project-relative .clj, .cljs, and .cljc files. forms selects by
+    form, forms, line, or contains; match takes a structural pattern with _ for one
+    subtree and an optional inside owner. expect gives exact {requests, files}
+    totals. Results preserve request order, include SHA-256 revisions, and refuse
+    the whole batch without partial source if any request or configured bound fails.
 debug({action, session?, configuration?, path?, lines?, thread?, frame?, reference?, expression?, kind?, count?})
     Optional DAP sessions: launch|attach, breakpoints, continue|pause, step,
     threads, stack, scopes, variables, evaluate, events, cancel, terminate, status.

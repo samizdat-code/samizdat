@@ -162,6 +162,10 @@ flowchart LR
     reads --> readroots
     readroots --> redact
 
+    surgeon[inspect_clojure: bounded structural source reads]
+    toolcall --> surgeon
+    surgeon --> readroots
+
     resources[resource tool: revisioned reads and staged writes]
     toolcall --> resources
     resources --> readroots

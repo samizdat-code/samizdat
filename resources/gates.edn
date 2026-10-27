@@ -1766,6 +1766,13 @@
   :provenance ["karamazov-d1pw.7" "autolith structural query and rewrite"]
   :doc "Optional ast-grep executable, invocation deadline, source, match, and preview bounds."}
 
+ :clj-surgeon
+ {:value {:max-requests 32 :max-files 8 :max-forms 64 :max-matches 100
+          :max-source-chars 1048576 :max-result-chars 65536}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-p7c9.2"]
+  :doc "Native Clojure inspection batch, per-file selection, source, match, and rendered EDN bounds."}
+
  :debug
  {:value {:program nil :adapter-args [] :timeout-ms 10000
           :default-stack-frames 20 :default-variables 50 :default-event-page 1

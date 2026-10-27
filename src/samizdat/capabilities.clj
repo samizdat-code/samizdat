@@ -118,6 +118,7 @@
             [samizdat.sdiff.address]
             [samizdat.sdiff.names]
             [samizdat.sdiff.group]
+            [samizdat.surgeon.inspect]
             [samizdat.surgeon.move]
             [samizdat.surgeon.outline]
             [samizdat.agent.run-state]
