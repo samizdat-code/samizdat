@@ -20,7 +20,8 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest testing is]]
-            [samizdat.layers :as layers]))
+            [samizdat.layers :as layers]
+            [samizdat.profiles :as profiles]))
 
 ;; --- fixtures ----------------------------------------------------------------
 
@@ -164,6 +165,22 @@
   (with-dirs [root global]
     (put! global "gui.edn" "{:theme {:bg \"#000\"}}")
     (is (= {:theme {:bg "#000"}} (:value (layers/resolve "gui" (opts root global)))))))
+
+(deftest a-selected-profile-layers-beneath-project-settings
+  (with-dirs [root global]
+    (let [home (temp-dir "samizdat-profile-layer")]
+      (try
+        (let [p (profiles/create! home "work" {})]
+          (profiles/use! home "work")
+          (put! (:home p) "config/tui.edn" "{:a :profile :b :profile}")
+          (put! root ".samizdat/tui.edn" "{:a :project}")
+          (with-redefs [layers/config-home (fn [] global)]
+            (is (= (str (:home p) "/config") (layers/global-dir)))
+            (let [r (layers/resolve "tui" (opts root (layers/global-dir)))]
+              (is (= {:a :project :b :profile} (:value r))
+                  "profile settings never replace the project's own role configuration"))))
+        (finally (profiles/clear!)
+                 (delete-recursively (io/file home)))))))
 
 ;; --- where things are --------------------------------------------------------
 

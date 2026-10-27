@@ -55,7 +55,10 @@ Two kinds of file, deliberately different:
   copies that map and every file it names into `<root>/.samizdat/`
   (`userspace/seed-project!`), and from then on only the project's map and
   files are read — there is no global set, because the point is a workflow
-  that adapts to each project. `src/` asks for a ROLE and never lists what a
+  that adapts to each project. A selected operator profile uses its own binding
+  seeded from that role map and workflow files, so its later edits and database
+  stay isolated without introducing a global workflow. `src/` asks for a ROLE
+  and never lists what a
   project has; a role the map lacks is refused with a message naming the
   role and the map, never answered by the shipped template. Every edit is
   CHECKED before it runs (`userspace/register-validator!` per kind): one that
@@ -75,10 +78,13 @@ Two kinds of file, deliberately different:
   remembered in `.samizdat/adoption.edn`.
 - **Settings follow the person.** `config.edn` and each front end's file
   (`tui.edn`, later `gui.edn`, `webui.edn`) are LAYERED by
-  `samizdat.layers`: `$SAMIZDAT_<NAME>_FILE` > `.samizdat/<name>.edn` >
+  `samizdat.layers`: `$SAMIZDAT_<NAME>_FILE` > `.samizdat/<name>.edn` > the
+  selected profile's `config/<name>.edn` (when one is active) >
   `~/.config/samizdat/<name>.edn` > the shipped default, deep-merged (maps key
-  by key, vectors such as a hiccup `:layout` replaced whole). A new front end
-  is a new name, not a new loader.
+  by key, vectors such as a hiccup `:layout` replaced whole). Profiles retain
+  credential and knowledge references by path, never copied secret contents;
+  shared knowledge writers use `profiles/with-shared-lock`. A new front end is
+  a new name, not a new loader.
 
 `docs/RFCS/` specifies each layer: its purpose and scope, its API, and the
 invariants it holds. `docs/provenance.md` indexes the numbered review findings

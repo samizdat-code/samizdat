@@ -22,7 +22,8 @@
   resume, workflow/run! — calls `run-ended!` in its finally, so a new piece
   of per-run state is added here once and cannot be forgotten by one of
   them (a serve process otherwise keeps one entry per run it ever ran)."
-  (:require [samizdat.agent.verify :as verify]
+  (:require [samizdat.agent.context-edit :as context-edit]
+            [samizdat.agent.verify :as verify]
             [samizdat.llm.client :as llm]
             [samizdat.progress :as progress]
             [samizdat.sdiff.address :as address]
@@ -34,5 +35,5 @@
   failing must not keep the rest."
   [run-id]
   (doseq [f [verify/unseal-run! flow/forget-run! llm/forget-retired! address/forget-reads!
-             progress/forget-run!]]
+             progress/forget-run! context-edit/forget-run!]]
     (try (f run-id) (catch Throwable _ nil))))

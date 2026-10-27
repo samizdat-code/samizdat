@@ -162,6 +162,11 @@ flowchart LR
     reads --> readroots
     readroots --> redact
 
+    context[context_edit: projection only; journal history immutable]
+    toolcall --> context
+    context --> messages
+    context --> redact
+
     digest[read_digest: the files, whole, to the reader model]
     reader[outbound HTTP to the :reader role's provider, else the branch's]
     toolcall --> digest

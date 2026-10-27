@@ -888,7 +888,8 @@
         ;; looked for only when some file carries a label.
         (try (when (flow/any-labelled-file? (:conn ctx))
                (flow/read! ctx (read-paths command) "shell"))
-             (catch Throwable _ nil))
+             (catch Throwable _
+               (flow/observe! ctx flow/uncertain-label "shell")))
         ;; A missing exit code is a spawn that did not report one, which is
         ;; not evidence the command succeeded. `(or (:exit r) 0)` read it as
         ;; success, the opposite of what run-verify does with the same shape;

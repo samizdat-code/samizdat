@@ -251,6 +251,7 @@
    "battery"     {:reach :spawns-process :also "heldout/draft! git update-ref under secrets/scrubbed-process-env"}
    "fetch_turn"  {:reach :harness-only}
    "fetch_artifact" {:reach :harness-only}
+   "context_edit" {:reach :harness-only}
    "cells"       {:reach :harness-only}
    "cell"        {:reach :spawns-process :also "heldout/check-edit: git archive + a jolt child, both under secrets/scrubbed-process-env"}
    "reload_cells" {:reach :harness-only}

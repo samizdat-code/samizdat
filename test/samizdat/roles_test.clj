@@ -25,8 +25,8 @@
     (is (string? (roles/doc r)) (str r " has no doc — it must say what it is for"))))
 
 (deftest the-implementor-builds-and-the-supervisor-does-not
-  (testing "the implementor may change the project"
-    (doseq [t ["write_file" "edit_file" "patch" "eval" "plan"]]
+  (testing "the implementor may change the project and its context projection"
+    (doseq [t ["write_file" "edit_file" "patch" "eval" "plan" "context_edit"]]
       (is (roles/may-use? :implementor t) (str "implementor lost " t))))
   (testing "the supervisor may NOT change the project — that is not its job"
     (doseq [t ["write_file" "edit_file" "patch"]]

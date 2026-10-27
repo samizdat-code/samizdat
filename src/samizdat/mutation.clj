@@ -21,8 +21,8 @@
   cells.
 
   The agent edits a cell file, then this runs
-  checkpoint -> reload -> validate -> soak -> commit or rollback. A good edit
-  commits and is live on the next turn; a bad one — a syntax error, a wiring
+  checkpoint -> reload -> validate -> soak -> per-definition live probes ->
+  battery -> commit or rollback. A good edit commits and is live on the next turn; a bad one — a syntax error, a wiring
   break, or a cell that throws on valid input — rolls the registry AND the file
   back to the last known-good state and is journaled as a negative constraint,
   so a bad edit can never brick the loop.
@@ -30,7 +30,7 @@
   This is the plan's 'edit the executor, hot-reload, revert on fault' loop, and
   autolith's journaled mutation state machine (journal -> install -> check ->
   commit -> select -> durable) with a two-tier explore-then-commit: the reload
-  installs into the live image, validate + soak are the checks, and commit is
+  installs into the live image, validate + soak + live probes + battery are the checks, and commit is
   the point of no return. Once dolt lands (karamazov-ioo.17) a commit becomes a
   dolt commit and rollback a dolt revert; today the durable record is the cell
   file on disk plus the journal."
@@ -161,6 +161,104 @@
       (catch Throwable e
         (str "soak could not run: " (or (ex-message e) (str e)))))))
 
+(defn- referenced-cell-id [cell-ref]
+  (if (map? cell-ref) (:id cell-ref) cell-ref))
+
+(defn- affected-definitions [id loop-def extra-defs]
+  (vec (keep (fn [[path definition]]
+               (when (some #(= id (referenced-cell-id %))
+                           (vals (:cells definition)))
+                 [path definition]))
+             (cons ["loop" loop-def] extra-defs))))
+
+(defn- probe-path
+  [id path definition soak-input compile-fn baseline candidate-ids]
+  (let [called (atom false)
+        current (cell/get-cell id)
+        current-handler (:handler current)
+        overlays
+        (atom
+         (into {}
+           (for [[_ cell-ref] (:cells definition)
+                 :let [cell-id (referenced-cell-id cell-ref)
+                       spec (if (and (contains? candidate-ids cell-id)
+                                     (not= cell-id id))
+                              (get-in baseline [cell-id :spec])
+                              (cell/get-cell cell-id))]
+                 :when spec]
+             [cell-id
+              (cond
+                (= cell-id id)
+                (assoc spec :handler
+                       (fn [ctx data]
+                         (reset! called true)
+                         (current-handler ctx data)))
+
+                (not (cell/pure? spec))
+                (assoc spec :handler (fn [_ data] data))
+
+                :else spec)])))]
+    (try
+      (let [compiled (binding [cell/*overlay* overlays] (compile-fn definition))
+            [tag outcome]
+            (cancel/with-deadline
+             (ebb/via ebb/blk
+               (binding [cell/*overlay* overlays]
+                 (try {:result (myc/run-compiled compiled {:max-turns 1}
+                                                (or soak-input {}))}
+                      (catch Throwable e {:error (or (ex-message e) (str e))}))))
+             soak-timeout-ms)
+            error (case tag
+                    :timeout (prompt/render "mutation-probe" {:timeout true})
+                    :ok (or (:error outcome)
+                            (when (myc/error? (:result outcome))
+                              (:message (myc/workflow-error (:result outcome))))
+                            (when-not @called
+                              (prompt/render "mutation-probe" {:not-called true})))
+                    :err (or (ex-message outcome) (str outcome)))]
+        {:path path :ok? (nil? error) :called? @called :error error})
+      (catch Throwable e
+        {:path path :ok? false :called? @called
+         :error (or (ex-message e) (str e))}))))
+
+(defn- probe-definition
+  [id loop-def extra-defs soak-input compile-fn baseline candidate-ids]
+  (let [paths (affected-definitions id loop-def extra-defs)
+        results (if (seq paths)
+                  (into []
+                        (map (fn [[path definition]]
+                               (probe-path id path definition soak-input compile-fn
+                                           baseline candidate-ids)))
+                        paths)
+                  [{:path nil :ok? false :called? false
+                    :error (prompt/render "mutation-probe" {:no-path true})}])]
+    {:id id :ok? (every? :ok? results) :paths results}))
+
+(defn- changed-definition-ids [before after]
+  (vec
+   (distinct
+    (mapcat (fn [path]
+              (let [old-body (get before path)
+                    new-body (get after path)]
+                (when (not= old-body new-body)
+                  (cells/defcell-ids (or new-body old-body)))))
+            (distinct (concat (keys before) (keys after)))))))
+
+(defn- live-probes
+  [ids loop-def extra-defs soak-input compile-fn baseline probe-fn]
+  (let [candidate-ids (set ids)
+        probe-fn (or probe-fn probe-definition)
+        results (into []
+                      (map #(probe-fn % loop-def extra-defs soak-input compile-fn
+                                      baseline candidate-ids))
+                      ids)]
+    {:ok? (every? :ok? results) :results results}))
+
+(defn- probe-reason [{:keys [results]}]
+  (when-let [{:keys [id paths]} (first (remove :ok? results))]
+    (str "live probe " id ": "
+         (or (some :error paths) "failed"))))
+
 (defn- validate
   "Compile the loop definition through mycelium's static checks (structure,
   reachability, dispatch coverage, constraints). Also rejects a cell that did
@@ -209,24 +307,28 @@
     (catch Throwable _ nil)))
 
 (defn- rollback!
-  [{:keys [conn run-id dirs]} {:keys [changes files]} reason]
-  ;; Undo the edit on disk, restore the registry, then reload from the restored
-  ;; (good) files so the loader's known-good content re-syncs. The reload of
-  ;; good files cannot fail; if it somehow does, the registry restore above
-  ;; already left the running system working.
-  (let [attempt (attempt-of files)]
-  (restore-files! files)
-  (cell/undo! changes)
-  (try (reload-cells! dirs) (catch Throwable _ nil))
-  ;; WHAT WAS TRIED, not only that something was. Read before restore-files!
-  ;; above overwrites it — the reason alone lets the next run re-derive the
-  ;; same edit, which is the failure WikiSkill's skill-impact.md exists to
-  ;; prevent (karamazov-mpd).
-  (when (and conn run-id)
-    (journal/note! conn run-id :mutation-rolled-back
-                   {:data {:reason reason :attempt attempt}}))
-  (log/warn "cell mutation rolled back:" reason)
-  {:status :rolled-back :reason reason}))
+  ([opts checkpoint reason]
+   (rollback! opts checkpoint reason nil))
+  ([{:keys [conn run-id dirs]} {:keys [changes files]} reason probes]
+   ;; Undo the edit on disk, restore the registry, then reload from the restored
+   ;; (good) files so the loader's known-good content re-syncs. The reload of
+   ;; good files cannot fail; if it somehow does, the registry restore above
+   ;; already left the running system working.
+   (let [attempt (attempt-of files)]
+     (restore-files! files)
+     (cell/undo! changes)
+     (try (reload-cells! dirs) (catch Throwable _ nil))
+     ;; WHAT WAS TRIED, not only that something was. Read before restore-files!
+     ;; above overwrites it — the reason alone lets the next run re-derive the
+     ;; same edit, which is the failure WikiSkill's skill-impact.md exists to
+     ;; prevent (karamazov-mpd).
+     (when (and conn run-id)
+       (journal/note! conn run-id :mutation-rolled-back
+                      {:data (cond-> {:reason reason :attempt attempt}
+                               probes (assoc :probes probes))}))
+     (log/warn "cell mutation rolled back:" reason)
+     (cond-> {:status :rolled-back :reason reason}
+       probes (assoc :probes probes)))))
 
 (defn- battery-reason
   "Why a candidate was refused, naming the targets that flipped.
@@ -252,8 +354,9 @@
 
   Returns {:status :committed} on success (the edit is live), or
   {:status :rolled-back :reason \"...\"} with the registry and files restored."
-  [{:keys [dirs loop-def soak-input compile-fn soak-fn battery-fn conn run-id] :as opts}]
+  [{:keys [dirs loop-def extra-defs soak-input compile-fn soak-fn probe-fn battery-fn conn run-id] :as opts}]
   (let [compile-fn (or compile-fn myc/pre-compile)
+        candidate-ids (atom [])
         ;; Injected so a test can drive the ORDER of the ladder, and so the
         ;; battery can be supplied by the caller rather than requiring this
         ;; namespace to reach up into the workflow layer for a way to run one.
@@ -281,6 +384,8 @@
       ;; error throws here and the loader has already restored the registry;
       ;; we still restore the file below.
       (cell/recording (:changes checkpoint) #(reload-cells! dirs))
+      (reset! candidate-ids
+              (changed-definition-ids (:files checkpoint) (cells/loaded-file-content)))
       ;; VALIDATE — does the loop still compile with the edited cells, and
       ;; does every cell's :pure / :effects mark cover what its body reaches?
       ;; The second is over what was just loaded, before the soak that
@@ -292,28 +397,24 @@
         ;; SOAK — does the edited cell actually run without throwing?
         (if-let [reason (soak-fn compile-fn loop-def soak-input)]
           (rollback! opts checkpoint reason)
-          ;; BATTERY — does the edited cell REGRESS? The soak proves the edit
-          ;; does not crash; this is the paper's Step 3, replaying held-out
-          ;; recorded work against the candidate and refusing a candidate that
-          ;; scores below the retained baseline (karamazov-ylte.4). It runs
-          ;; LAST of the three because it is the dearest: a replay per case,
-          ;; and there is no point paying it for an edit the soak already
-          ;; rejected.
-          ;;
-          ;; OPT-IN. A project with no battery behaves exactly as before —
-          ;; otherwise every project without recorded cases could not tune
-          ;; itself at all, which would be a worse failure than the one the
-          ;; gate prevents.
-          (let [b (when battery-fn (battery-fn))]
-            (if (and b (not (:ok? b)))
-              (rollback! opts checkpoint (battery-reason b))
-              ;; COMMIT — the edit stands; it is already live in the registry.
-              (do (when (and conn run-id)
-                    (journal/note! conn run-id :mutation-committed
-                                   {:data {:cells (keys (cells/loaded))
-                                           :battery (select-keys b [:passed :total])}}))
-                  (log/info "cell mutation committed")
-                  {:status :committed})))))
+          (let [report (live-probes @candidate-ids loop-def extra-defs
+                                    (get opts :probe-input soak-input)
+                                    compile-fn @(:changes checkpoint) probe-fn)]
+            (if-not (:ok? report)
+              (rollback! opts checkpoint (probe-reason report) (:results report))
+              ;; BATTERY — replay held-out work only after every changed
+              ;; definition passed its own live path.
+              (let [b (when battery-fn (battery-fn))]
+                (if (and b (not (:ok? b)))
+                  (rollback! opts checkpoint (battery-reason b))
+                  ;; COMMIT — the edit stands; it is already live in the registry.
+                  (do (when (and conn run-id)
+                        (journal/note! conn run-id :mutation-committed
+                                       {:data {:cells (keys (cells/loaded))
+                                               :probes (:results report)
+                                               :battery (select-keys b [:passed :total])}}))
+                      (log/info "cell mutation committed")
+                      {:status :committed :probes (:results report)})))))))
       (catch Throwable e
         ;; RELOAD failed (syntax error): the loader restored the registry;
         ;; restore the file and report.
@@ -385,7 +486,7 @@
     :rationale  — why, stored with the committed version (karamazov-c58)
     :defer-fn   — (fn [candidate commit!] -> truthy when it took the commit),
                   the held-out battery off the turn (samizdat.heldout/defer!,
-                  karamazov-nha1): called after a clean soak; when it takes
+                  karamazov-nha1): called after a clean soak and live probes; when it takes
                   the edit, the registry is restored and the result is
                   {:status :pending} — `commit!` saves and loads it later
     :conn :run-id — to journal the outcome (optional)
@@ -393,20 +494,24 @@
   Returns {:status :committed :version n} or
   {:status :rolled-back :reason ...} with the registry restored and nothing
   written to the store."
-  [{:keys [name body loop-def extra-defs soak-input compile-fn rationale conn run-id defer-fn]}]
+  [{:keys [name body loop-def extra-defs soak-input compile-fn probe-fn rationale conn run-id defer-fn] :as opts}]
   (let [compile-fn (or compile-fn myc/pre-compile)
         shadowing (shadowed-cells name body)
         unearned (unearned-marks body)
         ;; What installing the candidate changes, undone by id on a
         ;; rejection (karamazov-bmce).
         installed (cell/recorder)
-        fail (fn [reason]
-               (cell/undo! installed)
-               (when (and conn run-id)
-                 (journal/note! conn run-id :mutation-rolled-back
-                                {:data {:cell name :reason reason}}))
-               (log/warn "cell proposal rejected:" name reason)
-               {:status :rolled-back :reason reason})]
+        fail (fn fail
+               ([reason] (fail reason nil))
+               ([reason probes]
+                (cell/undo! installed)
+                (when (and conn run-id)
+                  (journal/note! conn run-id :mutation-rolled-back
+                                 {:data (cond-> {:cell name :reason reason}
+                                          probes (assoc :probes probes))}))
+                (log/warn "cell proposal rejected:" name reason)
+                (cond-> {:status :rolled-back :reason reason}
+                  probes (assoc :probes probes))))]
     (cond
       (seq shadowing)
       ;; REFUSED BEFORE INSTALLING. A save under the wrong name is not a bad
@@ -451,43 +556,42 @@
         (fail reason)
         (if-let [reason (soak compile-fn loop-def soak-input)]
           (fail reason)
-          (if (and defer-fn
-                   ;; BATTERY, off the turn: the candidate is replayed from its
-                   ;; text in a child process, and goes live only if nothing
-                   ;; that passed before fails. Until then it is not live, so
-                   ;; the registry goes back to the running cells.
-                   (defer-fn {:kind :cell :name name :text body}
-                             (fn []
-                               (let [v (userspace/save! :cell name body rationale)]
-                                 (when (nil? v)
-                                   (throw (ex-info "no project store is bound" {})))
-                                 (reload-cells! nil)
-                                 (when (and conn run-id)
-                                   (journal/note! conn run-id :mutation-committed
-                                                  {:data {:cell name :version v :heldout true}}))
-                                 v))))
-            (do (cell/undo! installed)
-                {:status :pending})
-          ;; COMMIT. The candidate is already live; this is what makes it
-          ;; survive a restart and what another run will load.
-          ;;
-          ;; save! returns nil when no project store is bound (RFC-001), and
-          ;; that is NOT a commit: reporting :committed with a nil version had
-          ;; the tool telling the model "saved as v … live on your next turn"
-          ;; about an edit that vanishes on restart (karamazov-blt.8). It is
-          ;; not a rollback either — validate and soak passed, the candidate
-          ;; stays live in this image — so the caller hears exactly that.
-          (let [v (userspace/save! :cell name body rationale)]
-            (if (nil? v)
-              ;; :reason is a KEYWORD, not prose: the sentence the model reads
-              ;; is the tool's to render (prompts/cell-tool.md), same as every
-              ;; other model-facing word.
-              (do (log/warn "cell" name "is live but UNSAVED — no project store is bound")
-                  {:status :live-unsaved :reason :unbound})
-              (do (when (and conn run-id)
-                    (journal/note! conn run-id :mutation-committed
-                                   {:data {:cell name :version v}}))
-                  (log/info "cell" name "committed as version" v)
-                  {:status :committed :version v}))))))
+          (let [report (live-probes (cells/defcell-ids body) loop-def extra-defs
+                                    (get opts :probe-input soak-input)
+                                    compile-fn @installed probe-fn)]
+            (if-not (:ok? report)
+              (fail (probe-reason report) (:results report))
+              (if (and defer-fn
+                       ;; BATTERY, off the turn: the candidate is replayed from its
+                       ;; text in a child process, and goes live only if nothing
+                       ;; that passed before fails. Until then it is not live, so
+                       ;; the registry goes back to the running cells.
+                       (defer-fn {:kind :cell :name name :text body
+                                  :probes (:results report)}
+                                 (fn []
+                                   (let [v (userspace/save! :cell name body rationale)]
+                                     (when (nil? v)
+                                       (throw (ex-info "no project store is bound" {})))
+                                     (reload-cells! nil)
+                                     (when (and conn run-id)
+                                       (journal/note! conn run-id :mutation-committed
+                                                      {:data {:cell name :version v :heldout true
+                                                              :probes (:results report)}}))
+                                     v))))
+                (do (cell/undo! installed)
+                    {:status :pending :probes (:results report)})
+                ;; COMMIT. The candidate is already live; save! makes it durable.
+                (let [v (userspace/save! :cell name body rationale)]
+                  (if (nil? v)
+                    (do (log/warn "cell" name "is live but UNSAVED — no project store is bound")
+                        {:status :live-unsaved :reason :unbound
+                         :probes (:results report)})
+                    (do (when (and conn run-id)
+                          (journal/note! conn run-id :mutation-committed
+                                         {:data {:cell name :version v
+                                                 :probes (:results report)}}))
+                        (log/info "cell" name "committed as version" v)
+                        {:status :committed :version v
+                         :probes (:results report)}))))))))
       (catch Throwable e
         (fail (str "the candidate did not load — " (or (ex-message e) (str e)))))))))

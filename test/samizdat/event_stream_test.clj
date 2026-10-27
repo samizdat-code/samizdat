@@ -22,6 +22,7 @@
   talking over a real socket."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
+            [samizdat.api.runs :as api-runs]
             [samizdat.api.sse :as sse]
             [samizdat.api.stream :as stream]
             [samizdat.system :as system]
@@ -90,14 +91,19 @@
 (defn- pumping
   "Run the pump for `run-id` from `since` on a thread, collecting what it
   emits. Returns [emitted stop!]."
-  [conn run-id since]
-  (let [out (atom [])
-        stop (atom false)
-        f (future (stream/pump! {:conn conn :run-id run-id :since since
-                                 :emit! (fn [e] (swap! out conj e) true)
-                                 :stop? #(deref stop)
-                                 :poll-ms 10 :heartbeat-ms 60000 :page 2}))]
-    [out (fn [] (reset! stop true) (deref f 2000 :timeout))]))
+  ([conn run-id since]
+   (pumping conn run-id since nil))
+  ([conn run-id since emit!]
+   (let [out (atom [])
+         stop (atom false)
+         f (future (stream/pump! {:conn conn :run-id run-id :since since
+                                  :emit! (fn [e]
+                                           (and (or (nil? emit!) (emit! e))
+                                                (swap! out conj e)
+                                                true))
+                                  :stop? #(deref stop)
+                                  :poll-ms 10 :heartbeat-ms 60000 :page 2}))]
+     [out (fn [] (reset! stop true) (deref f 2000 :timeout))])))
 
 (defn- wait-for [pred]
   (loop [n 0]
@@ -135,6 +141,48 @@
                (get-in (sse/parse-data (:data (last (remove :comment @out)))) [:data :node]))
             "a namespaced keyword keeps its namespace and loses its colon"))
       (finally (stop!) (db/close conn)))))
+
+(deftest independent-clients-recover-overflow-and-reconnect-without-duplicates
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        before-subs (count @@#'events/subscribers)
+        before-watchers (count @@#'events/watchers)
+        blocked (promise)
+        release (promise)
+        first-write (atom true)
+        slow-emit (fn [_]
+                    (when (compare-and-set! first-write true false)
+                      (deliver blocked true)
+                      (deref release 2000 nil))
+                    true)]
+    (with-redefs [events/buffer-size 2]
+      (let [[fast stop-fast] (pumping conn rid 0)
+            [slow stop-slow] (pumping conn rid 0 slow-emit)]
+        (try
+          (is (true? (deref blocked 2000 false)))
+          (doseq [n (range 12)]
+            (journal/note! conn rid :progress {:data {:n n}}))
+          (deliver release true)
+          (let [expected (mapv (comp str :id) (journal/events-since conn rid 0 100))]
+            (is (wait-for #(= (count expected) (count @fast))))
+            (is (wait-for #(= (count expected) (count @slow))))
+            (is (= expected (mapv :id @fast)))
+            (is (= expected (mapv :id @slow))
+                "the slow client rereads the durable journal after its bus window overflows")
+            (is (= (count expected) (count (distinct (map :id @slow)))))
+            (stop-slow)
+            (let [cursor (:id (peek @slow))
+                  [reconnected stop-reconnected] (pumping conn rid cursor)]
+              (try
+                (journal/note! conn rid :after-reconnect {})
+                (is (wait-for #(= 1 (count @reconnected))))
+                (is (= ["after-reconnect"] (kinds reconnected))
+                    "the reconnect cursor excludes every event already held")
+                (finally (stop-reconnected)))))
+          (finally (stop-fast) (stop-slow)))))
+    (is (= before-subs (count @@#'events/subscribers)))
+    (is (= before-watchers (count @@#'events/watchers)))
+    (db/close conn)))
 
 (deftest the-pump-stops-when-the-client-is-gone
   (let [conn (db/open! ":memory:")
@@ -208,10 +256,12 @@
     (with-redefs [stream/response (fn [_conn run-id _cursor]
                                     (swap! seen conj run-id)
                                     {:status 200})
+                  api-runs/activity (fn [_conn _run-id] {:runs [] :cursor 0})
                   system/conn (constantly nil)]
       (let [handler @(resolve 'samizdat.server/handler)]
         (is (= 200 (:status (handler {:request-method :get :uri "/v1/runs/abc/events"}))))
-        (is (= 200 (:status (handler {:request-method :get :uri "/v1/events"}))))))
+        (is (= 200 (:status (handler {:request-method :get :uri "/v1/events"}))))
+        (is (= 200 (:status (handler {:request-method :get :uri "/v1/activity"}))))))
     (is (= ["abc" nil] @seen) "one run's stream, then every run's")))
 
 (deftest the-approval-mode-can-be-set-for-the-session

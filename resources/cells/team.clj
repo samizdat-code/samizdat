@@ -155,24 +155,27 @@
   comes back :conflict with its task reopened, which is a part
   :team/supervise re-tasks, from the tree as it now is. Under :shared, or
   where no worktree can be made, it is the shared tree as before."
-  [ctx worker bid idx st prob suffix task-id]
-  (if-not (and (= :worktree (:mode (gates/threshold :isolation))) (:root ctx))
-    (run-worker ctx worker bid idx st prob suffix task-id)
-    (let [r (wt/isolated (:root ctx) (:run-id ctx) bid
-                         (fn [dir]
-                           (run-worker (cond-> ctx dir (assoc :root dir))
-                                       worker bid idx st prob suffix task-id))
-                         ok?)
-          {:keys [conflict why no-patch]} (:worktree r)]
-      (if (or conflict no-patch)
-        (do (when (:task r)
-              (try (tasks/update! (:conn ctx) (:task r) {:status "open"}) (catch Throwable _ nil)))
-            (assoc r :status :conflict
-                   :answer (str (:answer r) "\n\n"
-                                (prompt/render "worktree-conflict"
-                                               {:paths (str/join ", " conflict) :why why
-                                                :no-patch (boolean no-patch)}))))
-        r))))
+  ([ctx worker bid idx st prob suffix task-id]
+   (run-owner ctx worker bid idx st prob suffix task-id 1))
+  ([ctx worker bid idx st prob suffix task-id attempt]
+   (let [out (if-not (and (= :worktree (:mode (gates/threshold :isolation))) (:root ctx))
+               (run-worker ctx worker bid idx st prob suffix task-id)
+               (let [r (wt/isolated (:root ctx) (:run-id ctx) bid
+                                    (fn [dir]
+                                      (run-worker (cond-> ctx dir (assoc :root dir))
+                                                  worker bid idx st prob suffix task-id))
+                                    ok?)
+                     {:keys [conflict why no-patch]} (:worktree r)]
+                 (if (or conflict no-patch)
+                   (do (when (:task r)
+                         (try (tasks/update! (:conn ctx) (:task r) {:status "open"}) (catch Throwable _ nil)))
+                       (assoc r :status :conflict
+                              :answer (str (:answer r) "\n\n"
+                                           (prompt/render "worktree-conflict"
+                                                          {:paths (str/join ", " conflict) :why why
+                                                           :no-patch (boolean no-patch)}))))
+                   r)))]
+     (assoc out :attempt attempt))))
 
 (cell/defcell :team/plan
   {:doc "Split the manager branch's problem into independent sub-tasks for the
@@ -343,7 +346,7 @@
                                   ;; work.
                                   r2 (run-owner ictx worker (str "W" i "r1") i
                                                  st st (worker-prompt i tasks)
-                                                 (:task r))]
+                                                 (:task r) 2)]
                               (if (ok? r2) r2 r))))
                         results)
           fixed (count (filter (fn [[a b]] (and (not (ok? a)) (ok? b)))
