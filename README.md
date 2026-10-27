@@ -39,6 +39,10 @@ jolt test       # full suite
 jolt smoke      # platform probes (sqlite, https, server)
 ```
 
+The GTK4 GUI lives in
+[samizdat-gui](https://github.com/samizdat-code/samizdat-gui). With `jolt
+serve` running here, run `jolt gui` in that checkout.
+
 The binary takes the same modes: `samizdat` starts the server and the TUI,
 `samizdat --headless` the server alone, and `samizdat --connect [URL]` the TUI
 alone against a server that is already running. With the TUI in the same
