@@ -10,7 +10,7 @@
             [samizdat.surgeon.inspect :as inspect]
             [samizdat.surgeon.tool :as tool]))
 
-(def ^:private operations #{"outline" "forms" "match"})
+(def ^:private operations #{"outline" "forms" "match" "xray"})
 
 (defn- msg [vars]
   (prompt/render "surgeon-inspect-tool" vars))
@@ -94,20 +94,28 @@
                                 :limit (:max-source-chars policy)})))
     observations))
 
-(defn- pure-result [request source file]
+(defn- pure-result [request source file policy]
   (try
     (case (operation request)
       "outline" (inspect/outline-source source file)
       "forms" (inspect/forms-source source file
                                     (dissoc request :operation :file))
-      "match" (inspect/match-source source (select-keys request [:inside :match])))
+      "match" (inspect/match-source source (select-keys request [:inside :match]))
+      "xray" (inspect/xray-source
+               source
+               (-> (select-keys request [:expression :evidence])
+                   (assoc :file file
+                          :max-source-chars (:max-source-chars policy)
+                          :max-query-steps (:max-forms policy)
+                          :max-matches (:max-matches policy)
+                          :max-result-chars (:max-result-chars policy)))))
     (catch Exception _
       (refuse! :request-failed {:file file :detail "invalid-source"}))))
 
 (defn- inspect-request [observations policy request]
   (let [file (:file request)
         observation (get observations file)
-        result (pure-result request (:content observation) file)]
+        result (pure-result request (:content observation) file policy)]
     (when-let [error-type (:error-type result)]
       (refuse! :request-failed {:file file :detail (name error-type)}))
     (when (> (or (:match-count result) 0) (:max-matches policy))

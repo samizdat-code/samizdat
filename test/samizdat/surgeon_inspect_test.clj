@@ -21,6 +21,7 @@
 
 (ns samizdat.surgeon-inspect-test
   (:require [clojure.test :refer [deftest is testing]]
+            [rewrite-clj.zip :as z]
             [samizdat.surgeon.forms :as forms]
             [samizdat.surgeon.inspect :as inspect]))
 
@@ -224,3 +225,152 @@
     (is (= :invalid-match (:error-type invalid-match)))
     (doseq [result [missing conflict invalid-source invalid-match]]
       (is (not (contains? result :error))))))
+
+(def xray-source
+  (str "(ns bench.xray)\n\n"
+       "(def data\n"
+       "  ^:private\n"
+       "  {:xs [1 2]\n"
+       "   ;; Keep the second vector distinct.\n"
+       "   :ys [3 4]})\n\n"
+       "(defn choose [x]\n"
+       "  (case x\n"
+       "    :a 1\n"
+       "    :b 2))\n"))
+
+(defn- xray
+  ([expression] (xray expression {}))
+  ([expression opts]
+   (inspect/xray-source
+     xray-source
+     (merge {:file "xray.clj"
+             :expression expression
+             :max-source-chars 100000
+             :max-query-steps 32
+             :max-matches 100
+             :max-result-chars 65536}
+            opts))))
+
+(deftest xray-literal-paths-select-forms-lines-and-initializers
+  (let [adjacent (xray "(-> (form 'data) (match :ys) right)")
+        initializer (xray "(-> (form 'data) initializer)")
+        by-line (xray "(-> (line 11) (match :b) right)")]
+    (is (= :literal (:mode adjacent)))
+    (is (= "[3 4]" (get-in adjacent [:matches 0 :source])))
+    (is (= [[:form 'data] [:find :ys] :right] (:query adjacent)))
+    (is (= 3 (count (:trace adjacent))))
+    (is (= {:xs [1 2] :ys [3 4]}
+           (-> initializer :matches first :source z/of-string z/sexpr)))
+    (is (= "2" (get-in by-line [:matches 0 :source])))
+    (is (= "choose" (get-in by-line [:matches 0 :inside])))))
+
+(deftest xray-spans-and-partitions-become-stable-value-vectors
+  (let [span (xray (str "(-> (form 'choose) (match :a) (span 2) "
+                        "(expect-count 1) (analyze first))")
+                   {:evidence :full})
+        partitions (xray (str "(-> (form 'choose) (match 'case) up down right right "
+                              "(partition-all 2) (analyze #(mapv vec %)))")
+                         {:evidence "full"})]
+    (is (= [:a 1] (:value span)))
+    (is (= [":a" "1"] (get-in span [:matches 0 :forms])))
+    (is (= [[:a 1] [:b 2]] (:value partitions)))
+    (is (= [":b" "2"] (get-in partitions [:matches 1 :forms])))
+    (is (= {:size 2 :index 1 :complete? true}
+           (get-in partitions [:matches 1 :partition])))))
+
+(deftest xray-expect-count-and-analyze-enforce-cardinality-before-computation
+  (let [computed (xray (str "(-> (form 'data) (match :xs) right "
+                            "(expect-count 1) (analyze (fn [[xs]] (reduce + xs))))"))
+        mismatch (xray (str "(-> (form 'data) (match :xs) right "
+                            "(expect-count 2) (analyze identity))"))
+        literal-mismatch (xray "(-> (form 'data) (match '[1 2]) (expect-count 0))")]
+    (is (= 3 (:value computed)))
+    (is (= [:exactly 1] (get-in computed [:xray :cardinality])))
+    (is (= :selected-values (get-in computed [:xray :input-shape])))
+    (is (= :xray-cardinality-mismatch (:error-type mismatch)))
+    (is (= 2 (:expected-match-count mismatch)))
+    (is (= 1 (:actual-match-count mismatch)))
+    (is (not (contains? mismatch :value)))
+    (is (= :xray-cardinality-mismatch (:error-type literal-mismatch)))
+    (is (no-source? literal-mismatch))))
+
+(deftest xray-analyze-handles-zero-one-and-many-without-evaluating-source
+  (let [zero (xray (str "(-> (form 'data) (match :missing) "
+                        "(analyze (fn [xs] {:empty? (empty? xs)})))"))
+        many (xray (str "(-> (form 'data) (match '_) "
+                        "(where {:tag :vector}) (analyze #(mapv count %)))"))
+        map-syntax (xray (str "(-> (form 'data) initializer "
+                              "(analyze (fn [[m]] (assoc m :seen true))))"))]
+    (is (= {:empty? true} (:value zero)))
+    (is (= [2 2] (:value many)))
+    (is (= 2 (:match-count many)))
+    (is (= {:xs [1 2] :ys [3 4] :seen true}
+           (:value map-syntax)))))
+
+(deftest xray-computed-evidence-is-compact-by-default-and-exact-on-request
+  (let [expression "(-> (form 'data) (match :ys) right (analyze first))"
+        compact (xray expression)
+        full (xray expression {:evidence :full})]
+    (is (= [3 4] (:value compact) (:value full)))
+    (is (= :compact (get-in compact [:xray :evidence])))
+    (is (= :full (get-in full [:xray :evidence])))
+    (is (nil? (get-in compact [:matches 0 :source])))
+    (is (= "[3 4]" (get-in full [:matches 0 :source])))
+    (is (re-matches #"[0-9a-f]{64}" (:selection-hash compact)))
+    (is (re-matches #"[0-9a-f]{64}" (get-in compact [:matches 0 :source-hash])))
+    (is (= (:trace compact) (:trace full)))
+    (is (= :invalid-evidence-mode
+           (:error-type (xray expression {:evidence :brief}))))))
+
+(deftest xray-refuses-malformed-effectful-and-interop-expressions
+  (doseq [[expression reason]
+          [["" :expected-one-form]
+           ["(form 'data) (form 'choose)" :expected-one-form]
+           ["(-> (form 'data) (replace :changed))" :xray-terminal-required]
+           ["(spit \"/tmp/xray-must-not-write\" \"bad\")" :disallowed-symbol]
+           ["(slurp \"/tmp/xray-must-not-read\")" :disallowed-symbol]
+           ["(require 'clojure.java.io)" :disallowed-symbol]
+           ["(load-string \"(+ 1 2)\")" :disallowed-symbol]
+           ["(System/getenv \"HOME\")" :disallowed-symbol]
+           ["(.getProperty System \"user.dir\")" :disallowed-symbol]
+           ["(atom {})" :disallowed-symbol]
+           ["(jolt.process/sh \"ls\")" :disallowed-symbol]]]
+    (let [result (xray expression)]
+      (is (= :invalid-xray-expression (:error-type result)) expression)
+      (is (= reason (:reason result)) expression)
+      (is (not (contains? result :value))))))
+
+(deftest xray-returns-only-realized-bounded-edn
+  (doseq [[expression error-type]
+          [[(str "(-> (form 'data) (match '_) (where {:tag :vector}) "
+                 "(analyze (fn [xs] (map identity xs))))")
+            :invalid-xray-result]
+           ["(-> (form 'data) (analyze (fn [_] identity)))"
+            :invalid-xray-result]
+           ["(-> (form 'data) (analyze (fn [_] (/ 1 0))))"
+            :xray-analysis-failed]]]
+    (let [result (xray expression)]
+      (is (= error-type (:error-type result)))
+      (is (not (contains? result :value)))))
+  (let [result (xray "(-> (form 'data) (analyze (fn [_] (pr-str (range 200)))))"
+                     {:max-result-chars 100})]
+    (is (= :xray-result-too-large (:error-type result)))
+    (is (not (contains? result :value)))))
+
+(deftest xray-refuses-to-analyze-truncated-selections
+  (let [many-source (str "(ns bench.many)\n(def many ["
+                         (apply str (map #(str " :k" %) (range 101))) "])\n")
+        result (inspect/xray-source
+                 many-source
+                 {:file "many.clj"
+                  :expression (str "(-> (form 'many) (match '_) "
+                                   "(where {:tag :token :parent-tag :vector}) "
+                                   "(analyze identity))")
+                  :max-source-chars 100000
+                  :max-query-steps 32
+                  :max-matches 100
+                  :max-result-chars 65536})]
+    (is (= :xray-input-truncated (:error-type result)))
+    (is (= 101 (:match-count result)))
+    (is (= 100 (count (:matches result))))
+    (is (not (contains? result :value)))))

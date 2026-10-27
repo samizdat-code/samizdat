@@ -527,6 +527,15 @@
 (def ^:private cell-namespaces (delay (with-core-additions (namespaces-for cell-api))))
 (def ^:private form-namespaces (delay (with-core-additions (namespaces-for form-api))))
 
+(defn pure-context
+  "A fresh SCI context with caller-supplied pure user bindings, an explicit
+   core allowlist, and no host classes or imports."
+  [bindings allowed-symbols]
+  (sci/init {:namespaces {'user bindings}
+             :classes {}
+             :imports {}
+             :allow allowed-symbols}))
+
 ;; --- cells ---------------------------------------------------------------------
 
 (defn cell-context

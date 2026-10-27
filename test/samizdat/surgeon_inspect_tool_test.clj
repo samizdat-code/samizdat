@@ -222,3 +222,61 @@
         (let [result (call fixture (batch-args))]
           (is (= :neutral (:category result)) (pr-str result))))
       (is (= [{:paths ["a.clj" "b.cljc"] :via "inspect_clojure"}] @reads)))))
+
+(defn- xray-request []
+  {:operation "xray"
+   :file "b.cljc"
+   :expression (str "(-> (form 'beta) (match '(inc _)) (expect-count 2) "
+                    "(analyze #(mapv second %)))")})
+
+(deftest xray-reads-share-frozen-observations-and-preserve-source
+  (with-fixture [fixture]
+    (let [observations (atom {})
+          authorized resource-tool/authorized-observation]
+      (with-redefs [resource-tool/authorized-observation
+                    (fn [ctx uri]
+                      (swap! observations update uri (fnil inc 0))
+                      (authorized ctx uri))]
+        (let [result (call fixture
+                           {:requests [(xray-request)
+                                       (assoc (xray-request)
+                                              :file "./b.cljc" :evidence "full")]
+                            :expect {:requests 2 :files 1}})
+              requests (get-in result [:resource :requests])]
+          (is (= :neutral (:category result)) (pr-str result))
+          (is (= {"workspace:b.cljc" 1} @observations))
+          (is (= ["b.cljc" "b.cljc"] (mapv :file requests)))
+          (is (= [1 2] (get-in requests [0 :result :value])))
+          (is (= [1 2] (get-in requests [1 :result :value])))
+          (is (nil? (get-in requests [0 :result :matches 0 :source])))
+          (is (= "(inc 1)" (get-in requests [1 :result :matches 0 :source])))
+          (is (= match-source (slurp (str (:root fixture) "/b.cljc")))))))))
+
+(deftest xray-refusals-return-no-partial-source-or-computed-value
+  (with-fixture [fixture]
+    (doseq [[request overrides detail]
+            [[(assoc (xray-request) :expression "(spit \"/tmp/no-xray-write\" \"x\")")
+              {} "invalid-xray-expression"]
+             [(assoc (xray-request) :expression "(.getProperty System \"user.dir\")")
+              {} "invalid-xray-expression"]
+             [(assoc (xray-request) :evidence "brief") {} "invalid-evidence-mode"]
+             [(xray-request) {:max-matches 1} "xray-input-truncated"]
+             [(xray-request) {:max-result-chars 100} "result-limit"]]]
+      (let [result (call fixture {:requests [(forms-request) request]
+                                  :expect {:requests 2 :files 2}}
+                         overrides)]
+        (is (refused? result) (pr-str result))
+        (is (str/includes? (:result result) detail) (pr-str result))
+        (is (not (str/includes? (:result result) "defn ^:private alpha")))
+        (is (not (str/includes? (:result result) ":value")))))))
+
+(deftest xray-rendered-batch-limit-refuses-literal-evidence
+  (with-fixture [fixture]
+    (let [result (call fixture
+                       {:requests [{:operation "xray" :file "b.cljc"
+                                    :expression "(-> (form 'beta) (match '(inc _)))"}]
+                        :expect {:requests 1 :files 1}}
+                       {:max-result-chars 64})]
+      (is (refused? result) (pr-str result))
+      (is (str/includes? (:result result) "result-limit") (pr-str result))
+      (is (not (str/includes? (:result result) "(inc 1)"))))))

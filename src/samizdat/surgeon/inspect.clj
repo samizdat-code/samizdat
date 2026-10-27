@@ -9,6 +9,7 @@
   "Pure structural inspection of Clojure source snapshots."
   (:require [clojure.string :as str]
             [samizdat.resource.workspace :as workspace]
+            [samizdat.surgeon.edit-dsl :as edit-dsl]
             [samizdat.surgeon.outline :as outline]
             [samizdat.surgeon.owner-hypotheses :as owner-hypotheses]
             [samizdat.surgeon.structural-lens :as structural-lens]))
@@ -278,3 +279,29 @@
    selector with :match and optional :inside in; EDN matches out."
   [source selector]
   (structural-lens/find-subforms source selector))
+
+(defn xray-source
+  "Evaluate a pure structural X-ray expression against one source snapshot.
+   Optional file context and numeric bounds are supplied by the caller."
+  [source {:keys [expression evidence] :as opts}]
+  (let [evidence (cond
+                   (nil? evidence) :compact
+                   (string? evidence) (keyword evidence)
+                   :else evidence)]
+    (if-not (#{:compact :full} evidence)
+      {:operation :xray
+       :expression expression
+       :error-type :invalid-evidence-mode
+       :evidence evidence
+       :allowed [:compact :full]}
+      (try
+        (let [opts (assoc opts :evidence evidence)
+              program (edit-dsl/compile-xray expression opts)
+              result (edit-dsl/evaluate-xray source (assoc opts :xray program))]
+          (cond-> result
+            (:source-hash result) (assoc :file-hash (:source-hash result))))
+        (catch clojure.lang.ExceptionInfo e
+          (or (ex-data e)
+              {:operation :xray :expression expression :error-type :invalid-source}))
+        (catch Exception _
+          {:operation :xray :expression expression :error-type :invalid-source})))))
