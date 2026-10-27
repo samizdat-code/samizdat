@@ -20,7 +20,8 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later AND MIT
 
 (ns samizdat.surgeon-inspect-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.edn :as edn]
+            [clojure.test :refer [deftest is testing]]
             [rewrite-clj.zip :as z]
             [samizdat.surgeon.forms :as forms]
             [samizdat.surgeon.inspect :as inspect]))
@@ -374,3 +375,43 @@
     (is (= 101 (:match-count result)))
     (is (= 100 (count (:matches result))))
     (is (not (contains? result :value)))))
+
+(defn- edn-round-trip?
+  [value]
+  (try
+    (edn/read-string (pr-str value))
+    true
+    (catch Exception _ false)))
+
+(deftest xray-rejects-non-edn-patterns-in-literal-and-computed-results
+  (doseq [expression ["(-> (form 'data) (match identity))"
+                      "(-> (form 'data) (match identity) (analyze identity))"
+                      "(-> (form 'data) (match (re-pattern \"xs\")))"
+                      "(-> (form 'data) (match (with-meta [1 2] {:bad identity})))"]]
+    (let [result (xray expression)]
+      (is (= :invalid-query (:error-type result)) expression)
+      (is (= :non-edn-query (:reason result)) expression)
+      (is (not (contains? result :query)))
+      (is (not (contains? result :trace)))
+      (is (not (contains? result :value)))
+      (is (not-any? fn? (tree-seq coll? seq result)))
+      (is (edn-round-trip? result) (pr-str result)))))
+
+(deftest xray-preserves-valid-edn-structural-patterns
+  (let [source "(ns bench.patterns)\n(def data {:set #{1 2} :seq (1 2) :meta ^:answer [1 2]})\n"
+        expression (str "(-> (form 'data) (match "
+                        "'{:set #{1 2} :seq (1 2) :meta ^:answer [1 2]}))")
+        opts {:file "patterns.clj" :max-source-chars 100000 :max-query-steps 32
+              :max-matches 100 :max-result-chars 65536}
+        result (inspect/xray-source source (assoc opts :expression expression))
+        reader-result
+        (inspect/xray-source
+          source
+          (assoc opts :expression
+                 "(-> (form 'data) (match #uuid \"123e4567-e89b-12d3-a456-426614174000\"))"))]
+    (is (nil? (:error-type result)) (pr-str result))
+    (is (= 1 (:match-count result)))
+    (is (= :literal (:mode result)))
+    (is (edn-round-trip? result) (pr-str result))
+    (is (nil? (:error-type reader-result)) (pr-str reader-result))
+    (is (edn-round-trip? reader-result) (pr-str reader-result))))

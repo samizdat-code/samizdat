@@ -143,6 +143,22 @@
                           :supported-query-steps supported-query-steps}
                          data))))
 
+(defn- concrete-edn?
+  [value]
+  (if (nil? value)
+    true
+    (and (concrete-edn? (meta value))
+         (cond
+           (or (boolean? value) (char? value) (string? value)
+               (symbol? value) (keyword? value) (number? value)
+               (instance? java.util.UUID value)
+               (instance? java.util.Date value)) true
+           (vector? value) (every? concrete-edn? value)
+           (list? value) (every? concrete-edn? value)
+           (set? value) (every? concrete-edn? value)
+           (map? value) (every? (fn [[k v]] (and (concrete-edn? k) (concrete-edn? v))) value)
+           :else false))))
+
 (defn- parse-query
   [query max-query-steps]
   (let [parsed (cond
@@ -154,6 +170,8 @@
                  :else (invalid-query! :nonempty-vector-required {}))]
     (when-not (vector? parsed)
       (invalid-query! :edn-vector-required {}))
+    (when-not (concrete-edn? parsed)
+      (invalid-query! :non-edn-query {}))
     (when (empty? parsed)
       (invalid-query! :empty-query {}))
     (when (and max-query-steps (> (count parsed) max-query-steps))
@@ -474,16 +492,18 @@
 
 (defn- query-error-result
   [source query exception max-matches]
-  (merge {:operation :lens
-          :query query
-          :error-type (or (:error-type (ex-data exception)) :invalid-source)
-          :match-count 0
-          :matches []
-          :source-hash (workspace/content-revision source)}
-         (select-keys (ex-data exception)
-                      [:step-index :step :step-count :max-query-steps
-                       :supported-query-steps :file :platform :line :match-count
-                       :matches :matches-truncated?])))
+  (let [data (select-keys (ex-data exception)
+                          [:reason :step-index :step :step-count :max-query-steps
+                           :supported-query-steps :file :platform :line :match-count
+                           :matches :matches-truncated?])
+        safe-data (into {} (filter (comp concrete-edn? val) data))]
+    (cond-> (merge {:operation :lens
+                    :error-type (or (:error-type (ex-data exception)) :invalid-source)
+                    :match-count 0
+                    :matches []
+                    :source-hash (workspace/content-revision source)}
+                   safe-data)
+      (concrete-edn? query) (assoc :query query))))
 
 (defn evaluate-query
   "Evaluate a read-only structural query against one source snapshot. Optional

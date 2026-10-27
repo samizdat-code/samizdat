@@ -280,3 +280,18 @@
       (is (refused? result) (pr-str result))
       (is (str/includes? (:result result) "result-limit") (pr-str result))
       (is (not (str/includes? (:result result) "(inc 1)"))))))
+
+(deftest xray-non-edn-patterns-never-reach-resource-or-rendered-output
+  (with-fixture [fixture]
+    (doseq [expression ["(-> (form 'beta) (match identity))"
+                        "(-> (form 'beta) (match identity) (analyze identity))"
+                        "(-> (form 'beta) (match (re-pattern \"inc\")))"]]
+      (let [result (call fixture
+                         {:requests [(assoc (xray-request) :expression expression)]
+                          :expect {:requests 1 :files 1}})]
+        (is (refused? result) expression)
+        (is (str/includes? (:result result) "invalid-query") (pr-str result))
+        (is (not (contains? result :resource)))
+        (is (not (str/includes? (:result result) "#object")))
+        (is (not (str/includes? (:result result) ":query")))
+        (is (not (str/includes? (:result result) ":trace")))))))
