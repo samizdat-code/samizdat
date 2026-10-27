@@ -55,7 +55,7 @@
   ;; excludes by absence, which is what made the sentinel need one.
   :tools #{"thesis" "branch_theses" "done" "give_up"
            "plan" "eval" "doc" "complete" "manual" "propose_cell"
-           "read_file" "read_digest" "inspect_clojure" "edit_clojure" "grep" "glob" "lsp" "resource" "inference" "diagnosis" "execution" "structural" "debug" "write_file" "edit_file" "patch"
+           "read_file" "read_digest" "inspect_clojure" "edit_clojure" "apply_clojure_changes" "grep" "glob" "lsp" "resource" "inference" "diagnosis" "execution" "structural" "debug" "write_file" "edit_file" "patch"
            "shell" "websearch" "webfetch" "skill"
            "task" "split"
            "remember" "recall" "outcome" "forget" "retire" "message"

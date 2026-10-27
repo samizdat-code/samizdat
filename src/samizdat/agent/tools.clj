@@ -93,6 +93,7 @@
             [samizdat.agent.tools.structural]
             [samizdat.agent.tools.surgeon-inspect]
             [samizdat.agent.tools.surgeon-edit]
+            [samizdat.agent.tools.surgeon-apply]
             [samizdat.security.exposure :as exposure]
             [samizdat.security.secrets :as secrets]))
 
@@ -263,7 +264,8 @@
       (flow/read! ctx [(str/replace-first (str (:uri args))
                                           (re-pattern (str "^" resource/workspace-prefix)) "")] t)
 
-      (and (contains? #{"resource" "lsp" "edit_clojure"} t) (= :success (:category r)))
+      (and (contains? #{"resource" "lsp" "edit_clojure" "apply_clojure_changes"} t)
+           (= :success (:category r)))
       (doseq [{:keys [operation metadata]} (get-in r [:resource :members])]
         (when (:path metadata)
           (flow/wrote! ctx (:path metadata) (contains? #{:write :create :delete} operation)))

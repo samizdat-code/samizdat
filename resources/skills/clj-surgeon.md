@@ -1,6 +1,6 @@
 ---
 name: clj-surgeon
-description: Use for advanced structural Clojure work with inspect_clojure and edit_clojure: batched selectors, structural paths and X-ray analysis, exact multi-form edits, and preview/apply workflows. Do not load for ordinary calls covered by the tool schemas.
+description: Use for advanced structural Clojure work with inspect_clojure, edit_clojure, and apply_clojure_changes: batched selectors, structural paths and X-ray analysis, exact multi-file transactions, and preview/apply workflows. Do not load for ordinary calls covered by the tool schemas.
 ---
 
 # Advanced clj-surgeon routes
@@ -107,3 +107,40 @@ create a fresh proposal instead. Count mismatches, overlaps, stale revisions,
 protected paths, and invalid future source refuse the batch rather than
 partially writing it. After a committed change, run the relevant compile and
 test checks.
+
+## Apply one heterogeneous transaction
+
+Use `apply_clojure_changes` when a plan mixes files or actions. Do not decompose
+it into sequential edits: every selector reads the same frozen snapshot, all
+spans must be disjoint, and one resource proposal carries the complete result.
+Every change needs an exact `:expect {:matches n}` and the batch needs exact
+`:expect {:changes n :edits n :files n}`; add `:each-file` or `:each-form` when
+the distribution matters.
+
+```clojure
+apply_clojure_changes({
+  :changes [{:id :call :in ["src/example.clj"] :forms ['transition]
+             :find "(old-call x)" :do [:replace "(new-call x)"]
+             :expect {:matches 1 :each-form 1}}
+            {:id :helper :in ["src/example.clj"] :forms ['transition]
+             :do [:insert-after ["(defn helper [] :ready)"]]
+             :expect {:matches 1}}
+            {:id :status :in ["src/other.clj"] :find "{:a 1}"
+             :do [:assoc-entry {:key ":status" :value ":ready"}]
+             :expect {:matches 1 :each-file 1}}]
+  :expect {:changes 3 :edits 3 :files 2}
+  :preview true})
+```
+
+Use `[:insert-before [SOURCE ...]]` and `[:insert-after [SOURCE ...]]` for
+siblings, `[:delete true]` with exact named `:forms` for whole owners,
+`[:assoc-entry {:key K :value V}]` for a semantic map match, and
+`[:rename-binding {:from old :to new :preserve-external-key true}]` for local
+bindings. Binding rename changes only the selected owners' local identities;
+keywords and qualified symbols are not renamed. Comment-bearing insertion gaps
+are ambiguous: replace a larger exact span instead of moving comments by text.
+
+Preview and resource apply have the same exact-owner, single-use lifecycle as
+`edit_clojure`. The transaction's canonical effect identity does not depend on
+change or publication order. A refusal, stale revision, output bound, or failed
+publication is not a successful commit; inspect the actual resource status.

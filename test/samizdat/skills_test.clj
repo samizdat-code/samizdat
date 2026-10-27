@@ -28,11 +28,11 @@
     (is (not (str/includes? (str (:description entry)) "\n"))
         "the catalogue trigger is one line")
     (is (string? body) "the skill loads without a project overlay")
-    (doseq [native ["inspect_clojure" "edit_clojure" "outline" "forms"
-                    "match" "xray" ":preview true" "resource"]]
+    (doseq [native ["inspect_clojure" "edit_clojure" "apply_clojure_changes"
+                    "outline" "forms" "match" "xray" ":preview true" "resource"]]
       (is (str/includes? (str body) native)
           (str "the adapted guidance covers " native)))
-    (doseq [stale ["mcp" "cclsp" "CLI fallback" "apply_clojure_changes"
+    (doseq [stale ["mcp" "cclsp" "CLI fallback"
                    "transform_clojure" "clj-surgeon :op" "restart_server"]]
       (is (not (str/includes? (str/lower-case (str body))
                               (str/lower-case stale)))

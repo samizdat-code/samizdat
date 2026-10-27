@@ -1767,11 +1767,12 @@
   :doc "Optional ast-grep executable, invocation deadline, source, match, and preview bounds."}
 
  :clj-surgeon
- {:value {:max-requests 32 :max-files 8 :max-forms 64 :max-matches 100
-          :max-source-chars 1048576 :max-result-chars 65536}
+ {:value {:max-requests 32 :max-changes 32 :max-files 8 :max-forms 64 :max-matches 100
+          :max-edits 100 :max-source-chars 1048576 :max-result-chars 65536
+          :analysis-timeout-ms 120000}
   :kind :policy :capability-tunable? false
   :provenance ["karamazov-p7c9.2"]
-  :doc "Native Clojure inspection batch, per-file selection, source, match, and rendered EDN bounds."}
+  :doc "Native Clojure inspection and transaction batch, per-file selection, source, match, binding-analysis deadline, and rendered EDN bounds."}
 
  :debug
  {:value {:program nil :adapter-args [] :timeout-ms 10000

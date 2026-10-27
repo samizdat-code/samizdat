@@ -450,6 +450,8 @@
     :summary "inspect_clojure: batched outline, exact form, structural match, and pure X-ray reads over frozen project Clojure snapshots, with SHA-256 revisions, exact aggregate counts, compact or exact evidence, all-or-nothing selection, and bounds in gates.edn :clj-surgeon. Load the clj-surgeon skill for advanced batch, structural-path, and X-ray guidance."}
    {:name samizdat.surgeon.edit/plan-replacements
     :summary "edit_clojure: exact owner-scoped or root-scoped form replacements compiled against one frozen observation per file, then staged and published as one exact-owner revision-gated resource change. preview returns a single-use proposal for resource apply; stale, invalid, protected, and failed publications never masquerade as commits. Load the clj-surgeon skill for exact-selector and preview/apply workflows."}
+   {:name samizdat.surgeon.intent-transaction/compile-changes
+    :summary "apply_clojure_changes: pure heterogeneous multi-file replacement, sibling insertion, owner deletion, local binding rename, and semantic assoc-entry compilation over one frozen source map. Exact per-change and aggregate counts, disjoint edits, complete-future parsing, and canonical effect identity precede one revision-gated resource proposal; preview is write-free and publication failures retain their real resource status. Bounds live in gates.edn :clj-surgeon."}
    {:name samizdat.agent.files/large-untargeted-read?
     :summary "Whether a read_file call would page a file of at least min-lines through the context with no offset and no limit — the predicate behind the read-too-large refusal. Targeted, missing and unresolvable reads pass."}
    {:name samizdat.config/role-llm

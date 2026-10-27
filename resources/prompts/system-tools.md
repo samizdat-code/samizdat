@@ -216,11 +216,21 @@ edit_clojure({edits, preview?})
     1 and every edit must be disjoint. Ordinary calls stage and apply one revision-gated
     resource change; preview: true writes nothing and returns a proposal for resource
     apply. Stale revisions, invalid future source, and protected paths refuse the batch.
+apply_clojure_changes({changes, expect, preview?})
+    Compile one heterogeneous multi-file Clojure transaction against frozen snapshots.
+    Each change has id, in, optional forms or namespace owner, do, and exact expect
+    {matches, each-file?, each-form?}. Actions are [:replace SOURCE], [:insert-before
+    [SOURCE ...]], [:insert-after [SOURCE ...]], [:delete true], [:rename-binding
+    {from, to, preserve-external-key: true}], and [:assoc-entry {key, value}]. Aggregate
+    expect is exact {changes, edits, files}. Disjoint edits compile to complete parsed
+    future files and one canonical effect identity. Ordinary calls stage and apply one
+    resource change; preview returns one write-free proposal for resource apply.
 
     For project Clojure source, prefer structural reads over reconstructing text ranges:
     outline when owners are unknown, forms for a known owner or location, match for a
     structural pattern, and xray for computed structural facts. Use edit_clojure for
-    exact known replacements. Load the clj-surgeon skill only for advanced selector,
+    exact known replacements and apply_clojure_changes for a coordinated heterogeneous
+    plan. Load the clj-surgeon skill only for advanced selector, transaction,
     structural-path/X-ray, or preview/apply guidance beyond these ordinary routes.
 debug({action, session?, configuration?, path?, lines?, thread?, frame?, reference?, expression?, kind?, count?})
     Optional DAP sessions: launch|attach, breakpoints, continue|pause, step,
