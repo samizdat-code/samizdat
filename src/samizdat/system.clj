@@ -319,6 +319,7 @@
              #(do (steps/stop-pump!) (steps/reset!))
              #(fence/install-repair! nil)
              #(do (userspace/unbind!) (userspace/bind-root! nil))
+             profiles/clear!
              #(when conn (db/close conn))]]
     (try (f) (catch Throwable e (log/warn "undoing a failed start:" (ex-message e))))))
 
@@ -363,6 +364,7 @@
                        ;; read against no handle simply serves the template.
                        ["userspace" #(do (userspace/unbind!)
                                          (userspace/bind-root! nil))]
+                       ["profile" profiles/clear!]
                        ["database" #(db/close (:conn s))]]]
       (try (f) (catch Throwable e (log/warn "stopping" label "failed:" (ex-message e)))))
     (reset! system nil)

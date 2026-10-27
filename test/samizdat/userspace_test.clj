@@ -201,6 +201,40 @@
         (is (not (.exists (io/file (:home p) "operator-secret.edn")))))
       (finally (profiles/clear!) (jfs/delete-tree base) (jfs/delete-tree root)))))
 
+(deftest stopping-the-system-clears-the-selected-profile
+  (let [base (str (jfs/create-temp-dir))
+        root (str (jfs/create-temp-dir))]
+    (try
+      (profiles/create! base "work" {:project-root root})
+      (profiles/use! base "work")
+      (system/start! (fn [_] {:status 200 :headers {} :body "ok"})
+                     {:db {:path ":memory:"} :http {:port 0} :run {:root root}})
+      (system/stop!)
+      (is (nil? (profiles/current)))
+      (finally
+        (system/stop!)
+        (profiles/clear!)
+        (jfs/delete-tree base)
+        (jfs/delete-tree root)))))
+
+(deftest a-failed-system-start-clears-the-selected-profile
+  (let [base (str (jfs/create-temp-dir))
+        root (str (jfs/create-temp-dir))]
+    (try
+      (profiles/create! base "work" {:project-root root})
+      (with-redefs [samizdat.cells/load-cells! (fn [& _] (throw (ex-info "bad cells" {})))]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"bad cells"
+                              (system/start! (fn [_] {:status 200})
+                                             {:db {:path ":memory:"} :http {:port 0}
+                                              :profiles {:root base} :profile "work"
+                                              :run {:root root}}))))
+      (is (nil? (profiles/current)))
+      (finally
+        (system/stop!)
+        (profiles/clear!)
+        (jfs/delete-tree base)
+        (jfs/delete-tree root)))))
+
 (deftest userspace-the-harness-never-shipped-is-first-class
   ;; A cell the supervisor wrote has no template by definition.
   (us/bind! *conn*)
