@@ -30,6 +30,7 @@
   (:require ;; the java.time.* host shim, before data.json — see samizdat.store.journal
             [jolt.time]
             [clojure.data.json :as json]
+            [samizdat.agent.activity :as activity]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.live :as live]
             [samizdat.config :as config]
@@ -63,6 +64,9 @@
                ;; -1 means no limit — a tighter-looking ask that answered
                ;; with the whole table.
                (runs/list-runs conn (max 0 (or limit 50))))})
+
+(defn activity [conn run-id]
+  (activity/snapshot conn run-id))
 
 (def stall-threshold-ms
   "How long a running run may say nothing before a reader should doubt it.

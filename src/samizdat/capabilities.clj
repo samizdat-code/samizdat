@@ -35,6 +35,7 @@
             [samizdat.agent.budget]
             [samizdat.agent.compaction]
             [samizdat.agent.context-rules]
+            [samizdat.agent.context-edit]
             [samizdat.agent.corrections]
             [samizdat.agent.findings]
             [samizdat.agent.worktree]

@@ -3461,8 +3461,10 @@
    :summarize-via :fresh
 
    ;; :summary asks a model and distils memories; :evict is deterministic and
-   ;; keeps cumulative turn addresses for fetch_turn instead. Unaddressable
-   ;; messages are never evicted (karamazov-3h4c).
+   ;; keeps cumulative turn addresses for fetch_turn instead; :edit projects
+   ;; the same history without a model and accepts agent drops, edits, restores
+   ;; and notes through context_edit. Unaddressable messages are never evicted
+   ;; (karamazov-3h4c).
    :strategy :summary
 
    ;; Rough token estimate. Bytes over this, the same method the session

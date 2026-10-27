@@ -28,7 +28,9 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.walk :as walk]
-            [samizdat.layers :as layers]))
+            [samizdat.layers :as layers]
+            [samizdat.peripherals :as peripherals]
+            [samizdat.profiles :as profiles]))
 
 (def deep-merge
   "Merge maps left to right, recursing when BOTH values are maps; any other
@@ -148,6 +150,7 @@
   or nil.
 
     :env      the operator named a path; it wins whatever is on disk
+    :profile  the selected profile's isolated database
     :project  <root>/.samizdat/samizdat.sqlite3 exists
     :legacy   only the pre-1g6b <root>/samizdat.sqlite3 exists — opened where
               it is, and the boot log says so, rather than moved: a file the
@@ -161,9 +164,11 @@
   [root env-db]
   (let [under (str root "/.samizdat/samizdat.sqlite3")
         legacy (str root "/samizdat.sqlite3")
+        profile-db (:db-path (profiles/current))
         exists? (fn [p] (.exists (java.io.File. p)))]
     (cond
       env-db           {:path env-db :from :env}
+      profile-db       {:path profile-db :from :profile}
       (exists? under)  {:path under :from :project}
       (exists? legacy) {:path legacy :from :legacy}
       :else            {:path under :from :default})))
@@ -586,7 +591,8 @@
   "The top-level keys a config file may set. :run stays open below this:
   cells read their own :run keys, and a list of them here would be a
   decision about behaviour made in src."
-  #{:http :nrepl :db :eval :run :providers :roles :shell :approval :userspace})
+  #{:http :nrepl :db :eval :run :providers :roles :shell :approval :userspace
+    :peripherals})
 
 (defn- refuse-unrecognized!
   "Throw naming the file and the key when a config layer sets a top-level
@@ -800,7 +806,8 @@
       ;; layer has had its say: DeepSeek off /beta answers a prefill with a
       ;; 400, whatever a file claimed.
       (update :llm #(resolve-features provider %))
-      (check-roles!)))))
+      (check-roles!)
+      (peripherals/validate-config)))))
 
 (defn provider-llm
   "The :llm config for a SPECIFIC provider — a built-in, or an alias `config`

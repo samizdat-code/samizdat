@@ -38,6 +38,7 @@
             [samizdat.api.stream :as stream]
             [samizdat.approval :as approval]
             [samizdat.config :as config]
+            [samizdat.contracts :as contracts]
             [samizdat.engine.proc :as proc]
             [samizdat.llm.client :as llm-client]
             [samizdat.llm.message :as message]
@@ -338,6 +339,8 @@
 (def routes
   [{:method :get :path "/health" :response #(health %)}
    {:method :get :path "/slow" :response #(slow %)}
+   {:method :get :path "/v1/harness/contracts/run" :response
+    (fn [_] (json-response (contracts/schema contracts/run-request-contract)))}
    {:method :get :path "/v1/models" :response #(models %)}
    {:method :post :path "/v1/chat/completions" :response #(chat-completions %)}
    {:method :get :path "/v1/harness/gates" :response #(gate-table %)}
@@ -383,6 +386,8 @@
                   (json-response 400 {:error {:message (:problem r)}}))))}
       {:method :get :path "/v1/runs" :response
     (fn [req] (json-response (api-runs/list-runs (system/conn) (long-param req "limit"))))}
+   {:method :get :path "/v1/activity" :response
+    (fn [_] (json-response (api-runs/activity (system/conn) nil)))}
    ;; `(or (:status r) 200)`, the same shape resume uses: a handler that refuses
    ;; says so with a status, and success carries none. Answering 200 with an
    ;; error body let a caller checking only the code read a refusal as success.

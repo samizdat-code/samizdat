@@ -152,6 +152,20 @@
   []
   @root)
 
+(def ^:private binding-lock (Object.))
+
+(defn switch!
+  "Atomically replace the project connection and root, returning both previous
+  bindings. Cache invalidation and validator reset happen inside the same switch."
+  [new-conn new-root]
+  (locking binding-lock
+    (let [previous {:conn @project :root @root}]
+      (reset! project new-conn)
+      (reset! root (some-> new-root str))
+      (invalidate!)
+      (reset-checks!)
+      previous)))
+
 (def ^:private harness-markers
   "Files that exist in a samizdat checkout and nowhere else. Two rather than
   one, from opposite layers, so a directory that merely vendored a copy of the

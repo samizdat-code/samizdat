@@ -232,14 +232,18 @@
   (let [root (doto (java.io.File/createTempFile "team-wt" "") (.delete) (.mkdirs))
         sh (fn [& args] (apply samizdat.engine.proc/run {:timeout-ms 30000 :dir (str root)} args))
         threshold samizdat.agent.gates/threshold
-        made (atom 0)]
+        made (atom [])]
     (try
       (sh "git" "init" "-q") (sh "git" "config" "user.email" "t@e.com") (sh "git" "config" "user.name" "t")
       (spit (java.io.File. root "README") "x\n") (sh "git" "add" "-A") (sh "git" "commit" "-q" "-m" "i")
       (with-redefs [llm/chat worker-writes-its-part
                     samizdat.agent.gates/threshold (fn [k] (if (= k :isolation) {:mode :worktree} (threshold k)))
-                    samizdat.agent.worktree/create! (let [f samizdat.agent.worktree/create!]
-                                                      (fn [& args] (swap! made inc) (apply f args)))]
+                    samizdat.agent.worktree/isolated
+                    (let [f samizdat.agent.worktree/isolated]
+                      (fn [& args]
+                        (swap! made conj {:owner (nth args 2)
+                                          :attempt (if (str/ends-with? (nth args 2) "r1") 2 1)})
+                        (apply f args)))]
         (let [conn (db/open! ":memory:")
               r (workflow/run! {:conn conn
                                 :config {:run {:loop "team" :subtasks ["alpha" "beta"] :root (str root)}}
@@ -248,7 +252,14 @@
           (is (= :completed (:status r)) (str (:answer r)))
           (is (= "alpha part\n" (slurp (java.io.File. root "alpha.txt"))))
           (is (= "beta part\n" (slurp (java.io.File. root "beta.txt"))))
-          (is (= 2 @made) "each worker had a checkout of its own")
+          (is (= #{"W0" "W1"} (set (map :owner (take 2 @made))))
+              "both workers had an initial checkout")
+          (is (= [1 1] (mapv :attempt (take 2 @made))))
+          (doseq [retry (drop 2 @made)]
+            (is (= 2 (:attempt retry)) "an additional checkout is a supervisor retry")
+            (is (str/ends-with? (:owner retry) "r1")))
+          (is (every? #(= 1 (:attempt %)) (:results r))
+              "a retry replaces, never supplements, the first attempt's result")
           (is (= 1 (count (remove str/blank? (str/split-lines (:out (sh "git" "worktree" "list"))))))
               "and every one was removed")))
       (finally (doseq [f (reverse (file-seq root))] (.delete f))))))

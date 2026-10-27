@@ -7,6 +7,8 @@
             [clojure.string :as str]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
+            [samizdat.agent.context-edit :as context-edit]
+            [samizdat.contracts :as contracts]
             [samizdat.security.flow :as flow]
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
@@ -102,6 +104,8 @@
   ;;
   ;; :neutral for the same reason as fetch_artifact — a lookup establishes
   ;; nothing, and reporting success would clear the failure count.
+  (or (when-let [problem (contracts/problem contracts/fetch-turn-contract (:args ctx))]
+        (base/malformed branch problem))
   (if-let [query (and (nil? (base/arg ctx :turn))
                       (some-> (base/arg ctx :query) str str/trim not-empty))]
     (fetch-turn-search ctx query)
@@ -147,4 +151,13 @@
                                             message/strip-think-blocks
                                             not-empty)]
                       (str "\n\nWHAT YOU SAID\n" said))
-                    "\n\nRESULT\n" (:result t)))))))))
+                    "\n\nRESULT\n" (:result t))))))))))
+
+(defmethod base/run-tool "context_edit" [{:keys [branch run-id args]}]
+  (try
+    (let [out (context-edit/edit! run-id (:id branch) branch args)]
+      (base/ok out (str "context updated; revision " (:context-revision out)
+                        ", head " (:context-head out)
+                        ". Original turns remain available through fetch_turn.")))
+    (catch clojure.lang.ExceptionInfo e
+      (base/malformed branch (ex-message e)))))

@@ -123,6 +123,10 @@
             snip-bought-enough? summary-budget task-span tier turn-range unpinned-in
             validate-summary]}
 
+    ;; Immutable context projections. Pure; no journal writes or live tool state.
+    samizdat.agent.context-edit
+    {:vars [stage apply-edit fold]}
+
     ;; Scoring over branch maps. Pure.
     samizdat.agent.critic
     {:vars [dominated? fitness-objective survival-objectives]}
