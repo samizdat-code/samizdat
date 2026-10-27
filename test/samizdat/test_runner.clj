@@ -268,7 +268,8 @@
             [samizdat.tui-editing-test]
             [samizdat.store-test]
             [samizdat.surgeon-inspect-test]
-            [samizdat.surgeon-inspect-tool-test]))
+            [samizdat.surgeon-inspect-tool-test]
+            [samizdat.surgeon-edit-test]))
 
 (def namespaces
   '[maestro.core-test
@@ -345,6 +346,7 @@
     samizdat.store-test
     samizdat.surgeon-inspect-test
     samizdat.surgeon-inspect-tool-test
+    samizdat.surgeon-edit-test
     samizdat.llm-test
     samizdat.toolspec-test
     samizdat.llm-stream-test
