@@ -2,6 +2,9 @@
 ;; src/xi/ext/clj_surgeon, MIT License, Copyright (c) 2026 Florian Schroedl.
 ;; Copied as written and adapted only where samizdat needs it
 ;; (karamazov-0e2c.24); the original notice is in docs/third-party/xi-LICENSE.
+;; Source-only form records adapted from clj-surgeon source commit
+;; affdfe3fd59a63b3fbbb50da16b82509fafea907, MIT License,
+;; Copyright (c) 2026 Gene Kim; see docs/third-party/clj-surgeon-LICENSE.
 ;;
 ;; SPDX-License-Identifier: MIT
 
@@ -75,17 +78,17 @@
                                   (recur (z/right child))))
               :else           (recur (z/right child)))))))))
 
-(defn- preceding-comments
+(defn attached-comment-start
   "Look backwards from a form's start line to find attached comment lines.
    Comments must be contiguous (no blank lines between them and the form)."
   [lines form-line]
-  (let [idx (dec form-line)] ;; 0-indexed
+  (let [idx (dec form-line)]
     (loop [i (dec idx), comment-start form-line]
       (if (neg? i)
         comment-start
         (let [line (str/trim (nth lines i ""))]
           (if (str/starts-with? line ";")
-            (recur (dec i) (inc i)) ;; 1-indexed line number
+            (recur (dec i) (inc i))
             comment-start))))))
 
 (defn- file-extension [file]
@@ -112,6 +115,73 @@
              (filter z/vector?)
              (mapv z/string))))))
 
+(defn top-level-form-records
+  "Return every parsed top-level list form in source order, including exact
+   source for structural readers. Project aliases are explicit, never read
+   from the process-global configuration atom."
+  ([file source]
+   (top-level-form-records file source {}))
+  ([file source project-aliases]
+   (let [lines (str/split-lines source)
+         defaults (cwalk/platforms-for-extension (file-extension file))
+         walked (cwalk/top-level-forms source defaults)]
+     (mapv (fn [{:keys [zloc platforms]}]
+             (let [m (meta (z/node zloc))
+                   type-str (some-> zloc z/down z/string)
+                   form-spec (forms/spec-with-project-aliases
+                               project-aliases type-str)
+                   user-fields (:fields form-spec)
+                   extracted (when user-fields
+                               (resolve-user-fields user-fields zloc
+                                                    type-str (:row m)))
+                   name-val (cond
+                              user-fields (:name extracted)
+                              (some? form-spec) (extract-name zloc))
+                   arglist (cond
+                             user-fields (:arglist extracted)
+                             name-val (extract-arglist zloc))
+                   form-line (:row m)
+                   comment-start (when form-line
+                                   (attached-comment-start lines form-line))
+                   extras (when extracted
+                            (dissoc extracted :name :arglist))]
+               (cond-> {:type (symbol (or type-str "?"))
+                        :platforms (vec (sort platforms))
+                        :source (z/string zloc)}
+                 form-line (assoc :line form-line)
+                 (:end-row m) (assoc :end-line (:end-row m))
+                 name-val (assoc :name (if (symbol? name-val)
+                                         name-val
+                                         (symbol (str name-val))))
+                 arglist (assoc :args arglist)
+                 (seq extras) (merge extras)
+                 (and form-line comment-start (< comment-start form-line))
+                 (assoc :comment-start comment-start))))
+           walked))))
+
+(defn outline-source
+  "Return the compact outline for a filename and source string. Complete
+   form source remains internal to `top-level-form-records`."
+  ([file source]
+   (outline-source file source {}))
+  ([file source project-aliases]
+   (let [records (top-level-form-records file source project-aliases)
+         zloc (z/of-string source {:track-position? true})
+         ns-zloc (some-> zloc
+                         (z/find-value z/next 'ns)
+                         z/up)
+         ns-name (some-> ns-zloc z/down z/right z/string symbol)
+         requires (extract-ns-requires ns-zloc)]
+     {:ns ns-name
+      :file file
+      :lines (count (str/split-lines source))
+      :form-count (count (filter :name records))
+      :forms (->> records
+                  (remove #(= 'ns (:type %)))
+                  (mapv #(dissoc % :source)))
+      :requires (or requires [])
+      :forward-refs []})))
+
 (defn outline
   "Return outline of all top-level forms in a Clojure file.
    Returns EDN map with :ns, :file, :lines, :forms, :forward-refs.
@@ -122,65 +192,4 @@
    structure, so a `#?(:clj (defn foo ...))` shows up as a real form with
    :platforms #{:clj}."
   [file]
-  (let [source (slurp file)
-        lines (str/split-lines source)
-        total-lines (count lines)
-        zloc (z/of-string source {:track-position? true})
-        ext   (file-extension file)
-        defaults (cwalk/platforms-for-extension ext)
-        walked (cwalk/top-level-forms source defaults)
-        forms  (mapv (fn [{:keys [zloc platforms]}]
-                       (let [node (z/node zloc)
-                             m (meta node)
-                             type-str (some-> zloc z/down z/string)
-                             form-spec (forms/spec type-str)
-                             user-fields (:fields form-spec)
-                             extracted (when user-fields
-                                         (resolve-user-fields user-fields zloc
-                                                              type-str (:row m)))
-                             ;; If user provided :fields, respect their spec;
-                             ;; don't fall back to legacy extractors for
-                             ;; fields they didn't declare.
-                             name-val (cond
-                                        user-fields (:name extracted)
-                                        (forms/defining-form? type-str)
-                                        (extract-name zloc))
-                             arglist (cond
-                                       user-fields (:arglist extracted)
-                                       name-val (extract-arglist zloc))
-                             form-line (:row m)
-                             comment-start (when form-line
-                                             (preceding-comments lines form-line))
-                             ;; Extra user-declared fields (everything except
-                             ;; :name and :arglist which are already merged)
-                             extras (when extracted
-                                      (dissoc extracted :name :arglist))]
-                         (cond-> {:type (symbol (or type-str "?"))
-                                  :platforms (vec (sort platforms))}
-                           form-line (assoc :line form-line)
-                           (:end-row m) (assoc :end-line (:end-row m))
-                           name-val (assoc :name (if (symbol? name-val)
-                                                   name-val
-                                                   (symbol (str name-val))))
-                           arglist (assoc :args arglist)
-                           (seq extras) (merge extras)
-                           (and form-line comment-start (< comment-start form-line))
-                           (assoc :comment-start comment-start))))
-                     walked)
-        ;; Build definition line lookup
-        def-lines (into {}
-                        (for [f forms :when (:name f)]
-                          [(:name f) (:line f)]))
-        ;; Find ns form once, extract name + requires from it
-        ns-zloc (some-> zloc
-                        (z/find-value z/next 'ns)
-                        z/up)
-        ns-name (some-> ns-zloc z/down z/right z/string symbol)
-        requires (extract-ns-requires ns-zloc)]
-    {:ns ns-name
-     :file file
-     :lines total-lines
-     :form-count (count (filter :name forms))
-     :forms (vec (remove #(= 'ns (:type %)) forms))
-     :requires (or requires [])
-     :forward-refs []})) ;; forward-refs filled in by core with clj-kondo data
+  (outline-source file (slurp file) @forms/project-aliases))
