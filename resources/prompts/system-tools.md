@@ -209,6 +209,13 @@ inspect_clojure({requests, expect})
     compact or full evidence. expect gives exact {requests, files} totals. Results
     preserve request order, include SHA-256 revisions, and refuse the whole batch
     without partial source if any request or configured bound fails.
+edit_clojure({edits, preview?})
+    Replace exact Clojure forms against one frozen observation per file. Each edit is
+    {file, from, to, within?: {form}, matches?}; matching ignores whitespace but keeps
+    comments, metadata, reader syntax, and token spelling exact. `matches` defaults to
+    1 and every edit must be disjoint. Ordinary calls stage and apply one revision-gated
+    resource change; preview: true writes nothing and returns a proposal for resource
+    apply. Stale revisions, invalid future source, and protected paths refuse the batch.
 debug({action, session?, configuration?, path?, lines?, thread?, frame?, reference?, expression?, kind?, count?})
     Optional DAP sessions: launch|attach, breakpoints, continue|pause, step,
     threads, stack, scopes, variables, evaluate, events, cancel, terminate, status.

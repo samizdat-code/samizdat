@@ -166,6 +166,10 @@ flowchart LR
     toolcall --> surgeon
     surgeon --> readroots
 
+    surgeonedit[edit_clojure: exact structural edits through staged resource changes]
+    toolcall --> surgeonedit
+    surgeonedit --> resources
+
     resources[resource tool: revisioned reads and staged writes]
     toolcall --> resources
     resources --> readroots

@@ -281,6 +281,7 @@
    :storm-oscillation "prompts/storm-oscillation.md"
    :structural-tool "prompts/structural-tool.md"
    :surgeon-inspect-tool "prompts/surgeon-inspect-tool.md"
+   :surgeon-edit-tool "prompts/surgeon-edit-tool.md"
    :stuck "prompts/stuck.md"
    :suspect-the-test "prompts/suspect-the-test.md"
    :system "prompts/system.md"

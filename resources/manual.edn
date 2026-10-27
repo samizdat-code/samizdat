@@ -448,6 +448,8 @@
     :summary "read_digest: paths and a question, answered in bullets by the :reader role's model (config :roles :reader) so the files never enter the branch's context; anchors: true makes every line the reader cites a patch address. Numbers in gates.edn :digest; the rule that steers a whole-file read here is phases.edn :large-read-needs-a-digest."}
    {:name samizdat.surgeon.inspect/forms-source
     :summary "inspect_clojure: batched outline, exact form, structural match, and pure X-ray reads over frozen project Clojure snapshots, with SHA-256 revisions, exact aggregate counts, compact or exact evidence, all-or-nothing selection, and bounds in gates.edn :clj-surgeon."}
+   {:name samizdat.surgeon.edit/plan-replacements
+    :summary "edit_clojure: exact owner-scoped or root-scoped form replacements compiled against one frozen observation per file, then staged and published as one exact-owner revision-gated resource change. preview returns a single-use proposal for resource apply; stale, invalid, protected, and failed publications never masquerade as commits."}
    {:name samizdat.agent.files/large-untargeted-read?
     :summary "Whether a read_file call would page a file of at least min-lines through the context with no offset and no limit — the predicate behind the read-too-large refusal. Targeted, missing and unresolvable reads pass."}
    {:name samizdat.config/role-llm

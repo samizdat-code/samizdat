@@ -169,6 +169,7 @@
    "lsp"         {:reach :host-bytes}
    "resource"    {:reach :host-bytes}
    "inspect_clojure" {:reach :host-bytes}
+   "edit_clojure" {:reach :host-bytes}
    "inference"   {:reach :spawns-process
                   :also "bounded provider calls; authorized exposure-checked resources; project-image SCI with the same scrubbed spawn as eval"}
    "diagnosis"   {:reach :spawns-process
