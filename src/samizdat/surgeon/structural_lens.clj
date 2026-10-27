@@ -60,16 +60,23 @@
   [zloc]
   (when (z/list? zloc)
     (let [head (some-> zloc z/down z/sexpr str)]
-      (when (forms/defining-form? head)
+      (when (forms/spec-with-project-aliases {} head)
         (some-> zloc z/down z/right z/sexpr str)))))
 
-(defn- inside-range
+(defn- inside-ranges
   [zloc inside]
-  (some (fn [candidate]
+  (keep (fn [candidate]
           (when (= (str inside) (defining-form-name candidate))
             (let [{:keys [row end-row]} (meta (z/node candidate))]
-              {:row row :end-row end-row})))
+              {:zloc candidate :row row :end-row end-row})))
         (top-level-locations zloc)))
+
+(defn- owner-location
+  [{:keys [zloc row end-row]}]
+  {:type (some-> zloc z/down z/sexpr)
+   :name (symbol (defining-form-name zloc))
+   :line row
+   :end-line end-row})
 
 (defn- within-range?
   [{:keys [row end-row]} zloc]
@@ -124,11 +131,23 @@
           (one-complete-form match :invalid-match "Match")
           root (z/of-string source {:track-position? true})
           top-levels (vec (top-level-locations root))
-          range (when inside (inside-range root inside))]
-      (if (and inside (nil? range))
+          owner-ranges (when inside (vec (inside-ranges root inside)))
+          range (when (= 1 (count owner-ranges)) (first owner-ranges))]
+      (cond
+        (and inside (empty? owner-ranges))
         {:error-type :inside-not-found
          :inside (str inside) :match match-source :match-count 0 :matches []
          :file-hash (workspace/content-revision source)}
+
+        (and inside (< 1 (count owner-ranges)))
+        {:error-type :ambiguous-inside
+         :inside (str inside) :match match-source
+         :owner-match-count (count owner-ranges)
+         :candidates (mapv owner-location owner-ranges)
+         :match-count 0 :matches []
+         :file-hash (workspace/content-revision source)}
+
+        :else
         (let [matches (->> (zipper-locations root)
                            (map-indexed vector)
                            (keep (fn [[index candidate]]

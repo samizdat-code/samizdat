@@ -21,6 +21,7 @@
 
 (ns samizdat.surgeon-inspect-test
   (:require [clojure.test :refer [deftest is testing]]
+            [samizdat.surgeon.forms :as forms]
             [samizdat.surgeon.inspect :as inspect]))
 
 (def basic-source
@@ -183,6 +184,32 @@
                    (inspect/match-source source {:inside 'f :match "(loop _)"}))))
       (is (= 1 (:match-count
                 (inspect/match-source source {:inside 'f :match "(loop _ _)"})))))))
+
+(deftest structural-match-refuses-missing-and-duplicate-inside-owners
+  (let [source "(ns duplicate)\n(defn same [] (inc 1))\n(defn same [] (inc 2))\n"
+        duplicate (inspect/match-source source {:inside 'same :match "(inc _)"})
+        missing (inspect/match-source source {:inside 'absent :match "(inc _)"})]
+    (is (= :ambiguous-inside (:error-type duplicate)))
+    (is (= 2 (:owner-match-count duplicate)))
+    (is (= [{:type 'defn :name 'same :line 2 :end-line 2}
+            {:type 'defn :name 'same :line 3 :end-line 3}]
+           (:candidates duplicate)))
+    (is (zero? (:match-count duplicate)))
+    (is (empty? (:matches duplicate)))
+    (is (no-source? duplicate))
+    (is (= :inside-not-found (:error-type missing)))
+    (is (zero? (:match-count missing)))
+    (is (empty? (:matches missing)))
+    (is (no-source? missing))))
+
+(deftest structural-match-ignores-legacy-global-project-aliases
+  (let [source "(ns api)\n(defendpoint handle [] (inc 1))\n"
+        selector {:inside 'handle :match "(inc _)"}
+        baseline (inspect/match-source source selector)]
+    (is (= :inside-not-found (:error-type baseline)))
+    (with-redefs [forms/project-aliases
+                  (atom {"defendpoint" {:kind :defn}})]
+      (is (= baseline (inspect/match-source source selector))))))
 
 (deftest selector-contract-and-invalid-source-return-data-without-prose
   (let [missing (inspect/forms-source basic-source "sample.clj" {})
