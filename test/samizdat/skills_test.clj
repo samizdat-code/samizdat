@@ -18,6 +18,26 @@
   (is (str/includes? (skills/load-skill "mycelium") "defcell"))
   (is (nil? (skills/load-skill "no-such-skill"))))
 
+(deftest the-bundled-clj-surgeon-skill-is-discoverable-and-native-only
+  (let [entry (some #(when (= "clj-surgeon" (:name %)) %)
+                    (skills/catalog ["/no/such/dir"]))
+        body (skills/load-skill ["/no/such/dir"] "clj-surgeon")]
+    (is (some? entry) "the bundled skill is enumerated for classpath discovery")
+    (is (str/starts-with? (str (:description entry)) "Use for advanced")
+        "the description is meaningful, not folded-YAML syntax")
+    (is (not (str/includes? (str (:description entry)) "\n"))
+        "the catalogue trigger is one line")
+    (is (string? body) "the skill loads without a project overlay")
+    (doseq [native ["inspect_clojure" "edit_clojure" "outline" "forms"
+                    "match" "xray" ":preview true" "resource"]]
+      (is (str/includes? (str body) native)
+          (str "the adapted guidance covers " native)))
+    (doseq [stale ["mcp" "cclsp" "CLI fallback" "apply_clojure_changes"
+                   "transform_clojure" "clj-surgeon :op" "restart_server"]]
+      (is (not (str/includes? (str/lower-case (str body))
+                              (str/lower-case stale)))
+          (str "the native skill omits stale route: " stale)))))
+
 (deftest frontmatter-parses-and-drives-the-catalogue
   (let [fm (skills/parse-frontmatter "---\nname: x\ndescription: Use when Y.\n---\n# T\nbody")]
     (is (= "Use when Y." (get-in fm [:meta :description])))

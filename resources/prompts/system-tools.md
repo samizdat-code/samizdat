@@ -216,6 +216,12 @@ edit_clojure({edits, preview?})
     1 and every edit must be disjoint. Ordinary calls stage and apply one revision-gated
     resource change; preview: true writes nothing and returns a proposal for resource
     apply. Stale revisions, invalid future source, and protected paths refuse the batch.
+
+    For project Clojure source, prefer structural reads over reconstructing text ranges:
+    outline when owners are unknown, forms for a known owner or location, match for a
+    structural pattern, and xray for computed structural facts. Use edit_clojure for
+    exact known replacements. Load the clj-surgeon skill only for advanced selector,
+    structural-path/X-ray, or preview/apply guidance beyond these ordinary routes.
 debug({action, session?, configuration?, path?, lines?, thread?, frame?, reference?, expression?, kind?, count?})
     Optional DAP sessions: launch|attach, breakpoints, continue|pause, step,
     threads, stack, scopes, variables, evaluate, events, cancel, terminate, status.
