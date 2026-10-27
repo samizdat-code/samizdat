@@ -20,12 +20,11 @@
   "The client over the run API, plus the journal poll loop.
 
   Mechanism, so it lives in the base: how to reach the server is the same
-  question for every front end, and the GUI and the TUI had no business
-  answering it twice. `samizdat.gui.api` is now this namespace under its old
-  names; the TUI calls it directly.
+  question for every front end. Sharing it keeps authentication, polling and
+  cursor behaviour consistent across the TUI, the standalone GTK GUI and ACP.
 
   Deliberately toolkit-free — http-client and JSON only — so the headless
-  suite covers it without loading GTK or a terminal, and so the model/view
+  suite covers it without loading a UI toolkit or a terminal, and so the model/view
   split stays honest: everything a front end knows arrives through these
   functions, and everything it does goes back through them. The server
   neither knows nor cares that a front end exists.
@@ -303,9 +302,8 @@
   graph (code-review-2026-08 #5). @running is rechecked after the fetch
   too: a batch landing after stop! belongs to a run the UI has already
   left, and delivering it folded the old run's events into the new one.
-  glimmer marshals ratom writes made off the main thread onto the GTK
-  loop itself, so callbacks may swap! UI state directly; ftxui's refresh!
-  is thread-safe for the same reason.
+  UI toolkits marshal state writes and refreshes onto their own event loops,
+  so callbacks may update UI state directly.
   Returns {:stop! (fn [])}; stopping is cooperative at the next wakeup."
   [{:keys [base run-id on-events on-status]}]
   (let [running (atom true)

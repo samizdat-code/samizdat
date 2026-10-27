@@ -127,14 +127,14 @@ A new test namespace must be added to `test/samizdat/test_runner.clj` in BOTH
 places — the `:require` list and the `namespaces` vector — or it silently never
 runs.
 
-### The two front ends
+### Front ends
 
-`gui/` (GTK) and `tui/` (terminal) are optional components and strict HTTP
-clients of the server. Their toolkits live only under `:gui` / `:tui`, so
-`jolt serve` and `jolt test` never load one. Their SOURCE paths are on the
-test path, which is why everything in them except the toolkit's own run loop
-is written toolkit-free — the TUI's widgets return hiccup, and hiccup is
-data, so the suite covers them with no terminal and no cmake.
+`tui/` (terminal) is an optional component and a strict HTTP client of the
+server. Its toolkit lives only under `:tui`, so `jolt serve` and `jolt test`
+never load it. Its SOURCE path is on the test path, which is why everything
+except the toolkit's own run loop is written toolkit-free — the TUI's widgets
+return hiccup, and hiccup is data, so the suite covers them with no terminal
+and no cmake.
 
 ```bash
 jolt tui           # server + TUI in one process (samizdat.main); --headless, --connect [URL]
@@ -144,11 +144,16 @@ jolt acp [URL]     # samizdat as an ACP agent on stdio, for an editor (Zed,
                    # Emacs agent-shell, …) to launch; against a running `jolt serve`
 ```
 
-`acp/` is a third front end of the same kind: a strict HTTP client of the
-server, with no toolkit, so it is on the test path and its tests run in the
-main suite. A prompt starts a run or steers the session's running one, the
-run's journal streams back as session updates, and a question the run puts
-to a person arrives in the editor as a permission request.
+`acp/` is another strict HTTP client, with no toolkit, so it is on the test
+path and its tests run in the main suite. A prompt starts a run or steers the
+session's running one, the run's journal streams back as session updates, and
+a question the run puts to a person arrives in the editor as a permission
+request.
+
+The GTK4 GUI lives in the standalone
+[samizdat-gui](https://github.com/samizdat-code/samizdat-gui) repository. Run
+`jolt serve` here and `jolt gui` in that checkout; its tests and native toolkit
+requirements are independent of core.
 
 The TUI's own arrangement is EDN in `tui.edn`, a layered settings file (see
 "Where a project's configuration lives" below): `$SAMIZDAT_TUI_FILE` /
@@ -183,7 +188,7 @@ dev image once and evaluate into it; reload a namespace after editing it and
 run its tests in place.
 
 ```bash
-jolt -A:dev:test nrepl-server 7899                 # once; dev, test and gui paths
+jolt -A:dev:test nrepl-server 7899                 # once; dev and test paths
 NREPL_PORT=7899 CODE='(+ 1 2)' jolt -A:dev -m samizdat.dev.nrepl-eval
 echo "(require 'samizdat.foo-test :reload) (clojure.test/run-tests 'samizdat.foo-test)" \
   | NREPL_PORT=7899 jolt -A:dev -m samizdat.dev.nrepl-eval
@@ -194,8 +199,7 @@ echo "(require 'samizdat.test-runner) (samizdat.test-runner/run)" \
 Start your OWN server. `jolt serve` writes the harness's nREPL port to
 `.nrepl-port` (and so does any `nrepl-server` started from this directory —
 put it back if you clobber it); reloading edited namespaces into a harness
-that is mid-run changes the run under it. The runner needs the `gui` path
-the `:test` alias adds, hence `-A:dev:test`. Reload one edited namespace with
+that is mid-run changes the run under it. Reload one edited namespace with
 `:reload`; `(require 'samizdat.test-runner :reload-all)` reloads the whole
 tree (about 90 s on this machine) and needs jolt 0.8.22 (karamazov-cc3a).
 

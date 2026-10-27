@@ -185,60 +185,23 @@
 
  :nrepl/middleware [nrepl.middleware/default-middleware]
 
- ;; "gui" and "tui" are SOURCE paths here, not their toolkits: neither
- ;; alias's deps ride along. That is the discipline both front ends keep —
- ;; everything except the toolkit's own run loop is written toolkit-free
- ;; (the TUI's widgets return hiccup, which is data), so the suite covers
- ;; them without cmake, GTK, or a terminal.
- :aliases {:test {:extra-paths ["test" "gui" "tui" "acp"]
+ ;; "tui" and "acp" are SOURCE paths here, not their toolkits: no toolkit
+ ;; deps ride along on the test path. Everything except the TUI's own run loop
+ ;; is toolkit-free — its widgets return hiccup, which is data — so the suite
+ ;; covers them without cmake or a terminal.
+ :aliases {:test {:extra-paths ["test" "tui" "acp"]
                   :main-opts ["-m" "samizdat.test-runner"]}
            ;; The dev tree (the nREPL client, the ebb spike) plus the tests, so
            ;; a live image can run the suite without paying startup — with
-           ;; :test too, for the gui path: `jolt -A:dev:test nrepl-server 7899`,
-           ;; then (require 'samizdat.test-runner :reload-all)
+           ;; :test too: `jolt -A:dev:test nrepl-server 7899`, then
+           ;; (require 'samizdat.test-runner :reload-all)
            ;; (samizdat.test-runner/run). See AGENTS.md, "Live development
            ;; over nREPL".
            :dev  {:extra-paths ["dev" "test"]}
 
-           ;; The GUI is an optional component and a strict HTTP client of the
-           ;; server: its source root and its GTK/GL deps live ONLY under this
-           ;; alias, so `jolt serve` and `jolt -M:test` stay headless and never
-           ;; load a native toolkit.
-           :gui  {:extra-paths ["gui"]
-                  :extra-deps
-                  {;; glimmer is now the portable reactive core only — ratom,
-                   ;; the component model and the reconciler — and knows about
-                   ;; no toolkit. v0.1.0 is the release that split GTK out.
-                   ;; It still carries the two fixes this GUI needs: the swap!
-                   ;; nil-argument fix, and :scroll-top on :scrolled, without
-                   ;; which the inspector opens part-way down the previous
-                   ;; selection.
-                   jolt-lang/glimmer
-                   {:git/url "https://github.com/jolt-lang/glimmer.git"
-                    :git/tag "v0.1.4"
-                    :git/sha "09b8ab08705fa1e6f20145c2e99eaaba9ea812cc"}
-                   ;; The GTK4 backend: the widgets, the prop/signal wiring and
-                   ;; the app loop, registered through glimmer.backend. It also
-                   ;; owns the GTK/GLib :jolt/native declarations, which is why
-                   ;; none appear here. `glimmer.ffi` and `glimmer.widget` live
-                   ;; here now as `glimmer-gtk.ffi` and `glimmer-gtk.widget`.
-                   ;; Untagged: the head past v0.1.1 that moves it to glimmer
-                   ;; v0.1.4, so the two agree. Same for glimmer-gl below.
-                   jolt-lang/glimmer-gtk
-                   {:git/url "https://github.com/jolt-lang/glimmer-gtk.git"
-                    :git/sha "3d6c3d69623673fa7b7bce18a9712a99ac682fe8"}
-                   ;; Pinned past the split too: glimmer-gl.gtk registers
-                   ;; :gl-area and :scale into the widget registry, which now
-                   ;; lives in glimmer-gtk, so an older glimmer-gl fails to
-                   ;; load with `Could not locate glimmer/ffi`.
-                   jolt-lang/glimmer-gl
-                   {:git/url "https://github.com/jolt-lang/glimmer-gl.git"
-                    :git/sha "c11194924ef47c2245c819d0c0df6eb9c2693d3b"}}
-                  :main-opts ["-m" "samizdat.gui.core"]}
-
-           ;; The TUI, on the same terms as the GUI: its own source root, its
-           ;; own toolkit dep, and a strict HTTP client of the server. `jolt
-           ;; serve` and `jolt -M:test` never load it.
+           ;; The TUI has its own source root and toolkit dep, and is a strict
+           ;; HTTP client of the server. `jolt serve` and `jolt -M:test` never
+           ;; load its native toolkit.
            ;;
            ;; ftxui-jolt carries a C++ shim that has to be COMPILED (cmake
            ;; and a C++17 compiler), and jolt runs no prep step for a git dep:
@@ -291,7 +254,6 @@
           ;; {:rc 14}) — provenance A-3. `;` not `&&` so a hardened
           ;; environment where 1024 exceeds the hard limit still runs.
           test  "(ulimit -n 1024 2>/dev/null; jolt -M:test)"
-         gui   "jolt -M:gui"
          ;; The whole application: the server and the TUI in one process.
          ;; `jolt tui --connect [URL]` attaches to a server already running.
          tui   "jolt tui-native && jolt -M:tui"

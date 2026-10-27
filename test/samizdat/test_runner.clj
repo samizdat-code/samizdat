@@ -266,15 +266,7 @@
             [samizdat.tui-actions-test]
             [samizdat.tui-widgets-test]
             [samizdat.tui-editing-test]
-            [samizdat.store-test]
-            [samizdat.gui-api-test]
-            [samizdat.gui-approval-test]
-            [samizdat.gui-ops-test]
-            [samizdat.gui-graph-test]
-            [samizdat.gui-style-test]
-            [samizdat.gui-input-test]
-            [samizdat.gui-mathtext-test]
-            [samizdat.gui-newrun-test]))
+            [samizdat.store-test]))
 
 (def namespaces
   '[maestro.core-test
@@ -519,15 +511,7 @@
     samizdat.prompt-test
     samizdat.server-test
     samizdat.adapter-test
-    samizdat.proc-test
-    samizdat.gui-api-test
-    samizdat.gui-approval-test
-    samizdat.gui-ops-test
-    samizdat.gui-graph-test
-    samizdat.gui-style-test
-    samizdat.gui-input-test
-    samizdat.gui-mathtext-test
-    samizdat.gui-newrun-test])
+    samizdat.proc-test])
 
 (defn run []
   ;; Each test project is a fresh temp root with its own confined caches

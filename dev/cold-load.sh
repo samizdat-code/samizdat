@@ -22,19 +22,15 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 JOLT="${JOLT:-jolt}"
 
-# -A:test:gui, never -M:test. Two reasons for the exact form:
-#   -A not -M   the :test alias carries :main-opts that RUN the whole suite, so
-#               -M spent minutes per namespace running every test instead of
-#               loading one namespace. -A adds paths without the main.
-#   :gui too    gui/ is on :test's paths but glimmer is only on :gui's deps, so
-#               without it samizdat.gui.core fails to load for a reason that has
-#               nothing to do with the shim this checks.
+# -A:test, never -M:test: the :test alias carries :main-opts that RUN the whole
+# suite, so -M would run every test instead of loading one namespace. -A adds
+# the test path without the main.
 
 # Libraries known to reach for a shimmed JDK class at load. Add one here when a
 # jolt release moves another class behind the shim.
 SHIMMED='clojure\.data\.json|malli\.|selmer\.'
 
-mapfile -t FILES < <(grep -rlE "\[($SHIMMED)" src gui 2>/dev/null | sort -u)
+mapfile -t FILES < <(grep -rlE "\[($SHIMMED)" src 2>/dev/null | sort -u)
 
 if [ "${#FILES[@]}" -eq 0 ]; then
   echo "cold-load: found no namespaces requiring a shimmed library — the grep is wrong" >&2
@@ -47,7 +43,7 @@ for f in "${FILES[@]}"; do
   ns=$(sed -n 's/^(ns \([a-zA-Z0-9._-]*\).*/\1/p' "$f" | head -1)
   [ -n "$ns" ] || { echo "  SKIP $f (no ns form)"; continue; }
   # </dev/null so a child can never consume the driver's stdin.
-  if out=$("$JOLT" -A:test:gui -e "(require (quote $ns))" 2>&1 </dev/null); then
+  if out=$("$JOLT" -A:test -e "(require (quote $ns))" 2>&1 </dev/null); then
     echo "  ok   $ns"
   else
     echo "  FAIL $ns"
