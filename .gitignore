@@ -45,3 +45,6 @@ PLAN.md
 # A project's own workflow and state (cells, manifests, prompts, policy,
 # its database): per-project, written by samizdat on the first run.
 .samizdat/
+
+# Local agent planning and review scratch, not project documentation.
+.superpowers/
