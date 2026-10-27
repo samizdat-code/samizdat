@@ -48,3 +48,4 @@ PLAN.md
 
 # Local agent planning and review scratch, not project documentation.
 .superpowers/
+.worktrees/
