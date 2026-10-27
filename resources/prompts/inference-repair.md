@@ -1,0 +1,1 @@
+Your previous answer did not satisfy the output contract: {{error}}. Return only one corrected JSON value matching {{schema}}. Do not add prose.

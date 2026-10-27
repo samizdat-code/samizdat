@@ -43,9 +43,12 @@
             [clojure.tools.logging :as log]
             [ebb.core :as ebb]
             [samizdat.cancel :as cancel]
+            [samizdat.agent.gates :as gates]
             [samizdat.events :as events]
             [samizdat.session :as session]
+            [samizdat.store.executions :as executions]
             [samizdat.store.interventions :as interventions]
+            [samizdat.store.runs :as runs]
             [samizdat.prompt :as prompt]
             [samizdat.lexicon :as lexicon]
             [samizdat.store.journal :as journal]))
@@ -187,6 +190,14 @@
   (swap! seen-by-run dissoc run-id)
   nil)
 
+(defn deliver-receipts!
+  ([ctx] (deliver-receipts! ctx (gates/threshold :async)))
+  ([{:keys [conn run-id]} async-policy]
+   (when (and conn run-id async-policy)
+     (doseq [{:keys [id]} (runs/branches conn run-id)]
+       (executions/deliver-all! conn run-id id
+                                (assoc async-policy :defer? true))))))
+
 (defn reflex!
   "PHASE 1 of the supervisor (RFC-012): one cheap, rule-based look at what the
   implementer has just done, and at most a nudge.
@@ -218,6 +229,7 @@
                          run-id))))
   ([{:keys [conn run-id arrived] :as ctx} seen]
    (let [p (watch-policy)]
+     (deliver-receipts! ctx)
      (if (and (contains? ctx :arrived) (empty? arrived))
        []
        (let [;; Evaluated over THIS RUN, not the whole session. A watcher is
@@ -320,3 +332,15 @@
                                  (tick (when ch (events/collect ch)))
                                  (recur)))))]
       (fn stop [] (cancel) nil))))
+
+(defn completion-stream
+  "Deliver idle receipts on the oversight timer without a model pass."
+  [{:keys [conn run-id] :as ctx}]
+  (let [async-policy (gates/threshold :async)]
+    (start! (assoc ctx
+                   :enabled? (and conn run-id async-policy)
+                   :poll-ms (:poll-ms async-policy)
+                   :budget 0
+                   :reflex-fn (fn [timer-ctx]
+                                (deliver-receipts! timer-ctx async-policy)))
+            (fn [_] nil))))

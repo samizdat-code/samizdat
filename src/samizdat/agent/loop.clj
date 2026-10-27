@@ -39,6 +39,7 @@
             [clojure.tools.logging :as log]
             [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.files :as files]
+            [samizdat.agent.context-rules :as context-rules]
             [samizdat.agent.corrections :as corrections]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.handoff :as handoff]
@@ -58,6 +59,8 @@
             [samizdat.session :as session]
             [samizdat.security.flow :as flow]
             [samizdat.store.artifacts :as artifacts]
+            [samizdat.store.captures :as captures]
+            [samizdat.store.executions :as executions]
             [samizdat.store.failures :as failures]
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
@@ -399,6 +402,8 @@
   ([conn run-id branch last-claim share? modes]
    (context-block conn run-id branch last-claim share? modes true))
   ([conn run-id branch last-claim share? modes task?]
+   (context-block conn run-id branch last-claim share? modes task? nil))
+  ([conn run-id branch last-claim share? modes task? context-rule-text]
   (let [;; Other branches' entries, less the labelled ones: these are
         ;; samples put in front of the branch unasked (samizdat.security.flow).
         others #(flow/unlabelled (remove (fn [e] (= (:branch_id e) (:id branch))) %))
@@ -446,7 +451,8 @@
           ;; renderer that answered nil drops out here exactly as before.
           parts
           (remove (comp nil? second)
-                  [;; WHAT THIS BRANCH IS WORKING ON, first in the block.
+                  [[:context-rules context-rule-text]
+                   ;; WHAT THIS BRANCH IS WORKING ON, first in the block.
                    ;; Restated every turn rather than held at a fixed position
                    ;; near the top of the array: the block is appended at the
                    ;; END, which is where the prefix-cache boundary already is,
@@ -1190,6 +1196,11 @@
                          :prefix (:last-prefix branch)
                          :forced-tool (:forced-tool (:last-prefix branch))
                          :forced-via (:forced-via (:last-prefix branch))})
+  (when-let [id (get-in result [:captures :id])]
+    (captures/deliver! conn id (gates/threshold :shell-logs)))
+  (when (and conn run-id (:id branch))
+    (executions/deliver-all! conn run-id (:id branch)
+                             (assoc (gates/threshold :async) :defer? false)))
   (when-let [a (:artifact result)]
     (journal/record-artifact! conn run-id
                               (assoc a :branch-id (:id branch) :turn turn))
@@ -1250,14 +1261,14 @@
            ("message" "review")
            (if (and beam? (not scoped-here?))
              b ;; run-wide: the beam broadcasts it to every branch at the round top
-             (do (interventions/resolve! conn run-id (:id d) :applied nil turn)
+             (do (executions/acknowledge! conn d turn)
                  ;; The words carry what their issuer had read: a supervisor's
                  ;; directive its label, a person's none (v39).
                  (flow/receive! (assoc ctx :branch {:id (:id b)} :turn turn)
                                 [(:flow d)] "intervene")
                  ;; :payload-text = the parsed human words; the raw column is
                  ;; a JSON blob the gate would render verbatim (blt.38).
-                 (assoc b :pending-directive
+                 (assoc (context-rules/apply-directive b d turn) :pending-directive
                         (assoc d :payload-text (interventions/text-of d)))))
 
            "extend"
@@ -1377,12 +1388,15 @@
             _ (journal/record-gate-checks! conn run-id (:id branch) turn
                                            (arbiter/measurements gate-ctx)
                                            (:gate decision))
+            rule-context (context-rules/boundary ctx branch parsed result turn)
             {ctx-block :block branch :branch}
             (context-block conn run-id branch
                            (get-in parsed [:args :claim])
                            (get-in ctx [:config :run :share-artifacts?])
                            (get-in ctx [:config :run :modes])
-                           (roles/may-use? (or (:role ctx) (:role branch) :implementor) "task"))
+                           (roles/may-use? (or (:role ctx) (:role branch) :implementor) "task")
+                           (:texts rule-context))
+            branch (assoc branch :context-rule-facts (:facts rule-context))
             ;; What the block cost, durably: one note per turn per branch,
             ;; sizes by part (karamazov-o4wm.6). The branch keeps the same
             ;; vector for introspect's last-turn view; the note is what a
@@ -1392,8 +1406,12 @@
                 (try
                   (journal/note! conn run-id :context-block
                                  {:branch-id (:id branch) :turn turn
-                                  :data {:sizes (vec sizes)
-                                         :total (reduce + 0 (map second sizes))}})
+                                  :data (cond-> {:sizes (vec sizes)
+                                                 :total (reduce + 0 (map second sizes))}
+                                          (seq (:contributions rule-context))
+                                          (assoc :context-rules
+                                                 {:generation turn
+                                                  :ids (mapv :id (:contributions rule-context))}))})
                   (catch Throwable _ nil)))
             ;; The tool's output inside a frame it cannot close, and only
             ;; then the harness's own blocks (karamazov-o4wm.3): what the

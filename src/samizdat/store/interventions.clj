@@ -113,7 +113,7 @@
     (when (and n (pos? n)) n)))
 
 (defn submit!
-  [conn run-id {:keys [branch-id kind payload issued-by flow]}]
+  [conn run-id {:keys [id branch-id kind payload issued-by flow]}]
   (when-not (contains? kinds kind)
     (throw (ex-info (str "Unknown intervention kind: " kind)
                     {:kind kind :known (sort (keys kinds))})))
@@ -130,16 +130,19 @@
                       {:branch-id branch-id :status (:status row)}))))
   (let [id (db/with-writer
              (db/execute! conn
-                            ["INSERT INTO interventions (run_id, branch_id, kind, payload,
-                                                         issued_by, status, created_at, flow)
-                              VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)"
-                             run-id branch-id kind
-                             (if (string? payload) payload (json/write-str (or payload {})))
-                             (or issued-by "human") (db/now)
-                             ;; What the issuer had read (v39): the supervisor's
-                             ;; label; nil for a person's steer.
-                             flow])
-             (db/last-insert-id conn))]
+                            (into [(if id
+                                     "INSERT INTO interventions (id, run_id, branch_id, kind, payload,
+                                        issued_by, status, created_at, flow)
+                                      VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)"
+                                     "INSERT INTO interventions (run_id, branch_id, kind, payload,
+                                        issued_by, status, created_at, flow)
+                                      VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)")]
+                                  (concat (when id [id])
+                                          [run-id branch-id kind
+                                           (if (string? payload) payload (json/write-str (or payload {})))
+                                           (or issued-by "human") (db/now)
+                                           flow])))
+             (or id (db/last-insert-id conn)))]
     (journal/note! conn run-id :intervention-submitted
                    {:branch-id branch-id :data {:id id :kind kind}})
     id))

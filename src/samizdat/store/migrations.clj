@@ -1050,7 +1050,219 @@
      updated_at TEXT NOT NULL,
      PRIMARY KEY (point, family))"])
 
+(def v47
+  "Revisioned resource changes. Intent and original snapshots survive process
+  loss, while proposal tokens remain process-local. Member rows make partial
+  publication and explicit recovery visible without putting original text in
+  model-facing journal events."
+  ["CREATE TABLE IF NOT EXISTS resource_changes (
+     id TEXT PRIMARY KEY,
+     run_id TEXT NOT NULL,
+     branch_id TEXT NOT NULL,
+     status TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL)"
+   "CREATE INDEX IF NOT EXISTS idx_resource_changes_owner
+     ON resource_changes(run_id, branch_id, status)"
+   "CREATE TABLE IF NOT EXISTS resource_change_members (
+     change_id TEXT NOT NULL,
+     ordinal INTEGER NOT NULL,
+     uri TEXT NOT NULL,
+     base_revision TEXT,
+     original_text TEXT,
+     replacement_text TEXT,
+     operation TEXT NOT NULL DEFAULT 'write',
+     replacement_uri TEXT,
+     metadata TEXT,
+     publication_revision TEXT,
+     status TEXT NOT NULL,
+     detail TEXT,
+     PRIMARY KEY (change_id, uri),
+     FOREIGN KEY (change_id) REFERENCES resource_changes(id) ON DELETE CASCADE)"])
+
+(def v48
+  "Private inference frames, their explicit context views, and content-addressed
+  external context. Traces retain lineage and evidence; the parent conversation
+  receives only contracted values and trace identifiers."
+  ["CREATE TABLE IF NOT EXISTS inference_frames (
+     id TEXT PRIMARY KEY,
+     run_id TEXT,
+     branch_id TEXT,
+     parent_id TEXT,
+     task TEXT NOT NULL,
+     schema TEXT,
+     role TEXT,
+     model TEXT,
+     status TEXT NOT NULL,
+     result TEXT,
+     usage TEXT,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL)"
+   "CREATE INDEX IF NOT EXISTS idx_inference_frames_parent ON inference_frames(parent_id)"
+   "CREATE TABLE IF NOT EXISTS inference_views (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     frame_id TEXT NOT NULL,
+     label TEXT NOT NULL,
+     digest TEXT NOT NULL,
+     content TEXT NOT NULL,
+     FOREIGN KEY (frame_id) REFERENCES inference_frames(id) ON DELETE CASCADE)"
+   "CREATE TABLE IF NOT EXISTS inference_contexts (
+     digest TEXT PRIMARY KEY,
+     label TEXT NOT NULL,
+     content TEXT NOT NULL,
+     created_at TEXT NOT NULL)"])
+
+(def v49
+  "Inference lineage and ownership: side calls name their frame, and external
+  context is readable only by its owning run and branch."
+  ["ALTER TABLE side_calls ADD COLUMN trace_id TEXT"
+   "ALTER TABLE inference_contexts ADD COLUMN run_id TEXT"
+   "ALTER TABLE inference_contexts ADD COLUMN branch_id TEXT"])
+
+(def v50
+  "Content addressing is separate from exact-owner grants: identical bytes may
+  be interned independently by multiple branches without transferring access."
+  ["CREATE TABLE IF NOT EXISTS inference_context_owners (
+     digest TEXT NOT NULL,
+     run_id TEXT NOT NULL,
+     branch_id TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     PRIMARY KEY (digest, run_id, branch_id),
+     FOREIGN KEY (digest) REFERENCES inference_contexts(digest) ON DELETE CASCADE)"
+   "INSERT OR IGNORE INTO inference_context_owners (digest, run_id, branch_id, created_at)
+    SELECT digest, run_id, branch_id, created_at FROM inference_contexts
+    WHERE run_id IS NOT NULL AND branch_id IS NOT NULL"
+   "CREATE TABLE IF NOT EXISTS inference_attempts (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     frame_id TEXT NOT NULL,
+     attempt INTEGER NOT NULL,
+     messages TEXT NOT NULL,
+     response TEXT,
+     error TEXT,
+     usage TEXT,
+     created_at TEXT NOT NULL,
+     FOREIGN KEY (frame_id) REFERENCES inference_frames(id) ON DELETE CASCADE)"])
+
+(def v51
+  "Bounded shell stream captures, exact ownership, delivery, and pruning state."
+  ["CREATE TABLE IF NOT EXISTS shell_captures (
+     id TEXT PRIMARY KEY,
+     run_id TEXT NOT NULL,
+     branch_id TEXT NOT NULL,
+     status TEXT NOT NULL,
+     stdout_path TEXT NOT NULL,
+     stderr_path TEXT NOT NULL,
+     stdout_observed INTEGER NOT NULL DEFAULT 0,
+     stdout_retained INTEGER NOT NULL DEFAULT 0,
+     stderr_observed INTEGER NOT NULL DEFAULT 0,
+     stderr_retained INTEGER NOT NULL DEFAULT 0,
+     delivered INTEGER NOT NULL DEFAULT 0,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL,
+     completed_at TEXT)"
+   "CREATE INDEX IF NOT EXISTS idx_shell_captures_owner
+    ON shell_captures(run_id, branch_id, created_at)"
+   "CREATE INDEX IF NOT EXISTS idx_shell_captures_pruning
+    ON shell_captures(delivered, status, created_at)"])
+
+(def v52
+  "Shell captures keep private raw streams separate from command-scrubbed reads."
+  ["ALTER TABLE shell_captures ADD COLUMN stdout_read_path TEXT"
+   "ALTER TABLE shell_captures ADD COLUMN stderr_read_path TEXT"])
+
+(def v53
+  "Evidence and premise edges for locally recomputed knowledge status."
+  ["CREATE TABLE IF NOT EXISTS knowledge_evidence (
+     id TEXT PRIMARY KEY,
+     claim_id TEXT NOT NULL,
+     source_type TEXT NOT NULL,
+     source_id TEXT,
+     path TEXT,
+     quotation TEXT,
+     revision TEXT,
+     observed_at TEXT NOT NULL,
+     expires_at TEXT,
+     disputed INTEGER NOT NULL DEFAULT 0,
+     metadata TEXT,
+     FOREIGN KEY (claim_id) REFERENCES knowledge(id) ON DELETE CASCADE)"
+   "CREATE INDEX IF NOT EXISTS idx_knowledge_evidence_claim ON knowledge_evidence(claim_id)"
+   "CREATE TABLE IF NOT EXISTS knowledge_premises (
+     claim_id TEXT NOT NULL,
+     premise_id TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     PRIMARY KEY (claim_id, premise_id),
+     FOREIGN KEY (claim_id) REFERENCES knowledge(id) ON DELETE CASCADE,
+     FOREIGN KEY (premise_id) REFERENCES knowledge(id) ON DELETE CASCADE)"])
+
+(def v54
+  "Reusable exact-owner diagnosis cases and probe evidence."
+  ["CREATE TABLE IF NOT EXISTS diagnosis_cases (
+     id TEXT PRIMARY KEY,
+     run_id TEXT NOT NULL,
+     branch_id TEXT NOT NULL,
+     status TEXT NOT NULL,
+     hypotheses TEXT NOT NULL,
+     known TEXT NOT NULL,
+     trace TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL)"])
+
+(def v55
+  "Last delivered evidence status, for change notification at safe recall boundaries."
+  ["CREATE TABLE IF NOT EXISTS knowledge_status_deliveries (
+     claim_id TEXT PRIMARY KEY,
+     status TEXT NOT NULL,
+     delivered_at TEXT NOT NULL,
+     FOREIGN KEY (claim_id) REFERENCES knowledge(id) ON DELETE CASCADE)"])
+
+(def v56
+  "Durable execution records, artifacts, completion receipts, and revival claims."
+  ["CREATE TABLE IF NOT EXISTS executions (
+     id TEXT PRIMARY KEY,
+     run_id TEXT NOT NULL,
+     branch_id TEXT NOT NULL,
+     kind TEXT NOT NULL,
+     specification TEXT NOT NULL,
+     lineage TEXT,
+     status TEXT NOT NULL,
+     recovery TEXT NOT NULL,
+     revived_from TEXT,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL)"
+   "CREATE INDEX IF NOT EXISTS idx_executions_owner ON executions(run_id, branch_id)"
+   "CREATE TABLE IF NOT EXISTS execution_receipts (
+     execution_id TEXT PRIMARY KEY,
+     status TEXT NOT NULL,
+     artifacts TEXT NOT NULL,
+     delivery_status TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     delivered_at TEXT,
+     FOREIGN KEY (execution_id) REFERENCES executions(id) ON DELETE CASCADE)"])
+
+(def v57
+  "Receipt idempotence and explicit revival rationale."
+  ["ALTER TABLE execution_receipts ADD COLUMN intervention_id TEXT"
+   "ALTER TABLE executions ADD COLUMN revival_reason TEXT"])
+
+(def v58
+  "Durable debug event artifacts."
+  ["CREATE TABLE IF NOT EXISTS debug_events (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     session_id TEXT NOT NULL,
+     run_id TEXT NOT NULL,
+     branch_id TEXT NOT NULL,
+     event TEXT NOT NULL,
+     body TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     FOREIGN KEY (session_id) REFERENCES executions(id) ON DELETE CASCADE)"
+   "CREATE INDEX IF NOT EXISTS idx_debug_events_session ON debug_events(session_id, id)"])
+
+(def v59
+  "Retain original diagnosis hypotheses separately from the remaining open set."
+  ["ALTER TABLE diagnosis_cases ADD COLUMN open_hypotheses TEXT NOT NULL DEFAULT '[]'"
+   "UPDATE diagnosis_cases SET open_hypotheses = hypotheses"])
+
 (def migrations
   "Ordered. Index 0 is migration 1; PRAGMA user_version holds the count applied."
   [v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24
-   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40 v41 v42 v43 v44 v45 v46])
+   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40 v41 v42 v43 v44 v45 v46 v47 v48 v49 v50 v51 v52 v53 v54 v55 v56 v57 v58 v59])

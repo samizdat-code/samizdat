@@ -25,7 +25,8 @@
             [samizdat.agent.files :as files]
             [samizdat.config :as config]
             [samizdat.security.policy :as policy]
-            [samizdat.prompt :as prompt]))
+            [samizdat.prompt :as prompt]
+            [samizdat.resource :as resource]))
 
 (defn- glob->re [glob]
   (re-pattern
@@ -65,7 +66,7 @@
 (def ^:private path-args
   "The arguments that name a file a tool will read: path (read_file, the
   writers, grep's scope), file (lsp), paths (read_digest, grep)."
-  [:path :file :paths])
+  [:path :file :paths :uri])
 
 (defn- providers-for
   "Every provider the result of this call reaches."
@@ -84,9 +85,14 @@
   [{:keys [config root args] :as ctx}]
   (when (get-in config [:run :provider-deny])
     (first
-     (for [p (concat (mapcat (fn [k] (let [v (get args k)] (if (sequential? v) v [v]))) path-args)
-                     ;; What a shell statement prints (karamazov-d5wo.9).
-                     (when (= "shell" (:tool-name ctx)) (policy/read-paths (:command args))))
+     (for [candidate (concat (mapcat (fn [k] (let [v (get args k)] (if (sequential? v) v [v]))) path-args)
+                             ;; What a shell statement prints (karamazov-d5wo.9).
+                             (when (= "shell" (:tool-name ctx)) (policy/read-paths (:command args)))
+                             (when (= "inference" (:tool-name ctx))
+                               (keep :uri (concat (:views args)
+                                                  (mapcat :views (:tasks args))))))
+           :let [p (str/replace-first (str candidate)
+                                      (re-pattern (str "^" resource/workspace-prefix)) "")]
            :when (and (string? p) (not (str/blank? p)))
            provider (providers-for ctx)
            :let [pat (denied config provider (relative root p))]

@@ -102,6 +102,21 @@
 ;; an access that mutates.
 (defmacro with-writer [& body] `(with-conn ~@body))
 
+(declare execute!)
+
+(defn atomic
+  "Run f inside one immediate SQLite transaction, rolling back on failure."
+  [conn f]
+  (with-writer
+    (execute! conn ["BEGIN IMMEDIATE"])
+    (try
+      (let [value (f)]
+        (execute! conn ["COMMIT"])
+        value)
+      (catch Throwable e
+        (try (execute! conn ["ROLLBACK"]) (catch Throwable _ nil))
+        (throw e)))))
+
 (defn fetch
   "A serialized read. Everything that reads the shared connection goes through
   here rather than calling jdbc directly."

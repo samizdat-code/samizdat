@@ -162,6 +162,22 @@ flowchart LR
     reads --> readroots
     readroots --> redact
 
+    resources[resource tool: revisioned reads and staged writes]
+    toolcall --> resources
+    resources --> readroots
+    resources --> root
+    root --> redact
+
+    diagnosis[diagnosis: symbolic cases and bounded probes]
+    toolcall --> diagnosis
+    diagnosis --> readroots
+    diagnosis --> scrub
+    scrub --> redact
+
+    execution[execution: durable inspection and explicit claims]
+    toolcall --> execution
+    execution --> redact
+
     context[context_edit: projection only; journal history immutable]
     toolcall --> context
     context --> messages

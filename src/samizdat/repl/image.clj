@@ -90,10 +90,12 @@
   "aad8baef0dfe56d288792017841f37321d8160b1")
 
 (def nrepl-sdeps
-  "The -Sdeps map the image is started with: the nrepl dependency and its
-  default middleware stack, merged over the project's own deps.edn."
+  "The -Sdeps map the image is started with: nrepl, its middleware, and the
+  sandbox interpreter used by inference environments, over the project's deps."
   (pr-str {:deps {'jolt-lang/nrepl {:git/url "https://github.com/jolt-lang/nrepl"
-                                    :git/sha nrepl-sha}}
+                                    :git/sha nrepl-sha}
+                  'yogthos/sci {:git/url "https://github.com/yogthos/sci.git"
+                                :git/sha "1295142fc29f206dd2747963548ba038077d9205"}}
            :nrepl/middleware ['nrepl.middleware/default-middleware]}))
 
 (defn spawn-argv

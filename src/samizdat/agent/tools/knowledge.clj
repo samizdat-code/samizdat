@@ -16,6 +16,7 @@
             [samizdat.agent.tools.base :as base]
             [samizdat.basis :as basis]
             [samizdat.security.flow :as flow]
+            [samizdat.store.evidence :as evidence]
             [samizdat.store.journal :as journal]
             [samizdat.store.knowledge :as knowledge]
             [samizdat.prompt :as prompt]))
@@ -29,8 +30,9 @@
   ranked where it is. A list that hid its own ordering would be asking the
   model to trust it; showing the standing and the record lets the model judge
   a memory the way the ranking did."
-  ([m] (memory-line m nil))
-  ([m this-run]
+  ([m] (memory-line m nil nil))
+  ([m this-run] (memory-line m this-run nil))
+  ([m this-run delivery]
    (str (:id m) " [" (:kind m) "]"
         (when-let [s (:salience m)] (format " s%.2f" (double s)))
         ;; Where the TEXT stage put it, when there was one. A high standing
@@ -52,7 +54,9 @@
                    (not= (str (:run_id m)) (str this-run))
                    (knowledge/completion-claim?
                     (:content m) (lexicon/wordlist :completion-claim)))
-          (str "\n    ↳ " (prompt/prompt "memory-stale-completion"))))))
+          (str "\n    ↳ " (prompt/prompt "memory-stale-completion")))
+        (when delivery
+          (msg (assoc delivery :status-change true))))))
 
 (defn- unverified-completion?
   "Whether this memory claims the work is finished while the branch has changed
@@ -91,7 +95,11 @@
         ;; recorded off an empty diff is the exact poison that told run
         ;; cc88a760's worker its part was already done (karamazov-mjb).
         (base/fail branch (prompt/prompt "memory-unverified"))
-        (let [id (knowledge/remember!
+        (let [evidence-items (mapv #(update % :source-type keyword)
+                                   (or (base/arg ctx :evidence) []))
+              premises (or (base/arg ctx :premises) [])
+              _ (doseq [item evidence-items] (evidence/validate! item))
+              id (knowledge/remember!
                   conn {:content content
                         :kind kind
                         :confidence (some-> (base/arg ctx :confidence) str parse-double)
@@ -108,7 +116,9 @@
                         ;; runs too.
                         :flow (flow/carried ctx)
                         ;; And where it was written from (karamazov-4dn8.3).
-                        :source {:branch (:id branch) :from (:turn ctx) :to (:turn ctx)}})]
+                        :source {:branch (:id branch) :from (:turn ctx) :to (:turn ctx)}})
+              _ (doseq [item evidence-items] (evidence/add! conn id item))
+              _ (doseq [premise premises] (evidence/add-premise! conn id premise))]
           (base/ok branch (msg {:remembered true :id id :kind kind
                                 :content content}))))))))
 
@@ -154,11 +164,24 @@
       (base/ok branch (msg {:forgot true :id (base/arg ctx :id)}))
       (base/fail branch (msg {:no-memory true :id (base/arg ctx :id)})))))
 
+(defn- delivery [ctx row]
+  (evidence/status-change (:conn ctx) (:id row)
+                         (evidence/status (:conn ctx) (:id row)
+                                            {:check-file (evidence/file-checker (:root ctx))})))
+
+(defn- deliver! [conn row delivery]
+  (evidence/record-delivery! conn (:id row) (:status delivery)))
+
 (defmethod base/run-tool "recall" [{:keys [branch conn] :as ctx}]
   (if-let [id (base/arg ctx :id)]
     (if-let [row (knowledge/get-by-id conn id)]
-      (do (flow/receive! ctx [(:flow row)] "recall")
-          (base/ok branch (memory-line row (:run-id ctx))))
+      (let [_ (flow/receive! ctx [(:flow row)] "recall")
+            explanation (evidence/explain conn id {:check-file (evidence/file-checker (:root ctx))})
+            delivery (delivery ctx row)
+            _ (deliver! conn row delivery)
+            explained? (or (seq (:evidence explanation)) (seq (:premises explanation)))]
+        (base/ok branch (cond-> (memory-line row (:run-id ctx) delivery)
+                          explained? (str "\n" (msg (assoc explanation :explanation true))))))
       (base/fail branch (msg {:no-memory true :id id})))
     (if-let [miss (base/missing ctx :query)]
       (base/malformed branch (str miss "\n\n" @usage))
@@ -189,7 +212,11 @@
         (base/ok branch
                  (cond
                    (seq rows)
-                   (str/join "\n" (map #(memory-line % (:run-id ctx)) rows))
+                   (str/join "\n" (map (fn [row]
+                                         (let [d (delivery ctx row)]
+                                           (deliver! conn row d)
+                                           (memory-line row (:run-id ctx) d)))
+                                       rows))
 
                    ;; WHICH KIND OF NOTHING. An empty store and a missed query
                    ;; call for opposite actions — write it down, or search

@@ -147,6 +147,25 @@
             [samizdat.util-test]
             [samizdat.lisp-test]
             [samizdat.lsp-test]
+            [samizdat.lsp-edit-test]
+            [samizdat.resource-test]
+            [samizdat.resource-workspace-test]
+            [samizdat.resource-changes-test]
+            [samizdat.resource-tool-test]
+            [samizdat.inference-budget-test]
+            [samizdat.inference-contract-test]
+            [samizdat.inference-trace-test]
+            [samizdat.inference-frame-test]
+            [samizdat.inference-map-test]
+            [samizdat.inference-environment-test]
+            [samizdat.captures-test]
+            [samizdat.shell-log-test]
+            [samizdat.evidence-test]
+            [samizdat.diagnosis-test]
+            [samizdat.executions-test]
+            [samizdat.context-rules-test]
+            [samizdat.structural-test]
+            [samizdat.debug-test]
             [samizdat.cells-test]
             [samizdat.cells-sci-test]
             [samizdat.digest-test]
@@ -404,6 +423,25 @@
     samizdat.util-test
     samizdat.lisp-test
     samizdat.lsp-test
+    samizdat.lsp-edit-test
+    samizdat.resource-test
+    samizdat.resource-workspace-test
+    samizdat.resource-changes-test
+    samizdat.resource-tool-test
+    samizdat.inference-budget-test
+    samizdat.inference-contract-test
+    samizdat.inference-trace-test
+    samizdat.inference-frame-test
+    samizdat.inference-map-test
+    samizdat.inference-environment-test
+    samizdat.captures-test
+    samizdat.shell-log-test
+    samizdat.evidence-test
+    samizdat.diagnosis-test
+    samizdat.executions-test
+    samizdat.context-rules-test
+    samizdat.structural-test
+    samizdat.debug-test
     samizdat.cells-test
     samizdat.cells-sci-test
     samizdat.digest-test

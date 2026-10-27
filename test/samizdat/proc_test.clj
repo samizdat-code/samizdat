@@ -19,6 +19,7 @@
   "The subprocess reaper, against a process that refuses to cooperate."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
+            [jolt.fs :as fs]
             [samizdat.engine.proc :as proc]))
 
 ;; Unique to this test process. The sweep is `pkill -f` on it, so a fixed
@@ -108,3 +109,66 @@
       (is (:timeout r))
       (is (< waited 2150) (str "asked for 2000 ms, waited " waited)))
     (finally (sweep!))))
+
+(deftest captures-bound-retention-and-count-every-observed-byte
+  (let [dir (fs/create-temp-dir)
+        stdout (str dir "/stdout.log")
+        stderr (str dir "/stderr.log")
+        r (proc/run {:timeout-ms 5000
+                     :capture {:stdout stdout :stderr stderr :retain-bytes 4}}
+                    "sh" "-c" "printf abcdef; printf 12345 >&2")]
+    (is (= 0 (:exit r)))
+    (is (= "abcd" (:out r)))
+    (is (= "1234" (:err r)))
+    (is (= {:observed-bytes 6 :retained-bytes 4 :complete? false}
+           (get-in r [:capture :stdout])))
+    (is (= {:observed-bytes 5 :retained-bytes 4 :complete? false}
+           (get-in r [:capture :stderr])))
+    (is (= "abcd" (slurp stdout)))
+    (is (= "1234" (slurp stderr)))))
+
+(deftest timeout-preserves-partial-captured-output
+  (let [dir (fs/create-temp-dir)
+        stdout (str dir "/stdout.log")
+        r (proc/run {:timeout-ms 100
+                     :capture {:stdout stdout :stderr (str dir "/stderr.log")
+                               :retain-bytes 16}}
+                    "sh" "-c" "printf before; sleep 5")]
+    (is (:timeout r))
+    (is (= "before" (:out r)))
+    (is (= {:observed-bytes 6 :retained-bytes 6 :complete? true}
+           (get-in r [:capture :stdout])))
+    (is (= "before" (slurp stdout)))))
+
+(deftest captured-calls-cancel-truthfully-and-close-descendant-pipes
+  (let [dir (fs/create-temp-dir)
+        capture {:stdout (str dir "/out") :stderr (str dir "/err") :retain-bytes 32}
+        started (System/currentTimeMillis)
+        r (proc/run {:timeout-ms 5000 :capture capture}
+                    "sh" "-c" "sleep 60 & exit 0")]
+    (is (= 0 (:exit r)))
+    (is (< (- (System/currentTimeMillis) started) 4000)))
+  (let [dir (fs/create-temp-dir)
+        capture {:stdout (str dir "/out") :stderr (str dir "/err") :retain-bytes 32}
+        result (promise)
+        worker (Thread. #(deliver result (proc/run {:timeout-ms 10000 :capture capture}
+                                                   "sh" "-c" "sleep 60")))]
+    (.start worker)
+    (Thread/sleep 100)
+    (.interrupt worker)
+    (let [r (deref result 4000 ::hung)]
+      (is (not= ::hung r))
+      (when (map? r)
+        (is (:cancelled r))
+        (is (= :cancelled (get-in r [:capture :status])))))))
+
+(deftest capture-counts-utf8-bytes-rather-than-characters
+  (let [dir (fs/create-temp-dir)
+        stdout (str dir "/stdout.log")
+        r (proc/run {:timeout-ms 5000
+                     :capture {:stdout stdout :stderr (str dir "/stderr.log")
+                               :retain-bytes 2}}
+                    "sh" "-c" "printf '😀'")]
+    (is (= 4 (get-in r [:capture :stdout :observed-bytes])))
+    (is (= 2 (get-in r [:capture :stdout :retained-bytes])))
+    (is (= 2 (.length (java.io.File. stdout))))))

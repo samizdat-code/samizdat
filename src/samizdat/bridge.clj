@@ -43,6 +43,12 @@
     (defonce pending (atom {}))
     (defonce requests (atom []))
     (defonce config (atom {}))
+    (defn environment-store []
+      (or (:inference-environments @config)
+          (:inference-environments
+           (swap! config #(if (:inference-environments %)
+                            %
+                            (assoc % :inference-environments (atom {})))))))
     (def ^:dynamic *eval-id* nil)
     (defn call [op args]
       (let [{:keys [timeout-ms timeout-message]} @config
@@ -68,6 +74,13 @@
         (do (deliver p answer) :delivered)
         :gone))])
 
+(defonce ^:private environments (atom {}))
+
+(defn environment-store
+  "Retained sandbox contexts for the current image."
+  []
+  environments)
+
 (defn install-source
   "Source that installs the bridge in an image with `config` (`:timeout-ms`
   and `:timeout-message`); `alias-ns` holding one function per tool in
@@ -80,7 +93,7 @@
             ;; With metadata: `*eval-id*` is ^:dynamic, which a plain
             ;; pr-str drops, and binding it then throws in the image.
             (concat (binding [*print-meta* true] (mapv pr-str image-forms))
-                    [(pr-str (list 'reset! 'samizdat.bridge/config config))
+                    [(pr-str (list 'swap! 'samizdat.bridge/config 'merge config))
                      (pr-str (list 'ns alias-ns))]
                     (for [t (sort tools)]
                       (pr-str (list 'defn (symbol t) '[args]

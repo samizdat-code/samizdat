@@ -41,6 +41,7 @@
             [jolt.process :as jp]
             [samizdat.cancel :as cancel]
             [samizdat.engine.proc :as proc]
+            [samizdat.lsp.edit :as edit]
             [samizdat.security.secrets :as secrets])
   (:import [java.io BufferedInputStream OutputStream]))
 
@@ -266,6 +267,26 @@
              :position {:line line :character character}
              :newName (str new-name)}))
 
+(defn code-actions
+  "Code actions available at `range`, with optional diagnostic context."
+  [client path range context]
+  (ensure-open! client path)
+  (request! client "textDocument/codeAction"
+            {:textDocument {:uri (uri path)}
+             :range range
+             :context (or context {:diagnostics []})}))
+
+(defn resolve-code-action
+  "Resolve a lazy CodeAction, returning the updated action."
+  [client action]
+  (request! client "codeAction/resolve" action))
+
+(defn prepare-file-rename
+  "The WorkspaceEdit preparing a file rename; nothing is written here."
+  [client old-path new-path]
+  (request! client "workspace/willRenameFiles"
+            {:files [{:oldUri (uri old-path) :newUri (uri new-path)}]}))
+
 (defn changed!
   "Tell the server `path` now holds `text`, after the harness wrote it, so
   its next answer is about the file as it is."
@@ -275,27 +296,10 @@
              {:textDocument {:uri (uri path) :version (System/currentTimeMillis)}
               :contentChanges [{:text text}]})))
 
-(defn- offset-of
-  "The character offset of an LSP position (0-based line and character) in
-  `text`."
-  [text {:keys [line character]}]
-  (loop [i 0 l 0]
-    (cond
-      (= l line) (min (count text) (+ i character))
-      (>= i (count text)) (count text)
-      :else (let [nl (.indexOf ^String text "\n" (int i))]
-              (if (neg? nl) (count text) (recur (inc nl) (inc l)))))))
-
 (defn apply-edits
-  "`text` with LSP TextEdits applied, last first so earlier offsets hold."
+  "`text` with non-overlapping LSP TextEdits applied."
   [text edits]
-  (reduce (fn [t {:keys [range newText]}]
-            (let [a (offset-of t (:start range)) b (offset-of t (:end range))]
-              (str (subs t 0 a) newText (subs t b))))
-          (str text)
-          (sort-by (fn [{:keys [range]}] [(- (get-in range [:start :line]))
-                                          (- (get-in range [:start :character]))])
-                   edits)))
+  (edit/apply-text-edits text edits))
 
 (defn edit-files
   "A WorkspaceEdit as {path new-text}: `changes` or `documentChanges` (text

@@ -127,10 +127,12 @@
             [samizdat.agent.storm :as storm]
             [samizdat.agent.tools.tasks :as task-tool]
             [samizdat.cancel :as cancel]
+            [samizdat.prompt :as prompt]
             [samizdat.repl :as repl]
             [samizdat.repl.route :as route]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]
+            [samizdat.store.resources :as resources]
             [samizdat.store.tasks :as tasks]
             [samizdat.workflow :as workflow]))
 
@@ -308,6 +310,13 @@
   (when-let [r (runs/get-run conn run-id)]
     (not (contains? runs/unresumable-statuses (str (:status r))))))
 
+(defn unfinished-resources
+  "The recovery handoff for one branch, or nil when it has none."
+  [conn run-id branch-id]
+  (let [changes (resources/unfinished-changes conn {:run-id run-id :branch-id branch-id})]
+    (when (seq changes)
+      (prompt/render "resource-recovery" {:changes changes}))))
+
 (defn resume!
   "Rebuild a run's branches from the journal and continue the beam's round
   loop at the round after the last recorded turn, under the run's ORIGINAL
@@ -411,12 +420,14 @@
                                  ;; it made plus its side-effect state. Last,
                                  ;; because it is the most recent thing that
                                  ;; happened to the branch.
-                                 in-flight (handoff/after-crash conn run-id (:id b))]
+                                 in-flight (handoff/after-crash conn run-id (:id b))
+                                 recovery (unfinished-resources conn run-id (:id b))]
                              (cond-> b
                                held (assoc :task {:id (:id held)
                                                   :title (:title held)})
                                held (task-tool/task-statement held)
-                               (seq in-flight) (update :messages into in-flight))))
+                               (seq in-flight) (update :messages into in-flight)
+                               recovery (update :messages conj {:role "user" :content recovery}))))
                          ;; Not the supervisor stream's branch: the stream
                          ;; carries it and re-opens it on its next pass.
                          (remove #(= "supervisor" (:role %)) (runs/branches conn run-id)))

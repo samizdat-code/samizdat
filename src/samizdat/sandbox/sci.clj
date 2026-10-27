@@ -337,6 +337,11 @@
     {:vars [carried-by-run receive!]
      :effects #{:db}}
 
+    ;; Durable execution lifecycle, through the store's owner-scoped records.
+    samizdat.store.executions
+    {:vars [complete! start!]
+     :effects #{:db}}
+
     ;; Run and branch rows, through the store's own functions. get-branch replaced
     ;; a raw SELECT in cells/board.clj.
     samizdat.store.runs

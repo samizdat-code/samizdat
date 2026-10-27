@@ -23,6 +23,7 @@
             [samizdat.llm.client :as llm]
             [samizdat.agent.tools.tasks :as task-tool]
             [samizdat.security.flow :as flow]
+            [samizdat.store.executions :as executions]
             [samizdat.store.journal :as journal]
             [samizdat.store.tasks :as tasks]
             [samizdat.store.runs :as runs]
@@ -133,7 +134,11 @@
                   :when (not= b bid)]
             (tasks/release! conn task-id b))
         held (tasks/claim! conn task-id run-id bid)
-        attempts (tasks/attempted! conn task-id)]
+        attempts (tasks/attempted! conn task-id)
+        execution-id (executions/start! conn {:run-id run-id :branch-id bid
+                                              :kind "decompose" :specification node
+                                              :lineage {:task-id task-id :attempt attempts}
+                                              :recovery :unknown})]
     (try
       ;; The unit's contract is the branch's OWN problem, durably — what a
       ;; resume rebuilds this branch's opening messages from (blt.23).
@@ -175,6 +180,9 @@
                                   {:branch b :turn (or (:turn resume) 1)})
             done? (= :done (:verdict out))
             changed (gitdiff/changed-files root base)
+            _ (executions/complete! conn execution-id
+                                    {:status (if done? :complete :incomplete)
+                                     :artifacts []})
             ;; DID IT DELEGATE? The agent splits by writing stubs and calling
             ;; the split tool, which verified them against the tree and turned
             ;; them into child rows under this unit's task. Walking them is how

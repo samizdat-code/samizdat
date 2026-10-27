@@ -38,6 +38,7 @@
             [instaparse.combinators :as c]
             [instaparse.core :as insta]
             [samizdat.agent.acceptance :as acceptance]
+            [samizdat.agent.gates :as gates]
             [samizdat.approval :as approval]
             [samizdat.config :as config]
             [samizdat.engine.proc :as proc]
@@ -47,6 +48,7 @@
             [samizdat.security.flow :as flow]
             [samizdat.security.listen :as listen]
             [samizdat.security.secrets :as secrets]
+            [samizdat.store.captures :as captures]
             [samizdat.store.grants :as grants]
             [samizdat.util :as util]))
 
@@ -671,11 +673,12 @@
    (if (= (select-keys label [:trust :audience]) flow/top)
      []
      (let [ro (read-only? command)
-           gaps (flow/gaps flow/table "shell" {:read-only? ro} label)]
-       (if (and (some #(= :trust (:gap %)) gaps)
-                (contains? (set (force configured)) (str/trim (str command))))
-         (flow/gaps flow/table "shell" {:read-only? ro :configured? true} label)
-         gaps)))))
+           gaps (flow/gaps flow/table "shell" {:read-only? ro} label)
+           gaps (if (and (some #(= :trust (:gap %)) gaps)
+                         (contains? (set (force configured)) (str/trim (str command))))
+                  (flow/gaps flow/table "shell" {:read-only? ro :configured? true} label)
+                  gaps)]
+       (with-meta gaps {::read-only ro})))))
 
 (defn- flow-reason
   "A gap as the short rule text a person's dialog shows beside the call."
@@ -691,13 +694,65 @@
   not that the branch is. Pure — run-shell and the policy trace replay
   (samizdat.security.replay) both decide through it."
   [decided label command configured]
-  (let [gaps (when (not= :deny (:effect decided))
-               (not-empty (shell-gaps label command configured)))]
+  (let [assessment (when (not= :deny (:effect decided))
+                     (shell-gaps label command configured))
+        gaps (not-empty assessment)]
     (cond-> decided
+      (contains? (meta assessment) ::read-only)
+      (assoc :execution-recovery (if (::read-only (meta assessment))
+                                   :safe-restart :unknown))
       gaps (assoc :gaps gaps :remedies (flow/remedies "shell" gaps))
       (and gaps (= :allow (:effect decided)))
       (assoc :effect :ask :flow? true
              :rule {:name :flow :pattern (str/join "; " (map flow-reason gaps))}))))
+
+(defn- allocate-capture [{:keys [conn run-id root branch] :as ctx}]
+  (when (and conn run-id root (:id branch))
+    (let [policy (gates/threshold :shell-logs)
+          id (or (:execution-id ctx) (str (random-uuid)))
+          stdout (str root "/.samizdat/shell-logs/" id ".stdout")
+          stderr (str root "/.samizdat/shell-logs/" id ".stderr")
+          stdout-read (str stdout ".read")
+          stderr-read (str stderr ".read")]
+      (when-not (captures/capture conn id)
+        (captures/create! conn {:id id :run-id run-id :branch-id (:id branch)
+                                :stdout-path stdout :stderr-path stderr
+                                :stdout-read-path stdout-read :stderr-read-path stderr-read}))
+      (when-not ((requiring-resolve 'samizdat.store.executions/execution) conn id)
+        ((requiring-resolve 'samizdat.store.executions/start!)
+         conn {:id id :run-id run-id :branch-id (:id branch)
+               :kind "shell" :specification (:args ctx)
+               :recovery (or (:execution-recovery ctx) :unknown)}))
+      {:id id :policy policy
+       :options {:stdout stdout :stderr stderr
+                 :retain-bytes (:retain-bytes-per-stream policy)
+                 :tail-bytes (:preview-chars policy)}
+       :stdout-path stdout :stderr-path stderr
+       :stdout-read-path stdout-read :stderr-read-path stderr-read})))
+
+(defn- capture-public [allocation result]
+  (when allocation
+    (let [streams (:capture result)
+          status (cond
+                   (:cancelled result) :cancelled
+                   (:timeout result) :timeout
+                   (:error result) :error
+                   (some :error (vals streams)) :capture-error
+                   :else :complete)]
+      (into {:id (:id allocation)}
+            (for [stream [:stdout :stderr]]
+              [stream (cond-> (assoc (get streams stream)
+                                     :status status
+                                     :uri (str "shell-log:" (:id allocation)
+                                               "?stream=" (name stream)))
+                        (#{:error :capture-error :cancelled} status)
+                        (assoc :complete? false))])))))
+
+(defn- redact-capture-file [source target known]
+  (spit target (secrets/redact (slurp source) known)))
+
+(defn- preview-stream [text cap known]
+  (util/truncate-middle (secrets/redact (str text) known) cap))
 
 (defn run-shell
   "Run a shell command through the full gate: decide, then (on allow) resolve
@@ -867,20 +922,78 @@
                                  :root (or root ".") :command resolved
                                  :env child-env :ports (listen/ports)
                                  :settings settings})
-            r (apply proc/run {:timeout-ms (or (:timeout-ms ctx) 120000)
-                               :env env :dir dir}
-                     argv)
-            out (if (:timeout r)
-                  (str "[timed out after " (:ms r) "ms]")
-                  (str (:out r)
-                       (when (seq (:err r)) (str "\n" (:err r)))))
-            ;; Redact the WHOLE output first, then truncate — so a secret that
-            ;; would straddle the truncation boundary is caught before the cut.
-            ;; truncate-middle keeps the head AND tail, because the end of a
-            ;; command's output (a test summary, an exit line) is as load-
-            ;; bearing as the start.
-            redacted (util/truncate-middle (secrets/redact out known)
-                                           (max-output-chars))]
+            allocation (allocate-capture (assoc ctx :execution-recovery
+                                                (:execution-recovery decided)))
+            r (try
+                (apply proc/run (cond-> {:timeout-ms (or (:timeout-ms ctx) 120000)
+                                         :env env :dir dir}
+                                  allocation (assoc :capture (:options allocation)))
+                       argv)
+                (catch Throwable e
+                  {:error true :message (ex-message e) :out "" :err ""
+                   :capture {:stdout {:observed-bytes 0 :retained-bytes 0
+                                      :complete? false :error (ex-message e)}
+                             :stderr {:observed-bytes 0 :retained-bytes 0
+                                      :complete? false :error (ex-message e)}}}))
+            finalization-error
+            (when allocation
+              (try
+                (redact-capture-file (:stdout-path allocation) (:stdout-read-path allocation) known)
+                (redact-capture-file (:stderr-path allocation) (:stderr-read-path allocation) known)
+                (captures/finish! conn (:id allocation)
+                                  (cond
+                                    (:error r) :error
+                                    (:cancelled r) :cancelled
+                                    (some :error (vals (:capture r))) :capture-error
+                                    (:timeout r) :timeout
+                                    :else :complete)
+                                  (:capture r)
+                                  (select-keys allocation [:stdout-read-path :stderr-read-path]))
+                nil
+                (catch Throwable e
+                  (captures/finish! conn (:id allocation) :error (:capture r)
+                                    (select-keys allocation [:stdout-read-path :stderr-read-path]))
+                  e)))
+            out (if allocation
+                  (let [policy (:policy allocation)
+                        total (:preview-chars policy)
+                        stdout-cap (long (Math/round (* total (:preview-stdout-fraction policy))))
+                        stderr-cap (- total stdout-cap)
+                        stdout (preview-stream
+                                (str (:out r) (:out-tail r)
+                                     (when (:timeout r)
+                                       (str "\n[timed out after " (:ms r) "ms]"))
+                                     (when (:cancelled r) "\n[cancelled]")
+                                     (when (:message r) (str "\n" (:message r)))
+                                     (when finalization-error
+                                       (str "\n" (ex-message finalization-error))))
+                                stdout-cap known)
+                        stderr (preview-stream (str (:err r) (:err-tail r)) stderr-cap known)]
+                    (str stdout (when (seq stderr) (str "\n" stderr))))
+                  (cond
+                    (:message r) (str (:message r))
+                    (:timeout r) (str "[timed out after " (:ms r) "ms]")
+                    :else (str (:out r) (when (seq (:err r)) (str "\n" (:err r))))))
+            redacted (if allocation
+                       out
+                       (util/truncate-middle (secrets/redact out known)
+                                             (max-output-chars)))
+            public-capture (capture-public allocation
+                                           (cond-> r
+                                             finalization-error
+                                             (assoc :error (ex-message finalization-error))))
+            _ (when allocation
+                ((requiring-resolve 'samizdat.store.executions/complete!)
+                 conn (:id allocation)
+                 {:status (cond
+                            finalization-error :error
+                            (:cancelled r) :cancelled
+                            (:timeout r) :timeout
+                            (:error r) :error
+                            :else :complete)
+                  :artifacts (mapv :uri (vals (select-keys public-capture [:stdout :stderr])))}))
+            reference-note (when public-capture
+                             (str "\nCaptures: " (pr-str public-capture)))]
         ;; What ran read outside the project: the branch holds it now.
         (when outside-all
           (flow/observe! ctx (:outside-read flow/table) "shell"))
@@ -894,15 +1007,18 @@
         ;; not evidence the command succeeded. `(or (:exit r) 0)` read it as
         ;; success, the opposite of what run-verify does with the same shape;
         ;; both now fail closed.
-        {:category (if (and (not (:timeout r)) (zero? (or (:exit r) 1)))
-                     :success :failure)
-         :progress? true
-         :result redacted
-         ;; Carried as a flag rather than left to string-matching the output:
-         ;; the loop weights a timeout heavier on the failure streak and drops
-         ;; the storm window's retry allowance for the call that hung.
-         :timeout? (boolean (:timeout r))
-         :policy {:effect :allow}}))))
+        (cond->
+          {:category (if (and (not finalization-error) (not (:timeout r))
+                              (zero? (or (:exit r) 1)))
+                       :success :failure)
+           :progress? true
+           :result (str redacted reference-note)
+           ;; Carried as a flag rather than left to string-matching the output:
+           ;; the loop weights a timeout heavier on the failure streak and drops
+           ;; the storm window's retry allowance for the call that hung.
+           :timeout? (boolean (:timeout r))
+           :policy {:effect :allow}}
+          public-capture (assoc :captures public-capture))))))
 
 ;; --- reads through the shell (karamazov-d5wo.9) -------------------------------
 ;;

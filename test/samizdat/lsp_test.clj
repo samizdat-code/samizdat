@@ -9,7 +9,10 @@
              [jolt.time]
              [clojure.data.json :as json]
              [samizdat.lsp.client :as client]
-             [samizdat.security.secrets :as secrets]))
+             [samizdat.security.secrets :as secrets]
+             [samizdat.resource :as resource]
+             [samizdat.store.db :as db]
+             [samizdat.store.runs :as runs]))
 
 ;; clojure-lsp is not installed on CI; every lsp-touching assert is gated so the
 ;; suite is trivially green there and meaningful on a machine that has it.
@@ -221,9 +224,12 @@
                                                          :newText "new"}]}]}
                             (constantly "old")))))
 
-(deftest a-rename-writes-every-file-through-write-file
+(deftest a-rename-publishes-every-file-as-one-resource-change
   (let [root (doto (java.io.File/createTempFile "lsp-rename" "") (.delete) (.mkdirs))
-        a (io/file root "src/a.clj") b (io/file root "src/b.clj")]
+        a (io/file root "src/a.clj") b (io/file root "src/b.clj")
+        conn (db/open! ":memory:")
+        run-id (runs/start-run! conn {:problem "rename"})]
+    (runs/open-branch! conn run-id {:branch-id "B1"})
     (try
       (io/make-parents a)
       (spit a "(ns a)\n(defn sum [x] x)\n")
@@ -237,13 +243,189 @@
                                                (str "file://" (.getCanonicalPath b))
                                                [{:range {:start {:line 1 :character 3} :end {:line 1 :character 6}}
                                                  :newText new-name}]}})]
-        (let [r (base/run-tool {:tool-name "lsp" :root (str root) :branch {:id "B1" :role :implementor}
+        (let [r (base/run-tool {:tool-name "lsp" :root (str root) :conn conn :run-id run-id
+                                :branch {:id "B1" :role :implementor}
                                 :args {:op "rename" :file "src/a.clj" :line 1 :col 7 :new_name "total"}})]
           (is (str/includes? (str (:result r)) "Renamed to `total`") (str (:result r)))
           (is (= "(ns a)\n(defn total [x] x)\n" (slurp a)))
           (is (= "(ns b (:require [a]))\n(a/total 1)\n" (slurp b))))
         (testing "a role that does not write cannot rename"
-          (let [r (base/run-tool {:tool-name "lsp" :root (str root) :branch {:id "R1" :role :reviewer}
+          (let [r (base/run-tool {:tool-name "lsp" :root (str root) :conn conn :run-id run-id
+                                  :branch {:id "R1" :role :reviewer}
                                   :args {:op "rename" :file "src/a.clj" :line 1 :col 7 :new_name "x"}})]
             (is (str/includes? (str (:result r)) "does not write")))))
-      (finally (doseq [f (reverse (file-seq root))] (.delete f))))))
+      (finally (db/close conn)
+               (doseq [f (reverse (file-seq root))] (.delete f))))))
+
+(defn- semantic-context [root]
+  (let [conn (db/open! ":memory:")
+        run-id (runs/start-run! conn {:problem "semantic edits"})]
+    (runs/open-branch! conn run-id {:branch-id "B1"})
+    (runs/open-branch! conn run-id {:branch-id "B2"})
+    {:tool-name "lsp" :root (str root) :conn conn :run-id run-id
+     :branch {:id "B1" :role :implementor}}))
+
+(defn- close-semantic-context [ctx]
+  (db/close (:conn ctx)))
+
+(deftest a-stale-lsp-preview-leaves-every-file-original
+  (let [root (doto (java.io.File/createTempFile "lsp-stale" "") (.delete) (.mkdirs))
+        a (io/file root "src/a.clj") b (io/file root "src/b.clj")
+        ctx (semantic-context root)]
+    (try
+      (io/make-parents a)
+      (spit a "(ns a)\n(defn sum [x] x)\n")
+      (spit b "(ns b (:require [a]))\n(a/sum 1)\n")
+      (with-redefs [client/available? (constantly true)
+                    client/client-for (constantly {:opened (atom #{})})
+                    client/rename (fn [_ _ _ _ new-name]
+                                    {:changes {(str "file://" (.getCanonicalPath a))
+                                               [{:range {:start {:line 1 :character 6} :end {:line 1 :character 9}}
+                                                 :newText new-name}]
+                                               (str "file://" (.getCanonicalPath b))
+                                               [{:range {:start {:line 1 :character 3} :end {:line 1 :character 6}}
+                                                 :newText new-name}]}})]
+        (let [staged (base/run-tool (assoc ctx :args {:op "rename" :file "src/a.clj"
+                                                      :line 1 :col 7 :new_name "total" :preview true}))
+              proposal (get-in staged [:resource :proposal-id])]
+          (is (some? proposal) (pr-str staged))
+          (spit b "(ns b (:require [a]))\n(a/sum 2)\n")
+          (let [result (base/run-tool (assoc ctx :tool-name "resource"
+                                             :args {:action "apply" :proposal proposal}))]
+            (is (= :mechanics (:category result)))
+            (is (= "(ns a)\n(defn sum [x] x)\n" (slurp a)))
+            (is (= "(ns b (:require [a]))\n(a/sum 2)\n" (slurp b))))))
+      (finally (close-semantic-context ctx)
+               (doseq [f (reverse (file-seq root))] (.delete f))))))
+
+(deftest code-actions-publish-through-the-resource-transaction
+  (let [root (doto (java.io.File/createTempFile "lsp-action" "") (.delete) (.mkdirs))
+        a (io/file root "src/a.clj")
+        ctx (semantic-context root)]
+    (try
+      (io/make-parents a)
+      (spit a "(ns a)\n(sum 1)\n")
+      (with-redefs [client/available? (constantly true)
+                    client/client-for (constantly {:opened (atom #{})})
+                    client/code-actions (fn [_ _ _ _]
+                                          [{:title "Replace sum"
+                                            :edit {:changes {(str "file://" (.getCanonicalPath a))
+                                                             [{:range {:start {:line 1 :character 1} :end {:line 1 :character 4}}
+                                                               :newText "total"}]}}}])]
+        (let [result (base/run-tool (assoc ctx :args {:op "code_action" :file "src/a.clj"
+                                                      :line 1 :col 1 :end_line 1 :end_col 4}))]
+          (is (= :success (:category result)) (pr-str result))
+          (is (= "(ns a)\n(total 1)\n" (slurp a)))))
+      (finally (close-semantic-context ctx)
+               (doseq [f (reverse (file-seq root))] (.delete f))))))
+
+(deftest file-moves-are-staged-resource-changes
+  (let [root (doto (java.io.File/createTempFile "lsp-move" "") (.delete) (.mkdirs))
+        a (io/file root "src/a.clj") b (io/file root "src/b.clj") c (io/file root "src/c.clj")
+        ctx (semantic-context root)]
+    (try
+      (io/make-parents a)
+      (spit a "(ns a)\n")
+      (spit b "(ns b (:require [a]))\n(a/sum 1)\n")
+      (with-redefs [client/available? (constantly true)
+                    client/client-for (constantly {:opened (atom #{})})
+                    client/prepare-file-rename (fn [_ _ _]
+                                                 {:changes {(str "file://" (.getCanonicalPath b))
+                                                            [{:range {:start {:line 1 :character 3} :end {:line 1 :character 6}}
+                                                              :newText "total"}]}})]
+        (let [result (base/run-tool (assoc ctx :args {:op "move" :file "src/a.clj" :new_path "src/c.clj"}))]
+          (is (= :success (:category result)) (pr-str result))
+          (is (not (.exists a)))
+          (is (= "(ns a)\n" (slurp c)))
+          (is (= "(ns b (:require [a]))\n(a/total 1)\n" (slurp b)))))
+      (finally (close-semantic-context ctx)
+               (doseq [f (reverse (file-seq root))] (.delete f))))))
+
+(deftest command-only-code-actions-are-explicitly-unsupported
+  (let [root (doto (java.io.File/createTempFile "lsp-command" "") (.delete) (.mkdirs))
+        a (io/file root "src/a.clj") ctx (semantic-context root)]
+    (try
+      (io/make-parents a)
+      (spit a "(ns a)\n")
+      (with-redefs [client/available? (constantly true)
+                    client/client-for (constantly {:opened (atom #{})})
+                    client/code-actions (constantly [{:title "Run command" :command "do.it"}])]
+        (let [result (base/run-tool (assoc ctx :args {:op "code_action" :file "src/a.clj"
+                                                      :line 0 :col 0 :end_line 0 :end_col 0}))]
+          (is (= :failure (:category result)))
+          (is (= "(ns a)\n" (slurp a)))))
+      (finally (close-semantic-context ctx)
+               (doseq [f (reverse (file-seq root))] (.delete f))))))
+
+(deftest preview-apply-synchronizes-the-lsp-document
+  (let [root (doto (java.io.File/createTempFile "lsp-preview-sync" "") (.delete) (.mkdirs))
+        a (io/file root "src/a.clj") ctx (semantic-context root)
+        changes (atom [])]
+    (try
+      (io/make-parents a)
+      (spit a "(ns a)\n(sum 1)\n")
+      (with-redefs [client/available? (constantly true)
+                    client/client-for (constantly {:opened (atom #{})})
+                    client/rename (fn [_ _ _ _ _]
+                                    {:changes {(str "file://" (.getCanonicalPath a))
+                                               [{:range {:start {:line 1 :character 1} :end {:line 1 :character 4}}
+                                                 :newText "total"}]}})
+                    client/changed! (fn [_ path text] (swap! changes conj [path text]))]
+        (let [staged (base/run-tool (assoc ctx :args {:op "rename" :file "src/a.clj"
+                                                      :line 1 :col 1 :new_name "total" :preview true}))
+              proposal (get-in staged [:resource :proposal-id])]
+          (is (empty? @changes))
+          (let [result (base/run-tool (assoc ctx :tool-name "resource"
+                                             :args {:action "apply" :proposal proposal}))]
+            (is (= :success (:category result)) (pr-str result))
+            (is (= [[(.getCanonicalPath a) "(ns a)\n(total 1)\n"]] @changes)))))
+      (finally (close-semantic-context ctx)
+               (doseq [f (reverse (file-seq root))] (.delete f))))))
+
+(deftest lsp-normalization-uses-one-observation-per-document
+  (let [root (doto (java.io.File/createTempFile "lsp-observations" "") (.delete) (.mkdirs))
+        a (io/file root "src/a.clj") ctx (semantic-context root)]
+    (try
+      (io/make-parents a)
+      (spit a "(ns a)\n(sum 1)\n")
+      (let [old-observe resource/observe
+            calls (atom 0)]
+        (with-redefs [client/available? (constantly true)
+                      client/client-for (constantly {:opened (atom #{})})
+                      client/rename (fn [_ _ _ _ _]
+                                      {:changes {(str "file://" (.getCanonicalPath a))
+                                                 [{:range {:start {:line 1 :character 1} :end {:line 1 :character 4}}
+                                                   :newText "total"}]}})
+                      resource/observe (fn [& args]
+                                         (swap! calls inc)
+                                         (when (= 2 @calls)
+                                           (spit a "(ns a)\n(sum 2)\n"))
+                                         (apply old-observe args))]
+          (let [result (base/run-tool (assoc ctx :args {:op "rename" :file "src/a.clj"
+                                                        :line 1 :col 1 :new_name "total"}))]
+            (is (= :mechanics (:category result)) (pr-str result))
+            (is (= "(ns a)\n(sum 2)\n" (slurp a)))
+            (is (= 2 @calls)))))
+      (finally (close-semantic-context ctx)
+               (doseq [f (reverse (file-seq root))] (.delete f))))))
+
+(deftest real-clojure-lsp-renames-across-files-and-refreshes-diagnostics
+  (if-not (client/available?)
+    (is true "clojure-lsp absent; skipped")
+    (let [root (doto (java.io.File/createTempFile "lsp-real-rename" "") (.delete) (.mkdirs))
+          a (io/file root "src/a.clj") b (io/file root "src/b.clj")
+          ctx (semantic-context root)]
+      (try
+        (io/make-parents a)
+        (spit a "(ns a)\n\n(defn sum [x] x)\n")
+        (spit b "(ns b (:require [a]))\n(a/sum 1)\n")
+        (let [result (base/run-tool (assoc ctx :args {:op "rename" :file "src/a.clj"
+                                                      :line 2 :col 7 :new_name "total"}))]
+          (is (= :success (:category result)) (pr-str result))
+          (is (= "(ns a)\n\n(defn total [x] x)\n" (slurp a)))
+          (is (= "(ns b (:require [a]))\n(a/total 1)\n" (slurp b)))
+          (let [c (client/client-for root)]
+            (is (empty? (client/diagnostics c (str b))))))
+        (finally (close-semantic-context ctx)
+                 (client/shutdown! root)
+                 (doseq [f (reverse (file-seq root))] (.delete f)))))))

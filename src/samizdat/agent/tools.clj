@@ -52,6 +52,7 @@
             [jolt.fs]
             [samizdat.config :as config]
             [samizdat.repl.route :as route]
+            [samizdat.resource :as resource]
             [samizdat.security.sandbox :as sandbox]
             [samizdat.agent.tools.base :as base]
             [samizdat.agent.tools.adopt]
@@ -84,6 +85,12 @@
             [samizdat.agent.tools.skills]
             [samizdat.agent.tools.introspect]
             [samizdat.agent.tools.lsp]
+            [samizdat.agent.tools.resource]
+            [samizdat.agent.tools.inference]
+            [samizdat.agent.tools.diagnosis]
+            [samizdat.agent.tools.execution]
+            [samizdat.agent.tools.debug]
+            [samizdat.agent.tools.structural]
             [samizdat.security.exposure :as exposure]
             [samizdat.security.secrets :as secrets]))
 
@@ -247,6 +254,17 @@
 
       (= "read_file" t) (flow/read! ctx (paths-arg (:path args)) t)
       (= "read_digest" t) (flow/read! ctx (paths-arg (:paths args)) t)
+
+      (and (= "resource" t) (= "read" (str (:action args))))
+      (flow/read! ctx [(str/replace-first (str (:uri args))
+                                          (re-pattern (str "^" resource/workspace-prefix)) "")] t)
+
+      (and (contains? #{"resource" "lsp"} t) (= :success (:category r)))
+      (doseq [{:keys [operation metadata]} (get-in r [:resource :members])]
+        (when (:path metadata)
+          (flow/wrote! ctx (:path metadata) (contains? #{:write :create :delete} operation)))
+        (when (:target-path metadata)
+          (flow/wrote! ctx (:target-path metadata) true)))
 
       (= "grep" t)
       (let [out (str (:result r))

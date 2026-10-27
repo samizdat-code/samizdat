@@ -92,6 +92,16 @@
    :tools #{"write_file" "edit_file"}
    :message-file "task-required"}
 
+  {:rule :same-failure-needs-diagnosis
+   :when (and (samizdat.agent.state/active? branch)
+              (samizdat.agent.supervisor/repeating-one-failure?
+               (samizdat.agent.gates/tool-vocab :file-write)
+               (samizdat.agent.gates/tool-vocab :verification)
+               (:turns branch)
+               (samizdat.agent.gates/threshold :same-failure-turns)))
+   :tools #{"eval" "shell" "verify"}
+   :message-file "diagnosis"}
+
   ;; The storm guard (karamazov-ekk): withhold the identical repeat and the
   ;; A-B-A-B extension. Detection is samizdat.agent.storm (pure); thresholds
   ;; and tool classification are gates.edn (:storm-* thresholds, :storm-exempt

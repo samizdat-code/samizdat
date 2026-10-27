@@ -23,7 +23,8 @@
   branch that never returns its turn, and with five branches in the beam that
   is the whole run. `run` kills the process tree on timeout rather than
   leaving an orphan holding a pipe."
-  (:require [jolt.ffi :as ffi]
+  (:require [clojure.java.io :as io]
+            [jolt.ffi :as ffi]
             [jolt.process :as p]))
 
 (ffi/defcfn ^:private c-kill "kill" [:int :int] :int)
@@ -72,7 +73,7 @@
           (.waitFor p (min left wait-slice-ms) java.util.concurrent.TimeUnit/MILLISECONDS) true
           :else (recur))))))
 
-(defn- reap!
+(defn reap!
   "Kill `proc`'s whole tree and do not return until the root is gone.
 
   SIGTERM the tree first, then SIGKILL whatever is still alive — including
@@ -97,7 +98,126 @@
       (try (.destroyForcibly p) (catch Throwable _ nil))
       (try (wait-for p sigterm-grace-ms) (catch Throwable _ nil)))))
 
-(defn run
+(defn- daemon-thread [f]
+  (let [thread (Thread. f)]
+    (.setDaemon thread true)
+    (.start thread)
+    thread))
+
+(defn- capture-stream [path]
+  (let [file (io/file path)]
+    (when-let [parent (.getParentFile file)]
+      (.mkdirs parent))
+    (io/output-stream file)))
+
+(defn- capture-streams [stdout stderr]
+  (let [out (capture-stream stdout)]
+    (try
+      [out (capture-stream stderr)]
+      (catch Throwable e
+        (try (.close out) (catch Throwable _ nil))
+        (throw e)))))
+
+(defn- pump-stream [input output cap tail-cap]
+  (let [observed (atom 0)
+        written (atom 0)
+        error (atom nil)
+        eof (atom false)
+        tail (java.io.ByteArrayOutputStream.)
+        buffer (byte-array 8192)
+        thread (daemon-thread
+                (fn []
+                  (try
+                    (loop []
+                      (let [n (.read input buffer)]
+                        (if (neg? n)
+                          (reset! eof true)
+                          (do
+                            (swap! observed + n)
+                            (let [amount (min n (max 0 (- (long cap) @written)))]
+                              (when (pos? amount)
+                                (.write output buffer 0 amount)
+                                (swap! written + amount)))
+                            (.write tail buffer 0 n)
+                            (when (> (.size tail) tail-cap)
+                              (let [bytes (.toByteArray tail)]
+                                (.reset tail)
+                                (.write tail bytes (- (alength bytes) tail-cap) tail-cap)))
+                            (recur)))))
+                    (catch Throwable e (reset! error e)))))]
+    {:thread thread :observed observed :written written :error error :eof eof :tail tail}))
+
+(defn- capture-status [{:keys [observed written error eof]}]
+  (cond-> {:observed-bytes @observed
+           :retained-bytes @written
+           :complete? (and @eof (nil? @error) (= @observed @written))}
+    @error (assoc :error (str @error))))
+
+(defn- stream-tail [{:keys [observed written tail]}]
+  (when (> @observed @written)
+    (String. (.toByteArray ^java.io.ByteArrayOutputStream tail) "UTF-8")))
+
+(defn- run-captured
+  [{:keys [input timeout-ms env dir capture]} & args]
+  (let [{:keys [stdout stderr retain-bytes tail-bytes join-timeout-ms]} capture
+        cap (max 0 (long retain-bytes))
+        tail-cap (max 0 (long (or tail-bytes cap)))
+        join-ms (long (or join-timeout-ms sigterm-grace-ms))
+        [stdout-stream stderr-stream] (capture-streams stdout stderr)
+        builder (ProcessBuilder. ^java.util.List (mapv str args))]
+    (when dir (.directory builder (io/file (str dir))))
+    (when env
+      (let [environment (.environment builder)]
+        (.clear environment)
+        (doseq [[k v] env]
+          (.put environment (str k) (str v)))))
+    (try
+      (let [process (.start builder)]
+        (try
+          (let [stdout-pump (pump-stream (.getInputStream process) stdout-stream cap tail-cap)
+                stderr-pump (pump-stream (.getErrorStream process) stderr-stream cap tail-cap)
+                stdin (daemon-thread
+                       (fn []
+                         (with-open [writer (io/writer (.getOutputStream process))]
+                           (.write writer (str (or input ""))))))
+                ms (or timeout-ms 30000)
+                outcome (try
+                          (if (wait-for process ms) :finished :timeout)
+                          (catch InterruptedException _ :cancelled)
+                          (catch Throwable _ :error))]
+            (when-not (= :finished outcome)
+              (reap! {:proc process}))
+            (try (.close (.getOutputStream process)) (catch Throwable _ nil))
+            (let [deadline (+ (System/currentTimeMillis) join-ms)]
+              (doseq [thread [stdin (:thread stdout-pump) (:thread stderr-pump)]]
+                (.join thread (max 1 (- deadline (System/currentTimeMillis)))))
+              (doseq [stream [(.getInputStream process) (.getErrorStream process)]]
+                (try (.close stream) (catch Throwable _ nil)))
+              (doseq [thread [(:thread stdout-pump) (:thread stderr-pump)]]
+                (.join thread (max 1 (- deadline (System/currentTimeMillis))))))
+            (.flush stdout-stream)
+            (.flush stderr-stream)
+            (merge (case outcome
+                     :finished {:exit (.exitValue process)}
+                     :cancelled {:cancelled true :ms ms}
+                     :timeout {:timeout true :ms ms}
+                     :error {:error true :ms ms})
+                   {:out (slurp stdout)
+                    :err (slurp stderr)
+                    :out-tail (stream-tail stdout-pump)
+                    :err-tail (stream-tail stderr-pump)
+                    :capture (cond-> {:stdout (capture-status stdout-pump)
+                                      :stderr (capture-status stderr-pump)}
+                               (= :cancelled outcome) (assoc :status :cancelled))}))
+          (finally
+            (doseq [stream [(.getInputStream process) (.getErrorStream process)
+                            (.getOutputStream process)]]
+              (try (.close stream) (catch Throwable _ nil))))))
+      (finally
+        (doseq [stream [stdout-stream stderr-stream]]
+          (try (.close stream) (catch Throwable _ nil)))))))
+
+(defn run-uncaptured
   "Run `args` with `input` on stdin, capturing stdout and stderr.
 
   Returns {:exit :out :err} or {:timeout true :ms n} if it did not finish
@@ -160,6 +280,13 @@
       (finally
         (doseq [stream [(.getInputStream p) (.getErrorStream p) (.getOutputStream p)]]
           (try (some-> stream .close) (catch Throwable _ nil)))))))
+
+(defn run
+  "Run a process, optionally retaining bounded stdout/stderr files."
+  [{:keys [capture] :as options} & args]
+  (if capture
+    (apply run-captured options args)
+    (apply run-uncaptured options args)))
 
 (defn available?
   "Whether `bin` can be executed at all. Used by the smoke probes and to give
