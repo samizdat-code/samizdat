@@ -38,10 +38,10 @@
                     (remove node/whitespace-or-comment?)
                     (partition 2)
                     (map (comp node/sexpr first)))]
-      (some (fn [[key n]] (when (> n 1) key)) (frequencies keys)))))
+      (some (fn [[key n]] (when (> n 1) [key n])) (frequencies keys)))))
 
 (defn- assert-distinct-map-keys! [form-node file {:keys [change-index id]}]
-  (when-let [key (duplicate-map-key form-node)]
+  (when-let [[key _] (duplicate-map-key form-node)]
     (refuse! :duplicate-map-key nil
              {:file file :change-index change-index :change-id id :key key})))
 

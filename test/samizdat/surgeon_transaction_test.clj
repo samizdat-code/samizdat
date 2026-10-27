@@ -240,7 +240,11 @@
                            :expect {:matches 1}}]
                 :expect {:changes 1 :edits 1 :files 1}})]
     (doseq [[source find] [[duplicate-source "{:a 2}"]
-                           ["(ns demo)\n(def view {:a 2})\n" "{:a 1 :a 2}"]]]
+                           ["(ns demo)\n(def view {:a 2})\n" "{:a 1 :a 2}"]
+                           ["(ns demo)\n(def view {nil 1 nil 2})\n" "{nil 2}"]
+                           ["(ns demo)\n(def view {nil 2})\n" "{nil 1 nil 2}"]
+                           ["(ns demo)\n(def view {false 1 false 2})\n" "{false 2}"]
+                           ["(ns demo)\n(def view {false 2})\n" "{false 1 false 2}"]]]
       (let [data (refusal {file source} (spec find))]
         (is (= :duplicate-map-key (:surgeon/error data)))
         (is (= file (:file data)))
