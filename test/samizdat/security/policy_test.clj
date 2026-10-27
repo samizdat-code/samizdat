@@ -24,7 +24,12 @@
   persists."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
+            [samizdat.agent.gates :as gates]
+            [samizdat.agent.tools.base :as base]
+            [samizdat.agent.tools.resource]
             [samizdat.security.policy :as policy]
+            [samizdat.store.captures :as captures]
+            [samizdat.store.executions :as executions]
             [samizdat.store.db :as db]
             [samizdat.store.grants :as grants]
             [samizdat.store.runs :as runs]))
@@ -683,3 +688,133 @@
             (is (not (.exists (java.io.File. escape))))
             (finally (.delete (java.io.File. escape)))))))
    (finally (remove-dir! other)))))
+
+(deftest admitted-shell-calls-return-owned-retained-streams
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "captures"})
+          root (str (jolt.fs/create-temp-dir))]
+      (runs/open-branch! c rid {:branch-id "B1"})
+      (with-redefs [samizdat.security.confine/backend (constantly :none)]
+        (let [r (policy/run-shell {:conn c :run-id rid :root root :branch {:id "B1"}
+                                   :env {"PATH" (System/getenv "PATH")}
+                                   :args {:command "echo out; echo err >&2"}})
+              id (get-in r [:captures :id])
+              _ (is (= 0 (:delivered (captures/capture c id))))
+              _ (captures/deliver! c id (gates/threshold :shell-logs))
+              row (captures/capture c id)]
+          (is (= :success (:category r)) (pr-str r))
+          (is (str/includes? (get-in r [:captures :stdout :uri]) "shell-log:"))
+          (is (str/includes? (:result r) (get-in r [:captures :stdout :uri]))
+              "the model-facing result and its journal retain the reference")
+          (is (= :complete (get-in r [:captures :stdout :status])))
+          (is (str/includes? (:result r) ":status :complete"))
+          (is (str/includes? (:result r) ":observed-bytes 4"))
+          (is (str/includes? (:result r) ":complete? true"))
+          (is (= 4 (get-in r [:captures :stdout :observed-bytes])))
+          (is (= 4 (get-in r [:captures :stderr :observed-bytes])))
+          (is (= "complete" (:status row)))
+          (is (= :complete (:status (executions/execution c id))))
+          (is (= 2 (count (:artifacts (executions/receipt c id)))))
+          (is (= 1 (:delivered row)))
+          (is (= "out\n" (slurp (:stdout_path row))))
+          (is (= "err\n" (slurp (:stderr_path row)))))
+        (with-redefs [samizdat.approval/policy
+                      (constantly {:mode :yolo :wait-ms 1 :on-timeout :deny})]
+          (let [r (policy/run-shell {:conn c :run-id rid :root root :branch {:id "B1"}
+                                     :env {"PATH" (System/getenv "PATH")}
+                                     :timeout-ms 100
+                                     :args {:command "printf before; sleep 5"}})
+                row (captures/capture c (get-in r [:captures :id]))]
+            (is (:timeout? r))
+            (is (str/includes? (:result r) "before"))
+            (is (= "timeout" (:status row)))
+            (is (= "before" (slurp (:stdout_path row)))))))
+      (jolt.fs/delete-tree root))))
+
+(deftest large-output-preview-keeps-the-actual-tail
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "preview"})
+          root (str (jolt.fs/create-temp-dir))
+          original gates/threshold]
+      (runs/open-branch! c rid {:branch-id "B1"})
+      (with-redefs [samizdat.security.confine/backend (constantly :none)
+                    gates/threshold (fn [k]
+                                      (if (= :shell-logs k)
+                                        (assoc (original k)
+                                               :retain-bytes-per-stream 8
+                                               :preview-chars 16
+                                               :preview-stdout-fraction 1.0)
+                                        (original k)))]
+        (let [r (policy/run-shell {:conn c :run-id rid :root root :branch {:id "B1"}
+                                   :env {"PATH" (System/getenv "PATH")}
+                                   :args {:command "echo 123456789FINAL"}})]
+          (is (str/includes? (:result r) "FINAL") (:result r))))
+      (jolt.fs/delete-tree root))))
+
+(deftest finalization-failure-is-publicly-and-durably-incomplete
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "finalization failure"})
+          root (str (jolt.fs/create-temp-dir))]
+      (runs/open-branch! c rid {:branch-id "B1"})
+      (with-redefs [samizdat.security.confine/backend (constantly :none)
+                    policy/redact-capture-file (fn [& _] (throw (java.io.IOException. "read copy failed")))]
+        (let [r (policy/run-shell {:conn c :run-id rid :root root :branch {:id "B1"}
+                                   :env {"PATH" (System/getenv "PATH")}
+                                   :args {:command "echo ok"}})]
+          (is (= :failure (:category r)))
+          (is (= :error (get-in r [:captures :stdout :status])))
+          (is (false? (get-in r [:captures :stdout :complete?])))
+          (is (= "error" (:status (captures/capture c (get-in r [:captures :id])))))))
+      (jolt.fs/delete-tree root))))
+
+(deftest spawn-failure-finishes-not-strands-the-capture
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "spawn failure"})
+          root (str (jolt.fs/create-temp-dir))]
+      (runs/open-branch! c rid {:branch-id "B1"})
+      (with-redefs [samizdat.security.confine/backend (constantly :none)
+                    samizdat.security.confine/shell-command
+                    (fn [_] {:argv ["definitely-not-a-real-command-xyz"] :env {} :dir root})
+                    samizdat.approval/policy
+                    (constantly {:mode :yolo :wait-ms 1 :on-timeout :deny})]
+        (let [r (policy/run-shell {:conn c :run-id rid :root root :branch {:id "B1"}
+                                   :env {"PATH" (System/getenv "PATH")}
+                                   :args {:command "definitely-not-a-real-command-xyz"}})
+              _ (captures/deliver! c (get-in r [:captures :id]) (gates/threshold :shell-logs))
+              row (captures/capture c (get-in r [:captures :id]))]
+          (is (= :failure (:category r)))
+          (is (= "error" (:status row)))
+          (is (= 1 (:delivered row)))))
+      (jolt.fs/delete-tree root))))
+
+(deftest uncaptured-spawn-failure-keeps-its-error-message
+  (with-redefs [samizdat.security.confine/shell-command
+                (constantly {:argv ["definitely-not-a-real-command-xyz"] :env {} :dir "/tmp"})
+                samizdat.approval/policy
+                (constantly {:mode :yolo :wait-ms 1 :on-timeout :deny})]
+    (let [r (policy/run-shell {:args {:command "definitely-not-a-real-command-xyz"}})]
+      (is (= :failure (:category r)))
+      (is (str/includes? (:result r) "definitely-not-a-real-command-xyz")))))
+
+(deftest capture-reads-preserve-command-specific-redaction
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "capture redaction"})
+          root (str (jolt.fs/create-temp-dir))
+          secret "plain-opaque-value"
+          env {"PATH" (System/getenv "PATH") "OPAQUE" secret}]
+      (runs/open-branch! c rid {:branch-id "B1"})
+      (with-redefs [samizdat.config/shell-sandbox
+                    (constantly {:sandbox :none :writable [] :pass-env [] :env-refs ["OPAQUE"]})]
+        (let [r (policy/run-shell {:conn c :run-id rid :root root :branch {:id "B1"}
+                                   :env env :args {:command "echo {{env/OPAQUE}}"}})
+              id (get-in r [:captures :id])
+              row (captures/capture c id)
+              read-result (base/run-tool
+                           {:conn c :run-id rid :root root :branch {:id "B1" :role :answerer}
+                            :env env :tool-name "resource"
+                            :args {:action "read" :uri (get-in r [:captures :stdout :uri])}})]
+          (is (not (str/includes? (:result r) secret)))
+          (is (str/includes? (slurp (:stdout_path row)) secret))
+          (is (not (str/includes? (:result read-result) secret)))
+          (is (str/includes? (:result read-result) "REDACTED"))))
+      (jolt.fs/delete-tree root))))

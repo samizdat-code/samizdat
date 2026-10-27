@@ -209,11 +209,12 @@
                       (catch Throwable e {:error (or (ex-message e) (str e))}))))
              soak-timeout-ms)
             error (case tag
-                    :timeout "probe did not terminate within the time budget"
+                    :timeout (prompt/render "mutation-probe" {:timeout true})
                     :ok (or (:error outcome)
                             (when (myc/error? (:result outcome))
                               (:message (myc/workflow-error (:result outcome))))
-                            (when-not @called "workflow path did not invoke the changed definition"))
+                            (when-not @called
+                              (prompt/render "mutation-probe" {:not-invoked true})))
                     :err (or (ex-message outcome) (str outcome)))]
         {:path path :ok? (nil? error) :called? @called :error error})
       (catch Throwable e
@@ -229,7 +230,7 @@
                                       baseline candidate-ids))
                         paths)
                   [{:path nil :ok? false :called? false
-                    :error "no live workflow path references the changed definition"}])]
+                    :error (prompt/render "mutation-probe" {:no-path true})}])]
     {:id id :ok? (every? :ok? results) :paths results}))
 
 (defn- changed-definition-ids [before after]

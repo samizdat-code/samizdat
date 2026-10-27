@@ -38,6 +38,7 @@
   down between turns."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
+            [samizdat.agent.context-rules :as context-rules]
             [samizdat.agent.corrections :as corrections]
             [samizdat.agent.gates :as gates]
             [jolt.time]
@@ -188,6 +189,7 @@
                                          "no term they touch reaches a fixpoint: "
                                          (str/join ", " (map pr-str cycles)))
                                     {:cycles cycles}))))
+    "context-rules" (context-rules/validate-current!)
     "corrections" ;; Each rule's shape, bounded: a rule rides on every turn
                   ;; it matches (karamazov-05z0.4).
                 (when-let [p (corrections/problems

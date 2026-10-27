@@ -45,7 +45,6 @@
             [samizdat.agent.gates :as gates]
             [samizdat.events :as events]
             [samizdat.security.flow :as flow]
-            [samizdat.security.policy :as policy]
             [samizdat.session :as session]
             [samizdat.store.db :as db]))
 
@@ -199,17 +198,15 @@
 
   `branch-id` and `turn` are optional: a call made on behalf of the run rather
   than a branch is still the run's money."
-  [conn run-id {:keys [branch-id turn kind role model usage]}]
+  [conn run-id {:keys [branch-id turn kind role model usage trace-id]}]
   (db/with-writer
     (db/execute! conn
-                 ["INSERT INTO side_calls (run_id, branch_id, turn, kind, role, model,
+                 ["INSERT INTO side_calls (run_id, branch_id, turn, kind, role, model, trace_id,
                                            prompt_tokens, completion_tokens, total_tokens,
                                            cache_hit_tokens, cache_miss_tokens, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                   run-id branch-id turn (some-> kind name) (some-> role name)
-                  (some-> model str)
-                  ;; nil, not 0, when there was no response to cost — the same
-                  ;; rule record-turn! follows.
+                  (some-> model str) trace-id
                   (:prompt-tokens usage) (:completion-tokens usage)
                   (total-of usage)
                   (:cache-hit-tokens usage) (:cache-miss-tokens usage)
@@ -518,7 +515,8 @@
   turn the files its command printed (policy/read-paths)."
   [row]
   (if (= "shell" (:tool_name row))
-    (try (policy/read-paths (:command (json/read-str (str (:args row)) :key-fn keyword)))
+    (try ((requiring-resolve 'samizdat.security.policy/read-paths)
+          (:command (json/read-str (str (:args row)) :key-fn keyword)))
          (catch Throwable _ []))
     (keep identity [(path-of row)])))
 

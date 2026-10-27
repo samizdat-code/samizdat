@@ -165,6 +165,45 @@ read_digest({paths?, turns?, question, anchors?})
     `turns` instead of `paths` reads the WHOLE results of your own earlier
     turns, by number — what a clip note cut off — so a long build log or
     test run can be questioned without paging it back.
+resource({action, uri?, offset?, limit?, query?, content?, proposal?})
+    Revisioned resources. read {action: "read", uri, offset?, limit?} returns
+    a bounded window and the next offset. operations {action: "operations",
+    uri} lists what the resolver supports. edit {action: "edit", uri, content}
+    observes the current revision and stages a complete replacement, returning
+    a proposal id. apply {action: "apply", proposal} publishes that exact-owner,
+    single-use proposal only if every member is still at its observed revision;
+    stale or interrupted changes are reported, never blindly retried. unfinished
+    lists recovery work after resume; recover {action: "recover", proposal}
+    compensates an interrupted change after you inspect it. read with query
+    performs bounded literal search. Shell results name shell-log:<id> streams;
+    read those with stream=stdout or stream=stderr instead of rerunning a command
+    just to recover clipped output. Incomplete and pruned captures are named.
+    knowledge:<id> explains evidence and status; diagnosis:<id> inspects a case.
+inference({action, task?, views?, schema?, budget?, tasks?, context?, continue?})
+    Private bounded inference over explicit views. infer {action: "infer", task,
+    views?, schema?, budget?} returns one validated value and a trace id without
+    inheriting your conversation. map runs ordered tasks under one shared
+    call/token/depth budget. complete runs an external-context root through
+    bounded SCI operations; the full input stays outside your context. Read
+    inference:<id> and context:<digest> through the resource tool.
+diagnosis({action, hypotheses?, known?, probes?, budget?, id?})
+    investigate checks known evidence first, then runs bounded probes chosen by
+    information per policy cost. Accepted undisputed evidence alone rules out a
+    hypothesis; unresolved cases stay open. read returns a durable case by id.
+    Read diagnosis:<id> through the resource tool for hypotheses and evidence.
+execution({action, id?, reason?})
+    inspect returns lifecycle, artifacts, receipt, and continuity. revive consumes
+    a safe-restart claim and links a new execution; dispatch is a separate explicit
+    decision. deliver queues pending completion messages at a safe boundary.
+    Read execution:<id> through the resource tool.
+structural({action, uri?, base-revision?, language?, pattern?, replacement?, proposal?})
+    status reports optional ast-grep availability. query returns matches for an
+    exact workspace revision. rewrite stages a bounded preview; inspect shows it;
+    apply consumes it once through the ordinary revision-gated resource path.
+debug({action, session?, configuration?, path?, lines?, thread?, frame?, reference?, expression?, kind?, count?})
+    Optional DAP sessions: launch|attach, breakpoints, continue|pause, step,
+    threads, stack, scopes, variables, evaluate, events, cancel, terminate, status.
+    Adapter processes require ordinary approval. Read debug:<id> for retained events.
 mcp({action, server?, tool?, arguments?})
     The tools of the MCP servers this project is configured with. Actions:
     servers; tools {server}, each tool with its description and argument
@@ -175,15 +214,13 @@ wait({seconds?, until?, every?})
     {until, every?, seconds?} runs `until` — the run's own configured test
     or acceptance command, nothing else — every `every` seconds until it
     passes or `seconds` run out, all in one turn. Bounded at half an hour.
-lsp({op, file, line, col, new_name?})
-    Code navigation over the project via clojure-lsp. Ops:
-    definition|references|hover need file (project-relative), line, col;
-    diagnostics needs only file. line/col are 0-based ints. definition
-    returns 'path:line:col'; references one per line; hover the symbol's
-    info; diagnostics 'line:col severity: message' per problem. rename
-    needs file, line, col and new_name: clojure-lsp renames the symbol
-    everywhere it is used, and every file it touches is written for you
-    through write_file — the one way to rename that cannot miss a use.
+lsp({op, file, line, col, new_name?, new_path?, preview?})
+    Code navigation and semantic edits via clojure-lsp. definition|references|
+    hover need file, line, col; diagnostics needs only file. rename needs
+    new_name. code_action needs line, col, end_line, end_col. move needs
+    new_path. Semantic edits are staged as resource changes: preview: true
+    returns a proposal for resource apply; direct application uses the same
+    stale checks and recovery path.
 write_file({path, content})
     Write a whole file in the project, creating directories as needed.
     Overwrites. Use this for NEW files; to change an existing file, prefer

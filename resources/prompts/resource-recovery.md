@@ -1,0 +1,2 @@
+Unfinished resource changes were found on resume. Their proposal tokens are not valid in this process. Inspect them with resource {action: "unfinished"} and recover explicitly with resource {action: "recover", proposal: ID} only after checking current file state. Do not rerun the original edits blindly.
+{% for c in changes %}- {{c.id}}: {{c.status}}{% endfor %}

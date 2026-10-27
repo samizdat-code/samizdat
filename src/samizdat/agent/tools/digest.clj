@@ -46,7 +46,8 @@
             [samizdat.agent.tools.base :as base]
             [samizdat.config :as config]
             [samizdat.hashline :as hashline]
-            [samizdat.llm.client :as llm]
+            [samizdat.inference.budget :as inference-budget]
+            [samizdat.inference.frame :as frame]
             [samizdat.llm.message :as message]
             [samizdat.llm.registry :as registry]
             [samizdat.prompt :as prompt]
@@ -124,16 +125,21 @@
                                                      :anchors anchors?})}
                   {:role "user" :content (str question "\n\n" text)}]]
     (try
-      (let [reply (llm/chat adapter config messages)
-            ;; The client folds a reasoning model's thinking into
-            ;; :content as a <think> block for the loop's fence parser
-            ;; to strip; a digest is prose for the branch, so it is
-            ;; stripped here. The first real digest of the validation
-            ;; run came back as 1,790 tokens of reasoning around eight
-            ;; bullets. And a reader that ignores its budget does not
-            ;; get to fill the branch's context anyway: twice the
-            ;; budget is the ceiling, named when it clips.
-            answer (message/strip-think-blocks (str (:content reply)))
+      (let [{:keys [max-calls max-tokens max-depth output-tranche]}
+            (gates/threshold :inference)
+            result (frame/infer
+                    (assoc ctx :llm-adapter adapter :llm-config config)
+                    {:task question
+                     :views [{:label "material" :content text}]
+                     :schema :text
+                     :messages-fn (fn [_] messages)
+                     :role role :kind :digest
+                     :budget (inference-budget/budget
+                              {:calls max-calls :tokens max-tokens :depth max-depth
+                               :max-tranche output-tranche})})
+            _ (when (not= :complete (:status result))
+                (throw (ex-info "inference incomplete" result)))
+            answer (message/strip-think-blocks (str (:value result)))
             ceiling (* 2 (:budget-chars policy))
             answer (if (> (count answer) ceiling)
                      (str (subs answer 0 ceiling) "\n"
@@ -141,26 +147,13 @@
                                 :ceiling ceiling}))
                      answer)]
         (when (and conn run-id)
-          ;; TWO RECORDS, one fact each. The note is the SAVING — what
-          ;; the branch did not have to read — and the side call is the
-          ;; BILL, on the table the run's token budget sums
-          ;; (karamazov-2rqb.1). The usage used to live only in the
-          ;; note, where nothing summed it, so the shunt's whole point
-          ;; (move reading onto a cheaper model) moved spend out of the
-          ;; budget's view along with it.
           (journal/note! conn run-id :digest
                          {:branch-id (:id branch)
                           :data {:paths paths :chars-in chars :clipped clipped
-                                 :role role :model (:model config)}})
-          (journal/record-side-call! conn run-id
-                                     {:branch-id (:id branch)
-                                      :turn (:turn branch)
-                                      :kind :digest
-                                      :role role
-                                      :model (:model config)
-                                      :usage (:usage reply)}))
+                                 :role role :model (:model config)}}))
         (base/ok branch (if (str/blank? answer) (msg {:empty true}) answer)
-                 :digest {:paths paths :chars-in chars :role role}))
+                 :digest {:paths paths :chars-in chars :role role
+                          :trace-id (:trace-id result)}))
       (catch Throwable e
         (log/warn "read_digest: the reader failed:" (ex-message e))
         (base/unavailable branch "the reader" e)))))

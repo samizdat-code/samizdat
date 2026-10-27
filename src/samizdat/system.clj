@@ -347,6 +347,7 @@
                        ["repair seam" #(fence/install-repair! nil)]
                        ["lsp clients" #(lsp-client/shutdown-all!)]
                        ["mcp servers" #(mcp-client/shutdown-all!)]
+                       ["debug adapters" #((requiring-resolve 'samizdat.debug.sessions/close-all!))]
                        ;; Unbind BEFORE the connection closes: a userspace read
                        ;; against a closed handle would throw where the same
                        ;; read against no handle simply serves the template.

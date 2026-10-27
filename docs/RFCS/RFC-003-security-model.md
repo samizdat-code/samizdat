@@ -162,6 +162,22 @@ flowchart LR
     reads --> readroots
     readroots --> redact
 
+    resources[resource tool: revisioned reads and staged writes]
+    toolcall --> resources
+    resources --> readroots
+    resources --> root
+    root --> redact
+
+    diagnosis[diagnosis: symbolic cases and bounded probes]
+    toolcall --> diagnosis
+    diagnosis --> readroots
+    diagnosis --> scrub
+    scrub --> redact
+
+    execution[execution: durable inspection and explicit claims]
+    toolcall --> execution
+    execution --> redact
+
     digest[read_digest: the files, whole, to the reader model]
     reader[outbound HTTP to the :reader role's provider, else the branch's]
     toolcall --> digest

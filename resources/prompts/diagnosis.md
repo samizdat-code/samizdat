@@ -1,0 +1,1 @@
+The same verification failure has repeated without an implementation change. Do not run it again unchanged. Call diagnosis {action: "investigate"} to distinguish hypotheses with accepted evidence and a bounded probe, then act on the evidence that remains. An unresolved diagnosis stays open; it is not proof of the current hypothesis.

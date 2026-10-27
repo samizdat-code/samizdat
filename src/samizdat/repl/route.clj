@@ -191,8 +191,9 @@
   safe direction, and the reason `config/eval-image` treats an unknown role
   that way rather than falling through to the harness."
   [ctx]
-  (config/eval-image (config/eval-mode (:root ctx))
-                     (or (:role ctx) (get-in ctx [:branch :role]))))
+  (or (:eval-image ctx)
+      (config/eval-image (config/eval-mode (:root ctx))
+                         (or (:role ctx) (get-in ctx [:branch :role])))))
 
 (defn- timed-out
   "The answer for an eval `r` that hit its deadline in the project image.
@@ -249,15 +250,14 @@
   (gates/threshold :eval-bridge))
 
 (defn- bridge-for
-  "The bridge options for this eval's image calls, installing the bridge in
-  `im` first: `ctx`'s :bridge as the request handler when the policy is on
-  and the caller supplied one, else nil — and with nil no request is ever
-  answered, so a call fails at its own timeout."
+  "The bridge options for this eval's image calls. Policy enables ordinary
+  tools; a caller with :bridge-required? may instead install only its declared
+  :bridge-tools and handler for a private execution environment."
   [im ctx]
   (let [{:keys [enabled? tools cells? call-timeout-ms poll-ms]} (bridge-policy)
         handler (:bridge ctx)]
-    (when (and enabled? handler)
-      (let [r (image/install-bridge! im tools
+    (when (and handler (or enabled? (:bridge-required? ctx)))
+      (let [r (image/install-bridge! im (distinct (concat tools (:bridge-tools ctx)))
                                      (when cells? (map :id (callable/cells)))
                                      {:timeout-ms call-timeout-ms
                                       :timeout-message (prompt/render "bridge-timeout"

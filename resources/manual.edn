@@ -267,6 +267,8 @@
     :summary "Session modes: named prompt overlays in resources/modes.edn (hurry, plain, relax ship), chosen when a run starts — config.edn :run :modes or `modes` on POST /v1/runs — and read by the model in every turn's context block, after the cached prefix. Add one with a prompt and an entry; the policy save checks each mode names a prompt the project has."}
    {:name samizdat.agent.corrections/matching
     :summary "Corrections: guidance a person asked for, shown in a turn's context block when the branch's recent turns match a rule's :when. :output-contains is a literal matched only against what the model itself wrote, never a tool result. The project's set is the `corrections` policy (editable with the `policy` tool, checked on save); a person's own is ~/.config/samizdat/corrections.edn and follows them across projects. A person drafts one from a complaint with /complain in the TUI (POST /v1/corrections/draft), reviews it, and saves it with /keep. Bounds are gates.edn :corrections."}
+   {:name samizdat.agent.context-rules/resolve-contributions
+    :summary "Context rules: the `context-rules` policy maps symbolic selectors to bounded guidance at safe turn boundaries. :workspace, :paths (prefixes), :languages, :tools, :namespaces, :roles, :tasks, :workflows, :diagnostics, :events and :output-contains conjoin across fields and alternate within a field. :priority orders contributions; :lifetime is :turn, :while-relevant or :persistent (stable first). Late diagnostics must match the originating turn generation. Bounds and language extensions are gates.edn :context-rules."}
    {:name samizdat.agent.gates/threshold
     :summary "Read one tunable from gates.edn. Every gate budget in the harness is a value here."}
    {:name samizdat.agent.gates/reload-config!
@@ -328,6 +330,46 @@
    {:name samizdat.vocabulary/block
     :summary "The project's vocabulary as an opening block within gates.edn :vocabulary :max-chars: full detail, then names only, then whole namespaces dropped and counted. Once per run, on the run row; :enabled? false is the control arm."}]}
 
+ {:group "Revisioned resources"
+  :entries
+  [{:name samizdat.resource/registry
+    :summary "A scheme-keyed resolver registry for resource identity, observations, bounded reads, and operation discovery."}
+   {:name samizdat.resource.workspace/workspace-resolver
+    :summary "The confined workspace resolver: content revisions, reference-root reads, and vetted replacement snapshots."}
+   {:name samizdat.resource.changes/stage!
+    :summary "Validate and durably stage exact-owner resource changes with process-local, single-use proposal tokens."}
+   {:name samizdat.resource.changes/apply!
+    :summary "Publish a staged change against current revisions, compensating only states installed by this change."}
+   {:name samizdat.resource.changes/recover!
+    :summary "Recover an interrupted publication from its durable original snapshots without reusing its proposal."}
+   {:name samizdat.lsp.edit/workspace-edit->members
+    :summary "Normalize LSP text and file edits into data-only revisioned resource members, including UTF-16 positions and overlapping-edit refusal."}
+   {:name samizdat.lsp.client/code-actions
+    :summary "Request CodeAction values for selection and optional codeAction/resolve; their edits publish through resource changes."}
+   {:name samizdat.lsp.client/prepare-file-rename
+    :summary "Request a will-rename WorkspaceEdit without touching the filesystem."}
+   {:name samizdat.structural.backend/query
+    :summary "Optional ast-grep queries run against observed workspace content, with executable approval, deadlines, and bounded matches. Rewrites only produce staged resource changes; the backend never writes files."}
+   {:name samizdat.debug.dap/request!
+    :summary "Optional stdio DAP: Content-Length framing, correlated requests, events, deadlines, cancellation, launch/attach, semantic debug operations, and orderly cleanup. Exact-owner sessions require ordinary approval; non-reattachable sessions need a decision, never a silent relaunch."}
+   {:name samizdat.resource.debug/resolver
+    :summary "Read exact-owner debug execution and retained event artifacts as debug:<session-id>, through the ordinary resource authority boundary."}]}
+
+ {:group "Private inference"
+  :entries
+  [{:name samizdat.inference.budget/budget
+    :summary "Create a shared call/token/depth allowance for one inference tree; children consume the same counters."}
+   {:name samizdat.inference.frame/infer
+    :summary "Run one private inference over explicit views with a contract, trace, and shared budget."}
+   {:name samizdat.inference.map/map-inference
+    :summary "Run ordered inference tasks serially or in parallel under one shared budget."}
+   {:name samizdat.inference.environment/complete
+    :summary "Run an external-context root through bounded SCI context operations and nested inference."}
+   {:name samizdat.inference.contract/normalize
+    :summary "Normalize a JSON Schema-shaped result contract to Malli for validated frame values."}
+   {:name samizdat.inference.trace/frame
+    :summary "Read a private inference frame and its immutable evidence views by trace id."}]}
+
  {:group "Reads through the shell"
   :entries
   [{:name samizdat.security.policy/read-paths
@@ -336,6 +378,37 @@
     :summary "A file's definitions with the line ranges they span, by gates.edn :outline :patterns. read_file({path, outline: true}) returns it, so the next read can take one range instead of the whole file."}
    {:name samizdat.agent.files/large-shell-print?
     :summary "Whether a shell call is a lone `cat FILE` of a file over gates.edn :digest :min-lines — the phases.edn rule :large-shell-print-needs-a-digest refuses it toward read_digest."}]}
+
+ {:group "Retained command output"
+  :entries
+  [{:name samizdat.store.captures/create!
+    :summary "Create an exact-owner durable shell capture before process launch; finish records observed and retained bytes for each stream."}
+   {:name samizdat.resource.shell-log/resolver
+    :summary "Resolve shell-log:<id>?stream=stdout|stderr for owner-checked byte windows and bounded literal UTF-8 search."}
+   {:name samizdat.store.captures/prune!
+    :summary "Prune only delivered captures outside gates.edn :shell-logs age, count, or capacity policy; active and undelivered evidence is protected."}]}
+
+ {:group "Evidence and diagnosis"
+  :entries
+  [{:name samizdat.store.evidence/status
+    :summary "Recompute current, stale, unverified, conflicted, or retired from durable evidence and premises using local checks only."}
+   {:name samizdat.store.evidence/explain
+    :summary "Explain a claim through evidence, premises, dependents, and the reason for its current status."}
+   {:name samizdat.diagnosis/investigate
+    :summary "Evaluate symbolic hypotheses and choose bounded probes by information per policy cost; unresolved cases stay open."}
+   {:name samizdat.store.diagnoses/diagnosis
+    :summary "Read a durable exact-owner diagnosis case with known evidence and probe trace."}]}
+
+ {:group "Durable execution and continuity"
+  :entries
+  [{:name samizdat.store.executions/start!
+    :summary "Create an exact-owner execution record with specification, recovery class, and optional lineage."}
+   {:name samizdat.store.executions/complete!
+    :summary "Complete an execution with artifact references and an idempotent pending receipt."}
+   {:name samizdat.store.executions/revive!
+    :summary "Consume a safe-restart claim and link a new execution without repeating uncertain effects."}
+   {:name samizdat.store.executions/deliver-all!
+    :summary "Queue pending completion receipts through existing safe-boundary interventions, coalesced by policy."}]}
 
  {:group "Which providers may see which files"
   :entries

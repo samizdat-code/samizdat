@@ -59,6 +59,7 @@
             [samizdat.agent.loop :as branch-loop]
             [samizdat.agent.instructions :as instr]
             [samizdat.agent.orient :as orient]
+            [samizdat.agent.oversight :as oversight]
             [samizdat.repl :as repl]
             [samizdat.repl.route :as route]
             [samizdat.session :as session]
@@ -467,8 +468,9 @@
     ;; is the single-branch driver a role's sub-loop uses and the benches
     ;; drive — a nested reviewer loop being separately supervised was never
     ;; the design, and the outer run's stream watches the whole thing anyway.
+    ;; Its receipt-only timer has no reasoning pass and spends no model budget.
 
-    (let [stop-watch (constantly nil)]
+    (let [stop-watch (oversight/completion-stream ctx)]
      (try
       (let [data (note-schema-warnings!
                   ctx

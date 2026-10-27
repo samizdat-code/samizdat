@@ -57,6 +57,11 @@
     (testing "a shell statement that prints the file is refused too"
       (is (some? (exposure/refusal (assoc ctx :tool-name "shell"
                                           :args {:command "sed -n '1,5p' secrets/key.clj"})))))
+    (testing "nested inference resource views are refused before resolution"
+      (is (some? (exposure/refusal
+                  (assoc ctx :tool-name "inference"
+                         :args {:action "infer" :task "summarize"
+                                :views [{:uri "workspace:secrets/key.clj"}]})))))
     (testing "a path outside the patterns is not refused"
       (is (nil? (exposure/refusal (assoc ctx :args {:path "a.clj"})))))))
 

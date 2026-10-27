@@ -174,7 +174,12 @@
     (let [u (journal/run-usage conn run-id)]
       (is (= 1 (:side-calls u)))
       (is (= 13 (:total-tokens u))
-          "the reader's bill lands where spent-tokens can see it"))))
+          "the reader's bill lands where spent-tokens can see it")
+      (let [[frame] (db/fetch conn ["SELECT * FROM inference_frames"])]
+        (is (= "?" (:task frame)))
+        (is (= "gpt-4o" (:model frame)))
+        (is (= "complete" (:status frame)))
+        (is (some? (:usage frame)))))))
 
 (deftest the-readers-thinking-is-not-the-answer
   ;; The client merges a reasoning model's thinking into :content as a

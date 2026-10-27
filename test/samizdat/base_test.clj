@@ -464,6 +464,11 @@
                  "Which half of the refusal message to show — the exec advice
                   or the path advice. Same OS strings, same reasoning."}}
 
+   "src/samizdat/debug/dap.clj"
+   {:vocabulary {"(?i)Content-Length:\\s*(\\d+)"
+                 "The DAP base protocol header. Fixed by the specification;
+                  nobody may retune it."}}
+
    "src/samizdat/lsp/client.clj"
    {:threshold {5000 "LSP request timeout."
                 20000 "LSP read timeout."}

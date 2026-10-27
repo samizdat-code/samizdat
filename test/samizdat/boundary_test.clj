@@ -167,6 +167,17 @@
    ;; readily as a file's body can.
    "glob"        {:reach :host-bytes}
    "lsp"         {:reach :host-bytes}
+   "resource"    {:reach :host-bytes}
+   "inference"   {:reach :spawns-process
+                  :also "bounded provider calls; authorized exposure-checked resources; project-image SCI with the same scrubbed spawn as eval"}
+   "diagnosis"   {:reach :spawns-process
+                  :also "symbolic selection only; LSP and configured verification use the ordinary scrubbed tool/process paths"}
+   "execution"   {:reach :host-bytes
+                  :also "durable inspection and claims only; revival never dispatches the original spec"}
+   "structural"  {:reach :spawns-process
+                  :also "workspace-only authorized observations; approved ast-grep process; staged resource writes"}
+   "debug"       {:reach :spawns-process
+                  :also "approved stdio DAP; exact-owner sessions; scrubbed environment; retained debug resources"}
    ;; A process the person's config.edn names (a project's own config only
    ;; where the person trusted its root), under the scrubbed environment plus
    ;; the variables its entry names; each call passes the server's policy,

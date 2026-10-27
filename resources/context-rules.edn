@@ -1,0 +1,3 @@
+;; Project-local contextual guidance. Fields within :when are conjunctive;
+;; values within one field are alternatives.
+{:rules []}

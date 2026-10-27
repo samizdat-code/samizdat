@@ -1,0 +1,16 @@
+{:probes
+ {:lsp-diagnostics
+  {:cost 1 :fact :diagnostics-clean
+   :contract
+   {:requirements [{:name :diagnostics-op :when {:op "diagnostics"}}]
+    :observations [{:name :diagnostics-result
+                    :when {:diagnostics ?diagnostics}
+                    :then [:diagnostics ?diagnostics]}]
+    :expect #{:diagnostics-result}}}
+ :verify
+  {:cost 2 :fact :verify-green :command "jolt test"}}
+
+ :hypotheses
+ {:verification-failed
+  [{:id :change-regression :predicted {:verify-green false}}
+   {:id :verification-environment :predicted {:verify-green true}}]}}

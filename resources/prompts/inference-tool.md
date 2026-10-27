@@ -1,0 +1,2 @@
+{% if usage %}inference action: infer {task, views?, schema?, budget?}; map {tasks, schema?, budget?}; complete {task, context, schema?, budget?, continue?}. Views are the only context supplied. A schema makes the result one validated JSON value.{% endif %}{% if complete %}{{value}}
+Trace: {{trace-id}}{% endif %}{% if incomplete %}Inference incomplete: {{reason}}. Trace: {{trace-id}}.{% endif %}{% if error %}Inference failed: {{kind}}.{% endif %}
