@@ -56,7 +56,12 @@
         (refuse! :unknown-operation {:index index}))
       (when-not (clojure-file? (:file request))
         (refuse! :invalid-file {:index index})))
-    (let [files (vec (distinct (map :file requests)))]
+    (let [requests (mapv (fn [request]
+                           (if-let [file (tool/canonical-file ctx (:file request))]
+                             (assoc request :file file)
+                             (refuse! :outside-root {:file (:file request)})))
+                         requests)
+          files (vec (distinct (map :file requests)))]
       (when (> (count files) (:max-files policy))
         (refuse! :file-limit {:actual (count files) :limit (:max-files policy)}))
       (when (or (not= (count requests) (:requests expect))

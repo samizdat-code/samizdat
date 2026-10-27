@@ -102,6 +102,39 @@
           (is (= basic-source (slurp (str (:root fixture) "/a.clj"))))
           (is (= match-source (slurp (str (:root fixture) "/b.cljc")))))))))
 
+(deftest path-aliases-share-one-observation-and-form-budget
+  (with-fixture [fixture]
+    (testing "aliases canonicalize to one observed file"
+      (let [observations (atom {})
+            authorized resource-tool/authorized-observation]
+        (with-redefs [resource-tool/authorized-observation
+                      (fn [ctx uri]
+                        (swap! observations update uri (fnil inc 0))
+                        (authorized ctx uri))]
+          (let [result (call fixture {:requests [(forms-request)
+                                                 (assoc (outline-request) :file "./a.clj")]
+                                      :expect {:requests 2 :files 1}})]
+            (is (= :neutral (:category result)) (pr-str result))
+            (is (= {"workspace:a.clj" 1} @observations))
+            (is (= ["a.clj" "a.clj"]
+                   (mapv :file (get-in result [:resource :requests]))))
+            (is (= ["a.clj"] (keys (get-in result [:resource :files]))))))))
+    (testing "aliases share the per-file form cap"
+      (let [observations (atom 0)
+            authorized resource-tool/authorized-observation]
+        (with-redefs [resource-tool/authorized-observation
+                      (fn [ctx uri]
+                        (swap! observations inc)
+                        (authorized ctx uri))]
+          (let [result (call fixture {:requests [(forms-request)
+                                                 {:operation "forms" :file "./a.clj"
+                                                  :form "omega"}]
+                                      :expect {:requests 2 :files 1}}
+                             {:max-forms 1})]
+            (is (refused? result) (pr-str result))
+            (is (str/includes? (:result result) "form-limit") (pr-str result))
+            (is (zero? @observations))))))))
+
 (deftest wrong-aggregate-counts-refuse-before-observation
   (with-fixture [fixture]
     (doseq [expect [{:requests 2 :files 2}
