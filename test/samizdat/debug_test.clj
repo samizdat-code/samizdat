@@ -162,3 +162,11 @@
           (is (= :mechanics (:category (call ctx "launch" {}))))
           (is (some? @closed))))
       (finally (sessions/reset-sessions!) (db/close conn)))))
+
+(deftest close-reaps-the-adapter-process
+  (let [process (.start (ProcessBuilder. ^java.util.List ["sleep" "30"]))]
+    (try
+      (dap/close! {:proc {:proc process} :pending (atom {}) :next-id (atom 0)})
+      (is (not (.isAlive process)))
+      (finally
+        ((requiring-resolve 'samizdat.engine.proc/reap!) {:proc process})))))

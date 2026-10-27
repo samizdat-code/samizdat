@@ -73,7 +73,7 @@
           (.waitFor p (min left wait-slice-ms) java.util.concurrent.TimeUnit/MILLISECONDS) true
           :else (recur))))))
 
-(defn- reap!
+(defn reap!
   "Kill `proc`'s whole tree and do not return until the root is gone.
 
   SIGTERM the tree first, then SIGKILL whatever is still alive — including

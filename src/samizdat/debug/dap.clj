@@ -9,6 +9,7 @@
             [jolt.process :as jp]
             [samizdat.cancel :as cancel]
             [samizdat.debug.sessions :as sessions]
+            [samizdat.engine.proc :as proc]
             [samizdat.security.secrets :as secrets]
             [samizdat.store.debug :as store]
             [samizdat.store.executions :as executions])
@@ -143,5 +144,5 @@
 (defn close! [client]
   (cancel! client)
   (when-let [process (:proc client)]
-    (try (.destroyForcibly ^java.lang.Process (:proc process)) (catch Throwable _ nil)))
+    (try (proc/reap! process) (catch Throwable _ nil)))
   nil)

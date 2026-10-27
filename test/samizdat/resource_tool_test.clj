@@ -156,3 +156,14 @@
       (is (= :mechanics (:category result)))
       (is (not (str/includes? (:result result) "private"))))
     (cleanup fixture)))
+
+(deftest run-teardown-retires-resource-proposals
+  (let [fixture (fixture)]
+    (try
+      (let [staged (base/run-tool (ctx fixture "edit" {:uri "workspace:a.txt" :content "changed"}))
+            proposal (get-in staged [:resource :proposal-id])]
+        ((requiring-resolve 'samizdat.agent.run-state/run-ended!) (:run-id fixture))
+        (let [applied (base/run-tool (ctx fixture "apply" {:proposal proposal}))]
+          (is (= :mechanics (:category applied)) (pr-str applied))
+          (is (= "abcdef" (slurp (str (:root fixture) "/a.txt"))))))
+      (finally (cleanup fixture)))))

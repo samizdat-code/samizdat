@@ -24,6 +24,11 @@
 (defonce ^:private registries (atom {}))
 (defonce ^:private proposals (atom {}))
 
+(defn forget-run! [run-id]
+  (doseq [state [registries proposals]]
+    (swap! state (fn [entries]
+                   (into {} (remove (fn [[[rid _] _]] (= rid run-id)) entries))))))
+
 (defn- key [ctx]
   [(:run-id ctx) (get-in ctx [:branch :id]) (str (:root ctx))])
 
@@ -96,6 +101,8 @@
   (let [registry (registry-for ctx)
         uri (str (base/arg ctx :uri))
         observation (authorize! ctx (resource/observe registry uri ctx))
+        _ (when-let [row (get-in observation [:metadata :knowledge])]
+            (flow/receive! ctx [(:flow row)] "resource"))
         limit (min (number-arg ctx :limit (:read-chars (gates/threshold :resources)))
                    (:read-chars (gates/threshold :resources)))
         result (resource/read-window registry observation ctx

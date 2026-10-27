@@ -183,6 +183,11 @@
 
 (defonce ^:private last-delivery (atom {}))
 
+(defn forget-run! [run-id]
+  (swap! last-delivery
+         (fn [entries]
+           (into {} (remove (fn [[[rid _] _]] (= rid run-id)) entries)))))
+
 (defn deliver-all!
   "Queue a bounded batch of pending receipts for one exact owner."
   [conn run-id branch-id {:keys [coalesce? coalesce-window-ms defer? max-batch now]

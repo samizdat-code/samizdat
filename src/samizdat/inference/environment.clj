@@ -17,6 +17,11 @@
 
 (defonce ^:private continuations (atom {}))
 
+(defn forget-run! [run-id]
+  (swap! continuations
+         (fn [entries]
+           (into {} (remove (fn [[[rid _] _]] (= rid run-id)) entries)))))
+
 (defn- fail [kind data]
   (throw (ex-info (name kind) (assoc data :inference/error kind))))
 

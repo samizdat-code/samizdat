@@ -309,3 +309,21 @@
         (executions/complete! conn id {:status :complete :artifacts []})
         (is (= :complete (:status (executions/receipt conn id)))))
       (finally (db/close conn)))))
+
+(deftest run-teardown-resets-async-delivery-coalescing
+  (let [[conn run-id] (database)
+        opts {:coalesce? true :coalesce-window-ms 1000 :defer? true
+              :max-batch 10 :max-message-chars 1000}]
+    (try
+      (let [first-id (executions/start! conn {:run-id run-id :branch-id "B1"
+                                              :kind "shell" :specification {:command "one"}
+                                              :recovery :unknown})]
+        (executions/complete! conn first-id {:status :complete :artifacts []})
+        (is (= 1 (executions/deliver-all! conn run-id "B1" (assoc opts :now 1000))))
+        ((requiring-resolve 'samizdat.agent.run-state/run-ended!) run-id)
+        (let [second-id (executions/start! conn {:run-id run-id :branch-id "B1"
+                                                 :kind "shell" :specification {:command "two"}
+                                                 :recovery :unknown})]
+          (executions/complete! conn second-id {:status :complete :artifacts []})
+          (is (= 1 (executions/deliver-all! conn run-id "B1" (assoc opts :now 1001))))))
+      (finally (db/close conn)))))

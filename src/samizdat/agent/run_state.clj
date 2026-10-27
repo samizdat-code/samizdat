@@ -35,5 +35,8 @@
   [run-id]
   (doseq [f [verify/unseal-run! flow/forget-run! llm/forget-retired! address/forget-reads!
              progress/forget-run!
+             (requiring-resolve 'samizdat.agent.tools.resource/forget-run!)
+             (requiring-resolve 'samizdat.inference.environment/forget-run!)
+             (requiring-resolve 'samizdat.store.executions/forget-run!)
              (requiring-resolve 'samizdat.debug.sessions/close-run!)]]
     (try (f run-id) (catch Throwable _ nil))))

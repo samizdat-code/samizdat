@@ -220,3 +220,19 @@
       (finally
         (route/release! root)
         (db/close (:conn ctx))))))
+
+(deftest run-teardown-forgets-inference-continuations
+  (let [ctx (context)]
+    (with-redefs [llm/chat (fn [_ _ _] {:content "(finish \"done\")"})]
+      (let [allowance (budget/budget {:calls 2 :tokens 50 :depth 1})]
+        (is (= :complete
+               (:status (environment/complete ctx {:task "teardown" :context "abc"
+                                                   :budget allowance}))))
+        ((requiring-resolve 'samizdat.agent.run-state/run-ended!) (:run-id ctx))
+        (is (= :execution-lost
+               (try
+                 (environment/complete ctx {:task "teardown" :context "abc" :continue true
+                                            :budget allowance})
+                 (catch clojure.lang.ExceptionInfo e
+                   (:inference/error (ex-data e))))))))
+    (db/close (:conn ctx))))

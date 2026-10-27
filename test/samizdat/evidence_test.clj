@@ -151,3 +151,18 @@
       (let [unsupported (claim conn run-id "unsupported")]
         (is (= :unverified (evidence/status conn unsupported))))
       (finally (db/close conn)))))
+
+(deftest knowledge-resource-reads-carry-their-flow-label
+  (let [[conn run-id] (database)
+        claim-id (knowledge/remember! conn {:content "labelled claim" :kind "fact"
+                                            :run-id run-id :flow "encoded-label"})
+        received (atom nil)]
+    (try
+      (with-redefs [samizdat.security.flow/receive!
+                    (fn [_ labels via] (reset! received {:labels labels :via via}))]
+        (base/run-tool {:conn conn :run-id run-id :root "/tmp"
+                        :branch {:id "B1" :role :answerer}
+                        :tool-name "resource"
+                        :args {:action "read" :uri (str "knowledge:" claim-id)}}))
+      (is (= {:labels ["encoded-label"] :via "resource"} @received))
+      (finally (db/close conn)))))
