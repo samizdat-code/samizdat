@@ -147,20 +147,6 @@ jobs:
       - name: Fetch dependencies
         run: jolt -P
 
-      - name: Install the GUI's native toolkit
-        # cold-load runs under -A:test:gui (dev/cold-load.sh says why), and
-        # jolt loads every :jolt/native that ANY dep on the classpath declares
-        # before a single namespace is required. glimmer-gtk declares GTK4 and
-        # GLib, glimmer-gl declares OpenGL; without them on the host every one
-        # of the 26 namespaces died in load-natives! before it could prove
-        # anything about the shim — including the 24 that never touch the GUI.
-        # dlopen needs no display, and glimmer-gtk.core only registers its
-        # backend at load, so a headless runner can load the gui namespaces
-        # too.
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libgtk-4-1 libgl1
-
       - name: Cold load
         # Every namespace that touches a shimmed library, loaded in its OWN
         # process. jolt resolves java.time.* only once jolt.time has installed

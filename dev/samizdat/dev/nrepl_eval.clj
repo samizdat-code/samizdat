@@ -6,7 +6,7 @@
   comes back: out, err, the value, and any exception. The client half of
   REPL-driven development for an agent or a script that has no editor.
 
-      jolt -A:dev:test nrepl-server 7899       # a dev image, once (test adds gui)
+      jolt -A:dev:test nrepl-server 7899       # a dev image, once (dev + test paths)
       NREPL_PORT=7899 CODE='(+ 1 2)' jolt -A:dev -m samizdat.dev.nrepl-eval
       echo '(require (quote samizdat.foo-test) :reload)
             (clojure.test/run-tests (quote samizdat.foo-test))' \\

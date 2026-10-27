@@ -42,7 +42,7 @@
 
 (defn ns-from-test-path
   "The Clojure namespace a test file defines: strip the leading source root
-  (test/ or gui/), drop the extension, '/'->'.', '_'->'-'. Returns nil for a
+  (test/ or src/), drop the extension, '/'->'.', '_'->'-'. Returns nil for a
   non-Clojure path.
   e.g. \"test/samizdat/agent/decompose_test.clj\" -> \"samizdat.agent.decompose-test\".
 
