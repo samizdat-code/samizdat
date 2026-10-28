@@ -8,6 +8,7 @@
             [clojure.test :refer [deftest is testing]]
             [samizdat.surgeon.analyze :as analyze]
             [samizdat.surgeon.fix-declares :as declares]
+            [samizdat.surgeon.forms :as forms]
             [samizdat.surgeon.forward-refs :as forward-refs]
             [samizdat.surgeon.intent-transaction :as intent]
             [samizdat.surgeon.move :as move]))
@@ -84,6 +85,23 @@
         worker (first (filter #(= "worker" (:name %)) deps))]
     (is (= #{"fallback"} (:depends-on worker)))))
 
+(deftest source-only-planners-ignore-process-global-alias-configuration
+  (let [aliases (atom {})
+        move-source "(ns sample.move)\n(defn destination [] nil)\n(custom-defn worker [] 1)\n"
+        analyze-source "(ns x) (def config 1) (custom-defn worker [config] config)"
+        options {:form "worker" :before "destination"}]
+    (with-redefs [forms/project-aliases aliases]
+      (let [move-before (move/plan-form move-source options)
+            deps-before (analyze/intra-ns-deps (analyze/string->zloc analyze-source))]
+        (reset! aliases {"custom-defn" {:kind :defn}})
+        (let [move-after (move/plan-form move-source options)
+              deps-after (analyze/intra-ns-deps (analyze/string->zloc analyze-source))
+              worker-after (first (filter #(= "worker" (:name %)) deps-after))]
+          (is (= move-before move-after))
+          (is (= :form-not-found (:error-type move-after)))
+          (is (= deps-before deps-after))
+          (is (= #{"config"} (:depends-on worker-after))))))))
+
 (deftest forward-reference-evidence-is-a-pure-analysis-projection
   (let [analysis {:var-definitions [{:ns 'sample.core :name 'helper :row 8}]
                   :var-usages [{:from 'sample.core :to 'sample.core :name 'helper :row 5}
@@ -95,11 +113,15 @@
 (def simple-declare-source
   "(ns sample.declares)\n\n(declare helper)\n\n(defn main []\n  (helper 42))\n\n(defn helper [x]\n  (inc x))\n")
 
+(def simple-declare-fixed-source
+  "(ns sample.declares)\n\n\n(defn helper [x]\n  (inc x))\n\n(defn main []\n  (helper 42))\n\n")
+
 (deftest declare-planning-uses-injected-evidence-and-removes-stale-declares
   (let [result (declares/plan-fix simple-declare-source "sample.clj"
                                   {:forward-refs [(forward-ref "helper" 6 8)]})
         future (:future-source result)]
-    (is (not (str/includes? future "(declare helper)")))
+    (is (= simple-declare-fixed-source future))
+    (is (not (str/includes? future "(declare)")))
     (is (before? future "(defn helper" "(defn main"))
     (is (= 1 (get-in result [:summary :moves])))
     (is (= 1 (get-in result [:summary :declares-deleted]))))

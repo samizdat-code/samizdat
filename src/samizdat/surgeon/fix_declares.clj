@@ -82,13 +82,13 @@
   (let [root (z/of-string source {:track-position? true})]
     (for [form (take-while some? (iterate z/right root))
           :when (and (z/list? form) (= "declare" (some-> form z/down z/string)))
-          :let [children (rest (take-while some? (iterate z/right (z/down form))))]
-          child children
-          :when (= :token (node/tag (z/node child)))]
+          :let [children (rest (take-while some? (iterate z/right (z/down form))))
+                names (filter #(= :token (node/tag (z/node %))) children)]
+          child names]
       {:name (z/sexpr child)
        :form form
        :token child
-       :count (count children)})))
+       :count (count names)})))
 
 (defn- remove-whole-declare [source form]
   (let [{:keys [start end]} (node-offsets source (z/node form))

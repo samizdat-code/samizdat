@@ -219,7 +219,9 @@
                          {:changes 1 :edits 1 :files 1})
             future (read-file fixture "a.clj")]
         (is (= :success (:category result)) (pr-str result))
-        (is (not (str/includes? future "(declare helper)")))
+        (is (= "(ns sample.declares)\n\n\n(defn helper [] :ok)\n\n(defn main [] (helper))\n\n"
+               future))
+        (is (not (str/includes? future "(declare)")))
         (is (< (str/index-of future "(defn helper")
                (str/index-of future "(defn main")))))
     (let [source (str "(ns sample.refusal)\n\n"

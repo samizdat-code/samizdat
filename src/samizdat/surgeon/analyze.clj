@@ -19,6 +19,9 @@
   [s]
   (z/of-string s {:track-position? true}))
 
+(defn- private-form? [type-str]
+  (= :defn- (:kind (forms/spec-with-project-aliases {} type-str))))
+
 ;; ============================================================
 ;; Walk: Collect all top-level forms from a zipper
 ;; ============================================================
@@ -255,7 +258,8 @@
       (free-symbols-many form bound)
       (let [op (first form)
             args (rest form)
-            defining-kind (when (symbol? op) (forms/classify (str op)))]
+            defining-kind (when (symbol? op)
+                            (:kind (forms/spec-with-project-aliases {} (str op))))]
         (cond
           (#{'quote 'clojure.core/quote} op)
           #{}
@@ -448,7 +452,7 @@
          (filter (fn [d]
                    (and (not (contains? all-referenced (:name d)))
                         ;; Only flag private forms — public might be used externally
-                        (forms/private-form? (:type d)))))
+                        (private-form? (:type d)))))
          (mapv #(select-keys % [:name :type :line])))))
 
 ;; ============================================================
@@ -496,7 +500,7 @@
                                             ;; or if it's private (defn-)
                                             (and (not (visited' dep))
                                                  (let [dep-form (get deps-by-name dep)]
-                                                   (or (forms/private-form? (:type dep-form))
+                                                   (or (private-form? (:type dep-form))
                                                        (every? closure' callers)))))))
                                 vec)]
               (recur (into (vec rest-q) new-deps)

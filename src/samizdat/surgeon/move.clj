@@ -59,7 +59,7 @@
         definitions (->> entries
                          (filter #(and (:name %)
                                        (not= "declare" (:type %))
-                                       (forms/defining-form? (:type %))))
+                                       (forms/spec-with-project-aliases {} (:type %))))
                          vec)
         by-name (group-by :name definitions)
         declarations (reduce (fn [result {:keys [ordinal line declared-names]}]
