@@ -209,6 +209,10 @@
               (seq unsupported-public-forms)
               {:error-type :unsupported-public-forms
                :unsupported-public-forms (vec (sort unsupported-public-forms))}
+              (seq missing-required-public-forms)
+              {:error-type :required-public-forms
+               :missing-required-public-forms (vec (sort missing-required-public-forms))
+               :source-unchanged true :target-unchanged true}
               (not (:ok header-result)) header-result
               (not (:ok alias-result)) alias-result
               (not (:ok quoted-proof)) quoted-proof

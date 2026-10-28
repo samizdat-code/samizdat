@@ -16,7 +16,8 @@
   (if (or (= s from-prefix) (str/starts-with? s (str from-prefix ".")))
     (str to-prefix (subs s (count from-prefix))) s))
 
-(defn- ns-prefix->dir [prefix] (str/replace prefix "-" "_"))
+(defn- ns-prefix->dir [prefix]
+  (-> prefix (str/replace "-" "_") (str/replace "." "/")))
 
 (defn- find-ns-form [zloc]
   (loop [z zloc]

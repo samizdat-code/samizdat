@@ -9,7 +9,8 @@
   "Purely split one CLJC source string into CLJ and CLJS sources."
   (:require [clojure.string :as str]
             [rewrite-clj.node :as n]
-            [rewrite-clj.zip :as z]))
+            [rewrite-clj.zip :as z]
+            [samizdat.surgeon.cljc.merge :as merge]))
 
 (defn- reader-cond? [zloc]
   (and (= :reader-macro (some-> zloc z/node n/tag))
@@ -40,13 +41,17 @@
        (filter #(and (z/list? %) (= ":require" (some-> % z/down z/string)))) first))
 
 (defn- split-require-block [require-zl]
-  (loop [loc (z/down require-zl) clj [] cljs []]
+  (loop [loc (some-> require-zl z/down z/right) clj [] cljs []]
     (cond
       (nil? loc) {:clj clj :cljs cljs}
       (z/vector? loc) (let [s (z/string loc)] (recur (z/right loc) (conj clj s) (conj cljs s)))
       (reader-cond? loc) (let [{c :clj cs :cljs} (decode-reader-cond loc)]
                            (recur (z/right loc) (into clj (or c [])) (into cljs (or cs []))))
-      :else (recur (z/right loc) clj cljs))))
+      (contains? #{:whitespace :newline :comma} (n/tag (z/node loc)))
+      (recur (z/right loc) clj cljs)
+      :else
+      (throw (ex-info (str "require entry '" (z/string loc) "' not supported in v1")
+                      {:entry (z/string loc)})))))
 
 (defn- emit-ns-form [ns-name require-strs]
   (if (seq require-strs)
@@ -57,7 +62,8 @@
 (defn split-file [cljc-src]
   (let [ns-zl (ns-zloc cljc-src)]
     (when (nil? ns-zl) (throw (ex-info "Input must contain an ns form" {})))
-    (let [ns-nm (-> ns-zl z/down z/right z/string)
+    (let [_ (merge/assert-supported-ns! ns-zl :cljc)
+          ns-nm (-> ns-zl z/down z/right z/string)
           req-zl (require-form-zloc ns-zl)
           {clj-reqs :clj cljs-reqs :cljs} (if req-zl (split-require-block req-zl) {:clj [] :cljs []})
           clj-ns-text (emit-ns-form ns-nm clj-reqs)

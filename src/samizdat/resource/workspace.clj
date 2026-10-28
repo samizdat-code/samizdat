@@ -146,7 +146,7 @@
 
 (defn rename-workspace
   "Move a staged workspace resource and install its checked replacement text."
-  [resolver {:keys [metadata original replacement replacement-revision] :as member}]
+  [resolver {:keys [metadata replacement replacement-revision] :as member}]
   (let [source (:path metadata)
         target (:target-path metadata)
         target-path (java.nio.file.Paths/get (str target) (make-array String 0))
@@ -158,6 +158,5 @@
       (java.nio.file.Files/move
        (java.nio.file.Paths/get (str source) (make-array String 0)) target-path
        (into-array java.nio.file.CopyOption [java.nio.file.StandardCopyOption/ATOMIC_MOVE])))
-    (when (not= original replacement)
-      (publish-workspace resolver (assoc member :metadata (assoc metadata :path target))))
+    (publish-workspace resolver (assoc member :metadata (assoc metadata :path target)))
     replacement-revision))

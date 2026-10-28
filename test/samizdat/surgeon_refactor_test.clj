@@ -225,3 +225,50 @@
       (is (not (fs/exists? (str (:root fixture) "/old_ns/core.clj"))))
       (is (str/includes? (slurp (str (:root fixture) "/consumer.clj"))
                          "[new-ns.core :as old]")))))
+
+(deftest extraction-refuses-private-required-var-without-visibility-decision
+  (let [plan (extract/compile-plan
+              (-> (extraction-input)
+                  (dissoc :derive-required-public-forms)
+                  (assoc :caller-decisions
+                         {"src/sample/consumer.clj" :review-required})))]
+    (is (= :required-public-forms (:error-type plan)))
+    (is (= ["moved"] (:missing-required-public-forms plan)))
+    (is (nil? (:future-sources plan)))))
+
+(deftest namespace-rename-moves-every-segment-of-a-dotted-namespace
+  (let [plan (rename/compile-plan
+              {:sources {"src/old/ns/core.clj" "(ns old.ns.core)\n(defn ping [] :ok)\n"
+                         "src/new/ns/core.clj" nil}
+               :from 'old.ns :to 'new.ns})]
+    (is (= ["src/new/ns/core.clj"] (:created-files plan)))
+    (is (= ["src/old/ns/core.clj"] (:deleted-files plan)))
+    (is (= [{:from "src/old/ns/core.clj" :to "src/new/ns/core.clj"}]
+           (:renamed-files plan)))
+    (is (= [{:operation :rename :file "src/old/ns/core.clj" :target "src/new/ns/core.clj"}]
+           (:resource-effects plan)))
+    (is (str/includes? (get-in plan [:future-sources "src/new/ns/core.clj"])
+                       "(ns new.ns.core)"))))
+
+(deftest later-member-failure-restores-original-bytes-after-rename
+  (with-fixture [fixture]
+    (let [original "(ns old-ns.core)\n(defn ping [] :ok)\n"]
+      (fs/create-dirs (str (:root fixture) "/old_ns"))
+      (spit (str (:root fixture) "/old_ns/core.clj") original)
+      (spit (str (:root fixture) "/consumer.clj")
+            "(ns consumer (:require [old-ns.core :as old]))\n(defn ping [] (old/ping))\n")
+      (let [publish (fn [path content revision]
+                      (if (str/ends-with? (str path) "consumer.clj")
+                        (throw (java.io.IOException. "injected later write failure"))
+                        (do (spit path content) revision)))
+            registry (resource/registry
+                      {:workspace (workspace/workspace-resolver {:publish publish})})]
+        (with-redefs [resource-tool/registry-for (constantly registry)]
+          (let [result (call fixture
+                             {:id :rename :in ["old_ns/core.clj" "consumer.clj"]
+                              :do [:rename-namespace {:from 'old-ns :to 'new-ns}]
+                              :expect {:matches 2}}
+                             {:changes 1 :edits 2 :files 2})]
+            (is (= :compensated (get-in result [:resource :status])) (pr-str result))
+            (is (= original (slurp (str (:root fixture) "/old_ns/core.clj"))))
+            (is (not (fs/exists? (str (:root fixture) "/new_ns/core.clj"))))))))))

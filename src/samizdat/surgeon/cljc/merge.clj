@@ -19,7 +19,7 @@
 (defn- ns-children [ns-zloc]
   (->> (-> ns-zloc z/down z/right z/right) (iterate z/right) (take-while some?)))
 
-(defn- assert-supported-ns! [ns-zloc which]
+(defn assert-supported-ns! [ns-zloc which]
   (doseq [child (ns-children ns-zloc)]
     (let [tag (some-> child z/node n/tag)]
       (cond
@@ -40,8 +40,15 @@
     (let [require-form (->> (ns-children ns-zloc)
                             (filter #(and (z/list? %) (= ":require" (some-> % z/down z/string)))) first)]
       (when require-form
-        (->> (z/down require-form) (iterate z/right) (take-while some?)
-             (filter z/vector?) (mapv z/node))))))
+        (let [entries (->> (some-> require-form z/down z/right)
+                           (iterate z/right) (take-while some?)
+                           (remove #(contains? #{:whitespace :newline :comma}
+                                               (n/tag (z/node %))))
+                           vec)]
+          (doseq [entry entries :when (not (z/vector? entry))]
+            (throw (ex-info (str "require entry '" (z/string entry) "' not supported in v1")
+                            {:entry (z/string entry)})))
+          (mapv z/node entries))))))
 
 (defn vec-node->info [v-node]
   (let [sexpr (n/sexpr v-node) ns-key (first sexpr)

@@ -155,3 +155,34 @@
         (resource-tool/forget-run! run-id)
         (db/close conn)
         (fs/delete-tree root)))))
+
+(deftest split-refuses-namespace-content-it-cannot-preserve
+  (doseq [source ["(ns a \"docs\")"
+                  "(ns a {:author \"team\"})"
+                  "(ns a (:import java.util.UUID))"
+                  "(ns a (:refer-clojure :exclude [map]))"]]
+    (is (thrown? Exception (split/split-file source)) source))
+  (is (thrown? Exception
+               (merge/merge-files "(ns a (:require clojure.string))"
+                                  "(ns a (:require clojure.string))")))
+  (is (thrown? Exception (split/split-file "(ns a (:require clojure.string))"))))
+
+(deftest native-split-refuses-before-deleting-unsupported-input
+  (let [{:keys [root conn run-id] :as fixture} (fixture)
+        original "(ns a \"docs\")\n\n(def x 1)\n"]
+    (try
+      (spit (str root "/bad.cljc") original)
+      (let [result (tools/run-tool
+                    (assoc fixture :tool-name "apply_clojure_changes"
+                           :args {:changes [{:id :split :in ["bad.cljc"]
+                                             :do [:split-cljc {:clj "bad.clj" :cljs "bad.cljs"}]
+                                             :expect {:matches 3}}]
+                                  :expect {:changes 1 :edits 3 :files 3}}))]
+        (is (= :mechanics (:category result)) (pr-str result))
+        (is (= original (slurp (str root "/bad.cljc"))))
+        (is (not (fs/exists? (str root "/bad.clj"))))
+        (is (not (fs/exists? (str root "/bad.cljs")))))
+      (finally
+        (resource-tool/forget-run! run-id)
+        (db/close conn)
+        (fs/delete-tree root)))))
