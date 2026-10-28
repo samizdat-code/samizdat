@@ -273,7 +273,8 @@
             [samizdat.surgeon-edit-tool-test]
             [samizdat.surgeon-transaction-test]
             [samizdat.surgeon-apply-tool-test]
-            [samizdat.surgeon-transform-test]))
+            [samizdat.surgeon-transform-test]
+            [samizdat.surgeon-move-test]))
 
 (def namespaces
   '[maestro.core-test
@@ -355,6 +356,7 @@
     samizdat.surgeon-transaction-test
     samizdat.surgeon-apply-tool-test
     samizdat.surgeon-transform-test
+    samizdat.surgeon-move-test
     samizdat.llm-test
     samizdat.toolspec-test
     samizdat.llm-stream-test

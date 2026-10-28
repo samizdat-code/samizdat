@@ -186,3 +186,52 @@
                          {:changes 1 :edits 2 :files 1})]
         (is (= :success (:category result)) (pr-str result))
         (is (= expected (read-file fixture "a.clj")))))))
+
+(deftest move-operation-commits-through-the-existing-resource-apply-path
+  (with-fixture [fixture]
+    (let [source (str "(ns sample.move)\n\n"
+                      "(defn destination [] (worker))\n\n"
+                      ";; worker comment\n"
+                      "(defn worker [] :ok)\n")]
+      (spit (str (:root fixture) "/a.clj") source)
+      (let [result (call fixture
+                         [{:id :move :in ["a.clj"] :forms ['worker]
+                           :do [:move {:before 'destination :with-deps? true}]
+                           :expect {:matches 1}}]
+                         {:changes 1 :edits 1 :files 1})
+            future (read-file fixture "a.clj")]
+        (is (= :success (:category result)) (pr-str result))
+        (is (= :committed (get-in result [:resource :status])))
+        (is (< (str/index-of future ";; worker comment")
+               (str/index-of future "(defn destination")))
+        (is (str/includes? future ";; worker comment\n(defn worker"))))))
+
+(deftest fix-declares-operation-commits-and-unsafe-move-writes-nothing
+  (with-fixture [fixture]
+    (let [source (str "(ns sample.declares)\n\n"
+                      "(declare helper)\n\n"
+                      "(defn main [] (helper))\n\n"
+                      "(defn helper [] :ok)\n")]
+      (spit (str (:root fixture) "/a.clj") source)
+      (let [result (call fixture
+                         [{:id :declares :in ["a.clj"]
+                           :do [:fix-declares true] :expect {:matches 1}}]
+                         {:changes 1 :edits 1 :files 1})
+            future (read-file fixture "a.clj")]
+        (is (= :success (:category result)) (pr-str result))
+        (is (not (str/includes? future "(declare helper)")))
+        (is (< (str/index-of future "(defn helper")
+               (str/index-of future "(defn main")))))
+    (let [source (str "(ns sample.refusal)\n\n"
+                      "(defn destination [] (worker))\n\n"
+                      "(def config 1)\n\n"
+                      "(defn worker [] config)\n")]
+      (spit (str (:root fixture) "/a.clj") source)
+      (let [result (call fixture
+                         [{:id :move :in ["a.clj"] :forms ['worker]
+                           :do [:move {:before 'destination :with-deps? false}]
+                           :expect {:matches 1}}]
+                         {:changes 1 :edits 1 :files 1})]
+        (is (= :mechanics (:category result)) (pr-str result))
+        (is (str/includes? (:result result) "would-strand-dependencies"))
+        (is (= source (read-file fixture "a.clj")))))))

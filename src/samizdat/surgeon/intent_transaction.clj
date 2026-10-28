@@ -13,6 +13,8 @@
             [rewrite-clj.zip :as z]
             [samizdat.resource.workspace :as workspace]
             [samizdat.surgeon.binding-rename :as binding-rename]
+            [samizdat.surgeon.fix-declares :as declares]
+            [samizdat.surgeon.move :as move]
             [samizdat.surgeon.operation-algebra :as algebra]
             [samizdat.surgeon.outline :as outline]))
 
@@ -212,6 +214,22 @@
          :key (parse-one-form (:key value) ":do :assoc-entry :key")
          :value (parse-one-form (:value value) ":do :assoc-entry :value")})
 
+      (and (vector? operator) (= 2 (count operator))
+           (= :move kind) (map? value))
+      (let [allowed #{:before :with-deps?}
+            unknown (vec (sort (remove allowed (keys value))))]
+        (when (or (seq unknown)
+                  (not (symbol? (:before value)))
+                  (namespace (:before value))
+                  (and (contains? value :with-deps?)
+                       (not (boolean? (:with-deps? value)))))
+          (refuse! :invalid-move nil
+                   {:change-index change-index :change-id change-id :move value :unknown unknown}))
+        {:kind :move :move (update value :with-deps? boolean)})
+
+      (and (vector? operator) (= [:fix-declares true] operator))
+      {:kind :fix-declares}
+
       :else
       (refuse! :unsupported-change-operator nil
                {:change-index change-index :change-id change-id :operator operator}))))
@@ -240,8 +258,11 @@
             kind (:kind operator)
             rename? (= :rename-binding kind)
             delete? (= :delete kind)
+            move? (= :move kind)
+            fix-declares? (= :fix-declares kind)
             insertion? (#{:insert-before :insert-after} kind)
-            from (when-not (or rename? delete? (and insertion? (nil? (:find change))))
+            from (when-not (or rename? delete? move? fix-declares?
+                               (and insertion? (nil? (:find change))))
                    (parse-one-form (:find change) ":find"))
             inside (when-let [source (:inside change)]
                      (when-not (= :assoc-entry kind)
@@ -257,6 +278,16 @@
                    {:change-index change-index :change-id change-id}))
         (when (and delete? (or (nil? forms) owner (some? (:find change))))
           (refuse! :invalid-delete-owner nil {:change-index change-index :change-id change-id}))
+        (when (and move? (or (not= 1 (count files)) (not= 1 (count forms))
+                             owner (some? (:find change))))
+          (refuse! :invalid-move-owner nil {:change-index change-index :change-id change-id}))
+        (when (and fix-declares? (or (not= 1 (count files)) forms owner (some? (:find change))))
+          (refuse! :invalid-fix-declares-owner nil
+                   {:change-index change-index :change-id change-id}))
+        (when (and (or move? fix-declares?)
+                   (or (:each-form expectation) (:each-file expectation)))
+          (refuse! :invalid-native-expectation nil
+                   {:change-index change-index :change-id change-id}))
         (when (and (= :replace kind)
                    (= (:fingerprint from) (get-in operator [:form :fingerprint])))
           (refuse! :no-op-intent nil {:change-index change-index :change-id change-id}))
@@ -267,6 +298,7 @@
           inside (assoc :inside inside)
           owner (assoc :owner owner)
           rename? (assoc :rename (:rename operator))
+          move? (assoc :move (:move operator))
           (= :assoc-entry kind) (assoc :assoc-key (:key operator) :assoc-value (:value operator))
           (= :replace kind) (assoc :to (:form operator))
           insertion? (assoc :insert-side kind :insert-sources (mapv :source (:forms operator)))
@@ -697,28 +729,83 @@
      :result-hash (workspace/content-revision future)
      :edit-count (count prepared) :edits prepared :future-source future}))
 
+(defn- native-change? [change]
+  (contains? #{:move :fix-declares} (:operator change)))
+
+(defn- compile-native-change [sources {:keys [operator files forms move id change-index expect-count]}]
+  (let [file (first files)
+        source (get sources file)
+        result (case operator
+                 :move (move/plan-form source {:file file :form (first forms)
+                                               :before (:before move)
+                                               :with-deps? (:with-deps? move)})
+                 :fix-declares (declares/plan-fix source file))
+        error-type (:error-type result)]
+    (when error-type
+      (refuse! error-type nil (assoc result :change-index change-index :change-id id)))
+    (let [future (:future-source result)
+          matches (case operator
+                    :move 1
+                    :fix-declares (get-in result [:summary :declares-deleted]))]
+      (when-not (= expect-count matches)
+        (refuse! :expect-count-mismatch nil
+                 {:change-index change-index :change-id id :expected-count expect-count
+                  :actual-count matches :file file}))
+      (validate-complete-source! file future :invalid-future-source)
+      (let [edit {:change-index change-index :change-id id :file file
+                  :operator :replace :path [0] :address {:preorder 0} :end-preorder 0
+                  :offset 0 :before source :after future :line 1}
+            compiled {:id id :change-index change-index :files files :forms forms
+                      :operator operator :expected-count expect-count :match-count matches
+                      :plan (or (:plan result) (:summary result))}]
+        {:compiled-change compiled
+         :compiled-file {:file file :source-hash (workspace/content-revision source)
+                         :result-hash (workspace/content-revision future)
+                         :edit-count 1 :future-source future}
+         :edit edit}))))
+
+(defn- compile-native-transaction [sources changes expect]
+  (when-not (= 1 (count changes))
+    (refuse! :mixed-native-transaction nil
+             {:change-ids (mapv :id changes) :operators (mapv :operator changes)}))
+  (let [{:keys [compiled-change compiled-file edit]}
+        (compile-native-change sources (first changes))
+        file (:file compiled-file)
+        actual {:changes 1 :edits 1 :files 1}]
+    (when-not (= expect actual)
+      (refuse! :transaction-expectation-mismatch nil {:expected expect :actual actual}))
+    {:ok true :counts actual :changes [compiled-change]
+     :files [(dissoc compiled-file :future-source)] :edits [edit]
+     :original-sources {file (get sources file)}
+     :future-sources {file (:future-source compiled-file)}
+     :canonical-effects (algebra/canonical-effects {file (get sources file)}
+                                                   {file (:future-source compiled-file)} [edit])
+     :validated {:whole-files-parsed true :file-count 1}}))
+
 (defn- compile-transaction [sources spec options]
   (let [{:keys [changes expect]} (validate-spec! spec)
         files (vec (distinct (mapcat :files changes)))]
     (doseq [file files] (validate-complete-source! file (get sources file) :invalid-source))
-    (let [compiled-changes (mapv #(compile-change sources options %) changes)
-          edits-by-file (group-by :file (mapcat :edits compiled-changes))
-          compiled-files (mapv #(compile-file % (get sources %) (get edits-by-file % [])) files)
-          future-sources (into {} (map (juxt :file :future-source) compiled-files))
-          edits (->> compiled-files (mapcat :edits)
-                     (sort-by (juxt :file :offset :path)) vec)
-          actual {:changes (count compiled-changes)
-                  :edits (reduce + (map :match-count compiled-changes))
-                  :files (count (filter (comp pos? :edit-count) compiled-files))}]
-      (when-not (= expect actual)
-        (refuse! :transaction-expectation-mismatch nil {:expected expect :actual actual}))
-      {:ok true :counts actual
-       :changes (mapv #(dissoc % :edits) compiled-changes)
-       :files (mapv #(dissoc % :future-source :edits) compiled-files)
-       :edits edits :original-sources (select-keys sources files)
-       :future-sources future-sources
-       :canonical-effects (algebra/canonical-effects (select-keys sources files) future-sources edits)
-       :validated {:whole-files-parsed true :file-count (count compiled-files)}})))
+    (if (some native-change? changes)
+      (compile-native-transaction sources changes expect)
+      (let [compiled-changes (mapv #(compile-change sources options %) changes)
+            edits-by-file (group-by :file (mapcat :edits compiled-changes))
+            compiled-files (mapv #(compile-file % (get sources %) (get edits-by-file % [])) files)
+            future-sources (into {} (map (juxt :file :future-source) compiled-files))
+            edits (->> compiled-files (mapcat :edits)
+                       (sort-by (juxt :file :offset :path)) vec)
+            actual {:changes (count compiled-changes)
+                    :edits (reduce + (map :match-count compiled-changes))
+                    :files (count (filter (comp pos? :edit-count) compiled-files))}]
+        (when-not (= expect actual)
+          (refuse! :transaction-expectation-mismatch nil {:expected expect :actual actual}))
+        {:ok true :counts actual
+         :changes (mapv #(dissoc % :edits) compiled-changes)
+         :files (mapv #(dissoc % :future-source :edits) compiled-files)
+         :edits edits :original-sources (select-keys sources files)
+         :future-sources future-sources
+         :canonical-effects (algebra/canonical-effects (select-keys sources files) future-sources edits)
+         :validated {:whole-files-parsed true :file-count (count compiled-files)}}))))
 
 (defn compile-changes
   "Compile one exact change batch. No source, process, or publication effects."

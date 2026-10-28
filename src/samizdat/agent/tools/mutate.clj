@@ -297,12 +297,12 @@
             (not before) (base/malformed branch (base/missing ctx :before))
             (nil? why) (base/malformed branch (base/missing ctx :rationale))
             :else
-            (let [[r moved] (with-temp-source src #(move/move-form {:file % :form form :before before}))
+            (let [r (move/plan-form src {:form form :before before})
                   [ol] (with-temp-source src outline/outline)
                   there (str/join ", " (map :name (:forms ol)))]
               (if (:error r)
                 (base/malformed branch (str (:error r) "\n\n" there))
-                (commit-cell! ctx name moved why)))))
+                (commit-cell! ctx name (:future-source r) why)))))
 
         "replace-form"
         (let [form (some-> (base/arg ctx :form) str str/trim not-empty)

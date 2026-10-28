@@ -140,6 +140,15 @@ bindings. Binding rename changes only the selected owners' local identities;
 keywords and qualified symbols are not renamed. Comment-bearing insertion gaps
 are ambiguous: replace a larger exact span instead of moving comments by text.
 
+For dependency-aware movement, use one single-file change with the source in
+`:forms` and `:do [:move {:before 'destination :with-deps? true}]`. An exact move
+refuses newly stranded dependencies or callers; dependency expansion moves the
+minimum unresolved closure in topological order and refuses cycles. Attached
+comments travel with their forms. Use `:do [:fix-declares true]` without `:forms`
+to remove stale declarations and move safe definitions above their first callers;
+cyclic or unsafe declarations remain in place. These native operations each form
+a single-file transaction and cannot be mixed with ordinary span edits.
+
 Preview and resource apply have the same exact-owner, single-use lifecycle as
 `edit_clojure`. The transaction's canonical effect identity does not depend on
 change or publication order. A refusal, stale revision, output bound, or failed

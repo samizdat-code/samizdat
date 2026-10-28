@@ -221,8 +221,10 @@ apply_clojure_changes({changes, expect, preview?})
     Each change has id, in, optional forms or namespace owner, do, and exact expect
     {matches, each-file?, each-form?}. Actions are [:replace SOURCE], [:insert-before
     [SOURCE ...]], [:insert-after [SOURCE ...]], [:delete true], [:rename-binding
-    {from, to, preserve-external-key: true}], and [:assoc-entry {key, value}]. Aggregate
-    expect is exact {changes, edits, files}. Disjoint edits compile to complete parsed
+    {from, to, preserve-external-key: true}], and [:assoc-entry {key, value}]. A single-file
+    change may instead use [:move {before, with-deps?}] with one source form, or
+    [:fix-declares true] without forms; native operations cannot mix with span edits.
+    Aggregate expect is exact {changes, edits, files}. Disjoint edits compile to complete parsed
     future files and one canonical effect identity. Ordinary calls stage and apply one
     resource change; preview returns one write-free proposal for resource apply.
 transform_clojure({file, expression, expect, commit?})

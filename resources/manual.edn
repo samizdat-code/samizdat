@@ -165,8 +165,8 @@
     :summary "The critic's structural report opens with the changed forms grouped by the calls between them (read from the source: a bare name in the same namespace, an alias or full name elsewhere), forms used from three or more other files set apart as shared so they do not join every caller into one group."}
    {:name samizdat.sdiff.names/used
     :summary "Shortened names in the critic's structural report: a long path or namespace becomes its shortest unique suffix (or the alias its files agree on) only where that saves more than the legend line costs, and the legend leads the report. Not used in anything a model calls a tool with."}
-   {:name samizdat.surgeon.move/move-form
-    :summary "Structural cell edits (xi's clj-surgeon, ported): cell outline {name} lists the forms with their lines; cell move {name, form, before, rationale} moves a form, with the comment above it, ahead of another; cell replace-form {name, form, clj, rationale} replaces one top-level form by name. Each saves through the same validated path as cell save."}
+   {:name samizdat.surgeon.move/plan-form
+    :summary "Pure dependency-aware form movement returns future source without writing; exact moves refuse stranded dependencies or callers, and dependency-expanded moves preserve attached comments and reject cycles. Cell move uses the same planner and passes its future source through the validated cell save path."}
    {:name samizdat.sdiff.address/locate
     :summary "A top-level Clojure form by its id (defn route) or unique bare name, and a place in it by sdiff's printed path (body › binding cap) or any end of that path only one place has. read_file {path, form, at?} reads it; a miss or an ambiguity lists the candidates."}
    {:name samizdat.basis/unresolved
@@ -451,7 +451,7 @@
    {:name samizdat.surgeon.edit/plan-replacements
     :summary "edit_clojure: exact owner-scoped or root-scoped form replacements compiled against one frozen observation per file, then staged and published as one exact-owner revision-gated resource change. preview returns a single-use proposal for resource apply; stale, invalid, protected, and failed publications never masquerade as commits. Load the clj-surgeon skill for exact-selector and preview/apply workflows."}
    {:name samizdat.surgeon.intent-transaction/compile-changes
-    :summary "apply_clojure_changes: pure heterogeneous multi-file replacement, sibling insertion, owner deletion, local binding rename, and semantic assoc-entry compilation over one frozen source map. Exact per-change and aggregate counts, disjoint edits, complete-future parsing, and canonical effect identity precede one revision-gated resource proposal; preview is write-free and publication failures retain their real resource status. Bounds live in gates.edn :clj-surgeon."}
+    :summary "apply_clojure_changes: pure heterogeneous multi-file replacement, sibling insertion, owner deletion, local binding rename, and semantic assoc-entry compilation over one frozen source map. Single-file native move and fix-declares operations use the same future-source and resource proposal path. Exact per-change and aggregate counts, disjoint edits, complete-future parsing, and canonical effect identity precede publication; preview is write-free and failures retain their real resource status. Bounds live in gates.edn :clj-surgeon."}
    {:name samizdat.surgeon.transform/plan
     :summary "transform_clojure: a bounded pure SCI structural relation ending in transform computes exact replacements over one frozen source. Exact matches and changed-character budgets precede complete-future parsing and one revision-gated resource proposal. Preview is the default; comment-bearing selections refuse before staging, while narrower edits preserve surrounding comments. Capabilities, matches, and churn limits live in gates.edn :clj-surgeon."}
    {:name samizdat.agent.files/large-untargeted-read?
