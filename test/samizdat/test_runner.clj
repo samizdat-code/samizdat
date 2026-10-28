@@ -266,7 +266,18 @@
             [samizdat.tui-actions-test]
             [samizdat.tui-widgets-test]
             [samizdat.tui-editing-test]
-            [samizdat.store-test]))
+            [samizdat.store-test]
+            [samizdat.surgeon-inspect-test]
+            [samizdat.surgeon-inspect-tool-test]
+            [samizdat.surgeon-edit-test]
+            [samizdat.surgeon-edit-tool-test]
+            [samizdat.surgeon-transaction-test]
+            [samizdat.surgeon-apply-tool-test]
+            [samizdat.surgeon-transform-test]
+            [samizdat.surgeon-move-test]
+            [samizdat.surgeon-refactor-test]
+            [samizdat.surgeon-semantic-test]
+            [samizdat.surgeon-cljc-test]))
 
 (def namespaces
   '[maestro.core-test
@@ -341,6 +352,17 @@
     samizdat.tui-widgets-test
     samizdat.tui-editing-test
     samizdat.store-test
+    samizdat.surgeon-inspect-test
+    samizdat.surgeon-inspect-tool-test
+    samizdat.surgeon-edit-test
+    samizdat.surgeon-edit-tool-test
+    samizdat.surgeon-transaction-test
+    samizdat.surgeon-apply-tool-test
+    samizdat.surgeon-transform-test
+    samizdat.surgeon-move-test
+    samizdat.surgeon-refactor-test
+    samizdat.surgeon-semantic-test
+    samizdat.surgeon-cljc-test
     samizdat.llm-test
     samizdat.toolspec-test
     samizdat.llm-stream-test

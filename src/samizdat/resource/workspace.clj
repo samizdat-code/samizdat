@@ -145,15 +145,18 @@
     nil))
 
 (defn rename-workspace
-  "Move a staged workspace resource without replacing an existing target."
-  [resolver {:keys [metadata replacement-revision] :as _member}]
+  "Move a staged workspace resource and install its checked replacement text."
+  [resolver {:keys [metadata replacement replacement-revision] :as member}]
   (let [source (:path metadata)
         target (:target-path metadata)
+        target-path (java.nio.file.Paths/get (str target) (make-array String 0))
         rename (get-in resolver [:opts :rename])]
+    (java.nio.file.Files/createDirectories
+     (.getParent target-path) (make-array java.nio.file.attribute.FileAttribute 0))
     (if rename
       (rename source target)
       (java.nio.file.Files/move
-       (java.nio.file.Paths/get (str source) (make-array String 0))
-       (java.nio.file.Paths/get (str target) (make-array String 0))
+       (java.nio.file.Paths/get (str source) (make-array String 0)) target-path
        (into-array java.nio.file.CopyOption [java.nio.file.StandardCopyOption/ATOMIC_MOVE])))
+    (publish-workspace resolver (assoc member :metadata (assoc metadata :path target)))
     replacement-revision))

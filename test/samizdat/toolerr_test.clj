@@ -97,6 +97,17 @@
       (tools/run-tool {:branch {:id "B1"} :tool-name "shell" :args {}})
       (is (= 1 @n)))))
 
+(deftest timed-out-semantic-preparation-is-not-retried-into-a-second-basis
+  (let [bases (atom [])]
+    (with-tool "inspect_clojure"
+      (fn [{:keys [branch]}]
+        (swap! bases conj (str "basis-" (inc (count @bases))))
+        (base/fail branch "semantic preparation timed out" :timeout? true))
+      (tools/run-tool {:branch {:id "B1"} :tool-name "inspect_clojure"
+                       :args {:mode "prepare-change"}})
+      (is (= 1 (count @bases)))
+      (is (not (te/retry-safe? "inspect_clojure" (read-only)))))))
+
 ;; --- what it landed ----------------------------------------------------------
 
 (deftest a-cut-short-mutating-call-says-that-it-does-not-know-what-landed

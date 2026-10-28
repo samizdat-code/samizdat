@@ -91,6 +91,10 @@
             [samizdat.agent.tools.execution]
             [samizdat.agent.tools.debug]
             [samizdat.agent.tools.structural]
+            [samizdat.agent.tools.surgeon-inspect]
+            [samizdat.agent.tools.surgeon-edit]
+            [samizdat.agent.tools.surgeon-apply]
+            [samizdat.agent.tools.surgeon-transform]
             [samizdat.security.exposure :as exposure]
             [samizdat.security.secrets :as secrets]))
 
@@ -254,12 +258,20 @@
 
       (= "read_file" t) (flow/read! ctx (paths-arg (:path args)) t)
       (= "read_digest" t) (flow/read! ctx (paths-arg (:paths args)) t)
+      (= "inspect_clojure" t)
+      (if (= "prepare-change" (str (:mode args)))
+        (when (get-in r [:resource :ok])
+          (flow/read! ctx (distinct (map #(str (:file %))
+                                         (get-in r [:resource :surface]))) t))
+        (flow/read! ctx (distinct (map #(str (:file %)) (:requests args))) t))
 
       (and (= "resource" t) (= "read" (str (:action args))))
       (flow/read! ctx [(str/replace-first (str (:uri args))
                                           (re-pattern (str "^" resource/workspace-prefix)) "")] t)
 
-      (and (contains? #{"resource" "lsp"} t) (= :success (:category r)))
+      (and (contains? #{"resource" "lsp" "edit_clojure" "apply_clojure_changes"
+                        "transform_clojure"} t)
+           (= :success (:category r)))
       (doseq [{:keys [operation metadata]} (get-in r [:resource :members])]
         (when (:path metadata)
           (flow/wrote! ctx (:path metadata) (contains? #{:write :create :delete} operation)))

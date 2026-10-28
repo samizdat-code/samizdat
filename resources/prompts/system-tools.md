@@ -200,6 +200,65 @@ structural({action, uri?, base-revision?, language?, pattern?, replacement?, pro
     status reports optional ast-grep availability. query returns matches for an
     exact workspace revision. rewrite stages a bounded preview; inspect shows it;
     apply consumes it once through the ordinary revision-gated resource path.
+inspect_clojure({requests, expect} | {mode: "prepare-change", subject|subjects|file+form, intent, scope?})
+    Read exact Clojure structure rather than text: batch outline, forms, match, and
+    xray requests over project-relative .clj, .cljs, and .cljc files. forms selects
+    by form, forms, line, or contains; match takes a structural pattern with _ for
+    one subtree and an optional inside owner. xray evaluates a pure structural path,
+    optionally ending in expect-count and analyze, and returns realized EDN with
+    compact or full evidence. expect gives exact {requests, files} totals. Results
+    preserve request order, include SHA-256 revisions, and refuse the whole batch
+    without partial source if any request or configured bound fails. prepare-change
+    resolves one fully qualified subject or a related subject vector through LSP and
+    exact source anchors, adding quoted-Var references as structural supplements.
+    Every surface site names its authority; supplements never become semantic-complete.
+    Exact file/form preparation needs no index and claims no references. Copy the
+    returned next-call and fill every decision to apply_clojure_changes. Missing,
+    ambiguous, stale, mixed-session, or owner-disagreeing evidence refuses.
+edit_clojure({edits, preview?})
+    Replace exact Clojure forms against one frozen observation per file. Each edit is
+    {file, from, to, within?: {form}, matches?}; matching ignores whitespace but keeps
+    comments, metadata, reader syntax, and token spelling exact. `matches` defaults to
+    1 and every edit must be disjoint. Ordinary calls stage and apply one revision-gated
+    resource change; preview: true writes nothing and returns a proposal for resource
+    apply. Stale revisions, invalid future source, and protected paths refuse the batch.
+apply_clojure_changes({changes, expect, preview?} | {basis, decisions, preview?})
+    Compile one heterogeneous multi-file Clojure transaction against frozen snapshots.
+    For a prepared basis, copy next-call and supply every decision exactly once as
+    {site, keep: true}, {site, replace: "complete named form"}, or {site, delete: true}.
+    Decisions compile against retained observations without semantic rediscovery;
+    expired or wrong-owner bases refuse, and deletion without LSP caller proof refuses.
+    Each change has id, in, optional forms or namespace owner, do, and exact expect
+    {matches, each-file?, each-form?}. Actions are [:replace SOURCE], [:insert-before
+    [SOURCE ...]], [:insert-after [SOURCE ...]], [:delete true], [:rename-binding
+    {from, to, preserve-external-key: true}], and [:assoc-entry {key, value}]. A single-file
+    change may instead use [:move {before, with-deps?}] with one source form, or
+    [:fix-declares true] without forms; native operations cannot mix with span edits.
+    Other single-change native operators are [:extract {to, target-ns?, require-policy?,
+    caller-decisions?}], [:rename-namespace {from, to, caller-decisions?}],
+    [:merge-cljc {to}], [:split-cljc {clj, cljs}], and [:add-require {platform, ns, as?}].
+    Extraction creates its target; CLJC merge/split deletes the superseded inputs. Every
+    structural caller candidate needs an explicit :review-required or :not-a-caller disposition;
+    this evidence is never semantic-complete. Create/write/delete/rename members retain revisions
+    and share one resource proposal. Aggregate expect is exact {changes, edits, files}. Disjoint
+    span edits compile to complete parsed future files and one canonical effect identity. Ordinary calls stage and apply one
+    resource change; preview returns one write-free proposal for resource apply.
+transform_clojure({file, expression, expect, commit?})
+    Compile one pure structural Clojure relation ending in transform. The function
+    receives selected syntax as data and returns concrete EDN; I/O, processes, namespace
+    loading, mutation, host interop, and lazy results are refused. expect is exactly
+    {matches, max_changed_characters}. Preview is the default and returns a write-free
+    proposal for resource apply. commit: true publishes through the same resource path.
+    Comment-bearing selected subtrees refuse before staging; narrow the selection to
+    preserve comments and obtain an applicable proposal.
+
+    For project Clojure source, prefer structural reads over reconstructing text ranges:
+    outline when owners are unknown, forms for a known owner or location, match for a
+    structural pattern, and xray for computed structural facts. Use edit_clojure for
+    exact known replacements, apply_clojure_changes for a coordinated heterogeneous
+    plan, and transform_clojure when a pure relation derives the replacement. Load the
+    clj-surgeon skill only for advanced selector, transaction, structural-path/X-ray,
+    computed-transform, or preview/apply guidance beyond these ordinary routes.
 debug({action, session?, configuration?, path?, lines?, thread?, frame?, reference?, expression?, kind?, count?})
     Optional DAP sessions: launch|attach, breakpoints, continue|pause, step,
     threads, stack, scopes, variables, evaluate, events, cancel, terminate, status.

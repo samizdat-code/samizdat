@@ -2,6 +2,9 @@
 ;; src/xi/ext/clj_surgeon, MIT License, Copyright (c) 2026 Florian Schroedl.
 ;; Copied as written and adapted only where samizdat needs it
 ;; (karamazov-0e2c.24); the original notice is in docs/third-party/xi-LICENSE.
+;; Pure alias resolution adapted from clj-surgeon source commit
+;; affdfe3fd59a63b3fbbb50da16b82509fafea907, MIT License,
+;; Copyright (c) 2026 Gene Kim; see docs/third-party/clj-surgeon-LICENSE.
 ;;
 ;; SPDX-License-Identifier: MIT
 
@@ -241,18 +244,18 @@
 (defn- lookup-kind
   "Single-level lookup returning kind kw. Tiers: core forms, in-source
    explicit aliases, project aliases."
-  [s]
+  [aliases s]
   (or (core-forms s)
       (explicit-aliases s)
-      (:kind (@project-aliases s))))
+      (:kind (aliases s))))
 
 (defn- lookup-spec
   "Look up the full spec map. Core/explicit return {:kind kw} with no
    fields. Project entries return their full compiled spec."
-  [s]
+  [aliases s]
   (or (when-let [k (core-forms s)] {:kind k})
       (when-let [k (explicit-aliases s)] {:kind k})
-      (@project-aliases s)))
+      (aliases s)))
 
 (defn classify
   "Classify a form's type-str into a canonical kind (:defn, :defn-, :def, etc.)
@@ -266,18 +269,23 @@
       (mu/defn -> 'defn' -> :defn, works for any alias)"
   [type-str]
   (when type-str
-    (or (lookup-kind type-str)
+    (or (lookup-kind @project-aliases type-str)
         (when-let [idx (str/index-of type-str "/")]
-          (lookup-kind (subs type-str (inc idx)))))))
+          (lookup-kind @project-aliases (subs type-str (inc idx)))))))
+
+(defn spec-with-project-aliases
+  "Pure form-spec resolution against an explicit project-alias map."
+  [project-aliases type-str]
+  (when type-str
+    (or (lookup-spec project-aliases type-str)
+        (when-let [idx (str/index-of type-str "/")]
+          (lookup-spec project-aliases (subs type-str (inc idx)))))))
 
 (defn spec
   "Return the full spec map for a type-str — `{:kind <kw> :fields <map>}`
    or nil if not a defining form. Same tier resolution as `classify`."
   [type-str]
-  (when type-str
-    (or (lookup-spec type-str)
-        (when-let [idx (str/index-of type-str "/")]
-          (lookup-spec (subs type-str (inc idx)))))))
+  (spec-with-project-aliases @project-aliases type-str))
 
 ;; ============================================================
 ;; Derived predicates — used across outline, analyze, extract

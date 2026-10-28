@@ -34,7 +34,7 @@
   samizdat repo itself: every implementor silently lost the REPL/TDD guidance
   and the catalogue rendered empty (karamazov-blt.33). Same reasoning as
   cells/shipped-cells; pinned against resources/skills by skills-test."
-  ["clojure-style" "mycelium" "repl-workflow"])
+  ["clojure-style" "clj-surgeon" "mycelium" "repl-workflow"])
 
 (defn skill-roots
   "The project-relative directories a skill may live in, in precedence order —
