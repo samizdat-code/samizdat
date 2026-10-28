@@ -95,7 +95,12 @@ jobs:
       - name: Test suite
         # Offline and deterministic: maestro, mycelium, the store, the task
         # board, the arbiter and gates, fence parsing, the prompt contract.
-        # No provider calls.
+        # No provider calls. The whole suite is also a stress workload with a
+        # large retained set: a proportional heap ceiling drives Jolt into
+        # repeated full collections, which has caused native SCI corruption on
+        # Linux. Let it use the runner's memory rather than thrashing at 25%.
+        env:
+          JOLT_MAX_HEAP: off
         run: jolt -M:test
 
 
