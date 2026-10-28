@@ -190,6 +190,7 @@
                 :out (.getOutputStream osproc)
                 :in (BufferedInputStream. (.getInputStream osproc))
                 :next-id (atom 0)
+                :next-document-version (atom 0)
                 :opened (atom #{})
                 :diagnostics (atom {})
                 :diag-n (atom 0)
@@ -232,18 +233,22 @@
 
 ;; ---- document + narrow ops ------------------------------------------------
 
+(defn- next-document-version! [client]
+  (swap! (:next-document-version client) inc))
+
 (defn synchronize!
   "Make the server's document at `path` exactly the supplied source snapshot."
   [client path text]
-  (if (contains? @(:opened client) path)
-    (notify! client "textDocument/didChange"
-             {:textDocument {:uri (uri path) :version (System/currentTimeMillis)}
-              :contentChanges [{:text text}]})
-    (do
-      (notify! client "textDocument/didOpen"
-               {:textDocument {:uri (uri path) :languageId "clojure"
-                               :version 1 :text text}})
-      (swap! (:opened client) conj path))))
+  (let [version (next-document-version! client)]
+    (if (contains? @(:opened client) path)
+      (notify! client "textDocument/didChange"
+               {:textDocument {:uri (uri path) :version version}
+                :contentChanges [{:text text}]})
+      (do
+        (notify! client "textDocument/didOpen"
+                 {:textDocument {:uri (uri path) :languageId "clojure"
+                                 :version version :text text}})
+        (swap! (:opened client) conj path)))))
 
 (defn- ensure-open! [client path]
   (when-not (contains? @(:opened client) path)
@@ -303,9 +308,7 @@
   its next answer is about the file as it is."
   [client path text]
   (when (contains? @(:opened client) path)
-    (notify! client "textDocument/didChange"
-             {:textDocument {:uri (uri path) :version (System/currentTimeMillis)}
-              :contentChanges [{:text text}]})))
+    (synchronize! client path text)))
 
 (defn apply-edits
   "`text` with non-overlapping LSP TextEdits applied."
@@ -339,9 +342,7 @@
         n0 @(:diag-n client)]
     (ensure-open! client path)
     ;; ask the server to (re-)analyse the doc as it stands on disk
-    (notify! client "textDocument/didChange"
-             {:textDocument {:uri u :version 2}
-              :contentChanges [{:text (slurp path)}]})
+    (synchronize! client path (slurp path))
     (loop [waited 0]
       (let [e (get @(:diagnostics client) u)]
         (cond

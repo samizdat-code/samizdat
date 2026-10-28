@@ -274,25 +274,29 @@
                  :observations retained
                  :sources (into {} (map (fn [[file observation]] [file (:content observation)]))
                                 retained)}
-          execution-id (executions/start!
-                        (:conn ctx)
-                        {:id id :run-id (:run-id ctx)
-                         :branch-id (get-in ctx [:branch :id])
-                         :kind basis-kind
-                         :specification {:surgeon-basis? true :root (:root basis)
-                                         :expires-at-ms (:expires-at-ms basis)
-                                         :basis-edn (pr-str basis)}
-                         :recovery :safe-restart})]
-      (when-not (= id execution-id)
-        (fail! :semantic-basis-retention-failed {}))
-      (let [public-surface (mapv public-site surface-sites)
-            public-decisions (mapv #(assoc (public-site %) :source (:before %)) sites)]
-        {:ok true :basis id :basis-resource (str "execution:" id)
-         :lsp-session lsp-session :subjects subjects :intent intent :scope scope
-         :caller-proof? caller-proof? :references-claimed? references-claimed?
-         :surface public-surface :decision-sites public-decisions
-         :next-call {:basis id :decisions (mapv (fn [site] {:site (:id site) :replace nil}) sites)}
-         :source-unchanged true}))))
+          public-surface (mapv public-site surface-sites)
+          public-decisions (mapv #(assoc (public-site %) :source (:before %)) sites)
+          response {:ok true :basis id :basis-resource (str "execution:" id)
+                    :lsp-session lsp-session :subjects subjects :intent intent :scope scope
+                    :caller-proof? caller-proof? :references-claimed? references-claimed?
+                    :surface public-surface :decision-sites public-decisions
+                    :next-call {:basis id :decisions (mapv (fn [site] {:site (:id site) :replace nil}) sites)}
+                    :source-unchanged true}
+          rendered (pr-str response)]
+      (when (> (count rendered) (:max-result-chars policy))
+        (fail! :result-limit {:actual (count rendered) :limit (:max-result-chars policy)}))
+      (let [execution-id (executions/start!
+                          (:conn ctx)
+                          {:id id :run-id (:run-id ctx)
+                           :branch-id (get-in ctx [:branch :id])
+                           :kind basis-kind
+                           :specification {:surgeon-basis? true :root (:root basis)
+                                           :expires-at-ms (:expires-at-ms basis)
+                                           :basis-edn (pr-str basis)}
+                           :recovery :safe-restart})]
+        (when-not (= id execution-id)
+          (fail! :semantic-basis-retention-failed {}))
+        response))))
 
 (defn- requested-subjects [{:keys [subject subjects]}]
   (cond

@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [jolt.fs :as fs]
+            [samizdat.agent.gates :as gates]
             [samizdat.agent.tools :as tools]
             [samizdat.agent.tools.resource :as resource-tool]
             [samizdat.lsp.client :as client]
@@ -255,3 +256,21 @@
       (is (= :mechanics (:category result)) (pr-str result))
       (is (str/includes? (:result result) "semantic-definition-missing"))
       (is (not (contains? result :resource))))))
+
+(deftest result-limit-refusal-retains-no-live-basis
+  (with-fixture [fixture]
+    (let [threshold gates/threshold]
+      (with-redefs [gates/threshold
+                    (fn [key]
+                      (cond-> (threshold key)
+                        (= :clj-surgeon key) (assoc :max-result-chars 32)))]
+        (let [result (tools/run-tool
+                      (assoc fixture :tool-name "inspect_clojure"
+                             :args {:mode "prepare-change" :file definition-file
+                                    :form "alpha" :intent "exceed the result bound"}))
+              row (db/fetch-one (:conn fixture)
+                                ["SELECT COUNT(*) AS n FROM executions WHERE kind = ?"
+                                 "surgeon-semantic-basis"])]
+          (is (= :mechanics (:category result)) (pr-str result))
+          (is (str/includes? (:result result) "result-limit"))
+          (is (zero? (:n row)) (pr-str row)))))))

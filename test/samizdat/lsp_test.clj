@@ -105,12 +105,34 @@
           (is (identical? c1 c2) "both racers get the same client"))
         (swap! @#'client/clients dissoc root)))))
 
+(deftest document-synchronization-versions-increase-monotonically
+  (let [notifications (atom [])
+        c {:opened (atom #{}) :next-document-version (atom 0)}
+        path "/tmp/samizdat-monotonic.clj"]
+    (with-redefs [client/notify!
+                  (fn [_ method params]
+                    (swap! notifications conj [method params]))]
+      (client/synchronize! c path "(ns first)\n")
+      (client/synchronize! c path "(ns second)\n")
+      (client/changed! c path "(ns third)\n")
+      (is (= ["textDocument/didOpen" "textDocument/didChange" "textDocument/didChange"]
+             (mapv first @notifications)))
+      (is (= [1 2 3]
+             (mapv #(get-in % [1 :textDocument :version]) @notifications)))
+      (is (= ["(ns first)\n" "(ns second)\n" "(ns third)\n"]
+             (mapv (fn [[method params]]
+                     (if (= "textDocument/didOpen" method)
+                       (get-in params [:textDocument :text])
+                       (get-in params [:contentChanges 0 :text])))
+                   @notifications))))))
+
 (defn- fake-diag-client
   [f resp-writer]
   {:in (java.io.BufferedInputStream. (java.io.PipedInputStream. resp-writer))
    :out (java.io.ByteArrayOutputStream.)
    :root "/tmp/samizdat-lsp-diag-root"
    :next-id (atom 0)
+   :next-document-version (atom 0)
    :opened (atom #{(str f)})
    :diagnostics (atom {})
    :diag-n (atom 0)
@@ -235,7 +257,7 @@
       (spit a "(ns a)\n(defn sum [x] x)\n")
       (spit b "(ns b (:require [a]))\n(a/sum 1)\n")
       (with-redefs [client/available? (constantly true)
-                    client/client-for (constantly {:opened (atom #{})})
+                    client/client-for (constantly {:opened (atom #{}) :next-document-version (atom 0)})
                     client/rename (fn [_ _ _ _ new-name]
                                     {:changes {(str "file://" (.getCanonicalPath a))
                                                [{:range {:start {:line 1 :character 6} :end {:line 1 :character 9}}
@@ -277,7 +299,7 @@
       (spit a "(ns a)\n(defn sum [x] x)\n")
       (spit b "(ns b (:require [a]))\n(a/sum 1)\n")
       (with-redefs [client/available? (constantly true)
-                    client/client-for (constantly {:opened (atom #{})})
+                    client/client-for (constantly {:opened (atom #{}) :next-document-version (atom 0)})
                     client/rename (fn [_ _ _ _ new-name]
                                     {:changes {(str "file://" (.getCanonicalPath a))
                                                [{:range {:start {:line 1 :character 6} :end {:line 1 :character 9}}
@@ -306,7 +328,7 @@
       (io/make-parents a)
       (spit a "(ns a)\n(sum 1)\n")
       (with-redefs [client/available? (constantly true)
-                    client/client-for (constantly {:opened (atom #{})})
+                    client/client-for (constantly {:opened (atom #{}) :next-document-version (atom 0)})
                     client/code-actions (fn [_ _ _ _]
                                           [{:title "Replace sum"
                                             :edit {:changes {(str "file://" (.getCanonicalPath a))
@@ -328,7 +350,7 @@
       (spit a "(ns a)\n")
       (spit b "(ns b (:require [a]))\n(a/sum 1)\n")
       (with-redefs [client/available? (constantly true)
-                    client/client-for (constantly {:opened (atom #{})})
+                    client/client-for (constantly {:opened (atom #{}) :next-document-version (atom 0)})
                     client/prepare-file-rename (fn [_ _ _]
                                                  {:changes {(str "file://" (.getCanonicalPath b))
                                                             [{:range {:start {:line 1 :character 3} :end {:line 1 :character 6}}
@@ -348,7 +370,7 @@
       (io/make-parents a)
       (spit a "(ns a)\n")
       (with-redefs [client/available? (constantly true)
-                    client/client-for (constantly {:opened (atom #{})})
+                    client/client-for (constantly {:opened (atom #{}) :next-document-version (atom 0)})
                     client/code-actions (constantly [{:title "Run command" :command "do.it"}])]
         (let [result (base/run-tool (assoc ctx :args {:op "code_action" :file "src/a.clj"
                                                       :line 0 :col 0 :end_line 0 :end_col 0}))]
@@ -365,7 +387,7 @@
       (io/make-parents a)
       (spit a "(ns a)\n(sum 1)\n")
       (with-redefs [client/available? (constantly true)
-                    client/client-for (constantly {:opened (atom #{})})
+                    client/client-for (constantly {:opened (atom #{}) :next-document-version (atom 0)})
                     client/rename (fn [_ _ _ _ _]
                                     {:changes {(str "file://" (.getCanonicalPath a))
                                                [{:range {:start {:line 1 :character 1} :end {:line 1 :character 4}}
@@ -391,7 +413,7 @@
       (let [old-observe resource/observe
             calls (atom 0)]
         (with-redefs [client/available? (constantly true)
-                      client/client-for (constantly {:opened (atom #{})})
+                      client/client-for (constantly {:opened (atom #{}) :next-document-version (atom 0)})
                       client/rename (fn [_ _ _ _ _]
                                       {:changes {(str "file://" (.getCanonicalPath a))
                                                  [{:range {:start {:line 1 :character 1} :end {:line 1 :character 4}}
