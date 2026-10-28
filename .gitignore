@@ -47,5 +47,6 @@ PLAN.md
 .samizdat/
 
 # Local agent planning and review scratch, not project documentation.
+docs/superpowers
 .superpowers/
 .worktrees/
