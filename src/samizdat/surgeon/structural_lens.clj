@@ -7,7 +7,8 @@
 
 (ns samizdat.surgeon.structural-lens
   "Exact structural search below a named top-level form."
-  (:require [clojure.set :as set]
+  (:require [clojure.edn :as edn]
+            [clojure.set :as set]
             [clojure.string :as str]
             [rewrite-clj.zip :as z]
             [samizdat.resource.workspace :as workspace]
@@ -143,6 +144,17 @@
                           :supported-query-steps supported-query-steps}
                          data))))
 
+(defn lossless-edn-number? [value]
+  (and (number? value)
+       (not (ratio? value))
+       (not (and (instance? Double value)
+                 (or (Double/isNaN value) (Double/isInfinite value))))
+       (try
+         (let [round-tripped (edn/read-string (pr-str value))]
+           (and (= value round-tripped)
+                (= (type value) (type round-tripped))))
+         (catch Exception _ false))))
+
 (defn- concrete-edn?
   [value]
   (if (nil? value)
@@ -150,9 +162,10 @@
     (and (concrete-edn? (meta value))
          (cond
            (or (boolean? value) (char? value) (string? value)
-               (symbol? value) (keyword? value) (number? value)
+               (symbol? value) (keyword? value)
                (instance? java.util.UUID value)
                (instance? java.util.Date value)) true
+           (number? value) (lossless-edn-number? value)
            (vector? value) (every? concrete-edn? value)
            (list? value) (every? concrete-edn? value)
            (set? value) (every? concrete-edn? value)

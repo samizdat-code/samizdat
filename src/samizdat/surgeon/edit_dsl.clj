@@ -324,14 +324,18 @@
 
 (defn concrete-edn?
   [value]
-  (cond
-    (or (nil? value) (boolean? value) (char? value) (string? value)
-        (symbol? value) (keyword? value) (number? value)) true
-    (vector? value) (every? concrete-edn? value)
-    (list? value) (every? concrete-edn? value)
-    (set? value) (every? concrete-edn? value)
-    (map? value) (every? (fn [[k v]] (and (concrete-edn? k) (concrete-edn? v))) value)
-    :else false))
+  (if (nil? value)
+    true
+    (and (concrete-edn? (meta value))
+         (cond
+           (or (boolean? value) (char? value) (string? value)
+               (symbol? value) (keyword? value)) true
+           (number? value) (structural-lens/lossless-edn-number? value)
+           (vector? value) (every? concrete-edn? value)
+           (list? value) (every? concrete-edn? value)
+           (set? value) (every? concrete-edn? value)
+           (map? value) (every? (fn [[k v]] (and (concrete-edn? k) (concrete-edn? v))) value)
+           :else false))))
 
 (defn- xray-refusal
   [found expression error-type]

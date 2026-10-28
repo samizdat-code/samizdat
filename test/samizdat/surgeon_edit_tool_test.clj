@@ -6,6 +6,7 @@
             [clojure.test :refer [deftest is testing]]
             [jolt.fs :as fs]
             [rewrite-clj.parser :as parser]
+            [samizdat.agent.gates :as gates]
             [samizdat.agent.tools :as tools]
             [samizdat.agent.tools.resource :as resource-tool]
             [samizdat.resource :as resource]
@@ -208,3 +209,42 @@
       (is (= 2 (count @writes)))
       (is (= [true true] (mapv #(.endsWith (str (:path %)) ".clj") @writes)))
       (is (= [false false] (mapv :whole? @writes))))))
+
+(deftest edit-results-contain-member-summaries-and-hunks-not-file-snapshots
+  (with-fixture [fixture]
+    (let [result (call fixture [(a-edit)] {:args {:edits [(a-edit)] :preview true}})
+          members (get-in result [:resource :members])]
+      (is (= :neutral (:category result)) (pr-str result))
+      (is (= 1 (count members)))
+      (is (every? #(not (contains? % :original)) members))
+      (is (every? #(not (contains? % :replacement)) members))
+      (is (every? :replacement-revision members))
+      (is (= ["(old-call   x)"] (mapv :before (get-in result [:resource :edits]))))
+      (is (= ["(new-call\n  x)"] (mapv :after (get-in result [:resource :edits])))))))
+
+(deftest every-edit-bound-refuses-before-staging-a-proposal
+  (doseq [[label edits overrides expected]
+          [[:files [(a-edit) (b-edit)] {:max-files 1} "file-limit"]
+           [:source [(a-edit)] {:max-source-chars 10} "source-limit"]
+           [:logical-edits [(a-edit) (b-edit)] {:max-edits 1} "edit-limit"]
+           [:physical-edits [{:file "a.clj" :from "(old-call x)"
+                              :to "(new-call x)" :matches 2}]
+            {:max-edits 1} "edit-limit"]
+           [:result [(a-edit)] {:max-result-chars 32} "result-limit"]]]
+    (testing (name label)
+      (with-fixture [fixture]
+        (let [staged (atom 0)
+              threshold gates/threshold]
+          (with-redefs [gates/threshold
+                        (fn [key]
+                          (cond-> (threshold key)
+                            (= :clj-surgeon key) (merge overrides)))
+                        resource-tool/stage-proposal! (fn [& _] (swap! staged inc))]
+            (let [result (call fixture edits)]
+              (is (= :mechanics (:category result)) (pr-str result))
+              (is (str/includes? (:result result) expected) (pr-str result))
+              (is (zero? @staged))
+              (is (= a-source (read-file fixture "a.clj")))
+              (is (= b-source (read-file fixture "b.clj")))
+              (is (empty? (store/unfinished-changes
+                            (:conn fixture) {:run-id (:run-id fixture) :branch-id "B1"}))))))))))

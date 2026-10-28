@@ -1,5 +1,8 @@
 ;; samizdat - a self-hosting agentic harness
-;; SPDX-License-Identifier: GPL-3.0-or-later
+;; Inspection fixtures ported from clj-surgeon, MIT License,
+;; Copyright (c) 2026 Gene Kim, source commit
+;; affdfe3fd59a63b3fbbb50da16b82509fafea907.
+;; SPDX-License-Identifier: GPL-3.0-or-later AND MIT
 
 (ns samizdat.surgeon-cljc-test
   (:require [clojure.string :as str]
@@ -182,6 +185,61 @@
         (is (= original (slurp (str root "/bad.cljc"))))
         (is (not (fs/exists? (str root "/bad.clj"))))
         (is (not (fs/exists? (str root "/bad.cljs")))))
+      (finally
+        (resource-tool/forget-run! run-id)
+        (db/close conn)
+        (fs/delete-tree root)))))
+
+(deftest split-and-merge-preserve-shared-default-branches-at-a-fixed-point
+  (let [cljc (str "(ns sample.defaults\n"
+                  "  (:require #?@(:default [[clojure.string :as str]])))\n\n"
+                  "#?(:default (defn shared [] (str/upper-case \"ok\")))\n")
+        {:keys [clj cljs]} (split/split-file cljc)
+        merged (merge/merge-files clj cljs)
+        split-again (split/split-file merged)]
+    (is (str/includes? clj "[clojure.string :as str]"))
+    (is (str/includes? cljs "[clojure.string :as str]"))
+    (is (str/includes? clj "(defn shared []"))
+    (is (str/includes? cljs "(defn shared []"))
+    (is (= (normalized clj) (normalized (:clj split-again))))
+    (is (= (normalized cljs) (normalized (:cljs split-again))))))
+
+(deftest platform-branches-override-defaults-and-explicit-empty-branches-survive
+  (let [cljc (str "(ns sample.asymmetric\n"
+                  "  (:require #?@(:clj [] :default [[clojure.string :as str]])))\n\n"
+                  "#?@(:clj [] :default [(defn shared [] :default)])\n"
+                  "#?(:clj (def platform :clj) :default (def platform :default))\n")
+        {:keys [clj cljs]} (split/split-file cljc)]
+    (is (not (str/includes? clj "clojure.string")))
+    (is (str/includes? cljs "[clojure.string :as str]"))
+    (is (not (str/includes? clj "(defn shared")))
+    (is (str/includes? cljs "(defn shared [] :default)"))
+    (is (str/includes? clj "(def platform :clj)"))
+    (is (str/includes? cljs "(def platform :default)"))
+    (let [second-split (split/split-file (merge/merge-files clj cljs))]
+      (is (= (normalized clj) (normalized (:clj second-split))))
+      (is (= (normalized cljs) (normalized (:cljs second-split)))))))
+
+(deftest native-add-require-preserves-default-and-asymmetric-branches
+  (let [{:keys [root conn run-id] :as fixture} (fixture)
+        original (str "(ns sample.native-defaults\n"
+                      "  (:require #?@(:default [[clojure.string :as str]])\n"
+                      "            #?@(:clj [] :default [[clojure.walk :as walk]])))\n")]
+    (try
+      (spit (str root "/defaults.cljc") original)
+      (let [result (tools/run-tool
+                    (assoc fixture :tool-name "apply_clojure_changes"
+                           :args {:changes [{:id :require :in ["defaults.cljc"]
+                                             :do [:add-require {:platform :cljc :ns 'clojure.set :as 'set}]
+                                             :expect {:matches 1}}]
+                                  :expect {:changes 1 :edits 1 :files 1}}))
+            {:keys [clj cljs]} (split/split-file (slurp (str root "/defaults.cljc")))]
+        (is (= :committed (get-in result [:resource :status])) (pr-str result))
+        (doseq [source [clj cljs]]
+          (is (str/includes? source "[clojure.string :as str]"))
+          (is (str/includes? source "[clojure.set :as set]")))
+        (is (not (str/includes? clj "clojure.walk")))
+        (is (str/includes? cljs "[clojure.walk :as walk]")))
       (finally
         (resource-tool/forget-run! run-id)
         (db/close conn)

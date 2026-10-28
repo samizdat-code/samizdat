@@ -152,6 +152,7 @@
                 zloc (analyze/string->zloc source)
                 extracted-names (set (map #(str (:name %)) matched))
                 topo-order (->> (:sorted (analyze/topological-sort zloc)) (filter extracted-names))
+                unordered-forms (set/difference extracted-names (set topo-order))
                 form-texts
                 (->> (sort-by :line matched)
                      (mapv (fn [form]
@@ -166,9 +167,10 @@
                                 :text (str/join "\n" (subvec lines form-start form-end))}))))
                 texts-by-name (into {} (map (juxt :name identity) form-texts))
                 ordered-texts (mapv #(get texts-by-name %) topo-order)
-                header-result (extract-header/compile-target-header
-                               {:source-ns-form ns-form-text :target-ns target-ns
-                                :form-sources (mapv :text ordered-texts) :require-policy require-policy})
+                header-result (when (empty? unordered-forms)
+                                (extract-header/compile-target-header
+                                 {:source-ns-form ns-form-text :target-ns target-ns
+                                  :form-sources (mapv :text ordered-texts) :require-policy require-policy}))
                 alias-result (if (= :copy-all require-policy) {:ok true :aliases {}}
                                  (extract-header/source-aliases ns-form-text))
                 target-alias (when (and (:ok alias-result) (not= :copy-all require-policy))
@@ -203,6 +205,10 @@
                               (into {} (filter (comp string? val) captured-sources)) subjects)
                 proof (caller-proof other-files caller-decisions)]
             (cond
+              (seq unordered-forms)
+              {:error-type :extraction-forms-not-orderable
+               :unordered-forms (vec (sort unordered-forms))
+               :source-unchanged true :target-unchanged true}
               (seq invalid-public-forms)
               {:error-type :invalid-public-forms
                :invalid-public-forms (vec (sort invalid-public-forms))}

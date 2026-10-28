@@ -11,6 +11,7 @@
             [samizdat.agent.tools.resource :as resource-tool]
             [samizdat.lsp.client :as client]
             [samizdat.resource.workspace :as workspace]
+            [samizdat.security.flow :as flow]
             [samizdat.store.db :as db]
             [samizdat.store.executions :as executions]
             [samizdat.store.runs :as runs]
@@ -274,3 +275,21 @@
           (is (= :mechanics (:category result)) (pr-str result))
           (is (str/includes? (:result result) "result-limit"))
           (is (zero? (:n row)) (pr-str row)))))))
+
+(deftest successful-preparation-labels-definition-reference-and-supplement-files-once
+  (with-fixture [fixture]
+    (let [reads (atom [])]
+      (with-redefs [flow/read! (fn [_ paths via]
+                                (swap! reads conj {:paths (vec paths) :via via}))]
+        (let [result ((fake-lsp fixture)
+                      #(tools/run-tool
+                        (assoc fixture :tool-name "inspect_clojure"
+                               :args {:mode "prepare-change" :subject "sample.core/alpha"
+                                      :intent "label every semantic input"})))]
+          (is (= :neutral (:category result)) (pr-str result))
+          (is (get-in result [:resource :ok]))))
+      (is (= 1 (count @reads)) (pr-str @reads))
+      (is (= "inspect_clojure" (get-in @reads [0 :via])))
+      (is (= #{definition-file caller-file quoted-file}
+             (set (get-in @reads [0 :paths]))))
+      (is (= 3 (count (get-in @reads [0 :paths])))))))

@@ -40,13 +40,20 @@
   (->> (-> ns-zl z/down z/right z/right) (iterate z/right) (take-while some?)
        (filter #(and (z/list? %) (= ":require" (some-> % z/down z/string)))) first))
 
+(defn- platform-forms [decoded platform]
+  (if (contains? decoded platform)
+    (get decoded platform)
+    (get decoded :default)))
+
 (defn- split-require-block [require-zl]
   (loop [loc (some-> require-zl z/down z/right) clj [] cljs []]
     (cond
       (nil? loc) {:clj clj :cljs cljs}
       (z/vector? loc) (let [s (z/string loc)] (recur (z/right loc) (conj clj s) (conj cljs s)))
-      (reader-cond? loc) (let [{c :clj cs :cljs} (decode-reader-cond loc)]
-                           (recur (z/right loc) (into clj (or c [])) (into cljs (or cs []))))
+      (reader-cond? loc) (let [decoded (decode-reader-cond loc)]
+                           (recur (z/right loc)
+                                  (into clj (or (platform-forms decoded :clj) []))
+                                  (into cljs (or (platform-forms decoded :cljs) []))))
       (contains? #{:whitespace :newline :comma} (n/tag (z/node loc)))
       (recur (z/right loc) clj cljs)
       :else
@@ -73,9 +80,11 @@
           clj-bodies (atom []) cljs-bodies (atom [])]
       (doseq [zl after-ns]
         (if (reader-cond? zl)
-          (let [{c :clj cs :cljs} (decode-reader-cond zl)]
-            (when (seq c) (swap! clj-bodies into c))
-            (when (seq cs) (swap! cljs-bodies into cs)))
+          (let [decoded (decode-reader-cond zl)
+                clj-forms (platform-forms decoded :clj)
+                cljs-forms (platform-forms decoded :cljs)]
+            (when (seq clj-forms) (swap! clj-bodies into clj-forms))
+            (when (seq cljs-forms) (swap! cljs-bodies into cljs-forms)))
           (let [s (z/string zl)] (swap! clj-bodies conj s) (swap! cljs-bodies conj s))))
       {:clj (str clj-ns-text (when (seq @clj-bodies) (str "\n\n" (str/join "\n\n" @clj-bodies))) "\n")
        :cljs (str cljs-ns-text (when (seq @cljs-bodies) (str "\n\n" (str/join "\n\n" @cljs-bodies))) "\n")})))

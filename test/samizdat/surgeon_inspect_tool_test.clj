@@ -295,3 +295,22 @@
         (is (not (str/includes? (:result result) "#object")))
         (is (not (str/includes? (:result result) ":query")))
         (is (not (str/includes? (:result result) ":trace")))))))
+
+(deftest expectation-mismatch-never-renders-oversized-extra-keys
+  (with-fixture [fixture]
+    (let [observations (atom 0)
+          authorized resource-tool/authorized-observation
+          marker (apply str (repeat 20000 "x"))]
+      (with-redefs [resource-tool/authorized-observation
+                    (fn [ctx uri]
+                      (swap! observations inc)
+                      (authorized ctx uri))]
+        (let [result (call fixture
+                           {:requests [(outline-request)]
+                            :expect {:requests 2 :files 1 :padding marker}}
+                           {:max-result-chars 128})]
+          (is (refused? result) (pr-str result))
+          (is (zero? @observations))
+          (is (not (str/includes? (:result result) marker)))
+          (is (not (str/includes? (:result result) "padding")))
+          (is (< (count (:result result)) 512)))))))

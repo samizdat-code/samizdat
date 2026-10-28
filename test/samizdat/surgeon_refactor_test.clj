@@ -1,5 +1,8 @@
 ;; samizdat - a self-hosting agentic harness
-;; SPDX-License-Identifier: GPL-3.0-or-later
+;; Inspection fixtures ported from clj-surgeon, MIT License,
+;; Copyright (c) 2026 Gene Kim, source commit
+;; affdfe3fd59a63b3fbbb50da16b82509fafea907.
+;; SPDX-License-Identifier: GPL-3.0-or-later AND MIT
 
 (ns samizdat.surgeon-refactor-test
   (:require [clojure.string :as str]
@@ -272,3 +275,34 @@
             (is (= :compensated (get-in result [:resource :status])) (pr-str result))
             (is (= original (slurp (str (:root fixture) "/old_ns/core.clj"))))
             (is (not (fs/exists? (str (:root fixture) "/new_ns/core.clj"))))))))))
+
+(def cyclic-source
+  "(ns sample.cyclic)\n\n(defn even? [x] (if (zero? x) true (odd? (dec x))))\n\n(defn odd? [x] (if (zero? x) false (even? (dec x))))\n")
+
+(deftest cyclic-extraction-refuses-before-producing-candidates
+  (let [plan (extract/compile-plan
+              {:file "cyclic.clj" :sources {"cyclic.clj" cyclic-source}
+               :forms '[even? odd?] :to "extracted.clj" :target-ns "sample.extracted"})]
+    (is (= :extraction-forms-not-orderable (:error-type plan)) (pr-str plan))
+    (is (= #{"even?" "odd?"} (set (:unordered-forms plan))))
+    (is (:source-unchanged plan))
+    (is (:target-unchanged plan))
+    (is (nil? (:future-sources plan)))))
+
+(deftest native-cyclic-extraction-stages-nothing-and-preserves-source
+  (with-fixture [fixture]
+    (spit (str (:root fixture) "/cyclic.clj") cyclic-source)
+    (let [staged (atom 0)]
+      (with-redefs [resource-tool/stage-proposal! (fn [& _] (swap! staged inc))]
+        (let [result (call fixture
+                           {:id :extract :in ["cyclic.clj"] :forms '[even? odd?]
+                            :do [:extract {:to "extracted.clj" :target-ns 'sample.extracted}]
+                            :expect {:matches 2}}
+                           {:changes 1 :edits 2 :files 2})]
+          (is (= :mechanics (:category result)) (pr-str result))
+          (is (str/includes? (:result result) "extraction-forms-not-orderable"))
+          (is (zero? @staged))
+          (is (= cyclic-source (slurp (str (:root fixture) "/cyclic.clj"))))
+          (is (not (fs/exists? (str (:root fixture) "/extracted.clj"))))
+          (is (empty? (store/unfinished-changes
+                        (:conn fixture) {:run-id (:run-id fixture) :branch-id "B1"}))))))))

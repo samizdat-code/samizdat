@@ -18,10 +18,10 @@
 (defn- refuse! [kind data]
   (throw (ex-info (name kind) (merge {:surgeon/error kind} data))))
 
-(defn- contains-comment? [form-node]
-  (or (= :comment (node/tag form-node))
+(defn- contains-node-tag? [tag form-node]
+  (or (= tag (node/tag form-node))
       (and (node/inner? form-node)
-           (boolean (some contains-comment? (node/children form-node))))))
+           (boolean (some #(contains-node-tag? tag %) (node/children form-node))))))
 
 (defn- line-offsets [source]
   (loop [offsets [0] index 0]
@@ -68,15 +68,17 @@
         after-value (transformer (selected-value match targets))]
     (when-not (edit-dsl/concrete-edn? after-value)
       (refuse! :invalid-transform-result {:match-index index}))
-    (let [after (pr-str after-value)
-          changed (max (count before) (count after))]
+    (let [after (binding [*print-meta* true] (pr-str after-value))
+          changed (max (count before) (count after))
+          parsed-before (parser/parse-string-all before)]
       {:file nil
        :before before
        :after after
        :offset offset
        :end-offset end-offset
        :changed-characters changed
-       :comment-bearing? (contains-comment? (parser/parse-string-all before))})))
+       :comment-bearing? (contains-node-tag? :comment parsed-before)
+       :uneval-bearing? (contains-node-tag? :uneval parsed-before)})))
 
 (defn- assert-disjoint! [edits]
   (doseq [[left right] (partition 2 1 (sort-by :offset edits))]
@@ -151,9 +153,12 @@
                               (update :edits conj (assoc compiled :file file))
                               (assoc :changed-characters total)
                               (update :comment-bearing-selection?
-                                      #(or % (:comment-bearing? compiled))))))
+                                      #(or % (:comment-bearing? compiled)))
+                              (update :uneval-bearing-selection?
+                                      #(or % (:uneval-bearing? compiled))))))
                       {:edits [] :changed-characters 0
-                       :comment-bearing-selection? false}
+                       :comment-bearing-selection? false
+                       :uneval-bearing-selection? false}
                       (map-indexed vector (:matches found)))
               edits (assert-disjoint! (:edits compiled))]
           (when (every? #(= (:before %) (:after %)) edits)
@@ -164,7 +169,8 @@
              :matches actual-count
              :changed-characters (:changed-characters compiled)
              :comment-bearing-selection? (:comment-bearing-selection? compiled)
-             :edits (mapv #(dissoc % :comment-bearing?) edits)}))))
+             :uneval-bearing-selection? (:uneval-bearing-selection? compiled)
+             :edits (mapv #(dissoc % :comment-bearing? :uneval-bearing?) edits)}))))
     (catch clojure.lang.ExceptionInfo error
       (let [data (ex-data error)]
         (if (:surgeon/error data)

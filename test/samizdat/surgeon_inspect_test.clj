@@ -23,6 +23,7 @@
   (:require [clojure.edn :as edn]
             [clojure.test :refer [deftest is testing]]
             [rewrite-clj.zip :as z]
+            [samizdat.surgeon.edit-dsl :as edit-dsl]
             [samizdat.surgeon.forms :as forms]
             [samizdat.surgeon.inspect :as inspect]))
 
@@ -415,3 +416,21 @@
     (is (edn-round-trip? result) (pr-str result))
     (is (nil? (:error-type reader-result)) (pr-str reader-result))
     (is (edn-round-trip? reader-result) (pr-str reader-result))))
+
+(deftest xray-numeric-results-round-trip-value-and-type-and-reject-lossy-numbers
+  (doseq [value [1 1.0 1M 100000000000000000000N]]
+    (let [result (xray (str "(-> (form 'data) (analyze (fn [_] " (pr-str value) ")))"))
+          round-tripped (edn/read-string (pr-str (:value result)))]
+      (is (nil? (:error-type result)) (pr-str result))
+      (is (= value (:value result)))
+      (is (= (type value) (type (:value result))))
+      (is (= value round-tripped))
+      (is (= (type value) (type round-tripped)))))
+  (doseq [[expression expected]
+          [["(-> (form 'data) (match 1/2))" :invalid-query]
+           ["(-> (form 'data) (analyze (fn [_] (/ 1 2))))" :invalid-xray-result]]]
+    (let [result (xray expression)]
+      (is (= expected (:error-type result)) (pr-str result))
+      (is (not (contains? result :value)))))
+  (doseq [value [(float 1) Double/NaN Double/POSITIVE_INFINITY]]
+    (is (not (edit-dsl/concrete-edn? value)) (pr-str value))))

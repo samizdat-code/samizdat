@@ -259,7 +259,11 @@
       (= "read_file" t) (flow/read! ctx (paths-arg (:path args)) t)
       (= "read_digest" t) (flow/read! ctx (paths-arg (:paths args)) t)
       (= "inspect_clojure" t)
-      (flow/read! ctx (distinct (map #(str (:file %)) (:requests args))) t)
+      (if (= "prepare-change" (str (:mode args)))
+        (when (get-in r [:resource :ok])
+          (flow/read! ctx (distinct (map #(str (:file %))
+                                         (get-in r [:resource :surface]))) t))
+        (flow/read! ctx (distinct (map #(str (:file %)) (:requests args))) t))
 
       (and (= "resource" t) (= "read" (str (:action args))))
       (flow/read! ctx [(str/replace-first (str (:uri args))

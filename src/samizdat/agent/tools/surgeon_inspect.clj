@@ -44,6 +44,7 @@
     (when-not (vector? requests)
       (refuse! :invalid-requests {}))
     (when-not (and (map? expect)
+                   (= #{:requests :files} (set (keys expect)))
                    (count-arg? (:requests expect))
                    (count-arg? (:files expect)))
       (refuse! :invalid-expect {}))
@@ -69,7 +70,7 @@
                 (not= (count files) (:files expect)))
         (refuse! :expectation-mismatch
                  {:actual (pr-str {:requests (count requests) :files (count files)})
-                  :limit (pr-str expect)}))
+                  :limit (pr-str (select-keys expect [:requests :files]))}))
       (let [forms-by-file
             (reduce (fn [counts request]
                       (if (= "forms" (operation request))

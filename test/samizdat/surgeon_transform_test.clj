@@ -2,7 +2,8 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 (ns samizdat.surgeon-transform-test
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [jolt.fs :as fs]
             [samizdat.agent.gates :as gates]
@@ -258,3 +259,43 @@
           (is (str/includes? (:result result) "invalid-transform-expectation"))
           (is (zero? @staged))
           (is (= source (read-file fixture))))))))
+
+(deftest transform-refuses-ratios-and-unrepresentable-metadata
+  (doseq [expression ["(-> (form 'configs) (match :timeout) right (transform (fn [_] (/ 1 2))))"
+                      "(-> (form 'configs) initializer (transform (fn [v] (with-meta v {:bad identity}))))"]]
+    (is (= :invalid-transform-result
+           (:surgeon/error
+             (plan-error {:file "a.clj" :expression expression
+                          :expect {:matches (if (str/includes? expression "initializer") 1 2)
+                                   :max_changed_characters 1000}})))
+        expression)))
+
+(deftest real-transform-preserves-concrete-metadata
+  (with-fixture [fixture]
+    (let [original "(ns sample.core)\n\n(def settings ^String {:timeout 100})\n"]
+      (spit (str (:root fixture) "/a.clj") original)
+      (let [result (call fixture {:file "a.clj" :commit true
+                                  :expression "(-> (form 'settings) initializer (transform #(assoc % :ready? true)))"
+                                  :expect {:matches 1 :max_changed_characters 100}})
+            future (read-file fixture)]
+        (is (= :success (:category result)) (pr-str result))
+        (is (str/includes? future "{:tag String}"))
+        (is (str/includes? future ":ready? true"))
+        (let [settings (nth (second (edn/read-string (str "[" future "]"))) 2)]
+          (is (= 'String (:tag (meta settings)))))))))
+
+(deftest reader-discard-transform-refuses-preview-before-staging
+  (with-fixture [fixture]
+    (let [original "(ns sample.core)\n\n(def configs [100 #_101 102])\n"
+          staged (atom 0)]
+      (spit (str (:root fixture) "/a.clj") original)
+      (with-redefs [resource-tool/stage-proposal! (fn [& _] (swap! staged inc))]
+        (let [result (call fixture {:file "a.clj"
+                                    :expression "(-> (form 'configs) initializer (transform #(conj % 103)))"
+                                    :expect {:matches 1 :max_changed_characters 100}})]
+          (is (= :mechanics (:category result)) (pr-str result))
+          (is (str/includes? (:result result) "lossless-commit-refused"))
+          (is (zero? @staged))
+          (is (= original (read-file fixture)))
+          (is (empty? (store/unfinished-changes
+                        (:conn fixture) {:run-id (:run-id fixture) :branch-id "B1"}))))))))
