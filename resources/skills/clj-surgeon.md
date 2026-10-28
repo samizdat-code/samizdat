@@ -168,7 +168,8 @@ invalid future source refuses before staging. Preview is the default and uses
 the same exact-owner proposal and `resource` apply flow as exact edits. Set
 `:commit true` only for the already reviewed relation.
 
-A selected subtree containing comments may be previewed, but one-shot commit
-refuses it because printing the computed form drops those comments. Narrow the
-selection to the comment-free values, then commit; comments elsewhere in the
-file remain unchanged.
+A selected subtree containing comments is refused before staging, for preview as
+well as commit, because printing the computed form drops those comments and the
+proposal would otherwise remain applicable through `resource`. Narrow the
+selection to comment-free values, then preview or commit; comments elsewhere in
+the file remain unchanged.

@@ -178,18 +178,26 @@
           (is (zero? @staged))
           (is (= source (read-file fixture))))))))
 
-(deftest comments-require-a-narrow-selection-only-for-commit
+(deftest comment-bearing-transforms-refuse-preview-and-commit
   (with-fixture [fixture]
     (let [broad {:file "a.clj"
                  :expression "(-> (form 'settings) initializer (transform #(assoc % :retries 3)))"
                  :expect {:matches 1 :max_changed_characters 200}}
           preview (call fixture broad)
+          proposal-id (get-in preview [:resource :proposal-id])
+          applied (tools/run-tool
+                    (assoc fixture :tool-name "resource"
+                           :args {:action "apply" :proposal proposal-id}))
           refused (call fixture (assoc broad :commit true))]
-      (is (= :neutral (:category preview)) (pr-str preview))
-      (is (true? (get-in preview [:resource :comment-bearing-selection?])))
+      (is (= :mechanics (:category preview)) (pr-str preview))
+      (is (str/includes? (:result preview) "lossless-commit-refused"))
+      (is (nil? proposal-id))
+      (is (not= :success (:category applied)) (pr-str applied))
       (is (= :mechanics (:category refused)) (pr-str refused))
       (is (str/includes? (:result refused) "lossless-commit-refused"))
-      (is (= source (read-file fixture))))
+      (is (= source (read-file fixture)))
+      (is (empty? (store/unfinished-changes
+                    (:conn fixture) {:run-id (:run-id fixture) :branch-id "B1"}))))
     (let [narrow {:file "a.clj"
                   :expression "(-> (form 'settings) (match :timeout) right (transform inc))"
                   :expect {:matches 1 :max_changed_characters 3}

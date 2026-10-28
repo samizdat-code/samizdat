@@ -230,8 +230,9 @@ transform_clojure({file, expression, expect, commit?})
     receives selected syntax as data and returns concrete EDN; I/O, processes, namespace
     loading, mutation, host interop, and lazy results are refused. expect is exactly
     {matches, max_changed_characters}. Preview is the default and returns a write-free
-    proposal for resource apply. commit: true publishes through the same resource path;
-    it refuses comment-bearing selected subtrees, so narrow the selection to preserve them.
+    proposal for resource apply. commit: true publishes through the same resource path.
+    Comment-bearing selected subtrees refuse before staging; narrow the selection to
+    preserve comments and obtain an applicable proposal.
 
     For project Clojure source, prefer structural reads over reconstructing text ranges:
     outline when owners are unknown, forms for a known owner or location, match for a

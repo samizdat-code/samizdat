@@ -68,7 +68,7 @@
                                     :max-query-steps (:max-forms policy)
                                     :max-matches (:max-transform-matches policy)))
         commit (true? (base/arg ctx :commit))]
-    (when (and commit (:comment-bearing-selection? plan))
+    (when (:comment-bearing-selection? plan)
       (refuse! :lossless-commit-refused {:matches (:matches plan)}))
     (let [replacements {(str resource/workspace-prefix file) (:future-source plan)}
           members (workspace/stage-workspace (get registry :workspace) ctx
