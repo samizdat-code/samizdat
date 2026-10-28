@@ -186,6 +186,7 @@
         ^java.lang.Process osproc (:proc p)
         client {:proc p
                 :root root
+                :session-id (str (random-uuid))
                 :out (.getOutputStream osproc)
                 :in (BufferedInputStream. (.getInputStream osproc))
                 :next-id (atom 0)
@@ -231,12 +232,22 @@
 
 ;; ---- document + narrow ops ------------------------------------------------
 
+(defn synchronize!
+  "Make the server's document at `path` exactly the supplied source snapshot."
+  [client path text]
+  (if (contains? @(:opened client) path)
+    (notify! client "textDocument/didChange"
+             {:textDocument {:uri (uri path) :version (System/currentTimeMillis)}
+              :contentChanges [{:text text}]})
+    (do
+      (notify! client "textDocument/didOpen"
+               {:textDocument {:uri (uri path) :languageId "clojure"
+                               :version 1 :text text}})
+      (swap! (:opened client) conj path))))
+
 (defn- ensure-open! [client path]
   (when-not (contains? @(:opened client) path)
-    (notify! client "textDocument/didOpen"
-             {:textDocument {:uri (uri path) :languageId "clojure"
-                             :version 1 :text (slurp path)}})
-    (swap! (:opened client) conj path)))
+    (synchronize! client path (slurp path))))
 
 (defn- at [client path line character method]
   (ensure-open! client path)

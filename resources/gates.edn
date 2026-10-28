@@ -1770,10 +1770,10 @@
  {:value {:max-requests 32 :max-changes 32 :max-files 8 :max-forms 64 :max-matches 100
           :max-edits 100 :max-candidate-files 256 :max-source-chars 1048576 :max-result-chars 65536
           :max-transform-matches 128 :max-transform-changed-characters 262144
-          :analysis-timeout-ms 120000}
+          :analysis-timeout-ms 120000 :basis-ttl-ms 300000}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-p7c9.2" "karamazov-p7c9.8" "karamazov-p7c9.10"]
-  :doc "Native Clojure inspection, transaction, computed-transform, and structural caller-evidence bounds for batches, per-file selection, source, candidate files, matches, changed characters, binding-analysis deadline, and rendered EDN."}
+  :provenance ["karamazov-p7c9.2" "karamazov-p7c9.8" "karamazov-p7c9.10" "karamazov-p7c9.11"]
+  :doc "Native Clojure inspection, transaction, computed-transform, and structural caller-evidence bounds for batches, per-file selection, source, candidate files, matches, changed characters, binding-analysis deadline, semantic basis lifetime, and rendered EDN."}
 
  :debug
  {:value {:program nil :adapter-args [] :timeout-ms 10000

@@ -8,6 +8,7 @@
             [samizdat.agent.tools.base :as base]
             [samizdat.prompt :as prompt]
             [samizdat.surgeon.inspect :as inspect]
+            [samizdat.surgeon.semantic :as semantic]
             [samizdat.surgeon.tool :as tool]))
 
 (def ^:private operations #{"outline" "forms" "match" "xray"})
@@ -123,9 +124,29 @@
                              :limit (:max-matches policy)}))
     (assoc request :revision (:revision observation) :result result)))
 
+(defn- prepare-request [ctx]
+  (cond-> {:intent (base/arg ctx :intent)}
+    (base/arg ctx :subject) (assoc :subject (base/arg ctx :subject))
+    (base/arg ctx :subjects) (assoc :subjects (base/listed (base/arg ctx :subjects)))
+    (base/arg ctx :file) (assoc :file (base/arg ctx :file))
+    (base/arg ctx :form) (assoc :form (base/arg ctx :form))
+    (base/arg ctx :scope) (assoc :scope (base/arg ctx :scope))))
+
+(defn- prepare [ctx policy]
+  (let [value (semantic/prepare ctx (prepare-request ctx))]
+    (when-not (:ok value)
+      (refuse! (:error-type value) (dissoc value :ok :error-type)))
+    (let [rendered (pr-str value)]
+      (when (> (count rendered) (:max-result-chars policy))
+        (refuse! :result-limit {:actual (count rendered)
+                                :limit (:max-result-chars policy)}))
+      (base/ok (:branch ctx) (msg {:success true :edn rendered}) :resource value))))
+
 (defn- run [ctx]
-  (let [policy (gates/threshold :clj-surgeon)
-        {:keys [requests]} (validate-batch ctx policy)
+  (let [policy (gates/threshold :clj-surgeon)]
+    (if (= "prepare-change" (str (base/arg ctx :mode)))
+      (prepare ctx policy)
+      (let [{:keys [requests]} (validate-batch ctx policy)
         observations (checked-observations ctx requests policy)
         results (mapv #(inspect-request observations policy %) requests)
         value {:files (into {} (map (fn [[file observation]]
@@ -136,7 +157,7 @@
     (when (> (count rendered) (:max-result-chars policy))
       (refuse! :result-limit {:actual (count rendered)
                               :limit (:max-result-chars policy)}))
-    (base/ok (:branch ctx) (msg {:success true :edn rendered}) :resource value)))
+    (base/ok (:branch ctx) (msg {:success true :edn rendered}) :resource value)))))
 
 (defmethod base/run-tool "inspect_clojure" [{:keys [branch] :as ctx}]
   (try

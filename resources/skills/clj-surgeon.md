@@ -70,6 +70,31 @@ Compact evidence returns the computed value with hashes; `full` also retains
 exact matched source. Analysis is pure and capability-limited, not
 termination-proof: keep it bounded and never use it to write source or a plan.
 
+## Prepare proof-carrying semantic decisions
+
+When a Var names the goal but its exact owners are unknown, use
+`inspect_clojure` with `{:mode "prepare-change" :subject "example.core/transition"
+:intent "..."}`. Related Vars may instead be supplied as a unique `:subjects`
+vector. The default `:scope "surface"` makes every resolved definition and
+reference a decision; `:scope "definition"` retains the full surface but limits
+decisions to definitions. Resolved LSP evidence is unioned with exact quoted-Var
+supplements, and every site names its `:authority`. A structural supplement is
+never semantic-complete.
+
+Copy `:next-call` to `apply_clojure_changes`, filling every decision exactly once
+with `{:keep true}`, a complete named-form `:replace` string, or `{:delete true}`.
+Keep decisions preserve the retained source. Deletion requires LSP caller proof;
+exact-source and structural-only evidence do not supply it. Preparation refuses
+missing, ambiguous, stale, mixed-session, or owner-disagreeing evidence. Bases
+are run/branch-owned, expire, and compile from retained observations without
+repeating discovery; publication still uses the ordinary revision-gated resource
+proposal path.
+
+For an already known file and owner, `{:mode "prepare-change" :file ...
+:form "transition" :intent "..."}` needs no semantic index. It prepares only the
+exact definition and claims no references, so replacement is allowed but
+caller-dependent deletion refuses.
+
 ## Compile one exact edit batch
 
 When the files, targets, replacements, and counts are known, submit one coherent

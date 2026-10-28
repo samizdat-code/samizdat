@@ -14,6 +14,7 @@
             [samizdat.surgeon.binding-rename :as binding-rename]
             [samizdat.surgeon.intent-transaction :as intent]
             [samizdat.surgeon.rename :as rename]
+            [samizdat.surgeon.semantic :as semantic]
             [samizdat.surgeon.tool :as tool]))
 
 (defn- msg [vars]
@@ -135,47 +136,67 @@
   (mapv #(stage-resource-effect (get registry :workspace) ctx observations (:future-sources plan) %)
         (:resource-effects plan)))
 
-(defn- run [ctx]
+(defn- publish-plan [ctx registry policy observations observation-files plan basis-id]
   (let [branch (:branch ctx)
-        registry (resource-tool/registry-for ctx)
-        policy (gates/threshold :clj-surgeon)
-        changes (canonical-changes ctx policy)
-        observations (checked-observations ctx changes policy)
-        sources (into {} (map (fn [[file observation]] [file (:content observation)]))
-                      observations)
-        analysis (binding-analysis ctx changes sources policy)
-        plan (intent/compile-changes sources {:changes changes :expect (base/arg ctx :expect)}
-                                     {:binding-analysis analysis})
         _ (when (or (> (get-in plan [:counts :edits]) (:max-edits policy))
                     (> (count (:edits plan)) (:max-edits policy)))
             (refuse! :edit-limit {:actual (get-in plan [:counts :edits])
                                   :physical (count (:edits plan)) :limit (:max-edits policy)}))
-        files (vec (distinct (mapcat :in changes)))
-        observed (mapv observations files)
+        observed (mapv observations observation-files)
         replacements (into {} (map (fn [[file future]]
                                      [(str resource/workspace-prefix file) future]))
                            (:future-sources plan))
         members (if (:native-resource-effects? plan)
                   (stage-resource-effects registry ctx observations plan)
                   (workspace/stage-workspace (get registry :workspace) ctx observed replacements))
-        details {:members members :edits (:edits plan)
-                 :canonical-effects (:canonical-effects plan)
-                 :counts (:counts plan) :changes (:changes plan)
-                 :created-files (:created-files plan) :deleted-files (:deleted-files plan)
-                 :renamed-files (:renamed-files plan) :caller-proof (:caller-proof plan)}
+        details (cond-> {:members members :edits (:edits plan)
+                         :canonical-effects (:canonical-effects plan)
+                         :counts (:counts plan) :changes (:changes plan)
+                         :created-files (:created-files plan) :deleted-files (:deleted-files plan)
+                         :renamed-files (:renamed-files plan) :caller-proof (:caller-proof plan)}
+                  basis-id (assoc :basis basis-id))
         rendered (pr-str details)]
     (when (> (count rendered) (:max-result-chars policy))
       (refuse! :result-limit {:actual (count rendered) :limit (:max-result-chars policy)}))
-    (let [proposal (resource-tool/stage-proposal! ctx members)]
+    (let [proposal (if basis-id
+                     (resource-tool/stage-proposal!
+                      ctx members {:after-commit #(semantic/complete-basis! ctx basis-id [])})
+                     (resource-tool/stage-proposal! ctx members))]
       (if (base/arg ctx :preview)
         (base/ok branch (msg {:staged true :id (:id proposal)})
                  :resource (assoc details :proposal-id (:id proposal)))
         (let [result (changes/apply! registry ctx proposal)
               committed (= :committed (:status result))]
+          (when (and committed basis-id)
+            (semantic/complete-basis! ctx basis-id [(:id result)]))
           (base/ok branch (msg (assoc result :show-status true :files (count members)))
                    :category (if committed :success :mechanics)
                    :progress? committed
                    :resource (merge details result)))))))
+
+(defn- run-basis [ctx registry policy basis-id]
+  (let [compiled (semantic/compile-decisions
+                  ctx basis-id (base/listed (base/arg ctx :decisions)))]
+    (when-not (:ok compiled)
+      (refuse! (:error-type compiled) (dissoc compiled :ok :error-type)))
+    (publish-plan ctx registry policy (:observations compiled)
+                  (vec (keys (get-in compiled [:plan :future-sources])))
+                  (:plan compiled) basis-id)))
+
+(defn- run [ctx]
+  (let [registry (resource-tool/registry-for ctx)
+        policy (gates/threshold :clj-surgeon)]
+    (if-let [basis-id (base/arg ctx :basis)]
+      (run-basis ctx registry policy basis-id)
+      (let [changes (canonical-changes ctx policy)
+            observations (checked-observations ctx changes policy)
+            sources (into {} (map (fn [[file observation]] [file (:content observation)]))
+                          observations)
+            analysis (binding-analysis ctx changes sources policy)
+            plan (intent/compile-changes sources {:changes changes :expect (base/arg ctx :expect)}
+                                         {:binding-analysis analysis})]
+        (publish-plan ctx registry policy observations
+                      (vec (distinct (mapcat :in changes))) plan nil)))))
 
 (defmethod base/run-tool "apply_clojure_changes" [{:keys [branch] :as ctx}]
   (if (and (:role branch)

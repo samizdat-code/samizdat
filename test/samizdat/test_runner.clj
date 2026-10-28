@@ -276,6 +276,7 @@
             [samizdat.surgeon-transform-test]
             [samizdat.surgeon-move-test]
             [samizdat.surgeon-refactor-test]
+            [samizdat.surgeon-semantic-test]
             [samizdat.surgeon-cljc-test]))
 
 (def namespaces
@@ -360,6 +361,7 @@
     samizdat.surgeon-transform-test
     samizdat.surgeon-move-test
     samizdat.surgeon-refactor-test
+    samizdat.surgeon-semantic-test
     samizdat.surgeon-cljc-test
     samizdat.llm-test
     samizdat.toolspec-test
