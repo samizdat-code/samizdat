@@ -59,6 +59,11 @@
     (catch Exception _
       (refuse! error {:file file}))))
 
+(defn validate-future-source
+  "Validate one complete generated source with the exact-edit parser guard."
+  [file source]
+  (validate-complete-source! file source :invalid-future-source))
+
 (defn- normalize-within
   [within edit-index]
   (cond

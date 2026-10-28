@@ -121,6 +121,7 @@
             [samizdat.surgeon.inspect]
             [samizdat.surgeon.edit]
             [samizdat.surgeon.intent-transaction]
+            [samizdat.surgeon.transform]
             [samizdat.surgeon.move]
             [samizdat.surgeon.outline]
             [samizdat.agent.run-state]

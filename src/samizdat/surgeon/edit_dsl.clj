@@ -260,6 +260,22 @@
               :else :evaluation-failed)
             exception))))))
 
+(defn compile-transform
+  "Compile one pure structural relation ending in transform."
+  ([expression] (compile-transform expression nil))
+  ([expression {:keys [max-source-chars]}]
+   (let [program (evaluate-expression expression max-source-chars)
+         terminal (when (vector? program) (peek program))]
+     (when-not (and (vector? program)
+                    (vector? terminal)
+                    (= :transform (first terminal))
+                    (= 2 (count terminal))
+                    (ifn? (second terminal)))
+       (invalid-xray-expression! expression :transform-required))
+     {:query (pop program)
+      :transformer (second terminal)
+      :expression expression})))
+
 (defn compile-xray
   "Compile one pure structural path or terminal computation."
   ([expression] (compile-xray expression nil))
@@ -306,7 +322,7 @@
       (apply array-map arguments))
     value))
 
-(defn- concrete-edn?
+(defn concrete-edn?
   [value]
   (cond
     (or (nil? value) (boolean? value) (char? value) (string? value)

@@ -1769,10 +1769,11 @@
  :clj-surgeon
  {:value {:max-requests 32 :max-changes 32 :max-files 8 :max-forms 64 :max-matches 100
           :max-edits 100 :max-source-chars 1048576 :max-result-chars 65536
+          :max-transform-matches 128 :max-transform-changed-characters 262144
           :analysis-timeout-ms 120000}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-p7c9.2"]
-  :doc "Native Clojure inspection and transaction batch, per-file selection, source, match, binding-analysis deadline, and rendered EDN bounds."}
+  :provenance ["karamazov-p7c9.2" "karamazov-p7c9.8"]
+  :doc "Native Clojure inspection, transaction, and computed-transform bounds for batches, per-file selection, source, matches, changed characters, binding-analysis deadline, and rendered EDN."}
 
  :debug
  {:value {:program nil :adapter-args [] :timeout-ms 10000

@@ -283,6 +283,7 @@
    :surgeon-inspect-tool "prompts/surgeon-inspect-tool.md"
    :surgeon-edit-tool "prompts/surgeon-edit-tool.md"
    :surgeon-apply-tool "prompts/surgeon-apply-tool.md"
+   :surgeon-transform-tool "prompts/surgeon-transform-tool.md"
    :stuck "prompts/stuck.md"
    :suspect-the-test "prompts/suspect-the-test.md"
    :system "prompts/system.md"

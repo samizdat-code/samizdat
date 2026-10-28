@@ -1,6 +1,6 @@
 ---
 name: clj-surgeon
-description: Use for advanced structural Clojure work with inspect_clojure, edit_clojure, and apply_clojure_changes: batched selectors, structural paths and X-ray analysis, exact multi-file transactions, and preview/apply workflows. Do not load for ordinary calls covered by the tool schemas.
+description: Use for advanced structural Clojure work with inspect_clojure, edit_clojure, apply_clojure_changes, and transform_clojure: batched selectors, structural paths and X-ray analysis, exact multi-file transactions, bounded computed transforms, and preview/apply workflows. Do not load for ordinary calls covered by the tool schemas.
 ---
 
 # Advanced clj-surgeon routes
@@ -144,3 +144,31 @@ Preview and resource apply have the same exact-owner, single-use lifecycle as
 `edit_clojure`. The transaction's canonical effect identity does not depend on
 change or publication order. A refusal, stale revision, output bound, or failed
 publication is not a successful commit; inspect the actual resource status.
+
+## Derive replacements with a pure transform
+
+Use `transform_clojure` when the replacement is computed from selected syntax
+rather than already known. End the structural relation in `transform`; the
+function receives each selected form as data and must return concrete EDN.
+Realize collection results with `vec`, `mapv`, or another concrete constructor.
+The relation cannot perform I/O, start processes, load namespaces, mutate host
+state, or use host interop.
+
+```clojure
+transform_clojure({
+  :file "src/example.clj"
+  :expression "(-> (form 'retry-policy) (match :timeout) right (transform #(+ % 50)))"
+  :expect {:matches 2 :max_changed_characters 6}})
+```
+
+`expect.matches` is the exact selection cardinality and
+`expect.max_changed_characters` bounds the sum of each replacement's larger
+before/after source length. A mismatch, lazy or non-EDN result, excess churn, or
+invalid future source refuses before staging. Preview is the default and uses
+the same exact-owner proposal and `resource` apply flow as exact edits. Set
+`:commit true` only for the already reviewed relation.
+
+A selected subtree containing comments may be previewed, but one-shot commit
+refuses it because printing the computed form drops those comments. Narrow the
+selection to the comment-free values, then commit; comments elsewhere in the
+file remain unchanged.

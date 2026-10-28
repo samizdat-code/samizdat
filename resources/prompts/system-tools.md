@@ -225,13 +225,21 @@ apply_clojure_changes({changes, expect, preview?})
     expect is exact {changes, edits, files}. Disjoint edits compile to complete parsed
     future files and one canonical effect identity. Ordinary calls stage and apply one
     resource change; preview returns one write-free proposal for resource apply.
+transform_clojure({file, expression, expect, commit?})
+    Compile one pure structural Clojure relation ending in transform. The function
+    receives selected syntax as data and returns concrete EDN; I/O, processes, namespace
+    loading, mutation, host interop, and lazy results are refused. expect is exactly
+    {matches, max_changed_characters}. Preview is the default and returns a write-free
+    proposal for resource apply. commit: true publishes through the same resource path;
+    it refuses comment-bearing selected subtrees, so narrow the selection to preserve them.
 
     For project Clojure source, prefer structural reads over reconstructing text ranges:
     outline when owners are unknown, forms for a known owner or location, match for a
     structural pattern, and xray for computed structural facts. Use edit_clojure for
-    exact known replacements and apply_clojure_changes for a coordinated heterogeneous
-    plan. Load the clj-surgeon skill only for advanced selector, transaction,
-    structural-path/X-ray, or preview/apply guidance beyond these ordinary routes.
+    exact known replacements, apply_clojure_changes for a coordinated heterogeneous
+    plan, and transform_clojure when a pure relation derives the replacement. Load the
+    clj-surgeon skill only for advanced selector, transaction, structural-path/X-ray,
+    computed-transform, or preview/apply guidance beyond these ordinary routes.
 debug({action, session?, configuration?, path?, lines?, thread?, frame?, reference?, expression?, kind?, count?})
     Optional DAP sessions: launch|attach, breakpoints, continue|pause, step,
     threads, stack, scopes, variables, evaluate, events, cancel, terminate, status.
