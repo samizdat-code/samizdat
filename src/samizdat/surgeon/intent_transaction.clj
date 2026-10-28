@@ -13,16 +13,22 @@
             [rewrite-clj.zip :as z]
             [samizdat.resource.workspace :as workspace]
             [samizdat.surgeon.binding-rename :as binding-rename]
+            [samizdat.surgeon.cljc.merge :as cljc-merge]
+            [samizdat.surgeon.cljc.require-ops :as cljc-require]
+            [samizdat.surgeon.cljc.split :as cljc-split]
+            [samizdat.surgeon.extract :as extract]
             [samizdat.surgeon.fix-declares :as declares]
             [samizdat.surgeon.move :as move]
             [samizdat.surgeon.operation-algebra :as algebra]
-            [samizdat.surgeon.outline :as outline]))
+            [samizdat.surgeon.outline :as outline]
+            [samizdat.surgeon.rename :as rename]))
 
 (def ^:private supported-extensions [".clj" ".cljs" ".cljc" ".edn"])
 (def ^:private spec-keys #{:changes :expect})
 (def ^:private change-keys #{:id :in :forms :owner :find :inside :do :expect})
 (def ^:private expectation-keys #{:matches :each-form :each-file})
 (def ^:private aggregate-keys #{:changes :edits :files})
+(def ^:private refactor-operators #{:extract :rename-namespace :merge-cljc :split-cljc :add-require})
 
 (defn- refuse! [error _ & [data]]
   (throw (ex-info (name error) (merge {:surgeon/error error} data))))
@@ -174,9 +180,60 @@
     (refuse! :invalid-change-expectation nil {:change-index change-index :change-id change-id}))
   expect)
 
+(defn- validate-native-options! [kind value change-index change-id]
+  (let [allowed (case kind
+                  :extract #{:to :target-ns :source-paths :require-policy :public-forms
+                             :derive-required-public-forms :caller-decisions}
+                  :rename-namespace #{:from :to :caller-decisions}
+                  :merge-cljc #{:to}
+                  :split-cljc #{:clj :cljs}
+                  :add-require #{:platform :ns :as})
+        required (case kind
+                   :extract #{:to}
+                   :rename-namespace #{:from :to}
+                   :merge-cljc #{:to}
+                   :split-cljc #{:clj :cljs}
+                   :add-require #{:platform :ns})
+        unknown (when (map? value) (vec (sort (remove allowed (keys value)))))
+        missing (when (map? value) (vec (sort (remove #(contains? value %) required))))]
+    (when (or (not (map? value)) (seq unknown) (seq missing))
+      (refuse! :invalid-native-options nil
+               {:change-index change-index :change-id change-id :operator kind
+                :unknown unknown :missing missing}))
+    (let [path? (comp string? value)
+          valid-paths? (case kind
+                         :extract (path? :to)
+                         :rename-namespace true
+                         :merge-cljc (path? :to)
+                         :split-cljc (and (path? :clj) (path? :cljs) (not= (:clj value) (:cljs value)))
+                         :add-require true)
+          valid? (and valid-paths?
+                      (case kind
+                        :extract (and (or (nil? (:target-ns value)) (symbol? (:target-ns value)))
+                                      (or (nil? (:source-paths value))
+                                          (and (vector? (:source-paths value))
+                                               (every? string? (:source-paths value))))
+                                      (or (nil? (:require-policy value))
+                                          (#{:minimal :copy-all} (:require-policy value)))
+                                      (or (nil? (:caller-decisions value)) (map? (:caller-decisions value))))
+                        :rename-namespace (and (symbol? (:from value)) (symbol? (:to value))
+                                               (or (nil? (:caller-decisions value))
+                                                   (map? (:caller-decisions value))))
+                        :add-require (and (#{:clj :cljs :cljc} (:platform value))
+                                          (or (symbol? (:ns value)) (string? (:ns value)))
+                                          (or (nil? (:as value)) (symbol? (:as value))))
+                        true))]
+      (when-not valid?
+        (refuse! :invalid-native-options nil
+                 {:change-index change-index :change-id change-id :operator kind :options value})))
+    value))
+
 (defn- validate-operator! [operator change-index change-id]
   (let [kind (first operator) value (second operator)]
     (cond
+      (and (vector? operator) (= 2 (count operator)) (contains? refactor-operators kind))
+      {:kind kind :options (validate-native-options! kind value change-index change-id)}
+
       (and (vector? operator) (= 2 (count operator)) (= :replace kind))
       {:kind :replace :form (parse-one-form value ":do replacement")}
 
@@ -260,8 +317,9 @@
             delete? (= :delete kind)
             move? (= :move kind)
             fix-declares? (= :fix-declares kind)
+            refactor? (contains? refactor-operators kind)
             insertion? (#{:insert-before :insert-after} kind)
-            from (when-not (or rename? delete? move? fix-declares?
+            from (when-not (or rename? delete? move? fix-declares? refactor?
                                (and insertion? (nil? (:find change))))
                    (parse-one-form (:find change) ":find"))
             inside (when-let [source (:inside change)]
@@ -284,7 +342,15 @@
         (when (and fix-declares? (or (not= 1 (count files)) forms owner (some? (:find change))))
           (refuse! :invalid-fix-declares-owner nil
                    {:change-index change-index :change-id change-id}))
-        (when (and (or move? fix-declares?)
+        (when (and refactor?
+                   (or owner (some? (:find change))
+                       (and (= :extract kind) (or (not= 1 (count files)) (empty? forms)))
+                       (and (not= :extract kind) (seq forms))
+                       (and (#{:split-cljc :add-require} kind) (not= 1 (count files)))
+                       (and (= :merge-cljc kind) (not= 2 (count files)))))
+          (refuse! :invalid-native-owner nil
+                   {:change-index change-index :change-id change-id :operator kind}))
+        (when (and (or move? fix-declares? refactor?)
                    (or (:each-form expectation) (:each-file expectation)))
           (refuse! :invalid-native-expectation nil
                    {:change-index change-index :change-id change-id}))
@@ -299,6 +365,7 @@
           owner (assoc :owner owner)
           rename? (assoc :rename (:rename operator))
           move? (assoc :move (:move operator))
+          refactor? (assoc :native-options (:options operator))
           (= :assoc-entry kind) (assoc :assoc-key (:key operator) :assoc-value (:value operator))
           (= :replace kind) (assoc :to (:form operator))
           insertion? (assoc :insert-side kind :insert-sources (mapv :source (:forms operator)))
@@ -729,6 +796,83 @@
      :result-hash (workspace/content-revision future)
      :edit-count (count prepared) :edits prepared :future-source future}))
 
+(defn- refactor-change? [change]
+  (contains? refactor-operators (:operator change)))
+
+(defn- compile-refactor-plan [sources {:keys [operator files forms native-options]}]
+  (case operator
+    :extract
+    (let [file (first files)
+          options (update native-options :target-ns
+                          #(str (or % (extract/file-path->ns-name (:to native-options)
+                                                                  (:source-paths native-options)))))]
+      (extract/compile-plan (merge options {:file file :source (get sources file)
+                                            :sources sources :forms forms})))
+
+    :rename-namespace
+    (rename/compile-plan (assoc native-options :sources sources))
+
+    :merge-cljc
+    (let [clj-file (first (filter #(str/ends-with? % ".clj") files))
+          cljs-file (first (filter #(str/ends-with? % ".cljs") files))
+          target (:to native-options)]
+      (when-not (and clj-file cljs-file)
+        (refuse! :invalid-cljc-input nil {:files files :operator operator}))
+      (let [future (cljc-merge/merge-files (get sources clj-file) (get sources cljs-file))]
+        {:future-sources {target future} :created-files [target] :deleted-files files
+         :renamed-files []
+         :resource-effects (vec (concat [{:operation :create :file target}]
+                                        (map (fn [file] {:operation :delete :file file}) files)))}))
+
+    :split-cljc
+    (let [file (first files) clj-target (:clj native-options) cljs-target (:cljs native-options)
+          {:keys [clj cljs]} (cljc-split/split-file (get sources file))]
+      {:future-sources {clj-target clj cljs-target cljs}
+       :created-files [clj-target cljs-target] :deleted-files [file] :renamed-files []
+       :resource-effects [{:operation :create :file clj-target}
+                          {:operation :create :file cljs-target}
+                          {:operation :delete :file file}]})
+
+    :add-require
+    (let [file (first files) future (cljc-require/add-require (get sources file) native-options)]
+      {:future-sources {file future} :created-files [] :deleted-files [] :renamed-files []
+       :resource-effects [{:operation :write :file file}]})))
+
+(defn- compile-refactor-transaction [sources changes expect]
+  (when-not (= 1 (count changes))
+    (refuse! :mixed-native-transaction nil
+             {:change-ids (mapv :id changes) :operators (mapv :operator changes)}))
+  (let [{:keys [id change-index operator files forms expect-count] :as change} (first changes)
+        result (compile-refactor-plan sources change)]
+    (when (:error-type result)
+      (refuse! (:error-type result) nil (assoc result :change-index change-index :change-id id)))
+    (doseq [file (:created-files result)]
+      (when (some? (get sources file))
+        (refuse! :create-target-exists nil {:file file :change-index change-index :change-id id})))
+    (doseq [[file future] (:future-sources result)]
+      (validate-complete-source! file future :invalid-future-source))
+    (let [effects (:resource-effects result)
+          matches (if (= :extract operator) (:form-count result) (count effects))
+          actual {:changes 1 :edits (count effects) :files (count effects)}]
+      (when-not (= expect-count matches)
+        (refuse! :expect-count-mismatch nil
+                 {:change-index change-index :change-id id :expected-count expect-count
+                  :actual-count matches}))
+      (when-not (= expect actual)
+        (refuse! :transaction-expectation-mismatch nil {:expected expect :actual actual}))
+      {:ok true :counts actual
+       :changes [{:id id :change-index change-index :files files :forms forms :operator operator
+                  :expected-count expect-count :match-count matches
+                  :plan (dissoc result :future-sources :resource-effects)}]
+       :files [] :edits [] :original-sources (select-keys sources files)
+       :future-sources (:future-sources result)
+       :created-files (or (:created-files result) [])
+       :deleted-files (or (:deleted-files result) [])
+       :renamed-files (or (:renamed-files result) [])
+       :caller-proof (:caller-proof result)
+       :resource-effects effects :native-resource-effects? true
+       :validated {:whole-files-parsed true :file-count (count (:future-sources result))}})))
+
 (defn- native-change? [change]
   (contains? #{:move :fix-declares} (:operator change)))
 
@@ -786,8 +930,10 @@
   (let [{:keys [changes expect]} (validate-spec! spec)
         files (vec (distinct (mapcat :files changes)))]
     (doseq [file files] (validate-complete-source! file (get sources file) :invalid-source))
-    (if (some native-change? changes)
-      (compile-native-transaction sources changes expect)
+    (cond
+      (some refactor-change? changes) (compile-refactor-transaction sources changes expect)
+      (some native-change? changes) (compile-native-transaction sources changes expect)
+      :else
       (let [compiled-changes (mapv #(compile-change sources options %) changes)
             edits-by-file (group-by :file (mapcat :edits compiled-changes))
             compiled-files (mapv #(compile-file % (get sources %) (get edits-by-file % [])) files)

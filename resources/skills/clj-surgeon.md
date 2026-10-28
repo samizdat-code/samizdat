@@ -1,6 +1,6 @@
 ---
 name: clj-surgeon
-description: Use for advanced structural Clojure work with inspect_clojure, edit_clojure, apply_clojure_changes, and transform_clojure: batched selectors, structural paths and X-ray analysis, exact multi-file transactions, bounded computed transforms, and preview/apply workflows. Do not load for ordinary calls covered by the tool schemas.
+description: Use for advanced structural Clojure work with inspect_clojure, edit_clojure, apply_clojure_changes, and transform_clojure: batched selectors, structural paths and X-ray analysis, exact multi-file transactions, namespace extraction/rename, CLJC operations, bounded computed transforms, and preview/apply workflows. Do not load for ordinary calls covered by the tool schemas.
 ---
 
 # Advanced clj-surgeon routes
@@ -149,10 +149,41 @@ to remove stale declarations and move safe definitions above their first callers
 cyclic or unsafe declarations remain in place. These native operations each form
 a single-file transaction and cannot be mixed with ordinary span edits.
 
+## Extract, rename, and convert namespaces
+
+Use one native change per operation. `[:extract {:to "src/example/moved.clj"
+:target-ns 'example.moved :require-policy :minimal}]` moves the named `:forms`
+into a new namespace and rewrites the source. `:minimal` retains only proved
+requirements and refuses ambiguous side-effect-only or comment-bearing require
+clauses; `:copy-all` preserves the complete header instead. Set
+`:derive-required-public-forms true` when a remaining source caller requires a
+moved private `defn-` to become public.
+
+`[:rename-namespace {:from 'old.ns :to 'new.ns}]` rewrites matching namespace
+syntax and moves files under the corresponding namespace directory. Supply every
+source that may contain a caller in `:in`; the pure plan reads only that frozen
+map. For extraction and rename, every residual structural caller candidate must
+have a `:caller-decisions` entry of `:review-required` or `:not-a-caller`. These
+decisions do not make the evidence semantic-complete, and quoted-Var or bare
+symbol candidates still need their stated review.
+
+`[:merge-cljc {:to "shared.cljc"}]` consumes one CLJ and one CLJS input, creates
+the CLJC target, and deletes the two inputs. `[:split-cljc {:clj "shared.clj"
+:cljs "shared.cljs"}]` creates both platform files and deletes the CLJC input.
+`[:add-require {:platform :clj :ns 'clojure.set :as 'set}]` rewrites one CLJC
+file; platform `:cljs` adds only there and `:cljc` adds a shared require. Merge,
+split, and add-require preserve reader-conditional platform branches, with alias
+collisions and unsupported namespace forms refused.
+
+All these operations stage create/write/delete/rename members with their observed
+revisions in one resource change. Publication failures use ordinary resource
+compensation; there is no separate receipt or undo workflow.
+
 Preview and resource apply have the same exact-owner, single-use lifecycle as
-`edit_clojure`. The transaction's canonical effect identity does not depend on
-change or publication order. A refusal, stale revision, output bound, or failed
-publication is not a successful commit; inspect the actual resource status.
+`edit_clojure`. A span-edit transaction's canonical effect identity does not
+depend on change or publication order. A refusal, stale revision, output bound,
+or failed publication is not a successful commit; inspect the actual resource
+status.
 
 ## Derive replacements with a pure transform
 

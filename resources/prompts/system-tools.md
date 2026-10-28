@@ -224,8 +224,14 @@ apply_clojure_changes({changes, expect, preview?})
     {from, to, preserve-external-key: true}], and [:assoc-entry {key, value}]. A single-file
     change may instead use [:move {before, with-deps?}] with one source form, or
     [:fix-declares true] without forms; native operations cannot mix with span edits.
-    Aggregate expect is exact {changes, edits, files}. Disjoint edits compile to complete parsed
-    future files and one canonical effect identity. Ordinary calls stage and apply one
+    Other single-change native operators are [:extract {to, target-ns?, require-policy?,
+    caller-decisions?}], [:rename-namespace {from, to, caller-decisions?}],
+    [:merge-cljc {to}], [:split-cljc {clj, cljs}], and [:add-require {platform, ns, as?}].
+    Extraction creates its target; CLJC merge/split deletes the superseded inputs. Every
+    structural caller candidate needs an explicit :review-required or :not-a-caller disposition;
+    this evidence is never semantic-complete. Create/write/delete/rename members retain revisions
+    and share one resource proposal. Aggregate expect is exact {changes, edits, files}. Disjoint
+    span edits compile to complete parsed future files and one canonical effect identity. Ordinary calls stage and apply one
     resource change; preview returns one write-free proposal for resource apply.
 transform_clojure({file, expression, expect, commit?})
     Compile one pure structural Clojure relation ending in transform. The function

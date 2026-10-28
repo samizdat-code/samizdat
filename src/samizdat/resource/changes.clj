@@ -116,7 +116,9 @@
               (:base-revision member)))
          status
 
-         (not= (:revision current) (:publication-revision member))
+         (and (not= (:revision current) (:publication-revision member))
+              (not (and (= :rename (:operation member))
+                        (= (:revision current) (:base-revision member)))))
          (do (store/member-result! (:conn ctx) change-id (:uri member)
                                    :recovery-required {:error "resource changed after publication"})
              :recovery-required)
