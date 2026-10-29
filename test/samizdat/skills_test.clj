@@ -18,6 +18,42 @@
   (is (str/includes? (skills/load-skill "mycelium") "defcell"))
   (is (nil? (skills/load-skill "no-such-skill"))))
 
+(deftest the-bundled-clj-discover-skill-is-discoverable
+  (let [entry (some #(when (= "clj-discover" (:name %)) %)
+                    (skills/catalog ["/no/such/dir"]))
+        body (skills/load-skill ["/no/such/dir"] "clj-discover")]
+    (is (some? entry) "the bundled skill is enumerated for classpath discovery")
+    (is (str/starts-with? (str (:description entry)) "Use when"))
+    (is (not (str/includes? (str (:description entry)) "\n")))
+    (is (string? body) "the skill loads without a project overlay")))
+
+(deftest the-bundled-clj-replace-skill-is-discoverable
+  (let [entry (some #(when (= "clj-replace" (:name %)) %)
+                    (skills/catalog ["/no/such/dir"]))
+        body (skills/load-skill ["/no/such/dir"] "clj-replace")]
+    (is (some? entry) "the bundled skill is enumerated for classpath discovery")
+    (is (str/starts-with? (str (:description entry)) "Use when"))
+    (is (not (str/includes? (str (:description entry)) "\n")))
+    (is (string? body) "the skill loads without a project overlay")))
+
+(deftest the-bundled-clj-refactor-skill-is-discoverable
+  (let [entry (some #(when (= "clj-refactor" (:name %)) %)
+                    (skills/catalog ["/no/such/dir"]))
+        body (skills/load-skill ["/no/such/dir"] "clj-refactor")]
+    (is (some? entry) "the bundled skill is enumerated for classpath discovery")
+    (is (str/starts-with? (str (:description entry)) "Use when"))
+    (is (not (str/includes? (str (:description entry)) "\n")))
+    (is (string? body) "the skill loads without a project overlay")))
+
+(deftest the-bundled-clj-debug-skill-is-discoverable
+  (let [entry (some #(when (= "clj-debug" (:name %)) %)
+                    (skills/catalog ["/no/such/dir"]))
+        body (skills/load-skill ["/no/such/dir"] "clj-debug")]
+    (is (some? entry) "the bundled skill is enumerated for classpath discovery")
+    (is (str/starts-with? (str (:description entry)) "Use when"))
+    (is (not (str/includes? (str (:description entry)) "\n")))
+    (is (string? body) "the skill loads without a project overlay")))
+
 (deftest the-bundled-clj-surgeon-skill-is-discoverable-and-native-only
   (let [entry (some #(when (= "clj-surgeon" (:name %)) %)
                     (skills/catalog ["/no/such/dir"]))
