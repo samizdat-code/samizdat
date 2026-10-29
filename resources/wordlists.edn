@@ -528,6 +528,30 @@
  [".samizdat/skills"
   ".agents/skills"
   ".claude/skills"]
+
+ :auto-skill-activation
+ ;; Branch-opening skill activation by EXPLICIT project language. The language
+ ;; comes from .samizdat/config.edn :run :project-language, never from source
+ ;; extensions: Jolt projects commonly contain only .clj files or mix them
+ ;; with .jolt. Each skill's patterns decide which opening problems load its
+ ;; body; clj-refactor stays limited to an explicit review/refactor request.
+ {:jolt
+  {:skills
+   [{:name "clj-debug"
+     :patterns ["(?i)\\b(debug|debugging|failing|exception|println|prn|stack trace)\\b|tap>"]}
+    {:name "clj-discover"
+     :patterns ["(?i)unfamiliar|\\b(java|macro|interop|reflection)\\b"]}
+    {:name "clj-replace"
+     :patterns ["(?i)\\b(replace|replacement|rename|renaming|cljfmt|formatting|str_replace)\\b"]}
+    {:name "clj-refactor"
+     :patterns ["(?i)\\b(refactor|refactoring|mechanism/policy|policy review)\\b"]}]}}
+
+ :clj-surgeon-extensions
+ ;; File types the native structural tools accept, kept here rather than as
+ ;; regexes or vectors in src because supported source forms are policy. :code
+ ;; covers inspection and semantic discovery; :transaction also retains EDN.
+ {:code [".clj" ".cljs" ".cljc" ".jolt"]
+  :transaction [".clj" ".cljs" ".cljc" ".edn" ".jolt"]}
  ;; --- the exam (karamazov-fgsb) ----------------------------------------------
  ;;
  ;; What marks a file as part of the exam, and what marks an assertion inside

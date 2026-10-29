@@ -202,7 +202,7 @@ structural({action, uri?, base-revision?, language?, pattern?, replacement?, pro
     apply consumes it once through the ordinary revision-gated resource path.
 inspect_clojure({requests, expect} | {mode: "prepare-change", subject|subjects|file+form, intent, scope?})
     Read exact Clojure structure rather than text: batch outline, forms, match, and
-    xray requests over project-relative .clj, .cljs, and .cljc files. forms selects
+    xray requests over project-relative .clj, .cljs, .cljc, and .jolt files. forms selects
     by form, forms, line, or contains; match takes a structural pattern with _ for
     one subtree and an optional inside owner. xray evaluates a pure structural path,
     optionally ending in expect-count and analyze, and returns realized EDN with

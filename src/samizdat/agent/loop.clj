@@ -283,18 +283,26 @@
   `orient` is the opening block that says where the names the problem
   mentions are defined (samizdat.agent.orient, karamazov-fp21.3), rendered
   by the driver once per run and kept on the run row; nil/blank leaves the
-  problem turn exactly as it was."
+  problem turn exactly as it was.
+
+  The project's explicit language and the problem may also select skill bodies
+  for one automatic injection, through the same overlay-aware loader as the
+  skill tool. An unrelated opening selects nothing and is unchanged."
   ([problem] (initial-messages problem nil nil nil))
   ([problem prompt-suffix] (initial-messages problem prompt-suffix nil nil))
   ([problem prompt-suffix role] (initial-messages problem prompt-suffix role nil))
   ([problem prompt-suffix role orient]
-   [{:role "system" :content (cond-> (system-prompt-for role)
-                               (not (str/blank? prompt-suffix))
-                               (str "\n\n" prompt-suffix))}
-    ;; The opening user turn is prose the model reads and a project may want
-    ;; worded differently — prompts/problem.md, not a `str` here.
-    {:role "user" :content (prompt/render "problem" {:problem problem
-                                                     :orient (not-empty (str orient))})}]))
+   (let [root (userspace/project-root)
+         activated (skills/auto-activate root problem (skills/project-dirs root))]
+     [{:role "system" :content (cond-> (system-prompt-for role)
+                                 (not (str/blank? prompt-suffix))
+                                 (str "\n\n" prompt-suffix)
+                                 (seq activated)
+                                 (str "\n\n" (str/join "\n\n" activated)))}
+      ;; The opening user turn is prose the model reads and a project may want
+      ;; worded differently — prompts/problem.md, not a `str` here.
+      {:role "user" :content (prompt/render "problem" {:problem problem
+                                                       :orient (not-empty (str orient))})}])))
 
 (defn- shared-tree
   "The other branches' work on this run's tree, for the context block.

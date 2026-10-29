@@ -6,6 +6,7 @@
   (:require [clojure.string :as str]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
+            [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
             [samizdat.surgeon.inspect :as inspect]
             [samizdat.surgeon.semantic :as semantic]
@@ -27,7 +28,8 @@
   (and (string? file)
        (not (str/blank? file))
        (not (str/starts-with? file "/"))
-       (some? (re-matches #"(?i).+\.clj[cs]?" file))))
+       (some #(str/ends-with? (str/lower-case file) %)
+             (:code (lexicon/wordlist :clj-surgeon-extensions)))))
 
 (defn- count-arg? [value]
   (and (integer? value) (not (neg? value))))

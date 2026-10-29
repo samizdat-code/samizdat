@@ -248,3 +248,24 @@
               (is (= b-source (read-file fixture "b.clj")))
               (is (empty? (store/unfinished-changes
                             (:conn fixture) {:run-id (:run-id fixture) :branch-id "B1"}))))))))))
+
+(deftest jolt-source-uses-exact-edit-and-refuses-ambiguous-target
+  (with-fixture [fixture]
+    (let [file "core.jolt"
+          source "(ns sample.jolt)\n\n(defn alpha [x]\n  ;; Keep.\n  (old-call   x))\n\n(defn beta [x] (old-call x))\n"
+          expected "(ns sample.jolt)\n\n(defn alpha [x]\n  ;; Keep.\n  (new-call\n  x))\n\n(defn beta [x] (old-call x))\n"]
+      (spit (str (:root fixture) "/" file) source)
+      (let [ambiguous (call fixture [{:file file :from "(old-call x)" :to "(new-call x)"}])]
+        (is (= :mechanics (:category ambiguous)) (pr-str ambiguous))
+        (is (= source (read-file fixture file))))
+      (let [edit {:file file :within {:form "alpha"}
+                  :from "(old-call x)" :to "(new-call\n  x)"}
+            preview (call fixture [edit] {:args {:edits [edit] :preview true}})
+            proposal-id (get-in preview [:resource :proposal-id])]
+        (is (= :neutral (:category preview)) (pr-str preview))
+        (is (some? proposal-id))
+        (is (= source (read-file fixture file)))
+        (let [applied (apply-proposal fixture proposal-id {})]
+          (is (= :success (:category applied)) (pr-str applied))
+          (is (= :committed (get-in applied [:resource :status])))
+          (is (= expected (read-file fixture file))))))))

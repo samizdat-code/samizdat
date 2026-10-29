@@ -293,3 +293,14 @@
       (is (= #{definition-file caller-file quoted-file}
              (set (get-in @reads [0 :paths]))))
       (is (= 3 (count (get-in @reads [0 :paths])))))))
+
+(deftest jolt-files-join-semantic-source-discovery
+  (is (contains? (set (source-anchor/candidate-relative-files "sample.core/alpha" ["src"]))
+                 "src/sample/core.jolt"))
+  (with-fixture [fixture]
+    (spit (io/file (:root fixture) "src/sample/quoted.jolt") quoted-source)
+    (fs/delete-if-exists (io/file (:root fixture) "src/sample/quoted.clj"))
+    (let [prepared (semantic-prepare fixture)]
+      (is (:ok prepared) (pr-str prepared))
+      (is (= 3 (count (:surface prepared))) (pr-str (:surface prepared)))
+      (is (some #(= "src/sample/quoted.jolt" (:file %)) (:surface prepared))))))
