@@ -12,9 +12,11 @@
             [jolt.fs :as fs]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.loop :as aloop]
+            [samizdat.agent.skills :as skills]
             [samizdat.agent.orient :as orient]
             [samizdat.store.db :as db]
-            [samizdat.store.runs :as runs]))
+            [samizdat.store.runs :as runs]
+            [samizdat.userspace :as userspace]))
 
 (defn- policy [] (gates/threshold :orient-inject))
 
@@ -95,6 +97,77 @@
     (is (not (str/includes? (:content (second without)) "ORIENT")))
     (is (= without (aloop/initial-messages "do the thing" nil nil))
         "a nil block is byte-identical to the opening that never had one")))
+
+(defn- with-root [root f]
+  (let [previous (userspace/bind-root! root)]
+    (try
+      (f)
+      (finally
+        (userspace/bind-root! previous)))))
+
+(deftest opening-auto-loads-only-relevant-jolt-skills
+  (let [jolt-root (str (fs/create-temp-dir))
+        other-root (str (fs/create-temp-dir))
+        missing-root (str (fs/create-temp-dir))]
+    (try
+      (doseq [root [jolt-root other-root missing-root]]
+        (fs/create-dirs (str root "/.samizdat/skills"))
+        (fs/create-dirs (str root "/src"))
+        (spit (str root "/src/core.clj") "(ns core)"))
+      (spit (str jolt-root "/.samizdat/config.edn") "{:run {:project-language :jolt}}")
+      (spit (str other-root "/.samizdat/config.edn") "{:run {:project-language :clojure}}")
+      (spit (str jolt-root "/.samizdat/skills/clj-debug.md")
+            "---\nname: clj-debug\ndescription: Use when debugging.\n---\nPROJECT DEBUG")
+      (spit (str jolt-root "/.samizdat/skills/clj-replace.md")
+            "---\nname: clj-replace\ndescription: Use when replacing.\n---\nPROJECT REPLACE")
+      (let [messages (with-root jolt-root
+                       #(aloop/initial-messages "debug this failing function" "SUFFIX" nil "ORIENT"))
+            system (:content (first messages))
+            user (:content (second messages))
+            unrelated (with-root jolt-root
+                        #(aloop/initial-messages "implement a retry helper" "SUFFIX" nil "ORIENT"))
+            other (with-root other-root
+                   #(aloop/initial-messages "debug this failing function" "SUFFIX" nil "ORIENT"))
+            missing (with-root missing-root
+                     #(aloop/initial-messages "debug this failing function" "SUFFIX" nil "ORIENT"))
+            multi (with-root jolt-root
+                   #(aloop/initial-messages "debug and replace this" "SUFFIX" nil "ORIENT"))
+            other-unmodified (with-root other-root
+                              #(with-redefs [skills/auto-activate (fn [& _] [])]
+                                 (aloop/initial-messages "debug this failing function" "SUFFIX" nil "ORIENT")))
+            missing-unmodified (with-root missing-root
+                                #(with-redefs [skills/auto-activate (fn [& _] [])]
+                                   (aloop/initial-messages "debug this failing function" "SUFFIX" nil "ORIENT")))]
+        (is (= 1 (count (re-seq #"PROJECT DEBUG" system))) "the overlay body appears once")
+        (is (str/includes? system "SUFFIX"))
+        (is (str/includes? user "ORIENT"))
+        (is (not (str/includes? (:content (first unrelated)) "PROJECT DEBUG")))
+        (is (not (str/includes? (:content (first unrelated)) "PROJECT REPLACE")))
+        (is (= other-unmodified other) "a matching trigger is suppressed for another language")
+        (is (= missing-unmodified missing) "a matching trigger is suppressed without project language")
+        (is (= 1 (count (re-seq #"PROJECT DEBUG" (:content (first multi))))))
+        (is (= 1 (count (re-seq #"PROJECT REPLACE" (:content (first multi)))))))
+      (finally
+        (doseq [root [jolt-root other-root missing-root]]
+          (fs/delete-tree root))))))
+
+(deftest every-jolt-trigger-class-injects-its-skill-once
+  (let [root (str (fs/create-temp-dir))
+        previous (userspace/bind-root! root)]
+    (try
+      (fs/create-dirs (str root "/.samizdat"))
+      (fs/create-dirs (str root "/src"))
+      (spit (str root "/.samizdat/config.edn") "{:run {:project-language :jolt}}")
+      (spit (str root "/src/core.clj") "(ns core)")
+      (doseq [[problem marker] [["debug this failing function" "Debug in the live REPL"]
+                               ["explain unfamiliar Java interop" "Discover before integrating"]
+                               ["replace after cljfmt" "Replace Clojure and Jolt by structure"]
+                               ["review mechanism/policy separation" "Review mechanism and policy"]]]
+        (let [system (:content (first (aloop/initial-messages problem)))]
+          (is (= 1 (count (re-seq (re-pattern marker) system))) problem)))
+      (finally
+        (userspace/bind-root! previous)
+        (fs/delete-tree root)))))
 
 (deftest the-run-row-keeps-the-block-so-a-resume-reopens-on-it
   (let [c (db/open! ":memory:")]

@@ -7,7 +7,8 @@
             [jolt.fs :as fs]
             [samizdat.agent.skills :as skills]
             [samizdat.agent.tools.base :as base]
-            [samizdat.agent.tools.skills]))
+            [samizdat.agent.tools.skills]
+            [samizdat.lexicon :as lexicon]))
 
 (deftest the-bundled-mycelium-skill-is-discovered
   (let [cat (skills/catalog)]
@@ -178,3 +179,41 @@
   (let [found (skills/discover (skills/project-dirs "."))]
     (is (contains? found "beads")
         "AGENTS.md names .agents/skills/beads/SKILL.md; it must be loadable")))
+
+(deftest language-scoped-selection-is-triggered-and-bounded
+  (let [rules {:jolt {:skills [{:name "clj-debug" :patterns ["(?i)debug|failing"]}
+                               {:name "clj-discover" :patterns ["(?i)macro|java"]}
+                               {:name "clj-replace" :patterns ["(?i)replace|cljfmt"]}
+                               {:name "clj-refactor" :patterns ["(?i)mechanism/policy|refactor"]}]}}]
+    (is (= ["clj-debug"] (skills/select-auto-skills :jolt "debug this failing function" rules)))
+    (is (= ["clj-discover"] (skills/select-auto-skills :jolt "explain this Java macro" rules)))
+    (is (= ["clj-replace"] (skills/select-auto-skills :jolt "replace after cljfmt" rules)))
+    (is (= ["clj-refactor"] (skills/select-auto-skills :jolt "review mechanism/policy separation" rules)))
+    (is (= ["clj-debug" "clj-replace"]
+           (skills/select-auto-skills :jolt "debug and replace this" rules))
+        "multiple matches preserve policy order")
+    (is (empty? (skills/select-auto-skills :jolt "implement a retry helper" rules)))
+    (is (empty? (skills/select-auto-skills :clojure "debug this failing function" rules)))))
+
+(deftest auto-activation-reads-explicit-project-language-not-file-extensions
+  (let [root (str (fs/create-temp-dir))]
+    (try
+      (fs/create-dirs (str root "/.samizdat"))
+      (fs/create-dirs (str root "/src"))
+      (spit (str root "/.samizdat/config.edn") "{:run {:project-language :jolt}}")
+      (spit (str root "/src/core.clj") "(ns core)")
+      (let [bodies (skills/auto-activate root "debug this failing function"
+                                         (skills/project-dirs root))]
+        (is (= 1 (count bodies)))
+        (is (str/includes? (first bodies) "Debug in the live REPL")))
+      (finally (fs/delete-tree root)))))
+
+(deftest shipped-activation-patterns-cover-inflections-without-overmatching-api-work
+  (let [rules (lexicon/wordlist :auto-skill-activation)]
+    (doseq [[problem expected] [["debugging the parser" ["clj-debug"]]
+                               ["use tap> to inspect" ["clj-debug"]]
+                               ["structural replacement needed" ["clj-replace"]]
+                               ["review for refactoring opportunities" ["clj-refactor"]]]]
+      (is (= expected (skills/select-auto-skills :jolt problem rules)) problem))
+    (is (empty? (skills/select-auto-skills :jolt "build a REST API" rules))
+        "ordinary API design is not unfamiliar-API discovery")))

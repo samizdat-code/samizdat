@@ -10,6 +10,7 @@
             [clojure.set :as set]
             [clojure.string :as str]
             [jolt.fs :as fs]
+            [samizdat.lexicon :as lexicon]
             [samizdat.agent.files :as files]
             [samizdat.agent.gates :as gates]
             [samizdat.lsp.client :as client]
@@ -204,7 +205,8 @@
 
 (defn- project-source-files [ctx]
   (vec (distinct (mapcat #(files/glob-project (:root ctx) %)
-                         ["**/*.clj" "**/*.cljc" "**/*.cljs"]))))
+                         (map #(str "**/*" %)
+                              (:code (lexicon/wordlist :clj-surgeon-extensions)))))))
 
 (defn- quoted-sites [ctx cache subjects session]
   (let [observations (mapv #(observe! ctx cache %) (project-source-files ctx))

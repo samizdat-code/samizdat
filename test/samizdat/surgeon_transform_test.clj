@@ -299,3 +299,8 @@
           (is (= original (read-file fixture)))
           (is (empty? (store/unfinished-changes
                         (:conn fixture) {:run-id (:run-id fixture) :branch-id "B1"}))))))))
+
+(deftest jolt-source-transforms-without-special-casing
+  (let [result (plan (assoc timeouts-request :file "core.jolt"))]
+    (is (= edited (:future-source result)))
+    (is (= 2 (:matches result)))))

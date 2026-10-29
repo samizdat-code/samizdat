@@ -10,6 +10,7 @@
   (:require [clojure.string :as str]
             [rewrite-clj.node :as node]
             [rewrite-clj.zip :as z]
+            [samizdat.lexicon :as lexicon]
             [samizdat.resource.workspace :as workspace]
             [samizdat.surgeon.outline :as outline]))
 
@@ -115,6 +116,6 @@
        (vec
         (distinct
          (for [root source-roots
-               extension [".clj" ".cljc" ".cljs"]]
+               extension (:code (lexicon/wordlist :clj-surgeon-extensions))]
            (str (when (seq root) (str root "/"))
                 namespace-path extension))))))))

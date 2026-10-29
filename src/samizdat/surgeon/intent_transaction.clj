@@ -11,6 +11,7 @@
             [rewrite-clj.node :as node]
             [rewrite-clj.parser :as parser]
             [rewrite-clj.zip :as z]
+            [samizdat.lexicon :as lexicon]
             [samizdat.resource.workspace :as workspace]
             [samizdat.surgeon.binding-rename :as binding-rename]
             [samizdat.surgeon.cljc.merge :as cljc-merge]
@@ -23,7 +24,6 @@
             [samizdat.surgeon.outline :as outline]
             [samizdat.surgeon.rename :as rename]))
 
-(def ^:private supported-extensions [".clj" ".cljs" ".cljc" ".edn"])
 (def ^:private spec-keys #{:changes :expect})
 (def ^:private change-keys #{:id :in :forms :owner :find :inside :do :expect})
 (def ^:private expectation-keys #{:matches :each-form :each-file})
@@ -128,7 +128,9 @@
             (dissoc :node-size))))
 
 (defn- supported-file? [file]
-  (and (string? file) (some #(str/ends-with? file %) supported-extensions)))
+  (and (string? file)
+       (some #(str/ends-with? file %)
+             (:transaction (lexicon/wordlist :clj-surgeon-extensions)))))
 
 (defn- normalized-path [file]
   (str (.normalize (java.nio.file.Paths/get file (make-array String 0)))))

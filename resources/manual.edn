@@ -98,7 +98,7 @@
    {:name samizdat.workflow/catalog
     :summary "Every workflow available to select or adapt, with its description."}
    {:name samizdat.agent.skills/catalog
-    :summary "The on-demand skill catalogue: bundled skills with project overlays, including clj-debug for REPL inspection, clj-discover for Java/macro exploration, clj-replace for structural edits, and user-initiated clj-refactor for mechanism/policy review."}
+    :summary "The on-demand and project-language-activated skill catalogue: bundled skills with project overlays, including clj-debug for REPL inspection, clj-discover for runtime/API and macro exploration, clj-replace for structural edits on Clojure and .jolt sources, and user-initiated clj-refactor for mechanism/policy review. Set {:run {:project-language :jolt}} in .samizdat/config.edn to activate relevant bodies at branch opening."}
    {:name samizdat.heldout/defer!
     :summary "The held-out gate off the turn: after a save validates, the battery replays on a background lane and the edit is committed or refused there; the branch that made it is told by a message on a later turn. nil when the project has no battery, and the tool saves as before."}
    {:name samizdat.heldout/check-edit

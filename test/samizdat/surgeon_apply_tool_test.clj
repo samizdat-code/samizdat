@@ -237,3 +237,18 @@
         (is (= :mechanics (:category result)) (pr-str result))
         (is (str/includes? (:result result) "would-strand-dependencies"))
         (is (= source (read-file fixture "a.clj")))))))
+
+(deftest jolt-source-uses-transaction-replacement
+  (with-fixture [fixture]
+    (let [file "core.jolt"
+          source "(ns sample.jolt)\n\n(defn alpha [x]\n  ;; Keep.\n  (old-call   x))\n"
+          expected "(ns sample.jolt)\n\n(defn alpha [x]\n  ;; Keep.\n  (new-call x))\n"]
+      (spit (str (:root fixture) "/" file) source)
+      (let [result (call fixture
+                         [{:id :call :in [file] :forms ['alpha]
+                           :find "(old-call x)" :do [:replace "(new-call x)"]
+                           :expect {:matches 1}}]
+                         {:changes 1 :edits 1 :files 1})]
+        (is (= :success (:category result)) (pr-str result))
+        (is (= :committed (get-in result [:resource :status])))
+        (is (= expected (read-file fixture file)))))))

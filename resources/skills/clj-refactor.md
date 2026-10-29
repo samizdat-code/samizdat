@@ -1,6 +1,6 @@
 ---
 name: clj-refactor
-description: Use when the user asks for a mechanism/policy review or refactoring opportunities in Clojure code
+description: Use when the user asks for a mechanism/policy review or refactoring opportunities in Clojure or Jolt code
 ---
 
 # Review mechanism and policy

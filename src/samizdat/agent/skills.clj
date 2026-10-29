@@ -25,6 +25,7 @@
   first match by directory order — the same layering as cells and config."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
+            [samizdat.config :as config]
             [samizdat.lexicon :as lexicon]))
 
 (def shipped-skills
@@ -186,3 +187,29 @@
   ([name] (load-skill default-dirs name))
   ([dirs name]
    (get-in (discover dirs) [name :body])))
+
+(defn- matches-any?
+  [patterns text]
+  (boolean (some #(re-find (re-pattern %) (str text)) patterns)))
+
+(defn select-auto-skills
+  "Skill names whose policy patterns match `problem` under `language`, in
+  policy order. An absent or different language selects nothing."
+  [language problem rules]
+  (if-let [{:keys [skills]} (get rules language)]
+    (->> skills
+         (keep (fn [{:keys [name patterns]}]
+                 (when (matches-any? patterns problem) name)))
+         distinct
+         vec)
+    []))
+
+(defn auto-activate
+  "Bodies of skills automatically relevant to a branch's opening problem.
+  Project language is explicit config, not a source-extension guess; project
+  skill overlays use the same dirs as ordinary on-demand loading."
+  [root problem dirs]
+  (let [language (get-in (config/file-config root) [:run :project-language])
+        rules (lexicon/wordlist :auto-skill-activation)]
+    (into [] (keep #(load-skill dirs %))
+          (select-auto-skills language problem rules))))

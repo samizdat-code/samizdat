@@ -314,3 +314,13 @@
           (is (not (str/includes? (:result result) marker)))
           (is (not (str/includes? (:result result) "padding")))
           (is (< (count (:result result)) 512)))))))
+
+(deftest jolt-source-reads-exact-forms
+  (with-fixture [fixture]
+    (spit (str (:root fixture) "/core.jolt") basic-source)
+    (let [result (call fixture
+                       {:requests [{:operation "forms" :file "core.jolt" :form "alpha"}]
+                        :expect {:requests 1 :files 1}})]
+      (is (= :neutral (:category result)) (pr-str result))
+      (is (= alpha-source
+             (get-in result [:resource :requests 0 :result :forms 0 :source]))))))

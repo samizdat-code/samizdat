@@ -1,13 +1,14 @@
 ---
 name: clj-replace
-description: Use when Clojure text replacement fails after formatting changes, or when a structural form or local binding needs exact replacement
+description: Use when Clojure or Jolt text replacement fails after formatting changes, or when a structural form or local binding needs exact replacement
 ---
 
-# Replace Clojure by structure
+# Replace Clojure and Jolt by structure
 
 Formatting does not change an S-expression's identity. Use samizdat's
-revision-gated structural tools instead of retrying whitespace-sensitive
-text edits or rewriting a whole file.
+revision-gated structural tools for `.clj`, `.cljs`, `.cljc`, and `.jolt`
+files instead of retrying whitespace-sensitive text edits or rewriting a
+whole file.
 
 ## Replace a known form
 
@@ -18,7 +19,7 @@ make the target unique.
 
 ```clojure
 edit_clojure({
-  :edits [{:file "src/example.clj"
+  :edits [{:file "src/example.jolt"
            :within {:form "transition"}
            :from "(old-call data)"
            :to "(new-call\n  data)"
@@ -40,7 +41,7 @@ this example has one binding and one reference, so both counts are two.
 ```clojure
 apply_clojure_changes({
   :changes [{:id :rename-data
-             :in ["src/example.clj"]
+             :in ["src/example.jolt"]
              :forms ['parse-request]
              :do [:rename-binding {:from data
                                    :to parsed-data

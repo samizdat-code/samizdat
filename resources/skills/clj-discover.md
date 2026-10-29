@@ -1,19 +1,38 @@
 ---
 name: clj-discover
-description: Use when Clojure code needs an unfamiliar Java class, unclear interop, or a macro whose generated behavior is not understood
+description: Use when Clojure or Jolt code needs an unfamiliar API, unclear interop, or a macro whose generated behavior is not understood
 ---
 
 # Discover before integrating
 
 Do not guess an unfamiliar API from memory. Check what the project already
-uses, look for an idiomatic Clojure route, then verify the chosen calls in
+uses, choose the route that fits the runtime, then verify the chosen calls in
 `eval` before editing source.
 
-## Java and existing libraries
+## Check dependencies and runtime first
 
-1. Read the project's dependency declarations and search for existing usage of the class or related wrappers. An already-present library and established project convention come first.
-2. If the class is unfamiliar, use `websearch({query: "Clojure wrapper for <library or class>"})` and compare maintained wrappers against direct interop. A wrapper is an option, not an automatic improvement; do not add or upgrade a dependency silently.
-3. When direct interop is appropriate, inspect its constructors, static factories, method signatures, and return types in `eval` with `clojure.reflect`. Verify a minimal call before integrating it.
+1. Read dependency declarations and search for existing usage. An already-present library and established project convention come first.
+2. For JVM Clojure, use `websearch({query: "Clojure wrapper for <library or class>"})` and compare maintained wrappers against direct interop. A wrapper is an option, not an automatic improvement; do not add or upgrade a dependency silently.
+3. For Jolt, first check whether `clojure.core`, `clojure.string`, or `jolt.fs` already provides the operation. Jolt has no JVM, so do not assume a Java class or JVM wrapper exists.
+
+For example, filesystem work starts with the native API:
+
+```clojure
+(require '[jolt.fs :as fs])
+(fs/exists? "deps.edn")
+```
+
+When no idiomatic Jolt route exists, probe the actual shim in `eval`. Treat
+reflection as incomplete evidence: empty output can mean the image retained
+no metadata, not that the class has no methods. Consult official
+documentation through `websearch`, then verify the smallest supported call.
+If the class is unavailable, use a supported Jolt API rather than writing a
+JVM fallback from memory.
+
+## JVM Java interop
+
+When direct interop is appropriate for JVM Clojure, inspect constructors,
+static factories, method signatures, and return types with `clojure.reflect`:
 
 ```clojure
 (require '[clojure.reflect :as r])
@@ -25,11 +44,9 @@ uses, look for an idiomatic Clojure route, then verify the chosen calls in
      vec)
 ```
 
-Empty reflection output is inconclusive: some images do not retain metadata
-for every JDK class. It does not prove the class has no methods. Consult the
-class's official API documentation through `websearch`, then test the
-smallest static call or constructor in `eval`. Check argument order and
-instance/static call shape rather than assuming them.
+Empty reflection output is inconclusive here too. Consult official API
+documentation, then verify a minimal static call or constructor in `eval`,
+checking argument order and instance/static call shape.
 
 ## Macros
 
