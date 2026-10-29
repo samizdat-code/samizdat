@@ -49,6 +49,7 @@
             [samizdat.agent.outline]
             [samizdat.agent.phases]
             [samizdat.agent.select]
+            [samizdat.agent.skills]
             [samizdat.agent.state]
             [samizdat.agent.storm]
             [samizdat.agent.stubs]

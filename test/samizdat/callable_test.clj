@@ -31,9 +31,13 @@
   (fn [_ d] d))
 ")
 
-(use-fixtures :each (fn [f] (let [snap (cell/registry-snapshot)]
-                              (try (cells/eval-candidate! src) (f)
-                                   (finally (cell/registry-restore! snap))))))
+(defn- with-callable-cells [f]
+  (cell/trial
+   (fn []
+     (cells/eval-candidate! src)
+     (f))))
+
+(use-fixtures :each with-callable-cells)
 
 (defn- runner [seen]
   (fn [tool args] (swap! seen conj [tool args]) "line one\nline two"))
@@ -43,6 +47,18 @@
     (is (contains? ids :lex/line-count))
     (is (not (contains? ids :lex/not-callable))))
   (is (= "How many lines a file has." (:doc (first (filter #(= :lex/line-count (:id %)) (callable/cells)))))))
+
+(deftest fixture-undo-preserves-cells-registered-by-other-threads
+  (with-callable-cells
+    (fn []
+      (let [t (Thread. (fn []
+                         (cell/register-spec!
+                          :lex/concurrent
+                          {:id :lex/concurrent :handler (fn [_ d] d)})))]
+        (.start t)
+        (.join t))))
+  (is (some? (cell/get-cell :lex/concurrent))
+      "fixture cleanup does not undo another thread's registration"))
 
 (deftest a-call-runs-the-cell-with-the-runner-it-was-handed
   (let [seen (atom [])]
