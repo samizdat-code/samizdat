@@ -93,6 +93,17 @@
         (is (str/includes? (user-text (first @seen)) "what do f0 and f399 return?")
             "with the question")))))
 
+(deftest read-digest-accepts-json-array-path-strings
+  (file! "src/a.clj" ["(ns a)" "(def x 1)"])
+  (let [seen (atom [])]
+    (with-redefs [llm/chat (capturing-chat seen "- x: 1")]
+      (let [r (tools-base/run-tool
+               (ctx :args {:paths "[\"src/a.clj\"]" :question "x?"}))]
+        (is (= :neutral (:category r)))
+        (is (= "- x: 1" (:result r)))
+        (is (= 1 (count @seen)))
+        (is (str/includes? (user-text (first @seen)) "(def x 1)"))))))
+
 (deftest the-reader-role-answers-when-one-is-configured
   (file! "src/a.clj" ["(ns a)" "(def x 1)"])
   (let [seen (atom [])]

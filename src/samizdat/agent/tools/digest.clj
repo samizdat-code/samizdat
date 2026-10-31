@@ -65,7 +65,7 @@
     {:adapter llm-adapter :config llm-config :role :branch}))
 
 (defn- paths-of [ctx]
-  (let [p (base/arg ctx :paths)]
+  (let [p (base/listed (base/arg ctx :paths))]
     (cond (nil? p) []
           (string? p) [p]
           (sequential? p) (mapv str p)
