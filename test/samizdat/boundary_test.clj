@@ -284,6 +284,8 @@
    "propose_cell" {:reach :harness-only}
    "prompt"      {:reach :harness-only}
    "manual"      {:reach :harness-only}
+   ;; Reads only the role-scoped canonical prompt and policy; never tool output.
+   "tool_search" {:reach :harness-only}
    "introspect"  {:reach :harness-only}
    "thesis"      {:reach :harness-only}
    "done"        {:reach :harness-only}

@@ -179,7 +179,8 @@
 
 (defn- output-text [message limit]
   (when (and (= "assistant" (:role message)) (string? (:content message)))
-    (util/truncate-middle (:content message) limit)))
+    (let [text (util/truncate-middle (:content message) limit)]
+      (when-not (str/blank? text) text))))
 
 (defn- path-values [parsed shell-paths]
   (let [args (:args parsed)
@@ -204,7 +205,8 @@
         role (name (or (:role branch) (:role ctx) :implementor))
         workflow (some-> (or (:workflow ctx) (get-in ctx [:config :run :loop])) str)
         task (:task branch)
-        outputs (keep #(output-text % (:max-output-chars policy))
+        outputs (keep #(output-text % (min (:max-output-chars policy)
+                                           (:max-value-chars policy)))
                       (take-last (:max-recent-outputs policy) (:messages branch)))
         diagnostics (keep #(when-let [value (% result)]
                             (if (or (keyword? value) (string? value)) (name value)))

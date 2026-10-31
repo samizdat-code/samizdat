@@ -191,6 +191,10 @@ flowchart LR
     context --> messages
     context --> redact
 
+    discovery[tool_search: role-scoped canonical catalog and policy only]
+    toolcall --> discovery
+    discovery --> redact
+
     digest[read_digest: the files, whole, to the reader model]
     reader[outbound HTTP to the :reader role's provider, else the branch's]
     toolcall --> digest

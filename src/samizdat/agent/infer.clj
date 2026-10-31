@@ -55,11 +55,13 @@
   cell's job, in resources, where the supervisor can rewrite it."
   (:require [clojure.tools.logging :as log]
             [samizdat.agent.gates :as gates]
+            [samizdat.agent.context-fit :as context-fit]
             [samizdat.agent.hydration :as hydration]
             [samizdat.events :as events]
             [samizdat.cancel :as cancel]
             [samizdat.agent.tools.base :as tools]
             [samizdat.config :as config]
+            [samizdat.llm.accounting :as accounting]
             [samizdat.llm.client :as llm]
             [samizdat.llm.fence :as fence]
             [samizdat.llm.grammar :as grammar]
@@ -71,8 +73,8 @@
 ;; --- the tape projection -----------------------------------------------------
 
 (defn of-branch
-  "A branch's TAPE: the message array, the turn log the compactor reads, and
-  the two per-turn request knobs.
+  "A branch's TAPE: the message array, the turn log the compactor reads, the
+  per-turn request knobs, and trusted dynamically selected tool documentation.
 
   `:id` rides along for two reasons, both real: the retry note needs a branch
   id to journal against, and it is the stable conversation key an endpoint
@@ -89,6 +91,8 @@
    :squeeze (:context-squeeze branch)
    :prefill (:prefill branch)
    :force-tool (:force-tool branch)
+   :advertised-tools (:advertised-tools branch)
+   :advertised-tool-docs (:advertised-tool-docs branch)
    ;; The tool the harness just refused, if any — what a llama.cpp endpoint
    ;; may be asked to leave off the next decision (state/record-outcome).
    :refused-tool (:refused-tool branch)})
@@ -360,8 +364,92 @@
                                             :sent-reasoning (:sent-reasoning before))))))
      :flush! (fn [] (let [[before _] (swap-vals! st mark 0)] (publish! before)))}))
 
+(defn- prepare*
+  [ctx {:keys [id] :as tape} {:keys [attempt rendered fit?] :or {attempt 1}}]
+  (let [rendered (or rendered (render tape))
+        {:keys [grammar] forced-prefill :prefill forced-tool :force-tool}
+        (force-mechanism ctx tape)
+        reasoning-budget (reasoning-budget-for ctx tape)
+        tools (when (config/supports? (:llm-config ctx) :native-tools)
+                (not-empty (toolspec/for-messages (:messages tape)
+                                                  (gates/threshold :forceable-tools)
+                                                  (gates/threshold :native-tool-description-chars)
+                                                  (:advertised-tool-docs tape))))
+        base (or (:max-tokens (:llm-config ctx))
+                 (when (> attempt 1)
+                   (:retry-base-tokens (gates/threshold :context-budget))))
+        budget (when base (* base (bit-shift-left 1 (dec attempt))))
+        native-request? (and (nil? forced-prefill) (nil? grammar))
+        request-tools (when native-request?
+                        (let [specs (vec (or tools []))]
+                          (if (and forced-tool
+                                   (not-any? #(= (:name forced-tool) (:name %)) specs))
+                            (conj specs forced-tool)
+                            specs)))
+        tool-choice (when (and native-request? forced-tool)
+                      {:type "function" :function {:name (:name forced-tool)}})
+        policy (gates/threshold :request-accounting)
+        request {:provider (get-in ctx [:llm-config :provider])
+                 :model (get-in ctx [:llm-config :model])
+                 :context-window (or (get-in ctx [:llm-config :context-window])
+                                     (get-in ctx [:llm-config :max-context]))
+                 :tools request-tools
+                 :grammar grammar
+                 :prefill forced-prefill
+                 :tool-choice tool-choice
+                 :max-tokens budget}
+        estimate-for (fn [ms]
+                       (accounting/admit
+                        (accounting/estimate (assoc request :messages (message/prepare ms))
+                                             policy)))
+        estimate (estimate-for rendered)
+        fit-policy (when fit?
+                     (assoc (gates/threshold :request-fit)
+                            :chars-per-token (:chars-per-token policy)))
+        [final-rendered final-estimate]
+        (loop [current-rendered rendered
+               current-estimate estimate]
+          (if (or (not fit?) (:admissible? current-estimate)
+                  (not= :exceeds-context-window (:reason current-estimate)))
+            [current-rendered current-estimate]
+            (let [deficit (- (:total-tokens current-estimate)
+                             (:context-window current-estimate))
+                  fitted (context-fit/fit current-rendered deficit fit-policy)
+                  next-rendered (:messages fitted)
+                  next-estimate (estimate-for next-rendered)]
+              (if (or (:exhausted? fitted)
+                      (= next-rendered current-rendered))
+                [next-rendered next-estimate]
+                (recur next-rendered next-estimate)))))
+        call-opts (cond-> {:accounting-scope policy :accounting-estimate final-estimate}
+                    budget (assoc :max-tokens budget)
+                    forced-prefill (assoc :prefill forced-prefill)
+                    forced-tool (assoc :force-tool forced-tool)
+                    grammar (assoc :grammar grammar)
+                    reasoning-budget (assoc :reasoning-budget reasoning-budget)
+                    tools (assoc :tools tools)
+                    id (assoc :cache-key (str id)))
+        preparation {:rendered final-rendered
+                     :tools tools
+                     :call-opts call-opts
+                     :accounting final-estimate
+                     :wire (wire-fingerprint (message/prepare final-rendered))}]
+    (if (and fit? (false? (:admissible? final-estimate))
+             (= :exceeds-context-window (:reason final-estimate)))
+      (assoc preparation :ok false :reason :context-window-exceeded)
+      preparation)))
+
+(defn prepare
+  "Build the one request description shared by compaction, budget admission
+  and provider dispatch. `attempt` changes only the output reserve. With
+  `fit?`, an oversized render is fitted and re-accounted; a request that still
+  exceeds its window is returned as a typed non-admissible preparation."
+  [ctx tape {:keys [attempt fit?] :or {attempt 1}}]
+  (prepare* ctx tape {:attempt attempt :fit? fit?}))
+
 (defn complete-fn
-  "ctx -> (fn [tape] -> {:ok true :response r} | {:ok false :error s}).
+  "ctx -> (fn [tape] -> {:ok true :response r} |
+                         {:ok false :error s :reason keyword}).
 
   THE ONE EFFECT, as an injectable value — everything else here is pure. A
   test passes a stub; a probe cell can pass a variant's adapter and config
@@ -370,7 +458,8 @@
   Retried once at a DOUBLED budget when the first response hit the token cap
   before emitting a tool call. Doubled rather than repeated, since a response
   that ran out of room needs room, and repeating at the same cap reproduces
-  the same truncation.
+  the same truncation. Every attempt consumes the shared preparation; retry
+  preparation reuses the initial render.
 
   `opts`:
     :journal? — record the retry note (default true when ctx has a run).
@@ -379,93 +468,61 @@
                 reached the tape into the permanent record."
   ([ctx] (complete-fn ctx nil))
   ([ctx {:keys [journal?] :or {journal? true}}]
-   (fn [{:keys [id prefill force-tool] :as tape}]
-     ;; Fingerprint and request share one render, retries included. It rides
-     ;; the response beside :prefilled, because that is the value the loop
-     ;; already threads from the call to the journal (karamazov-o4wm.1).
-     (let [rendered (render tape)
-           wire (wire-fingerprint (message/prepare rendered))
-           ;; Which force goes out, if any — decided once, here, from the
-           ;; endpoint's features and policy (force-mechanism).
-           {:keys [grammar] forced-prefill :prefill forced-tool :force-tool}
-           (force-mechanism ctx tape)
-           reasoning-budget (reasoning-budget-for ctx tape)
-           ;; The tool surface as native specs, read off the documentation
-           ;; this branch's system prompt gives it, gates.edn's exact schemas
-           ;; winning (llm.toolspec). Only for an endpoint measured to take
-           ;; them; the adapter still leaves them off a prefilled or grammar
-           ;; turn (karamazov-jl1f).
-           tools (when (config/supports? (:llm-config ctx) :native-tools)
-                   (not-empty (toolspec/for-messages (:messages tape)
-                                                     (gates/threshold :forceable-tools)
-                                                     (gates/threshold :native-tool-description-chars))))
-           ;; One offset stream for the whole call, retries included. A probe
-           ;; (journal? false) has no watcher because it is not a visible turn.
+   (fn [{:keys [id] :as tape}]
+     (let [initial (prepare ctx tape {:attempt 1 :fit? true})
+           forced-prefill (get-in initial [:call-opts :prefill])
            watch (when (and journal? (:run-id ctx) id)
                    (delta-publisher (:run-id ctx) (str id) forced-prefill))]
-     (loop [attempt 1]
-       (let [base (or (:max-tokens (:llm-config ctx))
-                      ;; No configured cap: the FIRST attempt keeps the
-                      ;; provider's default, but a retry exists to buy room —
-                      ;; doubling nothing was a same-budget repeat (blt.38).
-                      (when (> attempt 1)
-                        (:retry-base-tokens (gates/threshold :context-budget))))
-             budget (when base (* base (bit-shift-left 1 (dec attempt))))
-             r (try
-                 {:ok true
-                  :response (assoc (llm/chat (:llm-adapter ctx) (:llm-config ctx)
-                                      rendered
-                                      (cond-> {}
-                                        budget (assoc :max-tokens budget)
-                                        ;; The one force mechanism force-mechanism
-                                        ;; chose for this call: a prefill the
-                                        ;; endpoint continues, a sampling grammar,
-                                        ;; or a native tool_choice — never two.
-                                        forced-prefill (assoc :prefill forced-prefill)
-                                        forced-tool (assoc :force-tool forced-tool)
-                                        grammar (assoc :grammar grammar)
-                                        ;; A per-call thinking cap on llama.cpp
-                                        ;; (reasoning-budget-for).
-                                        reasoning-budget (assoc :reasoning-budget reasoning-budget)
-                                        tools (assoc :tools tools)
-                                        ;; The stable conversation key an endpoint
-                                        ;; pins its prefix cache to. Only the local
-                                        ;; adapter emits it; see LR-5.
-                                        id (assoc :cache-key (str id))
-                                        watch (assoc :on-delta (:on-delta watch))))
-                                   :wire wire)}
-                 (catch Throwable e
-                   ;; The reason travels with the failure. `provider-error-step`
-                   ;; counts it, and an empty reply wants a different response
-                   ;; from a refused connection: more tokens or reasoning off,
-                   ;; versus wait and retry. Without this the loop knows only
-                   ;; `the call failed` and every provider problem looks alike.
-                   {:ok false :error (ex-message e)
-                    :reason (or (:reason (ex-data e)) :call-failed)}))
-             ;; After the call rather than in a `finally` round it: the catch
-             ;; above already turns every throw into a value, and a park under
-             ;; a finally is one ebb refuses where a park is a continuation
-             ;; capture — which is how every call of run 74ddebb8's supervisor
-             ;; failed with "Cannot fork inside a try/finally" (karamazov-ah7d).
-             _ (some-> watch :flush! (apply []))]
-         (if (and (:ok r)
-                  (< attempt max-call-attempts)
-                  ;; The prefill the adapter ACTUALLY sent (nil where it was
-                  ;; dropped), so a GLM reply is not parsed as if it began
-                  ;; mid-fence — see absorb (karamazov-0r8s).
-                  (truncated-without-call? (:response r)
-                                           (get (:response r) :prefilled forced-prefill)))
-           (do ;; A cancel that landed during the call is honoured before the
-               ;; note and the re-ask, not after: no journal write past a
-               ;; forfeit (RFC-013).
-               (cancel/check!)
-               (when (and journal? (:conn ctx) (:run-id ctx))
-                 (journal/note! (:conn ctx) (:run-id ctx) :turn-retry
-                                {:branch-id id
-                                 :data {:reason "truncated before any tool call"
-                                        :budget budget}}))
-               (recur (inc attempt)))
-           r)))))))
+       (loop [attempt 1 preparation initial]
+         (if (false? (:ok preparation))
+           {:ok false
+            :error (or (:error preparation)
+                       (str "request refused: " (:reason preparation)))
+            :reason (:reason preparation)}
+           (let [{:keys [rendered call-opts wire]} preparation
+                 budget (:max-tokens call-opts)
+                 r (try
+                     {:ok true
+                      :response (assoc (llm/chat (:llm-adapter ctx) (:llm-config ctx)
+                                                 rendered
+                                                 (cond-> call-opts
+                                                   watch (assoc :on-delta (:on-delta watch))))
+                                       :wire wire)}
+                     (catch Throwable e
+                       ;; The reason travels with the failure. `provider-error-step`
+                       ;; counts it, and an empty reply wants a different response
+                       ;; from a refused connection: more tokens or reasoning off,
+                       ;; versus wait and retry. Without this the loop knows only
+                       ;; `the call failed` and every provider problem looks alike.
+                       {:ok false :error (ex-message e)
+                        :reason (or (:reason (ex-data e)) :call-failed)}))
+                 ;; After the call rather than in a `finally` round it: the catch
+                 ;; above already turns every throw into a value, and a park under
+                 ;; a finally is one ebb refuses where a park is a continuation
+                 ;; capture — which is how every call of run 74ddebb8's supervisor
+                 ;; failed with "Cannot fork inside a try/finally" (karamazov-ah7d).
+                 _ (some-> watch :flush! (apply []))]
+             (if (and (:ok r)
+                      (< attempt max-call-attempts)
+                      ;; The prefill the adapter ACTUALLY sent (nil where it was
+                      ;; dropped), so a GLM reply is not parsed as if it began
+                      ;; mid-fence — see absorb (karamazov-0r8s).
+                      (truncated-without-call? (:response r)
+                                               (get (:response r) :prefilled forced-prefill)))
+               (do ;; A cancel that landed during the call is honoured before the
+                   ;; note and the re-ask, not after: no journal write past a
+                   ;; forfeit (RFC-013).
+                   (cancel/check!)
+                   (when (and journal? (:conn ctx) (:run-id ctx))
+                     (journal/note! (:conn ctx) (:run-id ctx) :turn-retry
+                                    {:branch-id id
+                                     :data {:reason "truncated before any tool call"
+                                            :budget budget}}))
+                   (recur (inc attempt)
+                          (prepare* ctx tape {:attempt (inc attempt)
+                                              :rendered rendered
+                                              :fit? true})))
+               r))))))))
 
 ;; --- the pure absorb --------------------------------------------------------
 

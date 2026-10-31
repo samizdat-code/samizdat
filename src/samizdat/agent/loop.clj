@@ -109,7 +109,8 @@
 
 (defn system-prompt-for
   "The system prompt as ROLE sees it: the tool catalogue filtered to that
-  role's surface (resources/roles.edn).
+  role's surface, with optional core-plus-deferred presentation. The false
+  second arity returns the full role-scoped canonical catalogue for discovery.
 
   Roles used to be the implementer's world plus a suffix, so a supervisor was
   handed 31 tools written for somebody building the project and its own prompt
@@ -134,48 +135,49 @@
   the read-only trees this project declared — both facts about the run's
   target, and both previously rendered as if every run worked on samizdat with
   nothing beside it."
-  [role]
-  (let [root (userspace/project-root)
-        ;; WHICH IMAGE, or none. The prompt's opening sentence and its whole
-        ;; REPL-first section are claims about where `eval` runs, and both were
-        ;; unconditional. `repl.clj`'s docstring records what that costs when
-        ;; the claim is false — the prompt promising a workflow the harness
-        ;; cannot deliver. Under :project the model is in a SEPARATE image
-        ;; rooted at the project, not "the same image the harness runs in", so
-        ;; :project needs the rewording as much as :off needs the suppression.
-        eval-mode (config/eval-mode root)
-        ;; PER ROLE, not per run: `:project` is a posture, and the supervisor
-        ;; keeps the harness image inside it. Telling a supervisor it is in a
-        ;; separate project image while its evals land in the harness would be
-        ;; the same false claim this is meant to remove.
-        image (config/eval-image eval-mode role)]
-    (let [ctx {:templates ""
-               :skills (skills/render-catalog)
-               :self-hosting (userspace/self-hosting?)
-               :repl (not= :off image)
-               :harness-image (= :harness image)
-               ;; Tools callable from inside an eval (karamazov-xn0h.7):
-               ;; only where the bridge serves them, the project image.
-               :bridge-tools (let [{:keys [enabled? tools]} (gates/threshold :eval-bridge)]
-                               (when (and enabled? (= :project image)) (seq (sort tools))))
-               ;; From the config FILES rather than the merged run config,
-               ;; which prompt assembly is not handed. Both layers — a
-               ;; machine-wide reference tree is a real thing to declare
-               ;; once — and they are the operator's rather than the
-               ;; agent's.
-               ;; With the trees the committed deps.edn declares, which the
-               ;; tools read as freely (files/ctx-reference-roots).
-               :reference-paths (seq (files/ctx-reference-roots
-                                      {:config (config/file-config root) :root root}))
-               ;; The split decision is its own prompt so a provider/model
-               ;; file can replace the 8 lines that were measured to matter
-               ;; without forking the other 490 (karamazov-1g6b.3) — the
-               ;; first extract; the sections are the rest (system-segments).
-               :split-decision (prompt/prompt "split-decision")}]
-      (roles/scope-catalogue
-       (prompt/render-str (or (prompt/layer :system) "")
-                          (merge ctx (render-segments ctx)))
-       role eval-mode))))
+  ([role] (system-prompt-for role true))
+  ([role presentation?]
+   (let [root (userspace/project-root)
+         ;; WHICH IMAGE, or none. The prompt's opening sentence and its whole
+         ;; REPL-first section are claims about where `eval` runs, and both were
+         ;; unconditional. `repl.clj`'s docstring records what that costs when
+         ;; the claim is false — the prompt promising a workflow the harness
+         ;; cannot deliver. Under :project the model is in a SEPARATE image
+         ;; rooted at the project, not "the same image the harness runs in", so
+         ;; :project needs the rewording as much as :off needs the suppression.
+         eval-mode (config/eval-mode root)
+         ;; PER ROLE, not per run: `:project` is a posture, and the supervisor
+         ;; keeps the harness image inside it. Telling a supervisor it is in a
+         ;; separate project image while its evals land in the harness would be
+         ;; the same false claim this is meant to remove.
+         image (config/eval-image eval-mode role)]
+     (let [ctx {:templates ""
+                :skills (skills/render-catalog)
+                :self-hosting (userspace/self-hosting?)
+                :repl (not= :off image)
+                :harness-image (= :harness image)
+                ;; Tools callable from inside an eval (karamazov-xn0h.7):
+                ;; only where the bridge serves them, the project image.
+                :bridge-tools (let [{:keys [enabled? tools]} (gates/threshold :eval-bridge)]
+                                (when (and enabled? (= :project image)) (seq (sort tools))))
+                ;; From the config FILES rather than the merged run config,
+                ;; which prompt assembly is not handed. Both layers — a
+                ;; machine-wide reference tree is a real thing to declare
+                ;; once — and they are the operator's rather than the
+                ;; agent's.
+                ;; With the trees the committed deps.edn declares, which the
+                ;; tools read as freely (files/ctx-reference-roots).
+                :reference-paths (seq (files/ctx-reference-roots
+                                       {:config (config/file-config root) :root root}))
+                ;; The split decision is its own prompt so a provider/model
+                ;; file can replace the 8 lines that were measured to matter
+                ;; without forking the other 490 (karamazov-1g6b.3) — the
+                ;; first extract; the sections are the rest (system-segments).
+                :split-decision (prompt/prompt "split-decision")}]
+       ((if presentation? roles/presentation-catalogue roles/scope-catalogue)
+        (prompt/render-str (or (prompt/layer :system) "")
+                           (merge ctx (render-segments ctx)))
+        role eval-mode)))))
 
 (defn system-prompt
   "The whole system prompt, unscoped — every tool the harness has.
@@ -548,6 +550,23 @@
 
 ;; --- one turn ---------------------------------------------------------------
 
+(defn request-context
+  "Normalize every per-branch request input once: role selection, live model
+  overrides, and the branch's reasoning effort. The marker makes this
+  idempotent when turn data carries the normalized context through several
+  cells and finally into call-model."
+  [ctx branch]
+  (if (::normalized-request ctx)
+    ctx
+    (let [off (:off-value (gates/threshold :thinking-budget))]
+      (-> (assoc ctx :role (or (:role ctx) (:role branch) :implementor))
+          live/in-ctx
+          (update :llm-config
+                  (fn [c]
+                    (assoc c :reasoning-effort
+                           (thinking/effort-for branch (:reasoning-effort c) off))))
+          (assoc ::normalized-request true)))))
+
 (defn call-model
   "One model call for `branch`, through the injected inference seam.
 
@@ -555,23 +574,10 @@
   `complete` is an argument — this is the branch-shaped wrapper the cells and
   the beam call. Same behaviour as before: one retry at a doubled budget when
   the response hit the token cap before emitting a tool call, and a provider
-  failure returned as {:ok false :error} rather than thrown."
+  failure or local refusal returned as {:ok false :error :reason} rather than
+  thrown."
   [ctx branch]
-  ;; The branch's own reasoning effort, not the run's. Once the runaway
-  ;; breaker has fired on this branch, thinking is off for the rest of its
-  ;; task — read HERE at request time rather than written into the run config,
-  ;; because the config belongs to the run and this decision belongs to one
-  ;; branch (samizdat.agent.thinking).
-  (let [off (:off-value (gates/threshold :thinking-budget))
-        ;; A person's live switch first (samizdat.agent.live): a model or
-        ;; effort changed mid-run for this branch's role — or for every role —
-        ;; lands here, on the next request, whatever the run started with.
-        ctx (-> (assoc ctx :role (or (:role ctx) (:role branch) :implementor))
-                live/in-ctx
-                (update :llm-config
-                        (fn [c]
-                          (assoc c :reasoning-effort
-                                 (thinking/effort-for branch (:reasoning-effort c) off)))))]
+  (let [ctx (request-context ctx branch)]
     ;; AN INJECTED `complete` WINS. RFC-004 already says the model call is
     ;; "the ONE effect, as an injectable value" and that a test or a probe
     ;; passes its own — but this call site hardcoded the constructor, so the
@@ -694,13 +700,14 @@
                          {:branch-id (:id branch) :turn turn
                           :tool-name "__provider_error__" :result error
                           :category "neutral" :task-id (:id (:task branch))})
-   (if (= :context-overflow reason)
-     ;; The prompt outgrew the window. 'Try again' is exactly wrong here —
-     ;; the failure is upstream of the model seeing anything, the next
-     ;; assemble would be just as oversized, and APPENDING a message grows
-     ;; the very thing that overflowed. Squeeze the branch's compaction
-     ;; budget instead (karamazov-d41): the next render fits, and the model
-     ;; continues none the wiser, which is how compaction always works.
+   (if (#{:context-overflow :context-window-exceeded} reason)
+     ;; The prompt outgrew the window, or local fitting exhausted its rewrites.
+     ;; 'Try again' is exactly wrong here — the failure is upstream of the model
+     ;; seeing anything, the next assemble would be just as oversized, and
+     ;; APPENDING a message grows the very thing that overflowed. Squeeze the
+     ;; branch's compaction budget instead (karamazov-d41): the next render
+     ;; fits, and the model continues none the wiser, which is how compaction
+     ;; always works.
      (state/squeeze-context branch)
      (state/add-message branch "user"
                         (str "[harness] The provider call failed: " error
@@ -1071,6 +1078,7 @@
                                       (gates/threshold :timeout-failure-weight))))
                    (state/add-turn {:turn turn :tool tool
                                     :category (:category result)
+                                    :args (when (= "tool_search" tool) (:args parsed))
                                     ;; Kept for failures AND malformed calls,
                                     ;; only so repeating-failure? can see a
                                     ;; loop. The turns table holds the

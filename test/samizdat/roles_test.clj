@@ -144,3 +144,17 @@
           t (tools-named-in text)]
     (is (contains? surface t)
         (str (name r) "'s prompt tells it to use `" t "`, which is not on its surface"))))
+
+(deftest core-presentation-never-changes-full-role-authorization
+  (let [full #{"read_file" "write_file" "grep" "tool_search"}]
+    (with-redefs [roles/table (constantly {:builder {:doc "build"
+                                                     :tools full
+                                                     :core-tools #{"read_file"
+                                                                   "tool_search"}}})]
+      (is (= full (roles/surface :builder)))
+      (doseq [tool full]
+        (is (roles/may-use? :builder tool)
+            (str tool " remains authorized even when its documentation is deferred")))))
+  (doseq [role [:supervisor :reviewer :answerer :critic]]
+    (is (nil? (:core-tools (roles/spec role)))
+        (str role " stays on static presentation"))))

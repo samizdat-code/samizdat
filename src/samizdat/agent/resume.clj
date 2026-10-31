@@ -56,6 +56,8 @@
   - notified-fractions from the rebuilt turn count via gates/crossed-fractions,
     so the turn-budget notice does not re-fire on fractions already crossed.
   - tiers-seen from rebuilt artifact tiers.
+  - advertised tools and trusted selected docs from successful tool_search turn
+    arguments, revalidated against the current role surface and canonical docs.
   - mechanics from the turns parse_error / auto_repaired columns; fence
     signals that are not journalled (truncation, multi-fence) reset to zero.
   - consecutive-policy-refusals replayed from the turns policy_refusal
@@ -166,12 +168,13 @@
   (reduce (fn [msgs t]
             (cond-> msgs
               (seq (:assistant_text t))
-              (conj {:role "assistant" :content (:assistant_text t)})
+              (conj {:role "assistant" :content (:assistant_text t)
+                     :turn (:turn t)})
               (seq (:result t))
               ;; Framed as the live turn framed it (karamazov-o4wm.3) —
               ;; except the harness's own rows, whose tool name is the
               ;; loop's `__…__` marker and whose result is harness text.
-              (conj {:role "user"
+              (conj {:role "user" :turn (:turn t)
                      :content (if (clojure.string/starts-with? (str (:tool_name t)) "__")
                                 (:result t)
                                 (message/frame-result (:tool_name t) (:result t)))})))
@@ -269,7 +272,9 @@
                              (-> b
                                  (state/add-turn {:turn (:turn t)
                                                   :tool tool
-                                                  :category cat})
+                                                  :category cat
+                                                  :args (when (= "tool_search" tool)
+                                                          (parse-json (:args t)))})
                                  (state/record-outcome {:category cat
                                                         :progress? (= :success cat)
                                                         :policy-refusal? (pos? (or (:policy_refusal t) 0))})))))
@@ -296,8 +301,13 @@
                                   :periodic 0}
                       ;; The fractions already crossed are told, so the
                       ;; turn-budget notice does not re-fire on them.
-                      :notified-fractions (gates/crossed-fractions branch max-turns))]
-    branch))
+                      :notified-fractions (gates/crossed-fractions branch max-turns))
+        advertised (when (some #(= "tool_search" (str (:tool_name %))) branch-turns)
+                     ((requiring-resolve 'samizdat.agent.tools.tool-search/advertised-from-turns)
+                      role nil branch-turns))]
+    (cond-> branch
+      advertised (assoc :advertised-tools (:tools advertised)
+                        :advertised-tool-docs (:docs advertised)))))
 
 (defn resumable?
   "A run can be resumed when it exists and has not reached a terminal state.

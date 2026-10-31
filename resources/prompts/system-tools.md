@@ -357,6 +357,19 @@ shell({command})
     and a read outside the project needs a person to allow it.
 ```
 
+### Discovering deferred tools
+
+```
+tool_search({query?, select?, limit?})
+    Find tools on your full allowed surface without loading every schema up
+    front. Pass `query` for bounded short summaries, or `select` with one exact
+    name or a list of names for canonical documentation and native schemas on
+    later turns. `limit` bounds query results. Searching alone loads nothing;
+    selecting never grants a tool outside your role.
+```
+
+<!-- deferred-tools -->
+
 ### Guidance you can load
 
 {{skills}}

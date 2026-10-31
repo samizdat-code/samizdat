@@ -74,6 +74,8 @@
             [samizdat.learned-test]
             [samizdat.base-test]
             [samizdat.boundary-test]
+            [samizdat.accounting-test]
+            [samizdat.context-fit-test]
             [samizdat.compaction-test]
             [samizdat.acp-test]
             [samizdat.corrections-test]
@@ -234,6 +236,7 @@
             [samizdat.grant-proposal-test]
             [samizdat.llm-test]
             [samizdat.toolspec-test]
+            [samizdat.tool-search-test]
             [samizdat.llm-stream-test]
             [samizdat.prompt-test]
             [samizdat.server-test]
@@ -365,6 +368,7 @@
     samizdat.surgeon-cljc-test
     samizdat.llm-test
     samizdat.toolspec-test
+    samizdat.tool-search-test
     samizdat.llm-stream-test
     samizdat.agent-test
     samizdat.approval-test
@@ -372,6 +376,8 @@
     samizdat.learned-test
     samizdat.base-test
     samizdat.boundary-test
+    samizdat.accounting-test
+    samizdat.context-fit-test
     samizdat.compaction-test
     samizdat.acp-test
     samizdat.corrections-test

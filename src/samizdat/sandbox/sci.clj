@@ -166,7 +166,7 @@
 
     ;; The probe's model calls and its journal line.
     samizdat.agent.infer
-    {:vars [ab complete-fn log-probe! of-branch trampoline]
+    {:vars [ab complete-fn log-probe! of-branch prepare trampoline]
      :effects #{:net :db}}
 
     ;; Which instruction files a branch owes a read. Pure over the branch.
@@ -194,7 +194,7 @@
     ;; cell reaches the machine, never around it.
     samizdat.agent.loop
     {:vars [absorb-response call-model initial-messages journal-step! no-call-step phase-valve
-            provider-error-step settle-step steer-step tool-step]
+            provider-error-step request-context settle-step steer-step tool-step]
      :effects #{:net :db :run}}
 
     ;; The phase table's withheld tools. Pure lookup.

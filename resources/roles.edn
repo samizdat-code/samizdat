@@ -14,6 +14,7 @@
 ;; that surface, and calling outside it is refused rather than discouraged.
 ;;
 ;; :tools  the tool surface. :all means every registered tool.
+;; :core-tools optional opening presentation only; never changes authorization.
 ;; :prompt the role prompt appended to the (scoped) system prompt, or nil.
 ;; :sees   what its opening context is built from — documentation for the
 ;;         reader and for the supervisor deciding what to tune; the cells that
@@ -59,7 +60,15 @@
            "shell" "websearch" "webfetch" "skill"
            "task" "split"
            "remember" "recall" "outcome" "forget" "retire" "message"
-           "fetch_artifact" "fetch_turn" "context_edit" "papercut" "finding" "mcp" "wait"}
+           "fetch_artifact" "fetch_turn" "context_edit" "papercut" "finding" "mcp" "wait"
+           "tool_search"}
+  ;; Evaluation-only dynamic presentation. The complete :tools set above is
+  ;; still the authorization boundary; these are the entries documented on the
+  ;; opening request. Other roles remain static unless they declare their own
+  ;; :core-tools.
+  :core-tools #{"thesis" "plan" "done" "give_up" "task" "eval"
+                "read_file" "grep" "glob" "write_file" "edit_file" "patch"
+                "shell" "tool_search"}
   :prompt "roles/implementor"
   :sees #{:task :problem :shared-tree :skills}}
 

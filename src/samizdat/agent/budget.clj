@@ -22,12 +22,16 @@
 (defonce ^:private ledger (atom {}))
 
 (defn estimate
-  "A call's worst case in tokens: the request's messages at
-  `chars-per-token`, plus `max-tokens` of output times `output-factor`, both
-  from the caller's policy."
-  [messages max-tokens {:keys [chars-per-token output-factor]}]
-  (+ (long (cmp/estimate-tokens messages chars-per-token))
-     (long (* (or max-tokens 0) output-factor))))
+  "A call's worst case in tokens. The structured arity uses the prepared
+  request's complete input and reserved output; the original message arity is
+  retained for existing callers. Output is multiplied by the caller's policy
+  factor in both forms."
+  ([accounting {:keys [output-factor]}]
+   (+ (long (:input-tokens accounting))
+      (long (* (or (:reserved-output-tokens accounting) 0) output-factor))))
+  ([messages max-tokens {:keys [chars-per-token output-factor]}]
+   (+ (long (cmp/estimate-tokens messages chars-per-token))
+      (long (* (or max-tokens 0) output-factor)))))
 
 (defn held
   "Tokens the run's calls in flight have reserved, plus what unpriced replies

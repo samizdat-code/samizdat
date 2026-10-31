@@ -28,7 +28,9 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest testing is are]]
             [jolt.http-client :as http]
+            [samizdat.agent.gates :as gates]
             [samizdat.config :as config]
+            [samizdat.llm.accounting :as accounting]
             [samizdat.llm.adapter :as adapter]
             [samizdat.llm.adapter.openai :as openai]
             [samizdat.llm.client :as client]
@@ -2346,3 +2348,136 @@
                                                                   :model "backup"}}]}
                                 [] {:on-delta (fn [_])})))
       (is (= 1 @calls) "a control signal starts no continuation or fallback"))))
+
+(deftest successful-client-usage-updates-calibration-without-internal-wire-options
+  (let [policy (gates/threshold :request-accounting)
+        a (registry/adapter-for :deepseek)]
+    (testing "normalized successful usage calibrates and accounting stays out of the HTTP body"
+      (accounting/reset-calibration!)
+      (let [request {:provider :deepseek :model "usage-success" :context-window 10000
+                     :max-tokens 100 :messages [{:role "user" :content "hi"}]}
+            before (accounting/estimate request policy)
+            observed (* 2 (:input-tokens before))
+            bodies (atom [])]
+        (with-redefs [http/post
+                      (fn [_ opts]
+                        (swap! bodies conj (:body opts))
+                        {:status 200
+                         :body (json/write-str
+                                {:choices [{:message {:content "ok"} :finish_reason "stop"}]
+                                 :usage {:prompt_tokens observed :completion_tokens 1
+                                         :total_tokens (inc observed)}})})]
+          (is (= "ok" (:content (client/chat a {:provider :deepseek :model "usage-success"
+                                                :max-tokens 100 :max-retries 0}
+                                             (:messages request)
+                                             {:accounting-scope policy
+                                              :accounting-estimate before})))))
+        (let [after (accounting/estimate request policy)]
+          (is (= observed (:input-tokens after)))
+          (is (= :provider-usage (:source after))))
+        (is (seq @bodies))
+        (is (every? #(not (str/includes? % "accounting")) @bodies)
+            "scope and estimate are internal options, never provider fields")))
+    (testing "missing successful usage leaves calibration conservative"
+      (accounting/reset-calibration!)
+      (let [request {:provider :deepseek :model "usage-missing" :context-window 10000
+                     :max-tokens 100 :messages [{:role "user" :content "hi"}]}
+            before (accounting/estimate request policy)
+            bodies (atom [])]
+        (with-redefs [http/post
+                      (fn [_ opts]
+                        (swap! bodies conj (:body opts))
+                        {:status 200
+                         :body (json/write-str
+                                {:choices [{:message {:content "ok"} :finish_reason "stop"}]})})]
+          (client/chat a {:provider :deepseek :model "usage-missing"
+                          :max-tokens 100 :max-retries 0}
+                       (:messages request)
+                       {:accounting-scope policy :accounting-estimate before}))
+        (is (= before (accounting/estimate request policy)))
+        (is (every? #(not (str/includes? % "accounting")) @bodies))))))
+
+(deftest reconciliation-body-failure-cannot-invalidate-a-successful-response
+  (accounting/reset-calibration!)
+  (let [policy (gates/threshold :request-accounting)
+        a (registry/adapter-for :deepseek)
+        request {:provider :deepseek :model "usage-second-body" :context-window 10000
+                 :max-tokens 100 :messages [{:role "user" :content "hi"}]}
+        before (accounting/estimate request policy)
+        observed (* 2 (:input-tokens before))
+        bodies (atom 0)
+        real-chat-body adapter/chat-body]
+    (with-redefs [adapter/chat-body
+                  (fn [& args]
+                    (when (= 2 (swap! bodies inc))
+                      (throw (ex-info "second body construction failed" {})))
+                    (apply real-chat-body args))
+                  http/post
+                  (fn [_ _]
+                    {:status 200
+                     :body (json/write-str
+                            {:choices [{:message {:content "ok"} :finish_reason "stop"}]
+                             :usage {:prompt_tokens observed :completion_tokens 1
+                                     :total_tokens (inc observed)}})})]
+      (is (= "ok" (:content (client/chat a {:provider :deepseek :model "usage-second-body"
+                                            :max-tokens 100 :max-retries 0}
+                                         (:messages request)
+                                         {:accounting-scope policy
+                                          :accounting-estimate before})))
+          "the already-successful provider response survives reconciliation failure"))
+    (is (= 2 @bodies) "the failure occurs on the reconciliation body construction")
+    (is (= before (accounting/estimate request policy))
+        "no usage is recorded when the shape check cannot complete")))
+
+(deftest fallback-usage-is-not-recorded-under-a-different-request-shape
+  (let [policy (gates/threshold :request-accounting)
+        a (registry/adapter-for :deepseek)
+        tool {:name "read_file" :parameters {:type "object" :properties {}}}
+        cases [{:label "prefill"
+                :request {:prefill "```tool-call\n"}
+                :opts {:prefill "```tool-call\n"}}
+               {:label "grammar"
+                :request {:grammar "root ::= call"}
+                :opts {:grammar "root ::= call"}}
+               {:label "native-tools"
+                :request {:tools [tool]}
+                :opts {:tools [tool]}}]]
+    (doseq [{:keys [label request opts]} cases]
+      (testing (str "fallback drops " label " from the actual request")
+        (accounting/reset-calibration!)
+        (let [scope (str "fallback-shape-" label)
+              primary-model (str label "-primary")
+              fallback-model (str label "-fallback")
+              base-request {:provider :deepseek :model primary-model :context-window 10000
+                            :max-tokens 50 :messages [{:role "user" :content "hi"}]}
+              shaped-request (merge base-request request)
+              before (accounting/estimate shaped-request policy)
+              observed (* 2 (:input-tokens before))
+              primary {:provider :deepseek :model primary-model
+                       :base-url "https://primary.invalid/v1"
+                       :features #{:prefill :grammar :native-tools}
+                       :max-tokens 50 :max-retries 0 :fallback-scope scope
+                       :fallbacks [{:adapter a
+                                    :config {:provider :deepseek :model fallback-model
+                                             :base-url "https://fallback.invalid/v1"
+                                             :features #{} :max-tokens 50 :max-retries 0}}]}]
+          (try
+            (with-redefs [http/post
+                          (fn [url _]
+                            (if (str/includes? url "primary")
+                              {:status 500 :body (json/write-str {:error {:message "down"}})}
+                              {:status 200
+                               :body (json/write-str
+                                      {:model fallback-model
+                                       :choices [{:message {:content "ok"} :finish_reason "stop"}]
+                                       :usage {:prompt_tokens observed :completion_tokens 1
+                                               :total_tokens (inc observed)}})}))]
+              (is (= "ok" (:content (client/chat a primary (:messages base-request)
+                                                 (assoc opts
+                                                        :accounting-scope policy
+                                                        :accounting-estimate before))))))
+            (let [after (accounting/estimate
+                         (assoc shaped-request :model fallback-model) policy)]
+              (is (= :conservative-chars (:source after))
+                  "a differently shaped fallback response cannot calibrate the primary shape"))
+            (finally (client/forget-retired! scope))))))))

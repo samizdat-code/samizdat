@@ -219,10 +219,14 @@
                 ;; a tool that does not exist silently narrows that role.
                 (let [registered (roles/all-tool-names)]
                   (doseq [r (roles/names)
-                          :let [surface (roles/surface r)]]
+                          :let [surface (roles/surface r)
+                                core (roles/core-tools r)]]
                     (when-not (or (= :all surface) (set? surface))
                       (throw (ex-info (str "role " r " declares no tool surface")
                                       {:role r})))
+                    (when (and (set? surface) (seq (remove surface core)))
+                      (throw (ex-info (str "role " r " presents core tools outside its full surface")
+                                      {:role r :outside (vec (remove surface core))})))
                     ;; An output contract must be a malli form that compiles
                     ;; (karamazov-05z0.14): a broken one would refuse every
                     ;; `done` the role makes.
@@ -230,8 +234,9 @@
                       (when-let [why (roles/output-problem o)]
                         (throw (ex-info (str "role " r " :output is not a malli schema: " why)
                                         {:role r}))))
-                    (when (and registered (set? surface))
-                      (when-let [unknown (seq (remove registered surface))]
+                    (when registered
+                      (when-let [unknown (seq (remove registered (into (set core)
+                                                                      (when (set? surface) surface))))]
                         (throw (ex-info (str "role " r " names unregistered tools: "
                                              (str/join ", " unknown))
                                         {:role r :unknown unknown}))))))

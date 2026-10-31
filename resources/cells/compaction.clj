@@ -30,6 +30,7 @@
             [samizdat.agent.context-edit :as context-edit]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.infer :as infer]
+            [samizdat.agent.loop :as turn]
             [samizdat.llm.client :as llm]
             [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]
@@ -71,23 +72,30 @@
         messages: measuring and acting are different jobs, and a cell that did
         both is exactly why the routing was invisible.
 
+        Pressure is the shared prepared-request total: rendered messages,
+        native tools and options, plus the ordinary per-call output reserve.
         A model with no recorded context window routes :none. Every rung is a
         fraction of that number, so guessing it would be guessing the policy."
    :pure true
    ;; :max-turns for the cost fold's turns-left; every run ctx carries it.
    :requires [:llm-config :max-turns]
-   :input  [:map [:branch :map] [:turn {:optional true} :int]]
+   :input  [:map [:branch :map] [:turn {:optional true} :int]
+            [:request-ctx {:optional true} :map]]
    ;; One output rather than per-transition: both edges leave with the same
    ;; keys and only :compaction/route differs in VALUE, which is the whole
    ;; design — measure writes the key, the manifest dispatches on it.
    ;; :compaction/tier is nil when no window is recorded, hence :any.
    :output [:map [:compaction/tier :any] [:compaction/ratio :any]
             [:compaction/before :any] [:compaction/route :keyword]]}
-  (fn [{:keys [llm-config max-turns]} {:keys [branch turn] :as data}]
-    (let [p (policy)
+  (fn [ctx {:keys [branch turn request-ctx] :as data}]
+    (let [request-context (or request-ctx (turn/request-context ctx branch))
+          {:keys [llm-config max-turns]} request-context
+          p (policy)
           window (window-of llm-config)
           msgs (vec (:messages branch))
-          tokens (cmp/estimate-tokens msgs (:chars-per-token p))
+          tokens (get-in (infer/prepare request-context (infer/of-branch branch)
+                                        {:attempt 1 :fit? false})
+                         [:accounting :total-tokens])
           ratio (cmp/pressure tokens window)
           t (and window (cmp/tier ratio (:ladder p)))
           ;; BELOW THE LADDER, a fold can still pay for itself: carrying an
@@ -392,7 +400,11 @@
                           :else (cmp/apply-summary msgs [s e]
                                                    (prompt/prompt "compaction-marker") summary
                                                    role))
-                    after (cmp/estimate-tokens out (:chars-per-token p))]
+                    after (get-in (infer/prepare
+                                   (or (:request-ctx data) (turn/request-context ctx branch))
+                                   (infer/of-branch (assoc branch :messages out))
+                                   {:attempt 1 :fit? false})
+                                  [:accounting :total-tokens])]
                 (if (>= after (:compaction/before data))
                   (do (note! conn run-id data {:action "no-progress"
                                           :before (:compaction/before data) :after after})

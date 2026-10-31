@@ -154,7 +154,9 @@
   and the tape is the ground truth the counter has to agree with. `:forked-at`
   records the branch point, without which an `{:at N}` fork's tree edge is
   lossy — the depth is the only thing that says where the child left the
-  parent's line."
+  parent's line. Dynamic tool selections are reconstructed only from complete
+  inherited successful tool_search exchanges, never copied from the parent's
+  metadata or replayed when the canonical-documentation result was truncated."
   [parent {:keys [id depth turn thesis problem]}]
   (let [messages (tape/truncate-at (:messages parent) depth)
         ;; The turn records the inherited messages actually cover — matched by
@@ -163,7 +165,25 @@
         kept-turns (let [stamped (set (keep :turn messages))]
                      (if (seq stamped)
                        (vec (filter #(contains? stamped (:turn %)) (:turns parent)))
-                       []))]
+                       []))
+        complete-search-turns (let [by-turn (group-by :turn (filter :turn messages))]
+                                (into #{}
+                                      (keep (fn [[turn msgs]]
+                                              (when (and (some #(= "assistant" (:role %)) msgs)
+                                                         (some #(and (= "user" (:role %))
+                                                                     (= "tool_search"
+                                                                        (first (message/framed-result
+                                                                                (:content %)))))
+                                                               msgs))
+                                                turn)))
+                                      by-turn))
+        advertised-turns (vec (filter #(or (not= "tool_search" (str (:tool %)))
+                                          (contains? complete-search-turns (:turn %)))
+                                      kept-turns))
+        advertised (when (or (:advertised-tools parent)
+                             (some #(= "tool_search" (str (:tool %))) advertised-turns))
+                     ((requiring-resolve 'samizdat.agent.tools.tool-search/advertised-from-turns)
+                      (:role parent) nil advertised-turns))]
     (cond-> (assoc (new-branch {:id id
                                 :parent-id (:id parent)
                                 :problem (or problem (:problem parent))
@@ -174,7 +194,9 @@
                    :thesis thesis)
       ;; The role the inherited conversation was opened under goes with it:
       ;; an answerer's fork is an answerer, not an unrestricted branch.
-      (:role parent) (assoc :role (:role parent)))))
+      (:role parent) (assoc :role (:role parent))
+      advertised (assoc :advertised-tools (:tools advertised)
+                        :advertised-tool-docs (:docs advertised)))))
 
 (defn active? [branch] (= :active (:status branch)))
 

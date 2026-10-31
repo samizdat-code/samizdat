@@ -15,6 +15,7 @@
             [samizdat.agent.compaction :as cmp]
             [samizdat.agent.context-edit :as context-edit]
             [samizdat.agent.gates :as gates]
+            [samizdat.agent.infer :as infer]
             [samizdat.agent.loop]
             [samizdat.agent.tools.base :as base]
             [samizdat.agent.tools.journal]
@@ -892,3 +893,56 @@
     (is (= :mechanics (:category anonymous-drop)))
     (is (re-find #"unknown" (:result anonymous-drop))
         "nil is not an address that can drop every unaddressable message")))
+
+(deftest compaction-pressure-includes-native-tools-and-reserved-output
+  (cells/load-cells!)
+  (let [branch {:id "measure-prepared"
+                :messages [{:role "system"
+                            :content (str "Tools:\n```\nread_file({path})\n    Read a file by its path.\n"
+                                          "alpha_tool({query, limit?})\n    Search the alpha index.\n```")}
+                           {:role "user" :content "go"}]
+                :turns []}
+        ctx {:llm-config {:provider :test :model "measure-model"
+                          :context-window 4096 :max-tokens 64
+                          :features #{:native-tools}}}
+        prepared (infer/prepare ctx (infer/of-branch branch)
+                                {:attempt 1 :fit? false})
+        expected (:total-tokens (:accounting prepared))
+        message-only (cmp/estimate-tokens (:messages branch) 4)
+        out ((:handler (cell/get-cell! :compaction/measure))
+             (assoc ctx :max-turns 10)
+             {:branch branch :turn 1})]
+    (is (> expected (+ message-only 64)))
+    (is (= expected (:compaction/before out))
+        "measure consumes the preparation's structured total")
+    (is (= (cmp/pressure expected 4096) (:compaction/ratio out))
+        "reserved output and native tools contribute to pressure")))
+
+(deftest fold-no-progress-compares-the-same-structured-total
+  (cells/load-cells!)
+  (let [msgs (into [{:role "system"
+                     :content "Tools:\n```\nread_file({path})\n    Read a file by its path.\n```"}
+                    {:role "user" :content "go"}]
+                   (mapcat (fn [i] [{:role "assistant" :content (str "call " i)}
+                                    {:role "user" :content (str "result " i)}])
+                           (range 8)))
+        ctx {:conn ::conn :run-id "fold-total" :llm-adapter ::adapter
+             :llm-config {:provider :test :model "fold-model"
+                          :context-window 8192 :max-tokens 64
+                          :features #{:native-tools}}}
+        branch {:id "fold-total-B1" :messages msgs :turns []}
+        before (get-in (infer/prepare ctx (infer/of-branch branch)
+                                      {:attempt 1 :fit? false})
+                       [:accounting :total-tokens])
+        data {:compaction/tier :fold :compaction/before before
+              :branch branch :turn 1}
+        notes (atom [])]
+    (with-redefs [samizdat.workflow/role-ctx (fn [ctx _] ctx)
+                  samizdat.llm.client/chat (fn [& _] {:content "## Active Task\nUnchanged"})
+                  samizdat.agent.compaction/validate-summary (fn [& _] true)
+                  samizdat.agent.compaction/apply-summary (fn [messages & _] messages)
+                  samizdat.store.journal/note!
+                  (fn [_ _ _ note] (swap! notes conj note) nil)]
+      ((:handler (cell/get-cell! :compaction/fold)) ctx data))
+    (is (some #(= "no-progress" (get-in % [:data :action])) @notes)
+        "identical structured totals are no progress, even with tools and output reserve")))
