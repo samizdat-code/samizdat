@@ -169,3 +169,23 @@
                           (context-rules/boundary
                            {:root "/work"} current {:name "read_file" :args {}}
                            {:category :success} 4)))))))))
+
+(deftest assistant-outputs-are-clamped-to-selector-value-limit
+  (let [policy (assoc policy :max-recent-outputs 2 :max-output-chars 8000)
+        long-output (apply str (repeat 2000 "x"))]
+    (with-redefs [gates/threshold (fn [k]
+                                    (if (= :instructions k)
+                                      {:path-args []}
+                                      policy))
+                  userspace/body (fn [_ _] nil)]
+      (let [facts (:facts (context-rules/boundary
+                           {:root "/work"}
+                           {:role :implementor
+                            :messages [{:role "assistant" :content long-output}
+                                       {:role "assistant" :content "   "}]}
+                           {:name "read_file" :args {}}
+                           {:category :success}
+                           1))]
+        (is (= 1 (count (:outputs facts))) "blank assistant output is not a selector value")
+        (is (= 1024 (count (first (:outputs facts))))
+            "the larger capture limit must not bypass the selector value limit")))))

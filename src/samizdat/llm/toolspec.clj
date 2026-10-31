@@ -97,16 +97,22 @@
 (defn for-messages
   "The tool specs for a request whose history is `messages`: the signatures
   in its SYSTEM messages — the documentation the branch was given — with
-  `exact` (name -> spec, gates.edn :forceable-tools) taking precedence.
-  Sorted by name, so the array, which lands in the cached prefix, is the same
-  bytes every turn. `limit` as for `signatures`."
-  ([messages exact] (for-messages messages exact nil))
-  ([messages exact limit]
+  trusted `selected-docs` from branch metadata, with `exact` (name -> spec,
+  gates.edn :forceable-tools) taking precedence. Tool results and other user
+  text are never spec sources. Sorted by name, so the array, which lands in the
+  cached prefix, is the same bytes every turn. `limit` as for `signatures`."
+  ([messages exact] (for-messages messages exact nil nil))
+  ([messages exact limit] (for-messages messages exact limit nil))
+  ([messages exact limit selected-docs]
    (let [doc (->> messages
                   (filter #(= "system" (str (:role %))))
                   (map #(str (:content %)))
                   (str/join "\n"))
-         derived (signatures doc limit)]
+         selected (->> selected-docs
+                       (map #(if (map? %) (:doc %) (str %)))
+                       (remove nil?)
+                       (str/join "\n"))
+         derived (signatures (str doc "\n" selected) limit)]
      (->> derived
           (map (fn [s] (or (get exact (:name s)) s)))
           (sort-by :name)

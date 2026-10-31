@@ -68,6 +68,7 @@
             [samizdat.agent.tools.ship :as ship]
             [samizdat.agent.tools.split]
             [samizdat.agent.tools.tasks]
+            [samizdat.agent.tools.tool-search]
             [samizdat.agent.tools.messages]
             [samizdat.agent.tools.knowledge]
             [samizdat.agent.tools.journal]

@@ -199,11 +199,25 @@
                       (assoc acc :keep? k :out (cond-> (:out acc) k (conj line))))
                     ;; Anything else belongs to the entry above it, unless we
                     ;; are not inside one at all.
-                    (if (and (not keep?) (re-find #"^\s+\S" line))
+                    (if (and (not keep?) (re-find #"^\s*\S" line))
                       acc
-                      (assoc acc :out (conj (:out acc) line) :keep? true))))
+                      (assoc acc :out (conj (:out acc) line)
+                             :keep? (or keep? (not (str/blank? line)))))))
                 {:out [] :keep? true}
                 lines)))
+
+(defn- catalogue-with
+  "`text` filtered by an allowed-name predicate, dropping sections whose tool
+  entries all go while retaining sections that are prose in their own right."
+  [text allowed]
+  (->> (sections (str/split-lines (str text)))
+       (mapcat (fn [{:keys [head lines]}]
+                 (let [entries (keep #(second (re-find entry-head %)) lines)]
+                   (if (and head (seq entries) (not-any? allowed entries))
+                     nil
+                     (cond->> (filter-entries lines allowed)
+                       head (cons head))))))
+       (str/join "\n")))
 
 (defn scope-catalogue
   "`text` with every tool entry the role may not use removed, prose and all —
@@ -237,11 +251,82 @@
                      ;; entries; everything else in the catalogue stays.
                      (complement repl-tools)
                      allowed)]
-      (->> (sections (str/split-lines (str text)))
-           (mapcat (fn [{:keys [head lines]}]
-                     (let [entries (keep #(second (re-find entry-head %)) lines)]
-                       (if (and head (seq entries) (not-any? allowed entries))
-                         nil
-                         (cond->> (filter-entries lines allowed)
-                           head (cons head))))))
-           (str/join "\n"))))))
+       (catalogue-with text allowed)))))
+
+(defn core-tools
+  "The role's presentation-only core surface, as strings. Authorization stays
+  `surface`; an absent core surface means static presentation."
+  [role]
+  (set (map str (:core-tools (spec role)))))
+
+(defn catalogue-entries
+  "Ordered canonical entries parsed from the same signature and section grammar
+  as `scope-catalogue`. Each map carries the exact signature and indented
+  documentation, plus a short purpose derived only from that trusted text."
+  [text]
+  (let [lines (vec (str/split-lines (str text)))]
+    (vec
+     (keep (fn [[i line]]
+             (when-let [[_ nm] (re-find entry-head line)]
+               (let [body (take-while #(or (str/blank? %) (re-find #"^\s+\S" %))
+                                      (drop (inc i) lines))
+                     purpose (str/trim (str/join " " (map str/trim body)))
+                     first-sentence (when-let [end (str/index-of purpose ". ")]
+                                      (subs purpose 0 (inc end)))
+                     section (some #(second (re-find section-head %))
+                                   (reverse (take i lines)))]
+                 {:name nm
+                  :signature line
+                  :doc (str/join "\n" (cons line body))
+                  :summary (or first-sentence purpose)
+                  :section section})))
+           (map-indexed vector lines)))))
+
+(defn- discovery-policy []
+  (when-let [v (resolve 'samizdat.agent.gates/threshold)]
+    (@v :tool-discovery)))
+
+(defn- clipped-summary [s limit]
+  (let [s (str s)]
+    (if (and limit (> (count s) limit))
+      (str (str/trimr (subs s 0 limit)) "…")
+      s)))
+
+(defn- deferred-block [entries {:keys [max-deferred summary-chars
+                                       deferred-heading deferred-instruction]}]
+  (let [entries (take (or max-deferred 0) entries)]
+    (when (seq entries)
+      (str deferred-heading "\n"
+           deferred-instruction "\n"
+           (str/join "\n"
+                     (map (fn [{:keys [name summary]}]
+                            (str "- " name " — " (clipped-summary summary summary-chars)))
+                          entries))))))
+
+(def ^:private deferred-marker "<!-- deferred-tools -->")
+
+(defn presentation-catalogue
+  "The role's full catalogue statically, or its core docs plus bounded deferred
+  summaries when roles.edn declares `:core-tools`. Both views use effective
+  `may-use?` authorization, including `:denied` and the evaluation mode."
+  ([text role]
+   (presentation-catalogue text role (config/eval-mode (userspace/project-root))))
+  ([text role mode]
+   (let [allowed #(may-use? role % mode)
+         full (catalogue-with text allowed)
+         core (core-tools role)]
+     (if (empty? core)
+       (str/replace full deferred-marker "")
+       (let [core-names (set (filter allowed core))
+             presented (catalogue-with full core-names)
+             deferred (remove #(contains? core-names (:name %))
+                              (catalogue-entries full))
+             block (deferred-block deferred (discovery-policy))]
+         (cond
+           (and block (str/includes? presented deferred-marker))
+           (str/replace presented deferred-marker block)
+
+           block
+           (str presented "\n\n" block)
+
+           :else (str/replace presented deferred-marker "")))))))

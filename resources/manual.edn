@@ -39,7 +39,19 @@
    {:name samizdat.agent.context-edit/stage
     :summary "Stage drops, edits, restores and notes over immutable context; apply validates revision/head and tool-call pairing, while fetch_turn recovers every original."}
    {:name samizdat.agent.budget/reserve!
-    :summary "Reserve a call's worst case against the run's token budget, atomically across branches; false when spend plus what calls in flight hold plus this one would pass it. The :budget/admit cell calls it before every turn's model call and ends the branch :exhausted when it refuses (gates.edn :token-budget). release! gives it back; a reply with no usage keeps it as its price (unpriced)."}
+    :summary "Reserve a call's worst case against the run's token budget, atomically across branches; false when spend plus what calls in flight hold plus this one would pass it. The :budget/admit cell calls it before every turn's model call and ends the branch :exhausted when it refuses (gates.edn :token-budget). release! gives a reservation back; a reply with no usage keeps its price (unpriced), and its four-argument form settles a retry delta and full unpriced ask in one atomic update."}
+   {:name samizdat.agent.infer/prepare
+    :summary "Build the shared request preparation used by compaction, token-budget admission and provider dispatch: rendered messages, native tool specs, call options, structured accounting and wire fingerprint. With :fit? true, an oversized render goes through outgoing-only final fitting and is re-accounted; exhausted message fitting sheds deferrable native specs, and a still-oversized preparation is a typed :context-window-exceeded refusal, never a lower max-tokens request. Fallbacks and continuations re-enter preparation with their own config and messages. Compaction uses {:fit? false}; budget admission and dispatch use {:fit? true}."}
+   {:name samizdat.agent.roles/presentation-catalogue
+    :summary "Render a role's static full tool catalogue, or its policy-declared core docs plus bounded deferred summaries. roles.edn :core-tools changes presentation only; full :tools authorization is unchanged. gates.edn :tool-discovery owns limits, companions and prose."}
+   {:name samizdat.agent.tools.tool-search/advertised-from-turns
+    :summary "Reconstruct selected tool names and ordered trusted canonical docs from successful tool_search turn arguments, current role authorization, core policy and companion groups. gates.edn :tool-discovery :max-selected evicts the oldest deferred selections at the cumulative bound. Fork and resume use this same replay; no second catalog or model-output signatures are trusted."}
+   {:name samizdat.agent.context-fit/fit
+    :summary "Pure final request fitting over rendered messages: consumed framed tool results shrink oldest first to head-and-tail excerpts, unresolved results share a common excerpt floor only at stage two, and journal references are stages three and four. Frames, pairing, omitted-byte counts and fetch_turn recovery text survive; source messages and durable history stay exact. Floors, minimum savings and model-facing prose are gates.edn :request-fit."}
+   {:name samizdat.llm.accounting/estimate
+    :summary "Estimate a complete prepared request by component — messages, native tools, options and reserved output — using the conservative bounds in gates.edn :request-accounting and bounded provider-usage calibration. accounting/admit refuses an unknown window or one the total exceeds."}
+   {:name samizdat.llm.accounting/record-usage!
+    :summary "Reconcile settled provider prompt usage with the request estimate. Process-local calibration is versioned and partitioned by provider/model/request shape, with bounded samples and partitions; reset-calibration! clears it deterministically."}
    {:name samizdat.agent.compaction/fold-pays?
     :summary "Whether folding a window now costs less than carrying it at the cached-token price for the turns left. The measure cell asks for a fold below the ladder when it does (gates.edn :cost-fold; the weight is the provider's :cached-token-weight)."}
    {:name samizdat.agent.compaction/task-span

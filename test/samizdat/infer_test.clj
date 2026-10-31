@@ -10,11 +10,21 @@
   what a turn would do without running one."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [mycelium.cell :as cell]
+            [samizdat.agent.budget :as budget]
+            [samizdat.agent.compaction :as cmp]
+            [samizdat.agent.context-fit :as context-fit]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.infer :as infer]
+            [samizdat.cells :as cells]
+            [samizdat.llm.accounting :as accounting]
             [samizdat.events :as events]
+            [samizdat.llm.message :as message]
             [samizdat.agent.loop :as aloop]
+            [samizdat.agent.resume :as resume]
+            [samizdat.agent.roles :as roles]
             [samizdat.agent.state :as state]
+            [samizdat.agent.tools.tool-search :as tool-search]
             [samizdat.store.journal :as journal]
             [samizdat.tape :as tape]))
 
@@ -49,7 +59,9 @@
                  :prefill "```tool-call\n"
                  :force-tool {:name "done"})
         t (infer/of-branch b)]
-    (is (= #{:id :messages :turns :prefill :force-tool :refused-tool :squeeze} (set (keys t)))
+    (is (= #{:id :messages :turns :prefill :force-tool :refused-tool :squeeze
+             :advertised-tools :advertised-tool-docs}
+           (set (keys t)))
         "nothing else about a branch can change what the model is sent —
          :squeeze is on the list because the overflow squeeze legitimately
          changes how much history the wire sees (karamazov-d41), and
@@ -571,3 +583,588 @@
       (is (= ["read_file"] (mapv :name (:tools @seen))))
       ((infer/complete-fn {:llm-adapter ::a :llm-config {:features #{}}} {:journal? false}) tape)
       (is (nil? (:tools @seen)) "an endpoint not measured to take them is not sent them"))))
+
+(def ^:private prepared-native-tape
+  {:id "prepared-B1"
+   :messages [{:role "system"
+               :content (str "Tools:\n```\nread_file({path})\n    Read a file by its path.\n"
+                             "alpha_tool({query, limit?})\n    Search the alpha index.\n```")}
+              {:role "user" :content "Prepare the request."}]
+   :turns []})
+
+(deftest prepare-is-deterministic-and-complete-fn-consumes-its-request
+  (infer/clear-render-cache!)
+  (let [ctx {:llm-adapter ::a
+             :llm-config {:provider :test :model "prepared-model"
+                          :context-window 8192 :max-tokens 64
+                          :features #{:native-tools}}}
+        prepared (infer/prepare ctx prepared-native-tape {:attempt 1 :fit? false})
+        repeated (infer/prepare ctx prepared-native-tape {:attempt 1 :fit? true})
+        sent (atom nil)]
+    (is (= prepared repeated)
+        "fitting is an exact no-op for an already admissible request")
+    (is (= ["alpha_tool" "read_file"] (mapv :name (:tools prepared)))
+        "native specifications have deterministic name ordering")
+    (is (= (:wire prepared) (:wire repeated)))
+    (is (= (infer/request-digest (:wire prepared))
+           (infer/request-digest (:wire repeated)))
+        "request fingerprints remain deterministic across preparation")
+    (is (> (:input-tokens (:accounting prepared))
+           (cmp/estimate-tokens (:messages prepared-native-tape) 4))
+        "structured input exceeds the old message-only estimate when tools are present")
+    (with-redefs [samizdat.llm.client/chat
+                  (fn [_ _ messages opts]
+                    (reset! sent {:messages messages :opts opts})
+                    {:content (fenced "alpha_tool" "{\"query\": \"x\"}")
+                     :finish-reason "stop"})]
+      ((infer/complete-fn ctx {:journal? false}) prepared-native-tape))
+    (is (= (:rendered prepared) (:messages @sent)))
+    (is (= (:tools prepared) (:tools (:opts @sent))))
+    (is (= (:call-opts prepared) (dissoc (:opts @sent) :prepare-candidate))
+        "the provider receives the preparation's options, not a reconstructed request")
+    (is (fn? (:prepare-candidate (:opts @sent)))
+        "alternate dispatch re-enters the same preparation seam")
+    (infer/clear-render-cache!)))
+
+(deftest truncation-retry-changes-reserve-without-rendering-again
+  (infer/clear-render-cache!)
+  (let [renders (atom 0)
+        budgets (atom [])
+        real-compact samizdat.agent.hydration/compact]
+    (with-redefs [samizdat.agent.hydration/compact
+                  (fn [& args]
+                    (swap! renders inc)
+                    (apply real-compact args))
+                  samizdat.llm.client/chat
+                  (fn [_ _ _ opts]
+                    (swap! budgets conj (:max-tokens opts))
+                    (if (= 1 (count @budgets))
+                      {:content "still thinking" :finish-reason "length"}
+                      {:content (fenced "alpha_tool" "{\"query\": \"x\"}")
+                       :finish-reason "stop"}))]
+      ((infer/complete-fn {:llm-adapter ::a
+                           :llm-config {:max-tokens 100 :features #{:native-tools}}}
+                          {:journal? false})
+       prepared-native-tape))
+    (is (= [100 200] @budgets))
+    (is (= 1 @renders) "retry accounting reuses the initial prepared render")
+    (infer/clear-render-cache!)))
+
+(deftest truncation-retry-bills-the-first-response-and-reserves-the-delta
+  (let [calls (atom 0)
+        reservations (atom [])
+        side-calls (atom [])]
+    (with-redefs [samizdat.llm.client/chat
+                  (fn [_ _ _ _]
+                    (if (= 1 (swap! calls inc))
+                      {:content "still thinking" :finish-reason "length"
+                       :usage {:prompt-tokens 30 :completion-tokens 100 :total-tokens 130}}
+                      {:content (fenced "alpha_tool" "{\"query\": \"x\"}")
+                       :finish-reason "stop"
+                       :usage {:prompt-tokens 30 :completion-tokens 20 :total-tokens 50}}))
+                  budget/reserve! (fn [_ _ _ ask]
+                                    (swap! reservations conj ask)
+                                    true)
+                  journal/run-usage (fn [_ _] {:total-tokens 130})
+                  journal/record-side-call! (fn [_ _ call]
+                                              (swap! side-calls conj call))
+                  journal/note! (fn [& _] nil)]
+      (let [call ((infer/complete-fn
+                   {:conn ::conn :run-id "retry-billing" :token-budget 10000
+                    :budget-reservation {:ask 115 :output-factor 1}
+                    :llm-adapter ::a :llm-config {:max-tokens 100}}
+                   {:journal? true})
+                  base-tape)]
+        (is (= [100] @reservations)
+            "only the doubled output reserve is added to the initial reservation")
+        (is (= 1 (count @side-calls)))
+        (is (= 130 (get-in (first @side-calls) [:usage :total-tokens]))
+            "the discarded truncated response remains on the run's bill")
+        (is (= :turn-retry (:kind (first @side-calls))))
+        (is (= 50 (get-in call [:response :usage :total-tokens]))
+            "the committed turn carries the second response's usage")
+        (is (true? (:retry-initial-priced? call)))
+        (is (= 100 (:reserved-delta call)))))))
+
+(deftest truncation-retry-does-not-start-when-its-delta-exceeds-the-budget
+  (let [calls (atom 0)]
+    (with-redefs [samizdat.llm.client/chat
+                  (fn [_ _ _ _]
+                    (swap! calls inc)
+                    {:content "still thinking" :finish-reason "length"
+                     :usage {:prompt-tokens 30 :completion-tokens 100 :total-tokens 130}})
+                  budget/reserve! (fn [& _] false)
+                  journal/run-usage (fn [_ _] {:total-tokens 130})
+                  journal/record-side-call! (fn [& _] nil)
+                  journal/note! (fn [& _] nil)]
+      (let [call ((infer/complete-fn
+                   {:conn ::conn :run-id "retry-over-budget" :token-budget 140
+                    :budget-reservation {:ask 115 :output-factor 1}
+                    :llm-adapter ::a :llm-config {:max-tokens 100}}
+                   {:journal? true})
+                  base-tape)]
+        (is (= 1 @calls) "the doubled request is never sent")
+        (is (false? (:ok call)))
+        (is (= :over-budget (:reason call)))
+        (is (true? (:retry-initial-priced? call)))
+        (is (nil? (:reserved-delta call)))))))
+
+(deftest an-unpriced-retry-is-charged-its-complete-second-request
+  (cells/load-cells!)
+  (doseq [[initial-priced? expected] [[true 215] [false 330]]]
+    (let [rid (str "unpriced-retry-" initial-priced?)
+          updates (volatile! 0)
+          real-swap! clojure.core/swap!]
+      (try
+        (budget/reserve! rid 0 10000 115)
+        (budget/reserve! rid 0 10000 100)
+        (with-redefs [aloop/call-model
+                      (fn [_ _]
+                        {:ok true
+                         :response {:content (fenced "alpha_tool" "{\"query\": \"x\"}")
+                                    :finish-reason "stop"}
+                         :retry-initial-priced? initial-priced?
+                         :reserved-delta 100
+                         :retry-full-ask 215})
+                      clojure.core/swap!
+                      (fn [a f & args]
+                        (vswap! updates inc)
+                        (apply real-swap! a f args))]
+          ((:handler (cell/get-cell! :llm/infer))
+           {:run-id rid} {:branch {:id "B1"} :reserved 115 :request-ctx {}}))
+        (is (= expected (budget/unpriced rid))
+            "the second unpriced response costs its whole input plus doubled output")
+        (is (= expected (budget/held rid))
+            "no reservation remains after both attempts settle")
+        (is (= 2 @updates)
+            "each attempt settles in one atomic ledger update")
+        (finally (budget/reset-run! rid))))))
+
+(deftest budget-admission-reserves-the-structured-request-total
+  (cells/load-cells!)
+  (let [asks (atom [])
+        branch {:id "budget-B1" :messages (:messages prepared-native-tape) :turns []}
+        ctx {:conn ::conn :run-id "budget-r1" :token-budget 100000
+             :llm-config {:provider :test :model "budget-model"
+                          :context-window 8192 :max-tokens 64
+                          :features #{:native-tools}}}
+        expected (+ (:input-tokens
+                     (:accounting
+                      (infer/prepare ctx (infer/of-branch branch)
+                                     {:attempt 1 :fit? true})))
+                    64)]
+    (with-redefs [budget/reserve! (fn [_ _ _ ask]
+                                    (swap! asks conj ask)
+                                    true)
+                  journal/run-usage (fn [_ _] {:total-tokens 0})]
+      ((:handler (cell/get-cell! :budget/admit)) ctx {:branch branch}))
+    (is (= [expected] @asks)
+        "native tools and other prepared components are reserved, not just message bodies")))
+
+(deftest an-unfittable-request-is-refused-without-calling-the-provider
+  (let [ctx {:llm-adapter ::a
+             :llm-config {:context-window 1 :max-tokens 32}}
+        prepared (infer/prepare ctx base-tape {:fit? true})
+        called? (atom false)]
+    (is (false? (:ok prepared)))
+    (is (= :context-window-exceeded (:reason prepared)))
+    (is (false? (get-in prepared [:accounting :admissible?])))
+    (with-redefs [samizdat.llm.client/chat
+                  (fn [& _]
+                    (reset! called? true)
+                    (throw (ex-info "provider must not be called" {})))]
+      (let [call ((infer/complete-fn ctx {:journal? false}) base-tape)]
+        (is (false? (:ok call)))
+        (is (= :context-window-exceeded (:reason call)))
+        (is (some? (:error call)) "a refusal carries a diagnostic through the cells")))
+    (is (false? @called?))))
+
+(deftest a-smaller-fallback-window-is-admitted-before-fallback-dispatch
+  (let [fallback-called? (atom false)
+        scope "smaller-fallback-window"
+        ctx {:llm-adapter ::primary
+             :llm-config {:provider :test :model "primary"
+                          :context-window 10000 :max-tokens 16
+                          :fallback-scope scope
+                          :fallbacks [{:adapter ::fallback
+                                       :config {:provider :test :model "fallback"
+                                                :context-window 1 :max-tokens 16}}]}}]
+    (with-redefs [samizdat.llm.client/chat-one
+                  (fn [_ config _ _]
+                    (if (= "primary" (:model config))
+                      (throw (ex-info "primary down" {:reason :call-failed}))
+                      (do (reset! fallback-called? true)
+                          {:content "must not be sent"})))]
+      (try
+        (let [call ((infer/complete-fn ctx {:journal? false}) base-tape)]
+          (is (false? (:ok call)))
+          (is (= :context-window-exceeded (:reason call)))
+          (is (false? @fallback-called?)
+              "the fallback is refused by its own window, not the primary's"))
+        (finally (samizdat.llm.client/forget-retired! scope))))))
+
+(deftest fallback-output-limit-is-identical-in-accounting-and-dispatch
+  (let [fallback-opts (atom nil)
+        scope "fallback-output-limit"
+        ctx {:llm-adapter ::primary
+             :llm-config {:provider :test :model "primary"
+                          :context-window 10000 :max-tokens 100
+                          :fallback-scope scope
+                          :fallbacks [{:adapter ::fallback
+                                       :config {:provider :test :model "fallback"
+                                                :context-window 10000}}]}}]
+    (with-redefs [samizdat.llm.client/chat-one
+                  (fn [_ config _ opts]
+                    (if (= "primary" (:model config))
+                      (throw (ex-info "primary down" {:reason :call-failed}))
+                      (do (reset! fallback-opts opts)
+                          {:content "fallback" :finish-reason "stop"})))]
+      (try
+        (let [call ((infer/complete-fn ctx {:journal? false}) base-tape)]
+          (is (:ok call))
+          (is (= 100 (:max-tokens @fallback-opts)))
+          (is (= 100 (get-in @fallback-opts [:accounting-estimate
+                                             :reserved-output-tokens]))
+              "an inherited output limit is still part of the candidate's admission"))
+        (finally (samizdat.llm.client/forget-retired! scope))))))
+
+(deftest retry-fallback-does-not-double-the-retry-output-limit-twice
+  (let [primary-calls (atom 0)
+        fallback-opts (atom nil)
+        scope "retry-fallback-output-limit"
+        expected (* 2 (:retry-base-tokens (gates/threshold :context-budget)))
+        ctx {:llm-adapter ::primary
+             :llm-config {:provider :test :model "primary"
+                          :context-window 100000
+                          :fallback-scope scope
+                          :fallbacks [{:adapter ::fallback
+                                       :config {:provider :test :model "fallback"
+                                                :context-window 100000}}]}}]
+    (with-redefs [samizdat.llm.client/chat-one
+                  (fn [_ config _ opts]
+                    (if (= "fallback" (:model config))
+                      (do (reset! fallback-opts opts)
+                          {:content (fenced "alpha_tool" "{\"query\": \"x\"}")
+                           :finish-reason "stop"})
+                      (if (= 1 (swap! primary-calls inc))
+                        {:content "still thinking" :finish-reason "length"}
+                        (throw (ex-info "primary down" {:reason :call-failed})))))]
+      (try
+        (let [call ((infer/complete-fn ctx {:journal? false}) base-tape)]
+          (is (:ok call))
+          (is (= expected (:max-tokens @fallback-opts)))
+          (is (= expected (get-in @fallback-opts [:accounting-estimate
+                                                 :reserved-output-tokens]))
+              "the retry's already-scaled option is not scaled a second time"))
+        (finally (samizdat.llm.client/forget-retired! scope))))))
+
+(deftest local-window-refusal-squeezes-once-through-the-real-cells
+  (cells/load-cells!)
+  (let [ctx {:run-id "local-window-refusal"
+             :llm-adapter ::a
+             :llm-config {:context-window 1 :max-tokens 32}}
+        branch (state/new-branch {:id "local-window-refusal" :problem "p"})
+        message-count (count (:messages branch))
+        provider-calls (atom 0)]
+    (with-redefs [samizdat.llm.client/chat
+                  (fn [& _]
+                    (swap! provider-calls inc)
+                    (throw (ex-info "provider must not be called" {})))
+                  journal/record-turn! (fn [& _] nil)]
+      (let [inferred ((:handler (cell/get-cell! :llm/infer))
+                      ctx {:branch branch :turn 1})
+            call (:call inferred)
+            handled ((:handler (cell/get-cell! :loop/provider-error))
+                     ctx (assoc inferred :turn 1))
+            after (:branch handled)]
+        (is (false? (:ok call)))
+        (is (= :context-window-exceeded (:reason call)))
+        (is (some? (:error call)))
+        (is (zero? @provider-calls))
+        (is (= 1 (:context-squeeze after)))
+        (is (= message-count (count (:messages after)))
+            "a local refusal must not append a growing retry message")))))
+
+(deftest final-fit-is-outgoing-only-and-preserves-the-output-reserve
+  (infer/clear-render-cache!)
+  (let [result {:role "user" :turn 42
+                :content (samizdat.llm.message/frame-result
+                          "read_file" (apply str (repeat 12000 "x")))}
+        tape (assoc base-tape
+                    :messages [{:role "system" :content "sys"}
+                               {:role "user" :content "## Problem\n\ndo the thing"}
+                               {:role "assistant" :content "read the file"}
+                               result
+                               {:role "assistant" :content "the file was read"}])
+        unbounded {:llm-adapter ::a
+                   :llm-config {:context-window 100000 :max-tokens 32}}
+        initial (infer/prepare unbounded tape {:fit? false})
+        window (- (get-in initial [:accounting :total-tokens]) 40)
+        ctx (assoc-in unbounded [:llm-config :context-window] window)
+        before tape
+        sent (atom nil)]
+    (with-redefs [samizdat.llm.client/chat
+                  (fn [_ _ messages opts]
+                    (reset! sent {:messages messages :opts opts})
+                    {:content (fenced "verify" "{\"claim\": \"c\"}")
+                     :finish-reason "stop"})]
+      (let [response ((infer/complete-fn ctx {:journal? false}) tape)]
+        (is (:ok response))))
+    (is (= before tape) "fitting never changes the complete source tape")
+    (is (= result (nth (:messages tape) 3))
+        "durable branch history is not shortened")
+    (is (= (mapv #(nth (:messages tape) %) [0 1 2 4])
+           (mapv #(nth (:messages @sent) %) [0 1 2 4]))
+        "system, problem, and assistant messages reach the provider unchanged")
+    (is (< (count (get-in @sent [:messages 3 :content]))
+           (count (:content result)))
+        "only the outgoing tool-result projection is shortened")
+    (is (str/includes? (get-in @sent [:messages 3 :content])
+                       "fetch_turn({\"turn\": 42})"))
+    (is (= 32 (get-in @sent [:opts :max-tokens]))
+        "fitting never lowers max output")
+    (is (= (:messages @sent)
+           (:rendered (infer/prepare ctx tape {:fit? true})))
+        "prepare exposes the same fitted projection that dispatch sends")
+    (infer/clear-render-cache!)))
+
+(deftest calibrated-fit-continues-with-the-residual-deficit
+  (accounting/reset-calibration!)
+  (infer/clear-render-cache!)
+  (let [result (fn [turn n]
+                 {:role "user" :turn turn
+                  :content (samizdat.llm.message/frame-result
+                            "read_file" (apply str (repeat n "x")))})
+        tape (assoc base-tape
+                    :messages [{:role "system" :content "sys"}
+                               {:role "user" :content "## Problem\n\ncalibrated fit"}
+                               {:role "assistant" :content "first call"}
+                               (result 51 1600)
+                               {:role "assistant" :content "first response"}
+                               {:role "assistant" :content "second call"}
+                               (result 52 12000)
+                               {:role "assistant" :content "second response"}])
+        unbounded {:llm-adapter ::a
+                   :llm-config {:provider :test :model "calibrated-fit-model"
+                                :context-window 100000 :max-tokens 32}}
+        initial (infer/prepare unbounded tape {:fit? false})
+        fit-policy (assoc (gates/threshold :request-fit)
+                          :chars-per-token
+                          (get (gates/threshold :request-accounting) :chars-per-token))
+        first-fit (context-fit/fit (:rendered initial) 1 fit-policy)
+        first-saving (:freed-tokens first-fit)
+        _ (accounting/record-usage!
+           (gates/threshold :request-accounting)
+           (:accounting initial)
+           {:prompt-tokens (* 0.5 (:input-tokens (:accounting initial)))})
+        calibrated (infer/prepare unbounded tape {:fit? false})
+        window (- (get-in calibrated [:accounting :total-tokens]) first-saving)
+        ctx (assoc-in unbounded [:llm-config :context-window] window)
+        prepared (infer/prepare ctx tape {:fit? true})]
+    (is (pos? first-saving))
+    (is (= 1 (:shortened-earlier first-fit)) "the fixture isolates the first result")
+    (is (= :provider-usage (get-in calibrated [:accounting :source])))
+    (is (true? (get-in prepared [:accounting :admissible?])))
+    (is (< (count (get-in prepared [:rendered 3 :content]))
+           (count (get-in tape [:messages 3 :content]))))
+    (is (< (count (get-in prepared [:rendered 6 :content]))
+           (count (get-in tape [:messages 6 :content])))
+        "the residual calibrated deficit requires the second consumed result")
+    (let [refused (infer/prepare (assoc-in ctx [:llm-config :context-window] 1)
+                                 tape {:fit? true})
+          remaining (context-fit/fit (:rendered refused) 1 fit-policy)]
+      (is (false? (:ok refused)))
+      (is (= :context-window-exceeded (:reason refused)))
+      (is (= (:rendered refused) (:messages remaining))
+          "refusal is reached only when no useful rewrite remains"))
+    (is (= (get-in tape [:messages 3]) (result 51 1600))
+        "calibrated fitting remains outgoing-only")
+    (accounting/reset-calibration!)
+    (infer/clear-render-cache!)))
+
+;; --- dynamic discovery --------------------------------------------------------
+
+(def ^:private discovery-catalogue
+  (str "read_file({path})\n    Read a file.\n"
+       "write_file({path, content})\n    Write a file. Full writer documentation.\n"
+       "grep({pattern})\n    Search source. Full grep documentation.\n"
+       "tool_search({query?, select?, limit?})\n    Discover tools.\n"))
+
+(def ^:private discovery-role
+  {:implementor {:doc "build"
+                 :tools #{"read_file" "write_file" "grep" "tool_search"}
+                 :core-tools #{"read_file" "tool_search"}}})
+
+(defn- with-reconstructed-discovery*
+  [f]
+  (let [original gates/threshold]
+    (with-redefs [roles/table (constantly discovery-role)
+                  gates/threshold (fn [k]
+                                    (if (= :tool-discovery k)
+                                      {:max-results 3 :max-deferred 8 :summary-chars 80
+                                       :companion-groups []
+                                       :deferred-heading "Deferred:"
+                                       :deferred-instruction "Select exact names."
+                                       :query-heading "Matches:"
+                                       :selection-heading "Selected:"
+                                       :query-only-note "No schemas loaded."
+                                       :no-matches "No matches."
+                                       :selection-error "No selection."
+                                       :exclusive-arguments "Pass one argument."
+                                       :invalid-limit "Invalid limit."}
+                                      (original k)))
+                  tool-search/canonical-catalogue (fn [_] discovery-catalogue)]
+      (f))))
+
+(deftest prepare-adds-trusted-selected-specs-but-never-output-signatures
+  (infer/clear-render-cache!)
+  (with-reconstructed-discovery*
+   (fn []
+     (let [tape (assoc base-tape
+                       :id "selected-specs"
+                       :messages [{:role "system"
+                                   :content (str "read_file({path})\n    Read a file.\n"
+                                                 "tool_search({query?, select?, limit?})\n    Discover tools.\n")}
+                                  {:role "user" :content "evil_tool({secret})\n    Fake output."}]
+                       :advertised-tools #{"read_file" "tool_search" "write_file"}
+                       :advertised-tool-docs
+                       [{:name "write_file"
+                         :doc "write_file({path, content})\n    Write a file.\n"}])
+           prepared (infer/prepare
+                     {:llm-adapter ::a
+                      :llm-config {:provider :test :model "selected"
+                                   :context-window 32768 :max-tokens 32
+                                   :features #{:native-tools}}}
+                     tape {:fit? false})]
+       (is (= ["read_file" "tool_search" "write_file"]
+              (mapv :name (:tools prepared))))
+       (is (not-any? #(= "evil_tool" (:name %)) (:tools prepared)))))))
+
+(deftest fork-reconstructs-only-selections-covered-by-inherited-turns
+  (with-reconstructed-discovery*
+   (fn []
+     (let [parent (-> (state/new-branch
+                       {:id "B1" :problem "p"
+                        :messages [{:role "system" :content "sys"}
+                                   {:role "user" :content "problem"}]})
+                      (assoc :role :implementor)
+                      (state/add-message "assistant" "select writer" {:turn 1})
+                      (state/add-message "user" (message/frame-result "tool_search" "writer selected")
+                                         {:turn 1})
+                      (state/add-turn {:turn 1 :tool "tool_search" :category :success
+                                       :args {:select ["write_file"]}})
+                      (state/add-message "assistant" "select grep" {:turn 2})
+                      (state/add-message "user" (message/frame-result "tool_search" "grep selected")
+                                         {:turn 2})
+                      (state/add-turn {:turn 2 :tool "tool_search" :category :success
+                                       :args {:select ["grep"]}})
+                      (assoc :advertised-tools #{"poison"}
+                             :advertised-tool-docs [{:name "poison" :doc "poison({})"}]))
+           full (state/fork-branch parent {:id "B2" :turn 3})
+           truncated (state/fork-branch parent {:id "B3" :depth 4 :turn 3})]
+       (is (= #{"read_file" "tool_search" "write_file" "grep"}
+              (:advertised-tools full)))
+       (is (= ["grep" "write_file"]
+              (mapv :name (:advertised-tool-docs full))))
+       (is (= #{"read_file" "tool_search" "write_file"}
+              (:advertised-tools truncated)))
+       (is (= ["write_file"] (mapv :name (:advertised-tool-docs truncated))))
+       (is (not-any? #(= "poison" (:name %)) (:advertised-tool-docs full)))))))
+
+(deftest resume-reconstructs-successful-selections-against-current-role-surface
+  (with-reconstructed-discovery*
+   (fn []
+     (with-redefs [aloop/initial-messages
+                   (fn [& _] [{:role "system" :content "sys"}
+                              {:role "user" :content "problem"}])]
+       (let [rows [{:turn 1 :tool_name "tool_search"
+                    :args "{\"select\":[\"write_file\",\"shell\"]}"
+                    :category "success" :auto_repaired 0}
+                   {:turn 2 :tool_name "tool_search"
+                    :args "{\"select\":[\"grep\"]}"
+                    :category "failure" :auto_repaired 0}]
+             branch (#'resume/rebuild-branch
+                     {:problem "p"}
+                     {:id "B1" :role "implementor" :status "active"
+                      :created_at_turn 0}
+                     {"B1" rows} {} {} 10 (gates/storm-policy) nil)]
+         (is (= #{"read_file" "tool_search" "write_file"}
+                (:advertised-tools branch))
+             "shell was not on the current role surface; failed grep was never selected")
+         (is (= ["write_file"] (mapv :name (:advertised-tool-docs branch)))))))))
+
+(deftest fork-replays-only-complete-selection-exchanges
+  (with-reconstructed-discovery*
+   (fn []
+     (let [parent (-> (state/new-branch
+                       {:id "B1" :problem "p"
+                        :messages [{:role "system" :content "sys"}
+                                   {:role "user" :content "problem"}]})
+                      (assoc :role :implementor)
+                      (state/add-message "user" "[harness] The explore prologue is over" {:turn 1})
+                      (state/add-message "assistant" "select writer" {:turn 1})
+                      (state/add-message "user" (message/frame-result "tool_search" "writer selected")
+                                         {:turn 1})
+                      (state/add-turn {:turn 1 :tool "tool_search" :category :success
+                                       :args {:select ["write_file"]}})
+                      (assoc :advertised-tools #{"read_file" "tool_search" "write_file"}
+                             :advertised-tool-docs
+                             [{:name "write_file" :doc "write_file({path, content})"}]))
+           before-call (state/fork-branch parent {:id "before" :depth 3 :turn 2})
+           between-call-and-result (state/fork-branch parent {:id "between" :depth 4 :turn 2})
+           after-result (state/fork-branch parent {:id "after" :depth 5 :turn 2})]
+       (doseq [child [before-call between-call-and-result]]
+         (is (= #{"read_file" "tool_search"} (:advertised-tools child)))
+         (is (empty? (:advertised-tool-docs child))))
+       (is (= #{"read_file" "tool_search" "write_file"}
+              (:advertised-tools after-result)))
+       (is (= ["write_file"] (mapv :name (:advertised-tool-docs after-result))))))))
+
+(defn- rebuild-discovery-branch
+  [rows]
+  (with-redefs [aloop/initial-messages
+                (fn [& _] [{:role "system" :content "sys"}
+                           {:role "user" :content "problem"}])]
+    (#'resume/rebuild-branch
+     {:problem "p"}
+     {:id "B1" :role "implementor" :status "active" :created_at_turn 0}
+     {"B1" rows} {} {} 10 (gates/storm-policy) nil)))
+
+(deftest resume-then-full-fork-keeps-replayed-selections
+  (with-reconstructed-discovery*
+   (fn []
+     (let [resumed (rebuild-discovery-branch
+                    [{:turn 1 :tool_name "tool_search"
+                      :assistant_text "select writer" :result "canonical writer docs"
+                      :args "{\"select\":[\"write_file\",\"shell\"]}"
+                      :category "success" :auto_repaired 0}
+                     {:turn 2 :tool_name "tool_search"
+                      :assistant_text "select grep" :result "canonical grep docs"
+                      :args "{\"select\":[\"grep\"]}"
+                      :category "success" :auto_repaired 0}])
+           child (state/fork-branch resumed {:id "full-child" :turn 3})]
+       (is (= #{"read_file" "tool_search" "write_file" "grep"}
+              (:advertised-tools child)))
+       (is (= ["grep" "write_file"] (mapv :name (:advertised-tool-docs child))))
+       (is (not (contains? (:advertised-tools child) "shell"))
+           "fork reapplies the current role surface to replayed selections")))))
+
+(deftest resume-then-new-turn-then-fork-keeps-old-and-new-selections
+  (with-reconstructed-discovery*
+   (fn []
+     (let [resumed (rebuild-discovery-branch
+                    [{:turn 1 :tool_name "tool_search"
+                      :assistant_text "select writer" :result "canonical writer docs"
+                      :args "{\"select\":[\"write_file\",\"shell\"]}"
+                      :category "success" :auto_repaired 0}])
+           continued (-> resumed
+                         (state/add-message "assistant" "select grep" {:turn 2})
+                         (state/add-message "user" (message/frame-result "tool_search" "canonical grep docs")
+                                            {:turn 2})
+                         (state/add-turn {:turn 2 :tool "tool_search" :category :success
+                                          :args {:select ["grep"]}}))
+           child (state/fork-branch continued {:id "continued-child" :turn 3})]
+       (is (= #{"read_file" "tool_search" "write_file" "grep"}
+              (:advertised-tools child)))
+       (is (= ["grep" "write_file"] (mapv :name (:advertised-tool-docs child))))
+       (is (not (contains? (:advertised-tools child) "shell")))))))

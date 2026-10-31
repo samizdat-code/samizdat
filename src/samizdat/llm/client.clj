@@ -48,6 +48,7 @@
             [samizdat.config :as config]
             [samizdat.lexicon :as lexicon]
             [samizdat.llm.adapter :as adapter]
+            [samizdat.llm.accounting :as accounting]
             [samizdat.llm.message :as message]
             [samizdat.llm.ratelimit :as ratelimit]
             [samizdat.llm.stream :as stream]
@@ -456,6 +457,27 @@
       (update :usage merge-usage (:usage seed))
       (update :elapsed-ms #(+ (or % 0) (or (:elapsed-ms seed) 0)))))
 
+(defn- matching-accounting-shape?
+  "Whether the adapter's actual candidate request has the component shape the
+  estimate described. Fallbacks may drop prefill, grammar, or native tools;
+  their usage must not calibrate the primary request's different shape."
+  [adapter config request estimate]
+  (let [body (adapter/chat-body adapter config request)
+        messages (:messages body)
+        actual (cond-> #{}
+                 (seq messages) (conj :messages)
+                 (some :prefix messages) (conj :prefill)
+                 (seq (:tools body)) (conj :tools)
+                 (:grammar body) (conj :grammar)
+                 (:tool_choice body) (conj :tool-choice))]
+    (= actual (set (keys (:components estimate))))))
+
+(defn- candidate-request
+  [opts adapter config messages]
+  (if-let [prepare (:prepare-candidate opts)]
+    (prepare adapter config messages opts)
+    {:messages messages :opts opts}))
+
 ;; --- the public surface -----------------------------------------------------
 
 (defn chat-one
@@ -469,9 +491,12 @@
   ([adapter config messages] (chat-one adapter config messages nil))
   ([adapter config messages {:keys [max-tokens temperature max-retries prefill force-tool
                                     cache-key reasoning-effort grammar reasoning-budget
-                                    on-delta tools continuation-attempt continuation-seed]
+                                    on-delta tools continuation-attempt continuation-seed
+                                    accounting-scope accounting-estimate]
                            :as opts}]
    (let [request {:messages (message/prepare messages)
+                  :accounting-scope accounting-scope
+                  :accounting-estimate accounting-estimate
                   :max-tokens (or max-tokens (:max-tokens config))
                   :temperature (or temperature (:temperature config))
                   ;; Passed through as given; the adapter decides whether it
@@ -545,9 +570,21 @@
              errors (conj errors (:error result))]
          (cond
            (= :ok (:outcome result))
-           (if-let [seed continuation-seed]
-             (merge-continuation seed (:response result))
-             (:response result))
+           (let [response (cond-> (:response result)
+                            (:wire opts) (assoc :wire (:wire opts)))]
+             (when (and accounting-scope accounting-estimate)
+               (try
+                 (when (matching-accounting-shape? adapter call-config request
+                                                   accounting-estimate)
+                   (accounting/record-usage!
+                    accounting-scope
+                    (assoc accounting-estimate
+                           :provider (:provider config) :model (:model config))
+                    (:usage response)))
+                 (catch Throwable _ nil)))
+             (if-let [seed continuation-seed]
+               (merge-continuation seed response)
+               response))
 
            (or (= :fatal (:outcome result)) (>= attempt retries))
            (let [partial (:partial-response result)
@@ -556,10 +593,15 @@
                           (merge-continuation continuation-seed partial)
                           partial))]
              (if (continuation-eligible? result config continuation-attempt)
-               (chat-one adapter config (continuation-messages messages partial)
-                         (assoc opts
-                                :continuation-attempt (inc continuation-attempt)
-                                :continuation-seed seed))
+               (let [{continuation-messages :messages continuation-opts :opts}
+                     (candidate-request opts adapter config
+                                        (continuation-messages messages partial))]
+                 (chat-one adapter config continuation-messages
+                           (cond-> (assoc continuation-opts
+                                          :continuation-attempt (inc continuation-attempt)
+                                          :continuation-seed seed)
+                             (not (:prepare-candidate opts))
+                             (dissoc :accounting-scope :accounting-estimate))))
                (throw (ex-info (str (adapter/display-name adapter) " call failed: "
                                     (last errors))
                                (cond-> {:provider (adapter/id adapter)
@@ -632,23 +674,27 @@
          (if-not c
            (throw last-e)
            (let [active (atom true)
-                 candidate-opts (cond-> opts
-                                  (:on-delta opts)
-                                  (update :on-delta
-                                          (fn [publish]
-                                            (fn [delta]
-                                              (when @active (publish delta))))))
-                 r (if (and (seq more) (pos? (or (:slow-start-ms c) 0)))
-                     (let [[tag v] (cancel/with-deadline
-                                     (ebb/via ebb/blk (chat-one a c messages candidate-opts))
-                                     (:slow-start-ms c))]
-                       (case tag
-                         :timeout {:e (ex-info "slow start" {:reason :slow-start})}
-                         :err {:e v}
-                         :ok {:ok v}))
-                     (try {:ok (chat-one a c messages candidate-opts)}
-                          (catch Throwable e
-                            (if (cancel/control-signal? e) (throw e) {:e e}))))]
+                 r (try
+                     (let [{candidate-messages :messages prepared-opts :opts}
+                           (candidate-request opts a c messages)
+                           candidate-opts (cond-> prepared-opts
+                                            (:on-delta prepared-opts)
+                                            (update :on-delta
+                                                    (fn [publish]
+                                                      (fn [delta]
+                                                        (when @active (publish delta))))))]
+                       (if (and (seq more) (pos? (or (:slow-start-ms c) 0)))
+                         (let [[tag v] (cancel/with-deadline
+                                         (ebb/via ebb/blk
+                                                  (chat-one a c candidate-messages candidate-opts))
+                                         (:slow-start-ms c))]
+                           (case tag
+                             :timeout {:e (ex-info "slow start" {:reason :slow-start})}
+                             :err {:e v}
+                             :ok {:ok v}))
+                         {:ok (chat-one a c candidate-messages candidate-opts)}))
+                     (catch Throwable e
+                       (if (cancel/control-signal? e) (throw e) {:e e})))]
              (cond
                (and (:e r) (cancel/control-signal? (:e r)))
                (do (reset! active false) (throw (:e r)))

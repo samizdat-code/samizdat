@@ -18,6 +18,7 @@
             [samizdat.agent.budget :as budget]
             [samizdat.agent.compaction :as cmp]
             [samizdat.agent.gates :as gates]
+            [samizdat.agent.infer :as infer]
             [samizdat.agent.instructions :as instr]
             [samizdat.agent.loop :as turn]
             [samizdat.agent.reflect :as reflect]
@@ -44,36 +45,42 @@
 ;; :continue), and a key's meaning as opposed to its presence.
 (cell/defcell :loop/assemble
   {:doc "Open the turn: capture the before-snapshot the settle step compares
-        against, and run the explore-prologue release valve so its message
-        lands before the model call."
+        against, normalize the role/live/reasoning request context once for
+        measurement and dispatch, and run the explore-prologue release valve."
    :pure true
    :requires []
    :input  [:map [:branch :map] [:turn :int]]
-   :output [:map [:branch :map] [:before :map]]}
-  (fn [_ctx {:keys [branch turn] :as data}]
+   :output [:map [:branch :map] [:before :map] [:request-ctx :map]]}
+  (fn [ctx {:keys [branch turn] :as data}]
     (assoc data
            :before branch
+           :request-ctx (turn/request-context ctx branch)
            :branch (turn/phase-valve branch turn))))
 
 (cell/defcell :budget/admit
   {:doc "Reserve this call's worst case against the run's token budget before
-        it is made: the request at gates.edn :token-budget :chars-per-token
-        plus the output it may ask for. When spend, plus what calls in flight
-        hold, plus this one would pass the budget, the call is not made and
-        the turn routes to its end as over budget (karamazov-05z0.3). A run
-        with no budget reserves nothing."
+        it is made: the shared prepared request's complete structured input,
+        plus its reserved output times gates.edn :token-budget :output-factor.
+        When spend, plus what calls in flight hold, plus this one would pass
+        the budget, the call is not made and the turn routes to its end as over
+        budget (karamazov-05z0.3). A run with no budget reserves nothing."
    :effects [:db]
    :requires [:conn :llm-config :run-id :token-budget]
-   :input  [:map [:branch :map]]
+   :input  [:map [:branch :map] [:request-ctx {:optional true} :map]]
    :output [:map [:reserved {:optional true} :int]
             [:over-budget? {:optional true} :boolean]]}
-  (fn [{:keys [conn run-id token-budget llm-config]} {:keys [branch] :as data}]
+  (fn [{:keys [conn run-id token-budget] :as ctx} {:keys [branch request-ctx] :as data}]
     (let [p (gates/threshold :token-budget)]
       (if-not (and token-budget conn run-id (:reserve? p))
         (dissoc data :reserved)
-        (let [ask (budget/estimate (:messages branch)
-                                   (or (:max-tokens llm-config) (:fallback-max-tokens p))
-                                   p)
+        (let [request-context (or request-ctx (turn/request-context ctx branch))
+              llm-config (:llm-config request-context)
+              preparation (infer/prepare
+                           (assoc-in request-context [:llm-config :max-tokens]
+                                     (or (:max-tokens llm-config)
+                                         (:fallback-max-tokens p)))
+                           (infer/of-branch branch) {:attempt 1 :fit? true})
+              ask (budget/estimate (:accounting preparation) p)
               spent (or (:total-tokens (journal/run-usage conn run-id)) 0)]
           (if (budget/reserve! run-id spent token-budget ask)
             (assoc data :reserved ask)
@@ -82,25 +89,42 @@
 (cell/defcell :llm/infer
   {:doc "One model call, retried once at a doubled budget when the response hit
         the token cap before emitting a tool call. Produces :call {:ok
-        :response} or {:ok false :error} — a provider failure is data, never an
-        exception. Gives back what :budget/admit reserved, except for a reply
-        that reported no usage, which keeps it as its price."
+        :response} or {:ok false :error :reason} — provider failures and local
+        request refusals are data, never exceptions. Gives back what
+        :budget/admit reserved, plus any retry delta, except for an attempt
+        that reported no usage, which keeps its own reservation as its price."
    :effects [:net :db]
    :requires [:run-id]
-   :input  [:map [:branch :map] [:reserved {:optional true} :int]]
+   :input  [:map [:branch :map] [:reserved {:optional true} :int]
+            [:request-ctx {:optional true} :map]]
    :output [:map [:call [:map [:ok :boolean]]]]}
-  (fn [{:keys [run-id] :as ctx} {:keys [branch reserved] :as data}]
-    (let [call (try (turn/call-model ctx branch)
+  (fn [{:keys [run-id] :as ctx} {:keys [branch reserved request-ctx] :as data}]
+    (let [request-context (or request-ctx (turn/request-context ctx branch))
+          request-context (cond-> request-context
+                            reserved (assoc :budget-reservation
+                                            {:ask reserved
+                                             :output-factor (:output-factor
+                                                             (gates/threshold :token-budget))}))
+          call (try (turn/call-model request-context branch)
                     ;; call-model returns a failure as data; this is for
                     ;; the bug that throws, so it cannot keep the slot.
                     (catch Throwable e
                       (when reserved (budget/release! run-id reserved true))
                       (throw e)))]
-      ;; A failed call returned nothing to bill; a reply that came back
-      ;; without usage is unknown, and unknown is charged in full.
+      ;; Settle each attempt against its own response. A failed call returned
+      ;; nothing to bill; an unpriced response keeps its reservation as cost.
       (when reserved
         (budget/release! run-id reserved
-                         (or (not (:ok call)) (some? (get-in call [:response :usage])))))
+                         (if (contains? call :retry-initial-priced?)
+                           (:retry-initial-priced? call)
+                           (or (not (:ok call))
+                               (some? (get-in call [:response :usage]))))))
+      (when-let [delta (:reserved-delta call)]
+        (let [priced? (or (not (:ok call))
+                          (some? (get-in call [:response :usage])))]
+          (if-let [full-ask (:retry-full-ask call)]
+            (budget/release! run-id delta priced? full-ask)
+            (budget/release! run-id delta priced?))))
       (assoc (dissoc data :reserved) :call call))))
 
 (cell/defcell :llm/parse
@@ -128,8 +152,9 @@
         (assoc data :branch branch :parsed parsed :signals signals :said said)))))
 
 (cell/defcell :loop/provider-error
-  {:doc "A provider failure is not the branch's fault: journal it as neutral
-        and tell the branch to try again."
+  {:doc "A provider failure or local request refusal is not the branch's fault:
+        journal it as neutral. Context-window reasons squeeze the next render
+        without appending a message; other failures tell the branch to retry."
    :effects [:db]
    :requires []
    :input  [:map [:branch :map] [:turn :int] [:call :map]]
@@ -344,7 +369,8 @@
 
         (= verdict :continue)
         (-> (update :turn inc)
-            (dissoc :before :call :parsed :signals :said :result :tool :settled :over-budget?)
+            (dissoc :before :call :parsed :signals :said :result :tool :settled :over-budget?
+                    :request-ctx)
             ;; Each mycelium trace entry snapshots the whole data map — branch
             ;; message history included — so an uncapped trace grows
             ;; quadratically over a run. The journal is the durable record; the

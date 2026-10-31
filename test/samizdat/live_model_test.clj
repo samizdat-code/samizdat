@@ -21,10 +21,12 @@
   the `model` and `effort` interventions apply on arrival, and the next
   request every branch makes goes out under them."
   (:require [clojure.test :refer [deftest testing is]]
+            [mycelium.cell :as cell]
             [samizdat.agent.infer :as infer]
             [samizdat.agent.live :as live]
             [samizdat.agent.loop :as aloop]
             [samizdat.api.control :as control]
+            [samizdat.cells :as cells]
             [samizdat.store.db :as db]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]))
@@ -137,3 +139,47 @@
       (testing "an alias this config does not declare is still refused"
         (is (= 400 (:status (control/intervene! conn config rid {:kind "model" :payload "critic slow:m"})))))
       (finally (live/forget-run! rid) (db/close conn)))))
+
+(deftest measurement-and-dispatch-share-live-request-context
+  (let [rid (str (random-uuid))]
+    (try
+      (live/set! rid nil {:reasoning-effort "low"})
+      (live/set! rid :reviewer {:model "role-model"})
+      (cells/load-cells!)
+      (let [ctx {:run-id rid :max-turns 10 :llm-adapter ::base
+                 :llm-config {:provider :local :model "base" :reasoning-effort "high"
+                              :context-window 4096 :max-tokens 64}}
+            branch {:id "live-prepared" :role :reviewer
+                    :messages [{:role "system" :content "sys"}
+                               {:role "user" :content "go"}]
+                    :turns []}
+            measured (atom nil)
+            dispatched (atom nil)
+            real-prepare infer/prepare]
+        (with-redefs [infer/prepare
+                      (fn [ctx & args]
+                        (reset! measured (:llm-config ctx))
+                        (apply real-prepare ctx args))
+                      infer/complete-fn
+                      (fn [ctx]
+                        (reset! dispatched (:llm-config ctx))
+                        (fn [_] {:ok true :response {:content "ok" :usage {:total-tokens 1}}}))]
+          (let [assembled ((:handler (cell/get-cell! :loop/assemble))
+                           ctx {:branch branch :turn 1})
+                measured-data ((:handler (cell/get-cell! :compaction/measure))
+                               ctx assembled)]
+            ((:handler (cell/get-cell! :llm/infer)) ctx measured-data)
+            (is (map? (:request-ctx assembled))
+                "assembly captures the normalized context for every later request user")
+            (is (= (select-keys (:llm-config (:request-ctx assembled))
+                                [:model :reasoning-effort :context-window :max-tokens])
+                   (select-keys @measured
+                                [:model :reasoning-effort :context-window :max-tokens])
+                   (select-keys @dispatched
+                                [:model :reasoning-effort :context-window :max-tokens]))
+                "measurement and dispatch see the same live model and reasoning effort")
+            (is (= {:model "role-model" :reasoning-effort "low"
+                    :context-window 4096 :max-tokens 64}
+                   (select-keys @measured
+                                [:model :reasoning-effort :context-window :max-tokens]))))))
+      (finally (live/forget-run! rid)))))

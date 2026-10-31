@@ -131,14 +131,61 @@
         so a budget read off it alone let every live branch start a call
         under the line and land past it, and a reply with no usage cost
         nothing. Each call reserves its worst case — the request at
-        :chars-per-token plus max-tokens times :output-factor (raise it to 2
-        to cover the doubled-budget retry) — against spend plus what calls in
-        flight hold; a call that does not fit is not made and the branch ends
-        :exhausted. A reply that reports no usage keeps its reservation as its
-        price. :fallback-max-tokens is the output ask when the provider config
+        :chars-per-token plus max-tokens times :output-factor — against spend
+        plus what calls in flight hold; a doubled-budget retry reserves its
+        additional delta before dispatch, and its first response is billed as
+        a side call. A call that does not fit is not made and the branch ends
+        :exhausted. Each reply that reports no usage keeps its own reservation
+        as its price. :fallback-max-tokens is the output ask when the provider config
         names none. :reserve? false is the old after-the-fact check alone.
         Only on a run with a budget; side calls (critic, judge, summarizer)
         are still billed after the fact."}
+
+ :request-accounting
+ {:value {:chars-per-token 4
+          :non-ascii-chars-per-token 2
+          :ascii-max-codepoint 127
+          :min-component-tokens 1
+          :confidence :low
+          :calibrated-confidence :medium
+          :calibration-version "provider-usage-1"
+          :calibration {:min-ratio 0.5 :max-ratio 3.0
+                        :max-samples 8 :max-scopes 64}
+          :framing {:messages 8 :tools 12 :grammar 16 :prefill 4 :tool-choice 4}}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-a2y3.1"]
+  :doc "Complete prepared-request accounting: message, native tool, grammar,
+        prefill, tool-choice and reserved-output components. The estimate is
+        deliberately conservative until a settled response reports prompt
+        usage. Calibration is process-local, versioned, partitioned by
+        provider/model/request shape, clamped to :min-ratio/:max-ratio, and
+        bounded to :max-samples per partition and :max-scopes partitions.
+        Missing usage and incompatible versions leave the estimate unchanged."}
+
+ :request-fit
+ {:value {:excerpt-floor-chars 1024
+          :head-share 0.6
+          :minimum-savings-chars 128
+          :omission-text "\n… {omitted-bytes} bytes omitted; {recovery} retrieves the exact record. …\n"
+          :reference-text "{omitted-bytes} bytes omitted; {recovery} retrieves the exact journal record."
+          :turn-recovery "fetch_turn({\"turn\": {turn}})"
+          :generic-recovery "fetch_turn"}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-a2y3.3"]
+  :doc "Final outgoing-only request fitting after normal compaction. Consumed
+        tool results become head-and-tail excerpts oldest first, then the
+        unresolved batch shares a water-filled excerpt floor, then consumed
+        results become one-line journal references, and only finally do
+        unresolved results become references. :excerpt-floor-chars bounds each
+        excerpt, :head-share divides retained text between its head and tail,
+        and :minimum-savings-chars rejects rewrites whose recovery prose would
+        not pay for itself. The text templates name the omitted byte count and
+        the exact fetch_turn recovery path; messages without journal turn
+        metadata use :generic-recovery. When message fitting is exhausted and
+        the request still overflows, deferrable native tool specs are omitted
+        in reverse canonical name order, while core and forced specs remain. Fitting never
+        changes branch, journal, or durable tool-selection history and never
+        reduces reserved output tokens."}
 
  :provider-error-limit
  {:value 5 :kind :threshold :capability-tunable? false
@@ -4903,6 +4950,31 @@
                         (str "\n\nYou are working on: " g)))
    :prediction "the branch commits a change, runs a test, or ships"
    :window 3}]
+
+ :tool-discovery
+ {:value {:max-results 5
+          :max-deferred 40
+          :max-selected 12
+          :summary-chars 120
+          :companion-groups [["read_file" "read_digest"]
+                             ["edit_file" "patch"]
+                             ["inspect_clojure" "edit_clojure" "apply_clojure_changes"]]
+          :deferred-heading "Deferred tools (short summaries only):"
+          :deferred-instruction "Use tool_search with a query to find these, or select exact names to load their canonical documentation and native schemas. Every deferred tool remains subject to the same role authorization."
+          :query-heading "Matching allowed tools:"
+          :query-only-note "This query returned summaries only. Select exact names with tool_search when you need their full documentation and native schemas."
+          :selection-heading "Selected canonical tool documentation. These tools and their native schemas are available on later turns:"
+          :no-matches "No tools on this role's full allowed surface matched the query."
+          :selection-error "No exact allowed tool names were selected. Search first, then select names from the allowed results."
+          :exclusive-arguments "Pass exactly one of query or select."
+          :invalid-limit "limit must be a positive integer."}
+  :kind :policy :capability-tunable? true
+  :provenance ["2026-10-30-agenc-context-efficiency"]
+  :doc "Dynamic tool presentation and discovery bounds, companion groups, and
+        model-facing result prose. :max-selected bounds cumulative deferred
+        documentation; older selections evict oldest-first during live use and
+        replay. roles.edn :core-tools opts a role in; its full :tools set
+        remains the permission boundary."}
 
  :native-tool-description-chars
  {:value 240 :kind :threshold :capability-tunable? true
