@@ -8,6 +8,7 @@
 .cache/
 .cpcache/
 target/
+.clj-kondo/
 
 # AOT build output: a 20MB self-contained binary plus its intermediates.
 /samizdat
@@ -25,6 +26,7 @@ research/
 .dolt/
 *.db
 .beads-credential-key
+.beads.gate.lock
 
 # Octave dumps its workspace here if a session exits without saving.
 octave-workspace
