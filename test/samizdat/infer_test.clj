@@ -620,8 +620,10 @@
       ((infer/complete-fn ctx {:journal? false}) prepared-native-tape))
     (is (= (:rendered prepared) (:messages @sent)))
     (is (= (:tools prepared) (:tools (:opts @sent))))
-    (is (= (:call-opts prepared) (:opts @sent))
+    (is (= (:call-opts prepared) (dissoc (:opts @sent) :prepare-candidate))
         "the provider receives the preparation's options, not a reconstructed request")
+    (is (fn? (:prepare-candidate (:opts @sent)))
+        "alternate dispatch re-enters the same preparation seam")
     (infer/clear-render-cache!)))
 
 (deftest truncation-retry-changes-reserve-without-rendering-again
@@ -647,6 +649,96 @@
     (is (= [100 200] @budgets))
     (is (= 1 @renders) "retry accounting reuses the initial prepared render")
     (infer/clear-render-cache!)))
+
+(deftest truncation-retry-bills-the-first-response-and-reserves-the-delta
+  (let [calls (atom 0)
+        reservations (atom [])
+        side-calls (atom [])]
+    (with-redefs [samizdat.llm.client/chat
+                  (fn [_ _ _ _]
+                    (if (= 1 (swap! calls inc))
+                      {:content "still thinking" :finish-reason "length"
+                       :usage {:prompt-tokens 30 :completion-tokens 100 :total-tokens 130}}
+                      {:content (fenced "alpha_tool" "{\"query\": \"x\"}")
+                       :finish-reason "stop"
+                       :usage {:prompt-tokens 30 :completion-tokens 20 :total-tokens 50}}))
+                  budget/reserve! (fn [_ _ _ ask]
+                                    (swap! reservations conj ask)
+                                    true)
+                  journal/run-usage (fn [_ _] {:total-tokens 130})
+                  journal/record-side-call! (fn [_ _ call]
+                                              (swap! side-calls conj call))
+                  journal/note! (fn [& _] nil)]
+      (let [call ((infer/complete-fn
+                   {:conn ::conn :run-id "retry-billing" :token-budget 10000
+                    :budget-reservation {:ask 115 :output-factor 1}
+                    :llm-adapter ::a :llm-config {:max-tokens 100}}
+                   {:journal? true})
+                  base-tape)]
+        (is (= [100] @reservations)
+            "only the doubled output reserve is added to the initial reservation")
+        (is (= 1 (count @side-calls)))
+        (is (= 130 (get-in (first @side-calls) [:usage :total-tokens]))
+            "the discarded truncated response remains on the run's bill")
+        (is (= :turn-retry (:kind (first @side-calls))))
+        (is (= 50 (get-in call [:response :usage :total-tokens]))
+            "the committed turn carries the second response's usage")
+        (is (true? (:retry-initial-priced? call)))
+        (is (= 100 (:reserved-delta call)))))))
+
+(deftest truncation-retry-does-not-start-when-its-delta-exceeds-the-budget
+  (let [calls (atom 0)]
+    (with-redefs [samizdat.llm.client/chat
+                  (fn [_ _ _ _]
+                    (swap! calls inc)
+                    {:content "still thinking" :finish-reason "length"
+                     :usage {:prompt-tokens 30 :completion-tokens 100 :total-tokens 130}})
+                  budget/reserve! (fn [& _] false)
+                  journal/run-usage (fn [_ _] {:total-tokens 130})
+                  journal/record-side-call! (fn [& _] nil)
+                  journal/note! (fn [& _] nil)]
+      (let [call ((infer/complete-fn
+                   {:conn ::conn :run-id "retry-over-budget" :token-budget 140
+                    :budget-reservation {:ask 115 :output-factor 1}
+                    :llm-adapter ::a :llm-config {:max-tokens 100}}
+                   {:journal? true})
+                  base-tape)]
+        (is (= 1 @calls) "the doubled request is never sent")
+        (is (false? (:ok call)))
+        (is (= :over-budget (:reason call)))
+        (is (true? (:retry-initial-priced? call)))
+        (is (nil? (:reserved-delta call)))))))
+
+(deftest an-unpriced-retry-is-charged-its-complete-second-request
+  (cells/load-cells!)
+  (doseq [[initial-priced? expected] [[true 215] [false 330]]]
+    (let [rid (str "unpriced-retry-" initial-priced?)
+          updates (volatile! 0)
+          real-swap! clojure.core/swap!]
+      (try
+        (budget/reserve! rid 0 10000 115)
+        (budget/reserve! rid 0 10000 100)
+        (with-redefs [aloop/call-model
+                      (fn [_ _]
+                        {:ok true
+                         :response {:content (fenced "alpha_tool" "{\"query\": \"x\"}")
+                                    :finish-reason "stop"}
+                         :retry-initial-priced? initial-priced?
+                         :reserved-delta 100
+                         :retry-full-ask 215})
+                      clojure.core/swap!
+                      (fn [a f & args]
+                        (vswap! updates inc)
+                        (apply real-swap! a f args))]
+          ((:handler (cell/get-cell! :llm/infer))
+           {:run-id rid} {:branch {:id "B1"} :reserved 115 :request-ctx {}}))
+        (is (= expected (budget/unpriced rid))
+            "the second unpriced response costs its whole input plus doubled output")
+        (is (= expected (budget/held rid))
+            "no reservation remains after both attempts settle")
+        (is (= 2 @updates)
+            "each attempt settles in one atomic ledger update")
+        (finally (budget/reset-run! rid))))))
 
 (deftest budget-admission-reserves-the-structured-request-total
   (cells/load-cells!)
@@ -686,6 +778,85 @@
         (is (= :context-window-exceeded (:reason call)))
         (is (some? (:error call)) "a refusal carries a diagnostic through the cells")))
     (is (false? @called?))))
+
+(deftest a-smaller-fallback-window-is-admitted-before-fallback-dispatch
+  (let [fallback-called? (atom false)
+        scope "smaller-fallback-window"
+        ctx {:llm-adapter ::primary
+             :llm-config {:provider :test :model "primary"
+                          :context-window 10000 :max-tokens 16
+                          :fallback-scope scope
+                          :fallbacks [{:adapter ::fallback
+                                       :config {:provider :test :model "fallback"
+                                                :context-window 1 :max-tokens 16}}]}}]
+    (with-redefs [samizdat.llm.client/chat-one
+                  (fn [_ config _ _]
+                    (if (= "primary" (:model config))
+                      (throw (ex-info "primary down" {:reason :call-failed}))
+                      (do (reset! fallback-called? true)
+                          {:content "must not be sent"})))]
+      (try
+        (let [call ((infer/complete-fn ctx {:journal? false}) base-tape)]
+          (is (false? (:ok call)))
+          (is (= :context-window-exceeded (:reason call)))
+          (is (false? @fallback-called?)
+              "the fallback is refused by its own window, not the primary's"))
+        (finally (samizdat.llm.client/forget-retired! scope))))))
+
+(deftest fallback-output-limit-is-identical-in-accounting-and-dispatch
+  (let [fallback-opts (atom nil)
+        scope "fallback-output-limit"
+        ctx {:llm-adapter ::primary
+             :llm-config {:provider :test :model "primary"
+                          :context-window 10000 :max-tokens 100
+                          :fallback-scope scope
+                          :fallbacks [{:adapter ::fallback
+                                       :config {:provider :test :model "fallback"
+                                                :context-window 10000}}]}}]
+    (with-redefs [samizdat.llm.client/chat-one
+                  (fn [_ config _ opts]
+                    (if (= "primary" (:model config))
+                      (throw (ex-info "primary down" {:reason :call-failed}))
+                      (do (reset! fallback-opts opts)
+                          {:content "fallback" :finish-reason "stop"})))]
+      (try
+        (let [call ((infer/complete-fn ctx {:journal? false}) base-tape)]
+          (is (:ok call))
+          (is (= 100 (:max-tokens @fallback-opts)))
+          (is (= 100 (get-in @fallback-opts [:accounting-estimate
+                                             :reserved-output-tokens]))
+              "an inherited output limit is still part of the candidate's admission"))
+        (finally (samizdat.llm.client/forget-retired! scope))))))
+
+(deftest retry-fallback-does-not-double-the-retry-output-limit-twice
+  (let [primary-calls (atom 0)
+        fallback-opts (atom nil)
+        scope "retry-fallback-output-limit"
+        expected (* 2 (:retry-base-tokens (gates/threshold :context-budget)))
+        ctx {:llm-adapter ::primary
+             :llm-config {:provider :test :model "primary"
+                          :context-window 100000
+                          :fallback-scope scope
+                          :fallbacks [{:adapter ::fallback
+                                       :config {:provider :test :model "fallback"
+                                                :context-window 100000}}]}}]
+    (with-redefs [samizdat.llm.client/chat-one
+                  (fn [_ config _ opts]
+                    (if (= "fallback" (:model config))
+                      (do (reset! fallback-opts opts)
+                          {:content (fenced "alpha_tool" "{\"query\": \"x\"}")
+                           :finish-reason "stop"})
+                      (if (= 1 (swap! primary-calls inc))
+                        {:content "still thinking" :finish-reason "length"}
+                        (throw (ex-info "primary down" {:reason :call-failed})))))]
+      (try
+        (let [call ((infer/complete-fn ctx {:journal? false}) base-tape)]
+          (is (:ok call))
+          (is (= expected (:max-tokens @fallback-opts)))
+          (is (= expected (get-in @fallback-opts [:accounting-estimate
+                                                 :reserved-output-tokens]))
+              "the retry's already-scaled option is not scaled a second time"))
+        (finally (samizdat.llm.client/forget-retired! scope))))))
 
 (deftest local-window-refusal-squeezes-once-through-the-real-cells
   (cells/load-cells!)

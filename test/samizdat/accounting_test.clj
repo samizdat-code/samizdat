@@ -14,7 +14,6 @@
    :non-ascii-chars-per-token 2
    :ascii-max-codepoint 127
    :min-component-tokens 1
-   :max-serialized-chars 4096
    :confidence :low
    :calibration-version "uncalibrated-1"
    :framing {:messages 8 :tools 12 :grammar 16 :prefill 4 :tool-choice 4}})
@@ -84,8 +83,8 @@
              (+ (reduce + 0 (vals (:components est)))
                 (:reserved-output-tokens est)))))))
 
-(deftest nontext-blocks-and-unknown-tool-content-are-bounded
-  (testing "nontext blocks contribute serialized content up to the policy limit"
+(deftest nontext-blocks-and-unknown-tool-content-are-fully-accounted
+  (testing "nontext block estimates keep growing beyond the serialization inspection cap"
     (let [bounded-policy (assoc policy :max-serialized-chars 32)
           base (assoc request
                       :messages [{:role "user" :content ""}]
@@ -97,8 +96,8 @@
           tokens #(get-in (accounting/estimate % bounded-policy)
                           [:components :messages])]
       (is (< (tokens base) (tokens small)))
-      (is (= (tokens small) (tokens large)))))
-  (testing "unknown tool keys are accounted and bounded serialization caps them"
+      (is (< (tokens small) (tokens large)))))
+  (testing "unknown tool keys keep affecting the estimate beyond the inspection cap"
     (let [bounded-policy (assoc policy :max-serialized-chars 256)
           tool {:name "opaque" :description "Unknown tool payload"
                 :input-schema {:type "object"}}
@@ -109,7 +108,7 @@
           tokens #(get-in (accounting/estimate % bounded-policy)
                           [:components :tools])]
       (is (< (tokens base) (tokens small)))
-      (is (= (tokens small) (tokens large))))))
+      (is (< (tokens small) (tokens large))))))
 
 (deftest native-tool-parameters-are-accounted
   (testing "a native tool's :parameters schema affects its estimate"

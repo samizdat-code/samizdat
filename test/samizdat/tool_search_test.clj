@@ -42,6 +42,7 @@
 (def ^:private discovery-policy
   {:max-results 2
    :max-deferred 3
+   :max-selected 2
    :summary-chars 90
    :companion-groups [["grep" "split"]]
    :deferred-heading "Deferred tools:"
@@ -119,6 +120,78 @@
        (is (< (str/index-of (:result selected) "grep({pattern")
               (str/index-of (:result selected) "split({reason")))))))
 
+(deftest cumulative-selection-evicts-the-oldest-deferred-docs-at-the-policy-bound
+  (with-discovery*
+   (fn []
+     (let [branch {:id "B1" :role :implementor :turns []}
+           first-selection (base/run-tool {:branch branch :tool-name "tool_search"
+                                           :args {:select ["write_file"]}})
+           second-selection (base/run-tool {:branch (assoc (:branch first-selection) :turns
+                                                           [{:tool "tool_search" :category :success
+                                                             :args {:select ["write_file"]}}])
+                                            :tool-name "tool_search"
+                                            :args {:select ["split"]}})]
+       (is (= ["write_file"] (mapv :name (:advertised-tool-docs
+                                           (:branch first-selection)))))
+       (is (= ["grep" "split"] (mapv :name (:advertised-tool-docs
+                                            (:branch second-selection)))))
+       (is (= #{"read_file" "tool_search" "grep" "split"}
+              (:advertised-tools (:branch second-selection))))
+       (is (= (:advertised-tool-docs (:branch second-selection))
+              (:docs (tool-search/advertised-from-turns
+                      :implementor nil
+                      (conj (:turns branch)
+                            {:tool "tool_search" :category :success
+                             :args {:select ["write_file"]}}
+                            {:tool "tool_search" :category :success
+                             :args {:select ["split"]}}))))
+           "replay applies the same bound and eviction order")))))
+
+(deftest selecting-a-core-tool-does-not-consume-deferred-selection-or-fitting
+  (with-discovery*
+   (fn []
+     (let [original gates/threshold]
+       (with-redefs [gates/threshold
+                     (fn [k]
+                       (if (= :tool-discovery k)
+                         (assoc discovery-policy :max-selected 1)
+                         (original k)))]
+         (infer/clear-render-cache!)
+         (try
+           (let [branch {:id "core-selection" :role :implementor :turns []
+                         :messages [{:role "system"
+                                     :content (roles/presentation-catalogue catalogue :implementor)}
+                                    {:role "user" :content "go"}]}
+                 first-selection (base/run-tool {:branch branch :tool-name "tool_search"
+                                                 :args {:select ["write_file"]}})
+                 second-selection (base/run-tool
+                                   {:branch (assoc (:branch first-selection) :turns
+                                                   [{:tool "tool_search" :category :success
+                                                     :args {:select ["write_file"]}}])
+                                    :tool-name "tool_search"
+                                    :args {:select ["read_file"]}})
+                 docs (:advertised-tool-docs (:branch second-selection))
+                 fitted (infer/prepare
+                         {:llm-adapter ::test
+                          :llm-config {:provider :test :model "core-selection-window"
+                                       :context-window 220 :max-tokens 16
+                                       :features #{:native-tools}}}
+                         (infer/of-branch (:branch second-selection)) {:fit? true})]
+             (is (= ["write_file"] (mapv :name docs))
+                 "a core no-op selection does not evict deferred documentation")
+             (is (= (:docs (tool-search/advertised-from-turns
+                            :implementor nil
+                            [{:tool "tool_search" :category :success
+                              :args {:select ["write_file"]}}
+                             {:tool "tool_search" :category :success
+                              :args {:select ["read_file"]}}]))
+                    docs)
+                 "replay also excludes core names from the deferred budget")
+             (is (true? (get-in fitted [:accounting :admissible?])))
+             (is (every? (set (mapv :name (:tools fitted))) ["read_file" "tool_search"])
+                 "core native specs survive deferred-spec fitting"))
+           (finally (infer/clear-render-cache!))))))))
+
 (deftest real-selection-feeds-the-next-real-infer-prepare
   (with-discovery*
    (fn []
@@ -150,6 +223,34 @@
              "execution and native presentation use the full canonical argument contract")
          (is (= #{:path :content}
                 (set (keys (get-in specs ["write_file" :parameters :properties]))))))
+       (finally (infer/clear-render-cache!))))))
+
+(deftest request-fitting-sheds-deferred-native-specs-when-messages-cannot-make-room
+  (with-discovery*
+   (fn []
+     (infer/clear-render-cache!)
+     (try
+       (let [core (roles/presentation-catalogue catalogue :implementor)
+             branch {:id "discovery-window"
+                     :role :implementor
+                     :turns []
+                     :messages [{:role "system" :content core}
+                                {:role "user" :content "go"}]}
+             selected (base/run-tool {:branch branch :tool-name "tool_search"
+                                      :args {:select ["split"]}})
+             tape (infer/of-branch (:branch selected))
+             ctx {:llm-adapter ::test
+                  :llm-config {:provider :test :model "small-discovery-window"
+                               :context-window 220 :max-tokens 16
+                               :features #{:native-tools}}}
+             oversized (infer/prepare ctx tape {:fit? false})
+             fitted (infer/prepare ctx tape {:fit? true})]
+         (is (false? (get-in oversized [:accounting :admissible?]))
+             "the fixture really does overflow with the selected native specs")
+         (is (not (false? (:ok fitted))))
+         (is (true? (get-in fitted [:accounting :admissible?])))
+         (is (= ["read_file" "tool_search"] (mapv :name (:tools fitted)))
+             "core tools remain while deferrable specs are omitted from this request"))
        (finally (infer/clear-render-cache!))))))
 
 (defn- prepared-tool-names [role presented]

@@ -131,11 +131,12 @@
         so a budget read off it alone let every live branch start a call
         under the line and land past it, and a reply with no usage cost
         nothing. Each call reserves its worst case — the request at
-        :chars-per-token plus max-tokens times :output-factor (raise it to 2
-        to cover the doubled-budget retry) — against spend plus what calls in
-        flight hold; a call that does not fit is not made and the branch ends
-        :exhausted. A reply that reports no usage keeps its reservation as its
-        price. :fallback-max-tokens is the output ask when the provider config
+        :chars-per-token plus max-tokens times :output-factor — against spend
+        plus what calls in flight hold; a doubled-budget retry reserves its
+        additional delta before dispatch, and its first response is billed as
+        a side call. A call that does not fit is not made and the branch ends
+        :exhausted. Each reply that reports no usage keeps its own reservation
+        as its price. :fallback-max-tokens is the output ask when the provider config
         names none. :reserve? false is the old after-the-fact check alone.
         Only on a run with a budget; side calls (critic, judge, summarizer)
         are still billed after the fact."}
@@ -145,7 +146,6 @@
           :non-ascii-chars-per-token 2
           :ascii-max-codepoint 127
           :min-component-tokens 1
-          :max-serialized-chars 4096
           :confidence :low
           :calibrated-confidence :medium
           :calibration-version "provider-usage-1"
@@ -181,8 +181,11 @@
         and :minimum-savings-chars rejects rewrites whose recovery prose would
         not pay for itself. The text templates name the omitted byte count and
         the exact fetch_turn recovery path; messages without journal turn
-        metadata use :generic-recovery. Fitting never changes branch or journal
-        history and never reduces reserved output tokens."}
+        metadata use :generic-recovery. When message fitting is exhausted and
+        the request still overflows, deferrable native tool specs are omitted
+        in reverse canonical name order, while core and forced specs remain. Fitting never
+        changes branch, journal, or durable tool-selection history and never
+        reduces reserved output tokens."}
 
  :provider-error-limit
  {:value 5 :kind :threshold :capability-tunable? false
@@ -4951,6 +4954,7 @@
  :tool-discovery
  {:value {:max-results 5
           :max-deferred 40
+          :max-selected 12
           :summary-chars 120
           :companion-groups [["read_file" "read_digest"]
                              ["edit_file" "patch"]
@@ -4967,8 +4971,10 @@
   :kind :policy :capability-tunable? true
   :provenance ["2026-10-30-agenc-context-efficiency"]
   :doc "Dynamic tool presentation and discovery bounds, companion groups, and
-        model-facing result prose. roles.edn :core-tools opts a role in; its
-        full :tools set remains the permission boundary."}
+        model-facing result prose. :max-selected bounds cumulative deferred
+        documentation; older selections evict oldest-first during live use and
+        replay. roles.edn :core-tools opts a role in; its full :tools set
+        remains the permission boundary."}
 
  :native-tool-description-chars
  {:value 240 :kind :threshold :capability-tunable? true

@@ -91,8 +91,8 @@
         the token cap before emitting a tool call. Produces :call {:ok
         :response} or {:ok false :error :reason} — provider failures and local
         request refusals are data, never exceptions. Gives back what
-        :budget/admit reserved, except for a reply that reported no usage,
-        which keeps it as its price."
+        :budget/admit reserved, plus any retry delta, except for an attempt
+        that reported no usage, which keeps its own reservation as its price."
    :effects [:net :db]
    :requires [:run-id]
    :input  [:map [:branch :map] [:reserved {:optional true} :int]
@@ -100,17 +100,31 @@
    :output [:map [:call [:map [:ok :boolean]]]]}
   (fn [{:keys [run-id] :as ctx} {:keys [branch reserved request-ctx] :as data}]
     (let [request-context (or request-ctx (turn/request-context ctx branch))
+          request-context (cond-> request-context
+                            reserved (assoc :budget-reservation
+                                            {:ask reserved
+                                             :output-factor (:output-factor
+                                                             (gates/threshold :token-budget))}))
           call (try (turn/call-model request-context branch)
                     ;; call-model returns a failure as data; this is for
                     ;; the bug that throws, so it cannot keep the slot.
                     (catch Throwable e
                       (when reserved (budget/release! run-id reserved true))
                       (throw e)))]
-      ;; A failed call returned nothing to bill; a reply that came back
-      ;; without usage is unknown, and unknown is charged in full.
+      ;; Settle each attempt against its own response. A failed call returned
+      ;; nothing to bill; an unpriced response keeps its reservation as cost.
       (when reserved
         (budget/release! run-id reserved
-                         (or (not (:ok call)) (some? (get-in call [:response :usage])))))
+                         (if (contains? call :retry-initial-priced?)
+                           (:retry-initial-priced? call)
+                           (or (not (:ok call))
+                               (some? (get-in call [:response :usage]))))))
+      (when-let [delta (:reserved-delta call)]
+        (let [priced? (or (not (:ok call))
+                          (some? (get-in call [:response :usage])))]
+          (if-let [full-ask (:retry-full-ask call)]
+            (budget/release! run-id delta priced? full-ask)
+            (budget/release! run-id delta priced?))))
       (assoc (dissoc data :reserved) :call call))))
 
 (cell/defcell :llm/parse

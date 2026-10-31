@@ -2481,3 +2481,65 @@
               (is (= :conservative-chars (:source after))
                   "a differently shaped fallback response cannot calibrate the primary shape"))
             (finally (client/forget-retired! scope))))))))
+
+(deftest fallback-dispatches-its-own-prepared-request
+  (let [prepared (atom [])
+        dispatched (atom [])
+        config {:provider :deepseek :model "primary" :fallback-scope "candidate-prep"
+                :fallbacks [{:adapter :fallback-adapter
+                             :config {:provider :deepseek :model "fallback"}}]}]
+    (with-redefs [client/chat-one
+                  (fn [_ c messages opts]
+                    (swap! dispatched conj {:model (:model c) :messages messages :opts opts})
+                    (if (= "primary" (:model c))
+                      (throw (ex-info "primary down" {:reason :call-failed}))
+                      {:content "fallback answered"}))]
+      (try
+        (let [response (client/chat
+                        :primary-adapter config [{:role "user" :content "original"}]
+                        {:accounting-estimate :primary
+                         :prepare-candidate
+                         (fn [_ c messages opts]
+                           (swap! prepared conj (:model c))
+                           {:messages (conj (vec messages)
+                                            {:role "user" :content (str "for " (:model c))})
+                            :opts (assoc opts :accounting-estimate (keyword (:model c))
+                                         :wire [(keyword (:model c))])})})]
+          (is (= ["primary" "fallback"] @prepared))
+          (is (= "for fallback"
+                 (get-in (second @dispatched) [:messages 1 :content])))
+          (is (= :fallback (get-in (second @dispatched) [:opts :accounting-estimate]))
+              "the fallback cannot inherit the primary's accounting")
+          (is (= [:fallback] (get-in (second @dispatched) [:opts :wire]))
+              "the journal fingerprint describes the request that actually answered"))
+        (finally (client/forget-retired! "candidate-prep"))))))
+
+(deftest continuation-dispatches-a-newly-prepared-request
+  (let [calls (atom [])
+        prepared (atom 0)]
+    (with-redefs [client/post-once
+                  (fn [_ _ request]
+                    (swap! calls conj request)
+                    (if (= 1 (count @calls))
+                      (throw (ex-info "cut" {:partial-response
+                                             {:content "partial "
+                                              :usage {:prompt-tokens 5 :completion-tokens 2 :total-tokens 7}}}))
+                      {:outcome :ok
+                       :response {:content "finished" :finish-reason "stop"
+                                  :usage {:prompt-tokens 7 :completion-tokens 3 :total-tokens 10}}}))]
+      (let [response (client/chat-one
+                      (registry/adapter-for :deepseek)
+                      {:max-retries 0
+                       :continuation {:enabled? true :min-chars 1 :max-attempts 1}}
+                      [{:role "user" :content "go"}]
+                      {:accounting-estimate :initial
+                       :prepare-candidate
+                       (fn [_ _ messages opts]
+                         (swap! prepared inc)
+                         {:messages (conj (vec messages) {:role "user" :content "fitted"})
+                          :opts (assoc opts :accounting-estimate :continuation
+                                       :wire [:continuation])})})]
+        (is (= 1 @prepared) "only the enlarged continuation needs preparation")
+        (is (= "fitted" (get-in (second @calls) [:messages 3 :content])))
+        (is (= :continuation (get-in (second @calls) [:accounting-estimate])))
+        (is (= [:continuation] (:wire response)))))))

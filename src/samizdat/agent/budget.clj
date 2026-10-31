@@ -62,14 +62,16 @@
     @ok))
 
 (defn release!
-  "Give back a reservation. With `priced?` false the reply reported no
-  usage, and the reservation stays on the run as what the call is taken to
-  have cost."
-  [run-id ask priced?]
-  (swap! ledger (fn [m]
-                  (cond-> (update-in m [run-id :reserved] #(max 0 (- (or % 0) ask)))
-                    (not priced?) (update-in [run-id :unpriced] (fnil + 0) ask))))
-  nil)
+  "Give back a reservation. With `priced?` false the reply reported no usage,
+  and its cost stays on the run. The four-argument form settles a retry's delta
+  reservation and its full unpriced ask in one atomic ledger update."
+  ([run-id ask priced?]
+   (release! run-id ask priced? ask))
+  ([run-id ask priced? unpriced-ask]
+   (swap! ledger (fn [m]
+                   (cond-> (update-in m [run-id :reserved] #(max 0 (- (or % 0) ask)))
+                     (not priced?) (update-in [run-id :unpriced] (fnil + 0) unpriced-ask))))
+   nil))
 
 (defn reset-run!
   "Forget a run's reservations: when it ends, or in a test."

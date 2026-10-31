@@ -54,6 +54,7 @@
   probe, how to score the results or whether to commit a winner — that is a
   cell's job, in resources, where the supervisor can rewrite it."
   (:require [clojure.tools.logging :as log]
+            [samizdat.agent.budget :as budget]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.context-fit :as context-fit]
             [samizdat.agent.hydration :as hydration]
@@ -365,7 +366,7 @@
      :flush! (fn [] (let [[before _] (swap-vals! st mark 0)] (publish! before)))}))
 
 (defn- prepare*
-  [ctx {:keys [id] :as tape} {:keys [attempt rendered fit?] :or {attempt 1}}]
+  [ctx {:keys [id] :as tape} {:keys [attempt rendered fit? dispatch?] :or {attempt 1}}]
   (let [rendered (or rendered (render tape))
         {:keys [grammar] forced-prefill :prefill forced-tool :force-tool}
         (force-mechanism ctx tape)
@@ -380,12 +381,13 @@
                    (:retry-base-tokens (gates/threshold :context-budget))))
         budget (when base (* base (bit-shift-left 1 (dec attempt))))
         native-request? (and (nil? forced-prefill) (nil? grammar))
-        request-tools (when native-request?
-                        (let [specs (vec (or tools []))]
-                          (if (and forced-tool
-                                   (not-any? #(= (:name forced-tool) (:name %)) specs))
-                            (conj specs forced-tool)
-                            specs)))
+        tools-for-request (fn [specs]
+                            (when native-request?
+                              (let [specs (vec (or specs []))]
+                                (if (and forced-tool
+                                         (not-any? #(= (:name forced-tool) (:name %)) specs))
+                                  (conj specs forced-tool)
+                                  specs))))
         tool-choice (when (and native-request? forced-tool)
                       {:type "function" :function {:name (:name forced-tool)}})
         policy (gates/threshold :request-accounting)
@@ -393,47 +395,96 @@
                  :model (get-in ctx [:llm-config :model])
                  :context-window (or (get-in ctx [:llm-config :context-window])
                                      (get-in ctx [:llm-config :max-context]))
-                 :tools request-tools
+                 :tools (tools-for-request tools)
                  :grammar grammar
                  :prefill forced-prefill
                  :tool-choice tool-choice
                  :max-tokens budget}
-        estimate-for (fn [ms]
+        estimate-for (fn [ms specs]
                        (accounting/admit
-                        (accounting/estimate (assoc request :messages (message/prepare ms))
+                        (accounting/estimate (assoc request
+                                                    :messages (message/prepare ms)
+                                                    :tools (tools-for-request specs))
                                              policy)))
-        estimate (estimate-for rendered)
+        estimate (estimate-for rendered tools)
         fit-policy (when fit?
                      (assoc (gates/threshold :request-fit)
                             :chars-per-token (:chars-per-token policy)))
-        [final-rendered final-estimate]
+        deferred-names (set (map :name (:advertised-tool-docs tape)))
+        [final-rendered final-tools final-estimate]
         (loop [current-rendered rendered
+               current-tools (vec (or tools []))
                current-estimate estimate]
           (if (or (not fit?) (:admissible? current-estimate)
                   (not= :exceeds-context-window (:reason current-estimate)))
-            [current-rendered current-estimate]
+            [current-rendered current-tools current-estimate]
             (let [deficit (- (:total-tokens current-estimate)
                              (:context-window current-estimate))
                   fitted (context-fit/fit current-rendered deficit fit-policy)
                   next-rendered (:messages fitted)
-                  next-estimate (estimate-for next-rendered)]
-              (if (or (:exhausted? fitted)
-                      (= next-rendered current-rendered))
-                [next-rendered next-estimate]
-                (recur next-rendered next-estimate)))))
+                  next-estimate (estimate-for next-rendered current-tools)
+                  exhausted? (or (:exhausted? fitted)
+                                 (= next-rendered current-rendered))
+                  drop-index (when exhausted?
+                               (last (keep-indexed
+                                      (fn [i spec]
+                                        (when (and (contains? deferred-names (:name spec))
+                                                   (not= (:name forced-tool) (:name spec)))
+                                          i))
+                                      current-tools)))]
+              (cond
+                (:admissible? next-estimate)
+                [next-rendered current-tools next-estimate]
+
+                (not exhausted?)
+                (recur next-rendered current-tools next-estimate)
+
+                drop-index
+                (let [next-tools (vec (concat (subvec current-tools 0 drop-index)
+                                              (subvec current-tools (inc drop-index))))]
+                  (recur next-rendered next-tools
+                         (estimate-for next-rendered next-tools)))
+
+                :else
+                [next-rendered current-tools next-estimate]))))
+        final-tools (not-empty final-tools)
+        wire (wire-fingerprint (message/prepare final-rendered))
         call-opts (cond-> {:accounting-scope policy :accounting-estimate final-estimate}
                     budget (assoc :max-tokens budget)
                     forced-prefill (assoc :prefill forced-prefill)
                     forced-tool (assoc :force-tool forced-tool)
                     grammar (assoc :grammar grammar)
                     reasoning-budget (assoc :reasoning-budget reasoning-budget)
-                    tools (assoc :tools tools)
-                    id (assoc :cache-key (str id)))
+                    final-tools (assoc :tools final-tools)
+                    id (assoc :cache-key (str id))
+                    dispatch? (assoc :prepare-candidate
+                                     (fn [candidate-adapter candidate-config
+                                          candidate-messages candidate-opts]
+                                       (let [candidate-config
+                                             (if (and (= 1 attempt)
+                                                      (nil? (:max-tokens candidate-config))
+                                                      (:max-tokens candidate-opts))
+                                               (assoc candidate-config :max-tokens
+                                                      (:max-tokens candidate-opts))
+                                               candidate-config)
+                                             candidate
+                                             (prepare* (assoc ctx
+                                                              :llm-adapter candidate-adapter
+                                                              :llm-config candidate-config)
+                                                       tape {:attempt attempt
+                                                             :rendered candidate-messages
+                                                             :fit? true :dispatch? true})]
+                                         (if (false? (:ok candidate))
+                                           (throw (ex-info (str "request refused: " (:reason candidate))
+                                                           {:reason (:reason candidate)}))
+                                           {:messages (:rendered candidate)
+                                            :opts (assoc (merge candidate-opts (:call-opts candidate))
+                                                         :wire (:wire candidate))})))))
         preparation {:rendered final-rendered
-                     :tools tools
+                     :tools final-tools
                      :call-opts call-opts
                      :accounting final-estimate
-                     :wire (wire-fingerprint (message/prepare final-rendered))}]
+                     :wire wire}]
     (if (and fit? (false? (:admissible? final-estimate))
              (= :exceeds-context-window (:reason final-estimate)))
       (assoc preparation :ok false :reason :context-window-exceeded)
@@ -447,6 +498,15 @@
   [ctx tape {:keys [attempt fit?] :or {attempt 1}}]
   (prepare* ctx tape {:attempt attempt :fit? fit?}))
 
+(defn- retry-result
+  [call retry-state]
+  (if retry-state
+    (assoc call
+           :retry-initial-priced? (:initial-priced? retry-state)
+           :reserved-delta (:delta retry-state)
+           :retry-full-ask (:full-ask retry-state))
+    call))
+
 (defn complete-fn
   "ctx -> (fn [tape] -> {:ok true :response r} |
                          {:ok false :error s :reason keyword}).
@@ -459,7 +519,8 @@
   before emitting a tool call. Doubled rather than repeated, since a response
   that ran out of room needs room, and repeating at the same cap reproduces
   the same truncation. Every attempt consumes the shared preparation; retry
-  preparation reuses the initial render.
+  preparation reuses the initial render. A retry's first response is billed as
+  a side call, and its additional worst case is reserved before dispatch.
 
   `opts`:
     :journal? — record the retry note (default true when ctx has a run).
@@ -469,25 +530,28 @@
   ([ctx] (complete-fn ctx nil))
   ([ctx {:keys [journal?] :or {journal? true}}]
    (fn [{:keys [id] :as tape}]
-     (let [initial (prepare ctx tape {:attempt 1 :fit? true})
+     (let [initial (prepare* ctx tape {:attempt 1 :fit? true :dispatch? true})
            forced-prefill (get-in initial [:call-opts :prefill])
            watch (when (and journal? (:run-id ctx) id)
                    (delta-publisher (:run-id ctx) (str id) forced-prefill))]
-       (loop [attempt 1 preparation initial]
+       (loop [attempt 1 preparation initial retry-state nil]
          (if (false? (:ok preparation))
-           {:ok false
-            :error (or (:error preparation)
-                       (str "request refused: " (:reason preparation)))
-            :reason (:reason preparation)}
+           (retry-result
+            {:ok false
+             :error (or (:error preparation)
+                        (str "request refused: " (:reason preparation)))
+             :reason (:reason preparation)}
+            retry-state)
            (let [{:keys [rendered call-opts wire]} preparation
-                 budget (:max-tokens call-opts)
+                 output-budget (:max-tokens call-opts)
                  r (try
                      {:ok true
-                      :response (assoc (llm/chat (:llm-adapter ctx) (:llm-config ctx)
-                                                 rendered
-                                                 (cond-> call-opts
-                                                   watch (assoc :on-delta (:on-delta watch))))
-                                       :wire wire)}
+                      :response (let [response (llm/chat (:llm-adapter ctx) (:llm-config ctx)
+                                                         rendered
+                                                         (cond-> call-opts
+                                                           watch (assoc :on-delta (:on-delta watch))))]
+                                  (cond-> response
+                                    (nil? (:wire response)) (assoc :wire wire)))}
                      (catch Throwable e
                        ;; The reason travels with the failure. `provider-error-step`
                        ;; counts it, and an empty reply wants a different response
@@ -509,20 +573,46 @@
                       ;; mid-fence — see absorb (karamazov-0r8s).
                       (truncated-without-call? (:response r)
                                                (get (:response r) :prefilled forced-prefill)))
-               (do ;; A cancel that landed during the call is honoured before the
-                   ;; note and the re-ask, not after: no journal write past a
-                   ;; forfeit (RFC-013).
-                   (cancel/check!)
-                   (when (and journal? (:conn ctx) (:run-id ctx))
-                     (journal/note! (:conn ctx) (:run-id ctx) :turn-retry
-                                    {:branch-id id
-                                     :data {:reason "truncated before any tool call"
-                                            :budget budget}}))
-                   (recur (inc attempt)
-                          (prepare* ctx tape {:attempt (inc attempt)
-                                              :rendered rendered
-                                              :fit? true})))
-               r))))))))
+               (let [response (:response r)
+                     usage (:usage response)
+                     initial-priced? (some? usage)
+                     next-preparation (prepare* ctx tape {:attempt (inc attempt)
+                                                          :rendered rendered
+                                                          :fit? true :dispatch? true})
+                     reservation (:budget-reservation ctx)
+                     next-ask (when reservation
+                                (budget/estimate (:accounting next-preparation)
+                                                 {:output-factor (:output-factor reservation)}))
+                     delta (if reservation (max 0 (- next-ask (:ask reservation))) 0)]
+                 ;; A cancel that landed during the call is honoured before the
+                 ;; note and the re-ask, not after: no journal write past a
+                 ;; forfeit (RFC-013).
+                 (cancel/check!)
+                 (when (and journal? (:conn ctx) (:run-id ctx))
+                   (when usage
+                     (journal/record-side-call!
+                      (:conn ctx) (:run-id ctx)
+                      {:branch-id id :kind :turn-retry :role (:role ctx)
+                       :model (or (:model response) (:model-requested response)
+                                  (get-in ctx [:llm-config :model]))
+                       :usage usage}))
+                   (journal/note! (:conn ctx) (:run-id ctx) :turn-retry
+                                  {:branch-id id
+                                   :data {:reason "truncated before any tool call"
+                                          :budget output-budget}}))
+                 (if (or (zero? delta)
+                         (budget/reserve! (:run-id ctx)
+                                          (or (:total-tokens
+                                               (journal/run-usage (:conn ctx) (:run-id ctx))) 0)
+                                          (:token-budget ctx) delta))
+                   (recur (inc attempt) next-preparation
+                          {:initial-priced? initial-priced? :delta delta
+                           :full-ask next-ask})
+                   (retry-result
+                    {:ok false :error "request refused: retry exceeds token budget"
+                     :reason :over-budget}
+                    {:initial-priced? initial-priced?})))
+               (retry-result r retry-state)))))))))
 
 ;; --- the pure absorb --------------------------------------------------------
 

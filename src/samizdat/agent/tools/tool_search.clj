@@ -57,14 +57,19 @@
         by-name (into {} (map (juxt :name identity)) entries)
         selected (reduce (fn [names turn]
                            (if (successful-search-turn? turn)
-                             (let [args (parsed-args (:args turn))]
-                               (into names
-                                     (with-companions
-                                       (selected-names (:select args))
-                                       policy)))
+                             (let [args (parsed-args (:args turn))
+                                   expanded (remove core
+                                                    (with-companions
+                                                      (selected-names (:select args))
+                                                      policy))]
+                               (let [names (distinct (concat names (sort expanded)))]
+                                 (if-let [limit (:max-selected policy)]
+                                   (vec (take-last limit names))
+                                   (vec names))))
                              names))
-                         #{}
+                         []
                          turns)
+        selected (set selected)
         names (into (sorted-set)
                     (filter #(and (contains? by-name %) (roles/may-use? role %)))
                     (into core selected))

@@ -22,21 +22,23 @@
         [a n] (split-chars s policy)]
     (long (Math/ceil (+ (/ a cpt) (/ n npt))))))
 
-(defn- bounded [s policy]
-  (let [limit (long (:max-serialized-chars policy))]
-    (if (> (count s) limit) (subs s 0 limit) s)))
-
 (defn- accounting-content
-  "Preserve compaction's text shapes; represent each nontext block as bounded
+  "Preserve compaction's text shapes; represent each nontext block as
   serialized text so its unknown payload is included in the same measurement."
-  [content policy]
+  [content _policy]
   (if (sequential? content)
     (mapv (fn [block]
             (if (or (:text block) (:content block))
               block
-              {:type "text" :text (bounded (pr-str block) policy)}))
+              {:type "text" :text (pr-str block)}))
           content)
     content))
+
+(defn- tool-chars
+  "The complete native tool spec, deterministically serialized. This includes
+  :parameters and other schema spellings as well as unknown keys."
+  [t]
+  (pr-str t))
 
 (defn- non-ascii-chars [x policy]
   (cond
@@ -48,7 +50,7 @@
 
 (defn- message-tokens
   "Compaction's message estimate, adjusted for non-ASCII content under the
-  supplied policy. Nontext blocks have already become bounded text blocks."
+  supplied policy. Nontext blocks have already become serialized text blocks."
   [messages policy]
   (let [prepared (mapv #(update % :content accounting-content policy) messages)
         cpt (double (:chars-per-token policy))
@@ -59,12 +61,6 @@
         adjusted (long (Math/ceil (+ (/ (- chars non-ascii) cpt)
                                      (/ non-ascii npt))))]
     (max base adjusted)))
-
-(defn- tool-chars
-  "The complete native tool spec, deterministically serialized and bounded.
-  This includes :parameters and other schema spellings as well as unknown keys."
-  [t policy]
-  (bounded (pr-str t) policy))
 
 (defn- framing-for [policy k] (get-in policy [:framing k]))
 
@@ -136,7 +132,7 @@
                                    policy :messages)
               :tools (component (seq (:tools request))
                                 (chars->tokens
-                                 (reduce (fn [acc t] (str acc (tool-chars t policy)))
+                                 (reduce (fn [acc t] (str acc (tool-chars t)))
                                          "" (:tools request))
                                  policy)
                                 policy :tools)

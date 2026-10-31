@@ -472,6 +472,12 @@
                  (:tool_choice body) (conj :tool-choice))]
     (= actual (set (keys (:components estimate))))))
 
+(defn- candidate-request
+  [opts adapter config messages]
+  (if-let [prepare (:prepare-candidate opts)]
+    (prepare adapter config messages opts)
+    {:messages messages :opts opts}))
+
 ;; --- the public surface -----------------------------------------------------
 
 (defn chat-one
@@ -564,7 +570,8 @@
              errors (conj errors (:error result))]
          (cond
            (= :ok (:outcome result))
-           (let [response (:response result)]
+           (let [response (cond-> (:response result)
+                            (:wire opts) (assoc :wire (:wire opts)))]
              (when (and accounting-scope accounting-estimate)
                (try
                  (when (matching-accounting-shape? adapter call-config request
@@ -586,11 +593,15 @@
                           (merge-continuation continuation-seed partial)
                           partial))]
              (if (continuation-eligible? result config continuation-attempt)
-               (chat-one adapter config (continuation-messages messages partial)
-                         (-> opts
-                             (assoc :continuation-attempt (inc continuation-attempt)
-                                    :continuation-seed seed)
-                             (dissoc :accounting-scope :accounting-estimate)))
+               (let [{continuation-messages :messages continuation-opts :opts}
+                     (candidate-request opts adapter config
+                                        (continuation-messages messages partial))]
+                 (chat-one adapter config continuation-messages
+                           (cond-> (assoc continuation-opts
+                                          :continuation-attempt (inc continuation-attempt)
+                                          :continuation-seed seed)
+                             (not (:prepare-candidate opts))
+                             (dissoc :accounting-scope :accounting-estimate))))
                (throw (ex-info (str (adapter/display-name adapter) " call failed: "
                                     (last errors))
                                (cond-> {:provider (adapter/id adapter)
@@ -663,23 +674,27 @@
          (if-not c
            (throw last-e)
            (let [active (atom true)
-                 candidate-opts (cond-> opts
-                                  (:on-delta opts)
-                                  (update :on-delta
-                                          (fn [publish]
-                                            (fn [delta]
-                                              (when @active (publish delta))))))
-                 r (if (and (seq more) (pos? (or (:slow-start-ms c) 0)))
-                     (let [[tag v] (cancel/with-deadline
-                                     (ebb/via ebb/blk (chat-one a c messages candidate-opts))
-                                     (:slow-start-ms c))]
-                       (case tag
-                         :timeout {:e (ex-info "slow start" {:reason :slow-start})}
-                         :err {:e v}
-                         :ok {:ok v}))
-                     (try {:ok (chat-one a c messages candidate-opts)}
-                          (catch Throwable e
-                            (if (cancel/control-signal? e) (throw e) {:e e}))))]
+                 r (try
+                     (let [{candidate-messages :messages prepared-opts :opts}
+                           (candidate-request opts a c messages)
+                           candidate-opts (cond-> prepared-opts
+                                            (:on-delta prepared-opts)
+                                            (update :on-delta
+                                                    (fn [publish]
+                                                      (fn [delta]
+                                                        (when @active (publish delta))))))]
+                       (if (and (seq more) (pos? (or (:slow-start-ms c) 0)))
+                         (let [[tag v] (cancel/with-deadline
+                                         (ebb/via ebb/blk
+                                                  (chat-one a c candidate-messages candidate-opts))
+                                         (:slow-start-ms c))]
+                           (case tag
+                             :timeout {:e (ex-info "slow start" {:reason :slow-start})}
+                             :err {:e v}
+                             :ok {:ok v}))
+                         {:ok (chat-one a c candidate-messages candidate-opts)}))
+                     (catch Throwable e
+                       (if (cancel/control-signal? e) (throw e) {:e e})))]
              (cond
                (and (:e r) (cancel/control-signal? (:e r)))
                (do (reset! active false) (throw (:e r)))
