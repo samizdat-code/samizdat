@@ -288,7 +288,8 @@
   ;; not come up, so the wait ends there, and the start is tried once more on
   ;; a fresh port before the eval fails.
   (let [spawned (atom 0)]
-    (with-redefs [image/spawn-argv (fn [_ _ _] (swap! spawned inc) ["sh" "-c" "echo boom; exit 7"])]
+    (with-redefs [image/fetch-deps! (fn [& _] nil)
+                  image/spawn-argv (fn [_ _ _] (swap! spawned inc) ["sh" "-c" "echo boom; exit 7"])]
       (let [t0 (System/currentTimeMillis)
             img (image/start! {:root (System/getProperty "java.io.tmpdir") :backend :none
                                :sandbox-spec {}})]
