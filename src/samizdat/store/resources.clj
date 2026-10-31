@@ -63,14 +63,17 @@
                   (name status) (db/now) change-id])))
 
 (defn unfinished-changes
-  "Changes requiring completion or an explicit recovery decision."
+  "Changes requiring completion or an explicit recovery decision. An older
+  database without the recovery table has no such changes to resume."
   [conn {:keys [run-id branch-id]}]
-  (db/fetch conn
-            ["SELECT * FROM resource_changes
-              WHERE run_id = ? AND branch_id = ?
-                AND status IN ('staged', 'publishing', 'recovery-required')
-              ORDER BY created_at, id"
-             run-id branch-id]))
+  (if (some #{"resource_changes"} (db/table-names conn))
+    (db/fetch conn
+              ["SELECT * FROM resource_changes
+                WHERE run_id = ? AND branch_id = ?
+                  AND status IN ('staged', 'publishing', 'recovery-required')
+                ORDER BY created_at, id"
+               run-id branch-id])
+    []))
 
 (defn change-by-id [conn id]
   (db/fetch-one conn ["SELECT * FROM resource_changes WHERE id = ?" id]))

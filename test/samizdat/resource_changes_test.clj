@@ -318,3 +318,11 @@
                   file (make-array java.nio.file.LinkOption 0))))
           (is (some? original))))
       (finally (cleanup fixture)))))
+
+(deftest unfinished-changes-is-empty-when-the-table-is-absent
+  (let [conn (db/open! ":memory:")]
+    (try
+      (db/execute! conn ["DROP TABLE IF EXISTS resource_changes"])
+      (is (= [] (store/unfinished-changes conn {:run-id "run" :branch-id "B1"})))
+      (is (nil? (resume/unfinished-resources conn "run" "B1")))
+      (finally (db/close conn)))))
