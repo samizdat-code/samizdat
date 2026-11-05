@@ -144,6 +144,10 @@
     (with-redefs [lexicon/policy (fn [k] (cond-> (real k) (= :team-solve k) (merge overrides)))]
       (f))))
 
+;; These pin the tool-using worker, which is repository work's and :program-worker
+;; :tools. A program's default, one call per role, is team-solve-parity-test's.
+(use-fixtures :each (fn [f] (with-policy {:program-worker :tools} f)))
+
 (deftest it-is-a-discoverable-whole-run-workflow
   (let [conn (db/open! ":memory:")
         ts (some #(when (= "team-solve" (:name %)) %) (workflow/catalog conn))]

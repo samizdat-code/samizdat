@@ -36,9 +36,7 @@
                 (second (re-matches #"([A-Z_]{3,})\s*:\s*" s)))
             str/upper-case)))
 
-(defn parse
-  "{SECTION body} for every header in `text`. Text before the first header is
-  dropped. {} when there are no headers."
+(defn- read-sections
   [text]
   (let [flush (fn [{:keys [cur buf] :as acc}]
                 (cond-> acc
@@ -48,8 +46,92 @@
                         (assoc (flush acc) :cur h :buf [])
                         (cond-> acc cur (update :buf conj line))))
                     {:out {} :cur nil :buf []}
-                    (str/split-lines (reply-text text)))]
+                    (str/split-lines text))]
     (:out (flush end))))
+
+(defn parse
+  "{SECTION body} for every header in `text`. Text before the first header is
+  dropped. {} when there are no headers."
+  [text]
+  (read-sections (reply-text text)))
+
+;; --- GVS5H's readers, for the program path --------------------------------------
+;;
+;; Ported from codebase/v2-current/escalation/multiagent.py, MIT, Copyright (c) 2026
+;; Persis Capital Inc. Where one differs from the readers above it is on purpose:
+;; these have to read a reply exactly as theirs does (team-solve-parity-test).
+
+(declare bullets)
+
+(defn strip-think
+  "_strip_think."
+  [text]
+  (str/trim (str/replace (str text) #"(?s)<think>.*?</think>" "")))
+
+(defn parse-exact
+  "_sections."
+  [text]
+  (read-sections (strip-think text)))
+
+(defn strip-code-exact
+  "_strip_code."
+  [text]
+  (str/trim (str/replace (str text) #"(?s)```.*?```" "[code omitted -- approach only]")))
+
+(defn extract-program
+  "_extract_py: the first fenced block's text, or \"\"."
+  [text]
+  (if-let [m (re-find #"(?s)```(?:python)?\s*\n(.*?)```" (strip-think text))]
+    (str/trim (second m))
+    ""))
+
+(defn parse-task-list
+  "_parse_tasks: {:id :desc :status} per bullet, at most `cap`."
+  [text cap]
+  (let [rows (reduce
+              (fn [out b]
+                (let [m (re-find #"(?i)^\[\s*([a-z_ ]+?)\s*\]\s*(.*)" b)
+                      raw (when m (-> (second m) str/lower-case (str/replace " " "") (str/replace "_" "")))
+                      desc (str/trim (if m (nth m 2) b))
+                      status (cond (nil? m) "pending"
+                                   (= "done" raw) "done"
+                                   (#{"wip" "inprogress"} raw) "in_progress"
+                                   :else "pending")]
+                  (if (str/blank? desc)
+                    out
+                    (conj out {:id (inc (count out)) :desc desc :status status}))))
+              []
+              (bullets text))]
+    (vec (take cap rows))))
+
+(defn add-tasks
+  "_add_tasks: new descriptions onto `tasks`, skipping duplicates, up to `cap`."
+  [tasks descs cap]
+  (reduce
+   (fn [ts d]
+     (let [d (str/trim (str d))]
+       (if (and (seq d) (< (count ts) cap)
+                (not-any? #(= (str/lower-case d) (str/lower-case (:desc %))) ts))
+         (conj ts {:id (inc (reduce max 0 (map :id ts))) :desc d :status "pending"})
+         ts)))
+   (vec tasks)
+   descs))
+
+(defn py-repr
+  "Python's repr of a string, which their failure report prints."
+  [s]
+  (let [s (str s)
+        q (if (and (str/includes? s "'") (not (str/includes? s "\""))) \" \')
+        esc (fn [c]
+              (cond
+                (= c \\) "\\\\"
+                (= c q) (str "\\" c)
+                (= c \newline) "\\n"
+                (= c \return) "\\r"
+                (= c \tab) "\\t"
+                (< (int c) 32) (format "\\x%02x" (int c))
+                :else (str c)))]
+    (str q (apply str (map esc s)) q)))
 
 (defn bullets
   "The list items in `text`, in order, whichever list marker they use."

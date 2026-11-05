@@ -60,6 +60,7 @@
                          :max-rounds (:max-rounds (policy))
                          :task (:task l)
                          :gate (get-in l [:gate :summary])
+                         :program (some? (:program l))
                          :attempts (:attempts l)}}))
 
 (defn- signal!
@@ -70,6 +71,8 @@
                          :stage (name stage) :detail (str detail)}}))
 
 ;; --- one model call -----------------------------------------------------------
+
+(declare call-failed! program?)
 
 (defn- call-failed!
   "A role's call kept failing. One signal per distinct error: repeating it would
@@ -83,14 +86,17 @@
       (save-ledger! ctx {:call-failures (inc (or (:call-failures l) 0))
                          :call-error error}))))
 
-(defn- ask
-  "One fresh-context call for `role` at temperature `step`. Retried per gates;
-  a call that keeps failing raises a signal and answers \"\", and the caller
-  decides what an empty reply means."
+(defn- ask*
+  "One fresh-context call for `role` at temperature `step`. {:text :finish}, the
+  text as the model wrote it. Retried per gates; a call that keeps failing raises a
+  signal and answers \"\", and the caller decides what an empty reply means."
   [ctx role step system user]
   (let [{:keys [llm-adapter llm-config]} (wf/role-ctx ctx role)
         t (get-in (policy) [:temperatures step])
         cfg (cond-> llm-config t (assoc :temperature t))
+        ;; What their numbers were measured under, for the provider type that can do it.
+        cfg (cond-> cfg
+              (program? ctx) (merge (get-in (policy) [:program-llm (:provider cfg)])))
         msgs [{:role "system" :content system} {:role "user" :content user}]]
     ;; On the record before the call: a long generation on a slow model is not
     ;; silence, and the stream reading the journal can tell.
@@ -101,16 +107,22 @@
                      (when (cancel/control-signal? e) (throw e))
                      {:error (or (ex-message e) (str e))}))]
         (cond
-          (:reply r) (let [{:keys [content reasoning usage]} (:reply r)]
+          (:reply r) (let [{:keys [content reasoning usage finish-reason]} (:reply r)]
                        (journal/record-side-call! (:conn ctx) (:run-id ctx)
                                                   {:kind (keyword (str "team-solve-" (name step)))
                                                    :role role
                                                    :model (:model cfg)
                                                    :usage usage})
                        ;; A reply with no text is answered by its reasoning.
-                       (sections/reply-text (if (str/blank? (str content)) reasoning content)))
+                       {:text (str (if (str/blank? (str content)) reasoning content))
+                        :finish (some-> finish-reason name)})
           (pos? left) (recur (dec left))
-          :else (do (call-failed! ctx step (:error r)) ""))))))
+          :else (do (call-failed! ctx step (:error r)) {:text "" :finish nil}))))))
+
+(defn- ask
+  "`ask*`, as the text the repository path reads."
+  [ctx role step system user]
+  (sections/reply-text (:text (ask* ctx role step system user))))
 
 ;; --- the gate -----------------------------------------------------------------
 
@@ -126,6 +138,13 @@
     :else :none))
 
 (defn- target [{:keys [root]}] (str root "/" (:artifact (policy))))
+
+(defn- program?
+  "A task with paired samples, on the worker that is GVS5H's: from here on this
+  workflow is their multiagent_solve, request for request."
+  [ctx]
+  (and (= :samples (gate-kind ctx))
+       (= :one-call (:program-worker (policy)))))
 
 (defn- report [flags] (str/trim (prompt/render "team-solve-gate-report" flags)))
 
@@ -281,6 +300,255 @@
   (str/join "\n" (for [{:keys [desc done]} tasks]
                    (str "- [" (if done "done" "todo") "] " desc))))
 
+;; --- the program path: GVS5H's multiagent_solve ---------------------------------
+;;
+;; Ported from codebase/v2-current/escalation/multiagent.py, MIT, Copyright (c) 2026
+;; Persis Capital Inc; their prompts are prompts/program-*.md, verbatim. One call per
+;; role and no tools. Every function here matches theirs named in its docstring, and
+;; samizdat.team-solve-parity-test compares what they send, byte for byte.
+
+(defn- clip-of [k s] (clip s (get-in (policy) [:program-clips k])))
+
+(defn- say
+  "A prompt with its file's edges as they are: these are compared byte for byte."
+  ([name] (prompt/prompt name))
+  ([name ctx] (prompt/render name ctx)))
+
+(defn- program-plan!
+  "_primary_plan."
+  [ctx problem]
+  (let [p (policy)
+        reply (:text (ask* ctx :planner :plan (say "program-plan-system")
+                           (say "program-plan-user" {:problem problem})))
+        sec (sections/parse-exact reply)
+        plan (clip (or (not-empty (get sec "PLAN")) (str/trim reply)) (:plan-chars p))]
+    (save-ledger! ctx {:problem problem :plan plan :notes "" :round 0 :attempts [] :program true
+                       :tasks (sections/add-tasks [] (sections/bullets (get sec "TASKS")) (:max-tasks p))})))
+
+(defn- program-ideate!
+  "_ideation_worker."
+  [ctx]
+  (let [p (policy)
+        l (ledger ctx)
+        reply (:text (ask* ctx :ideator :ideate (say "program-ideate-system")
+                           (say "program-ideate-user" {:problem (:problem l) :plan (:plan l)})))
+        sec (sections/parse-exact reply)
+        analysis (sections/strip-code-exact (or (not-empty (get sec "NOTES")) (str/trim reply)))]
+    (save-ledger! ctx {:notes (str "\n## ideation\n" (clip analysis (:notes-chars p)) "\n")
+                       :proposals (mapv sections/strip-code-exact (sections/bullets (get sec "NEXT")))
+                       :latest (say "program-ideated")})))
+
+(defn- program-task-lines [tasks]
+  (or (not-empty (str/join "\n" (for [{:keys [status desc]} tasks]
+                                  (str "- [" (if (= "done" status) "done" "todo") "] " desc))))
+      "(none)"))
+
+(defn decide-program
+  "Where multiagent_solve's loop goes after a manager's reply. Pure.
+  `status` and `task` are what _primary_manage returned; `failing?` is whether the
+  samples that just ran failed. The override for that is theirs, and so is what a
+  repeated task does: their loop breaks and finalizes. Ours stops at :unstick on the
+  way so a supervisor can answer, and with no answer it finalizes the same."
+  [{:keys [status task prev-task round failing? answer?]} {:keys [max-rounds]} fix-task]
+  (let [overridden? (and failing? (= "done" status))
+        status (if overridden? "continue" status)
+        task (if (and overridden? (str/blank? (str task))) fix-task task)
+        same? (fn [a b] (= (str/lower-case (str/trim (str a))) (str/lower-case (str/trim (str b)))))]
+    (cond
+      (and (= "continue" status) (seq (str task)) (< (or round 0) max-rounds))
+      (if (and prev-task (same? task prev-task))
+        {:go :unstick :task task :why "the manager issued the same task twice"}
+        {:go :work :task task :overrode-done overridden?})
+
+      (and (= "done" status) answer?) {:go :verify}
+      :else {:go :finalize})))
+
+(defn- none? [s]
+  (let [s (str/lower-case (str/trim (str s)))]
+    (or (str/blank? s) (= "none" s))))
+
+(defn- guard-counterexample
+  "A manager continued on passing samples. If it named a concrete input, run it: the
+  published loss is a wrong expected answer talking the team out of a correct
+  program. {:overrule? bool :verdict text}, or nil when there is nothing to check,
+  which leaves the manager's word standing. So does a brute force that will not run:
+  no evidence is not evidence against it."
+  [ctx l reply]
+  (let [sec (sections/parse-exact (:text (ask* ctx :manager :manage
+                                               (say "program-guard-extract-system")
+                                               (say "program-guard-extract-user" {:reply reply}))))
+        input (get sec "INPUT")
+        expected (get sec "EXPECTED")]
+    (when-not (none? input)
+      (let [dir (str (:root ctx))
+            run (fn [argv] (samples/run-one argv (str input "\n")
+                                            {:dir dir :timeout-ms (:program-brute-timeout-ms (policy))}))
+            mine (run ["python3" (target ctx)])
+            out (fn [r] (str/trim (:stdout r)))]
+        (if (and (not (none? expected)) (:ran mine) (= (out mine) (str/trim expected)))
+          {:overrule? true :verdict "the program already prints it"}
+          (let [code (sections/extract-program
+                      (:text (ask* ctx :manager :manage (say "program-guard-brute-system")
+                                   (say "program-guard-brute-user" {:problem (:problem l)}))))
+                brute (when (seq code) (run ["python3" "-c" code]))]
+            (cond
+              (not (:ran brute)) {:overrule? false :verdict "the brute force did not run"}
+              (and (:ran mine) (= (out brute) (out mine)))
+              {:overrule? true :verdict "brute force agrees with the program"}
+              :else {:overrule? false :verdict "brute force agrees with the manager"})))))))
+
+(defn- program-manage
+  "_primary_manage, then multiagent_solve's rules for what it said."
+  [{:keys [conn run-id] :as ctx} data l round guidance]
+  (let [p (policy)
+        cur (str/trim (str (samples/read-artifact (target ctx))))
+        reply (:text (ask* ctx :manager :manage (say "program-manage-system")
+                           (say "program-manage-user"
+                                {:problem (:problem l)
+                                 :current (or (not-empty cur) "(none yet)")
+                                 :notes (:notes l)
+                                 :tasks (program-task-lines (:tasks l))
+                                 :latest (:latest l)
+                                 :proposals (or (not-empty (str/join "\n" (map #(str "- " %) (:proposals l))))
+                                                "(none)")
+                                 :guidance guidance})))
+        sec (sections/parse-exact reply)
+        curated (or (not-empty (sections/parse-task-list (get sec "TASKS") (:max-tasks p))) (:tasks l))
+        said-done? (str/starts-with? (str/lower-case (str/trim (str (get sec "STATUS")))) "done")
+        status (if (and said-done? (seq cur)) "done" "continue")
+        named (or (first (sections/bullets (get sec "NEXT"))) (str/trim (str (get sec "NEXT"))))
+        named (str/trim (str/replace named #"^[-*]\s*" ""))
+        next-task (if (and (= "continue" status) (str/blank? named))
+                    (or (:desc (first (remove #(= "done" (:status %)) curated))) "")
+                    named)
+        [status next-task] (if (and (str/blank? cur) (str/blank? next-task))
+                             ["continue" (say "program-first-task")]
+                             [status next-task])
+        res (:res l)
+        d (decide-program {:status status :task next-task :prev-task (:task l) :round round
+                           :failing? (and res (:ran res) (not (:ok res)))
+                           :answer? (seq cur)}
+                          p (say "program-fix-task"))
+        guard (when (and (:loss-guards? p) res (:ok res) (= :work (:go d)))
+                (guard-counterexample ctx l reply))
+        _ (when guard (journal/note! conn run-id :team-solve-guard {:data (assoc guard :round round)}))
+        d (if (:overrule? guard) {:go :verify} d)
+        go (if (= :finalize (:go d)) :work (:go d))
+        l (save-ledger! ctx (cond-> {:tasks curated}
+                              (:task d) (assoc :task (:task d))
+                              (:why d) (assoc :stuck-why (:why d))
+                              (= :finalize (:go d)) (assoc :final true)))]
+    (journal/note! conn run-id :team-solve-round
+                   {:data {:round round :status status :go (name (:go d)) :task (:task l) :why (:why d)
+                           :overrode-done (boolean (:overrode-done d))}})
+    (position! ctx :manage l)
+    (assoc data :team-solve/go go)))
+
+(defn- cutoff-snippet
+  "_summarize_cutoff's window on a long attempt."
+  [reply]
+  (let [{:keys [cutoff-chars program-clips]} (policy)
+        {:keys [cutoff-head cutoff-tail]} program-clips
+        txt (or (not-empty (sections/strip-think reply)) reply)]
+    (if (<= (count txt) cutoff-chars)
+      txt
+      (str (subs txt 0 cutoff-head) "\n...[middle omitted]...\n" (subs txt (- (count txt) cutoff-tail))))))
+
+(defn- program-work!
+  "_worker: one call, and the harness writes what it replied."
+  [ctx]
+  (let [p (policy)
+        l (ledger ctx)
+        final? (:final l)
+        round (if final? (or (:round l) 0) (inc (or (:round l) 0)))
+        cur (str (samples/read-artifact (target ctx)))
+        _ (position! ctx :work (assoc l :round round))
+        {:keys [text finish]} (ask* ctx :solver :work (say "program-work-system")
+                                    (say "program-work-user"
+                                         {:problem (:problem l) :plan (:plan l) :notes (:notes l)
+                                          :current (or (not-empty cur) "(none yet)")
+                                          :goal (if final?
+                                                  (say "program-finalize")
+                                                  (say "program-goal" {:task (:task l)}))}))
+        sec (sections/parse-exact text)
+        code (or (not-empty (sections/extract-program (get sec "CODE")))
+                 (sections/extract-program text))
+        wrote? (boolean (seq code))
+        cut? (= "length" finish)
+        nexts (vec (remove #(= "none" (str/lower-case %)) (sections/bullets (get sec "NEXT"))))
+        status (str/lower-case (str/trim (or (get sec "STATUS") "continue")))
+        task-clip (clip-of :task (:task l))
+        summary (if (and cut? (not final?))
+                  (let [digest (:text (ask* ctx :summarizer :cutoff (say "program-cutoff-system")
+                                            (say "program-cutoff-user"
+                                                 {:task (:task l) :attempt (cutoff-snippet text)})))
+                        digest (or (not-empty (sections/strip-think digest)) (say "program-no-summary"))]
+                    (say "program-worker-cut" {:task task-clip :digest (clip-of :digest digest)}))
+                  (say "program-worker-result" {:status status :task task-clip
+                                                :notes (clip-of :notes (get sec "NOTES"))}))]
+    (when wrote? (samples/write-artifact! (target ctx) code))
+    (save-ledger! ctx (cond-> {:round round
+                               :worker {:verdict (if cut? "cut" "done") :status status :summary summary
+                                        :wrote wrote? :nexts nexts}
+                               :result summary}
+                        (and (not-empty (get sec "NOTES")) (not cut?))
+                        (assoc :notes (str (clip (get sec "NOTES") (:notes-chars p)) "\n"))))))
+
+(defn- program-samples
+  "_run_samples and _sample_feedback."
+  [ctx]
+  (let [{:keys [program-sample-timeout-ms program-clips]} (policy)
+        dir (str (:root ctx))
+        results (mapv (fn [{:keys [input expected]}]
+                        (let [r (samples/run-one ["python3" (target ctx)] input
+                                                 {:dir dir :timeout-ms program-sample-timeout-ms})
+                              out (str/trim (:stdout r))
+                              got (cond
+                                    (:timed-out r) (say "program-timed-out")
+                                    (and (not (zero? (or (:exit r) 0))) (str/blank? out))
+                                    (say "program-runtime-error" {:stderr (clip (:stderr r) (:stderr program-clips))})
+                                    :else out)
+                              exp (str/trim (str expected))]
+                          {:ok (= got exp) :input input :expected exp :got got}))
+                      (remove :missing (samples/paired-tests (samples-dir dir))))
+        total (count results)
+        passed (count (filter :ok results))
+        fail (first (remove :ok results))
+        ok? (= passed total)]
+    {:kind "samples" :ran true :ok ok? :passed passed :total total
+     :summary (str "samples " passed "/" total)
+     :sig (when fail (:got fail))
+     :report (if ok?
+               (say "program-samples-passed" {:total total})
+               (say "program-samples-failed"
+                    {:passed passed :total total
+                     :input (sections/py-repr (clip (:input fail) (:input program-clips)))
+                     :expected (sections/py-repr (clip (:expected fail) (:output program-clips)))
+                     :got (sections/py-repr (clip (:got fail) (:output program-clips)))}))}))
+
+(defn- program-test!
+  "multiagent_solve's step after a worker: samples only when it wrote, and the
+  manager reads the verdict in front of the report. The finalize round is not
+  tested here; verify does that."
+  [{:keys [conn run-id] :as ctx} round-l]
+  (let [{:keys [worker final]} round-l
+        g (when (and (:wrote worker) (not final)) (program-samples ctx))
+        l (save-ledger! ctx (cond-> {:res g :proposals (:nexts worker)
+                                     :latest (str (when g (:report g)) (:summary worker))
+                                     :attempts (conj (vec (:attempts round-l))
+                                                     {:round (:round round-l)
+                                                      :task (clip (:task round-l) (:report-chars (policy)))
+                                                      :worker (:verdict worker)
+                                                      :gate (:summary g)})}
+                              g (assoc :gate g)))]
+    (when (and g (:ok g))
+      (when (:loss-guards? (policy)) (keep-best! ctx (:round l))))
+    (when g
+      (journal/note! conn run-id :team-solve-gate
+                     {:data (select-keys g [:kind :ran :ok :passed :total :summary])}))
+    (position! ctx :test l)
+    (boolean (and g (:ok g)))))
+
 (cell/defcell :team-solve/plan
   {:doc "PRIMARY: one call for the plan and the first task list. An unstructured
         reply is the plan; an empty one leaves the ideators and manager to work
@@ -290,6 +558,10 @@
    :input  [:map [:branch :map]]
    :output [:map [:team-solve/planned :boolean]]}
   (fn [ctx {:keys [branch] :as data}]
+    (if (program? ctx)
+      (let [l (program-plan! ctx (:problem branch))]
+        (position! ctx :plan l)
+        (assoc data :team-solve/planned (boolean (seq (:plan l)))))
     (let [p (policy)
           reply (ask ctx :planner :plan
                      (prompt/prompt "team-solve-plan-system")
@@ -306,7 +578,7 @@
                                :attempts []})]
       (when (:tests-sig l) (save-tests! ctx))
       (position! ctx :plan l)
-      (assoc data :team-solve/planned (boolean (seq plan))))))
+      (assoc data :team-solve/planned (boolean (seq plan)))))))
 
 (cell/defcell :team-solve/ideate
   {:doc "Independent proposals, each a fresh context under a different directive
@@ -319,6 +591,10 @@
    :input  [:map [:branch :map]]
    :output [:map [:team-solve/ideas :int]]}
   (fn [ctx data]
+    (if (program? ctx)
+      (let [l (program-ideate! ctx)]
+        (position! ctx :ideate l)
+        (assoc data :team-solve/ideas 1))
     (let [p (policy)
           l (ledger ctx)
           user (prompt/render "team-solve-ideate-user"
@@ -342,7 +618,7 @@
                                :proposals proposals
                                :latest (prompt/prompt "team-solve-ideated")})]
       (position! ctx :ideate l)
-      (assoc data :team-solve/ideas (count replies)))))
+      (assoc data :team-solve/ideas (count replies))))))
 
 ;; --- the manager ----------------------------------------------------------------
 
@@ -456,6 +732,9 @@
             (journal/note! conn run-id :team-solve-round
                            {:data {:round round :go "verify" :why "model unreachable"}})
             (assoc data :team-solve/go :verify))
+
+        (program? ctx)
+        (program-manage ctx data l round (:guidance drained))
 
         :else
         (let [reply (ask ctx :manager :manage
@@ -583,6 +862,9 @@
    :input  [:map [:branch :map]]
    :output [:map [:team-solve/worked :keyword]]}
   (fn [{:keys [config] :as ctx} data]
+    (if (program? ctx)
+      (let [l (program-work! ctx)]
+        (assoc data :team-solve/worked (keyword (get-in l [:worker :verdict]))))
     (let [p (policy)
           l (ledger ctx)
           round (inc (or (:round l) 0))
@@ -623,7 +905,7 @@
                           (assoc :notes (clip (get sec "NOTES") (:notes-chars p)))
                           finished?
                           (assoc :result summary)))
-      (assoc data :team-solve/worked (or (:verdict r) :unknown)))))
+      (assoc data :team-solve/worked (or (:verdict r) :unknown))))))
 
 ;; --- the check ------------------------------------------------------------------
 
@@ -636,6 +918,8 @@
    :input  [:map [:branch :map]]
    :output [:map [:team-solve/passed :boolean]]}
   (fn [{:keys [conn run-id] :as ctx} data]
+    (if (program? ctx)
+      (assoc data :team-solve/passed (program-test! ctx (ledger ctx)))
     (let [l (ledger ctx)
           g (run-gate ctx)
           round (:round l)
@@ -655,7 +939,7 @@
       (journal/note! conn run-id :team-solve-gate
                      {:data (select-keys g [:kind :ran :ok :passed :total :summary])})
       (position! ctx :test l)
-      (assoc data :team-solve/passed (boolean (:ok g))))))
+      (assoc data :team-solve/passed (boolean (:ok g)))))))
 
 ;; --- stuck ----------------------------------------------------------------------
 
@@ -705,6 +989,9 @@
                 (:stop d) {:go :verify :by "supervisor" :stopped (:stop d)}
                 (:finish d) {:go :verify :by "supervisor"}
                 (:retask d) {:go :work :by "supervisor" :task (:retask d)}
+                ;; Silence on a program is what their loop does on a repeated task.
+                (and (program? ctx) (:guidance d)) {:go :work :by "supervisor" :task (:guidance d)}
+                (program? ctx) {:go :work :by "method" :final? true}
                 (> n (:max-unsticks p)) {:go :work :by "bound" :final? true
                                          :task (str/trim (prompt/prompt "team-solve-finalize"))}
                 :else {:go :work :by (if (:guidance d) "supervisor" "fallback")

@@ -18,7 +18,9 @@ Current task: {{position.task|default:"none yet"}}
 {% if position.attempts %}Attempts:
 {% for a in position.attempts %}- round {{a.round}}, worker {{a.worker}}, {{a.gate}}: {{a.task}}
 {% endfor %}{% endif %}
-{% ifequal position.workflow "team-solve" %}Each round's worker is branch `W<round>`; `fetch_turn` and `introspect` read it. What
+{% ifequal position.workflow "team-solve" %}{% if position.program %}This is a program with samples: each worker is one model call with no tools and no branch, so
+what it did is in the attempts above and the program on disk, and `budget` does nothing here.
+{% else %}Each round's worker is branch `W<round>`; `fetch_turn` and `introspect` read it. {% endif %}What
 reaches this team, between rounds: `intervene({"kind": "retask", "text": "the next task"})`
 replaces the manager's next task and ends a stuck wait; `{"kind": "message", "text": "..."}`
 with no branch reaches the manager; `{"kind": "budget", "text": "N"}` sets each worker's turn

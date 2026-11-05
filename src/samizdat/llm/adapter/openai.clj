@@ -174,7 +174,7 @@
       {"Authorization" (str "Bearer " k)}
       {}))
 
-  (chat-body [this config {:keys [messages max-tokens temperature prefill force-tool
+  (chat-body [this config {:keys [top-p top-k messages max-tokens temperature prefill force-tool
                                   cache-key reasoning-effort grammar reasoning-budget tools]}]
    ;; The gate is the protocol method on THIS adapter (provenance R3-14), so the
    ;; answer a caller can query and the answer chat-body acts on are one
@@ -222,6 +222,8 @@
                          messages)}
       max-tokens (assoc max-tokens-key max-tokens)
       temperature (assoc :temperature temperature)
+      top-p (assoc :top_p top-p)
+      top-k (assoc :top_k top-k)
       ;; Only when the run stated something. Whether a model thinks was
       ;; previously a property of which one happened to be configured rather
       ;; than something a run stated; this makes it explicit and recorded. The

@@ -140,7 +140,11 @@
                            :dir (str dir)}
                  (mapv str argv))]
     {:ran (and (not (:timeout r)) (zero? (:exit r)))
-     :out (norm (:out r))}))
+     :out (norm (:out r))
+     :stdout (str (:out r))
+     :stderr (str (:err r))
+     :timed-out (boolean (:timeout r))
+     :exit (:exit r)}))
 
 (defn grade
   "Run `argv` against every paired case in `tests-dir`.

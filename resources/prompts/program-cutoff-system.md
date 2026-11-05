@@ -1,0 +1,1 @@
+A worker's solution attempt was CUT OFF when it hit the token limit. Summarize its partial attempt in 3-5 sentences: which approach it was pursuing, what it established or ruled out, how far it got, and what remained unfinished. Be concrete so another worker can resume or judge it. Do NOT try to finish the solution yourself.

@@ -499,6 +499,9 @@
                   :accounting-estimate accounting-estimate
                   :max-tokens (or max-tokens (:max-tokens config))
                   :temperature (or temperature (:temperature config))
+                  ;; Sampling a role's policy asked of a model that takes it.
+                  :top-p (:top-p config)
+                  :top-k (:top-k config)
                   ;; Passed through as given; the adapter decides whether it
                   ;; can honour it, and one that cannot must ignore it rather
                   ;; than approximate it.

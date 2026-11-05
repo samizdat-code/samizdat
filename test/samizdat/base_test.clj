@@ -207,6 +207,20 @@
    {:threshold {:all "HTTP status codes and the response-body cap of a
                       transport. Protocol constants, not policy."}}
 
+   "src/samizdat/agent/sections.clj"
+   {:vocabulary {"</?think>"
+                 "The providers' reasoning tag on the wire, as in llm/message.clj: a
+                  reply that is only reasoning keeps its text with the tags off."
+                 "(?s)<think>.*?</think>"
+                 "A reasoning block's syntax, as GVS5H's _strip_think reads it. Pinned
+                  by team-solve-parity-test: reading it differently is no longer
+                  their method, so it is not a project's to tune."
+                 "(?s)```(?:python)?\\s*\\n(.*?)```"
+                 "A fenced program's syntax, as GVS5H's _extract_py reads it. Pinned
+                  the same way."}
+    :threshold {32 "The first printable code point, where Python's repr starts
+                    writing control characters as escapes. A fact of repr."}}
+
    "src/samizdat/agent/judge.clj"
    {:vocabulary {"(?i)</material"
                  "The closing tag of the material envelope judge/seal writes
@@ -538,11 +552,6 @@
    {:threshold {8 "Concurrency floor for the advance pool."
                 40 "Fallback max-turns, as workflow.clj."
                 5 "Fallback beam width when config carries none."}}
-
-   "src/samizdat/agent/sections.clj"
-   {:vocabulary {"</?think>"
-                 "The providers' reasoning tag on the wire, as in llm/message.clj: a
-                  reply that is only reasoning keeps its text with the tags off."}}
 
    "src/samizdat/llm/message.clj"
    {:threshold {90 "Error-text truncation for a log line."}

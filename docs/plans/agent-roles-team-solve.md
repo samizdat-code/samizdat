@@ -180,6 +180,19 @@ a failed triage usually means the model is unreachable anyway. `answer`, `invest
 trivial changes keep their shorter workflows. Dropping `:workflow` from those two rows
 reverts it.
 
+### Corrected: the program path (karamazov-9jkl)
+
+The design below this line described a worker with tools on every gate. On a task with paired
+samples that was not their method, so their numbers did not describe it. Since then, on paired
+samples, team-solve is GVS5H's `multiagent_solve`, request for request, pinned by
+`samizdat.team-solve-parity-test`: one call per role and no tools, one ideator, their prompts
+and rules, and the manager's continue on passing samples honoured. The counterexample section,
+stall rule, and A and B ideators below apply to repository gates and to `:program-worker :tools`.
+`:loss-guards?` adds two things theirs lacks, which never change what a role is sent: the last
+passing program ships if the final one fails, and a concrete counterexample against passing
+samples is checked against the program and a brute force. The results in section 6 predate
+this and do not describe it.
+
 ### Not adopted
 
 The mario YAML engine, files as the state medium, the escalation ladder, their sampling

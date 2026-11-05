@@ -1991,9 +1991,17 @@
           :cutoff-chars 9000
           :ideate? true
           :ideators ["team-solve-ideator-a" "team-solve-ideator-b"]
+          :program-worker :one-call
+          :loss-guards? true
+          :program-clips {:task 80 :notes 200 :digest 500 :input 600 :output 400 :stderr 200
+                          :cutoff-head 3500 :cutoff-tail 5500}
+          :program-sample-timeout-ms 10000
+          :program-brute-timeout-ms 30000
+          :program-llm {:local {:max-tokens 128000 :top-p 0.95 :top-k 20
+                                :max-response-ms 14400000}}
           :temperatures {:plan 0.3 :ideate 0.4 :manage 0.2 :work 0.2 :cutoff 0.2 :review 0.2}}
   :kind :policy :capability-tunable? true
-  :provenance ["karamazov-p4b3"]
+  :provenance ["karamazov-p4b3" "karamazov-9jkl"]
   :doc "THE TEAM-SOLVE WORKFLOW'S NUMBERS (cells/team_solve.clj). :max-rounds is
         GVS5H's bound on the manager loop, after which one finalize round runs.
         :stall-rounds is how many rounds an identical check failure may repeat
@@ -2008,7 +2016,23 @@
         one worker on one task; a supervisor `budget` directive overrides it.
         :temperatures are GVS5H's values as starting points, per step: expect to
         retune per model. :ideate? off is the ablation arm of the empirical test.
-        :ideators names the directive prompts, one call each."}
+        :ideators names the directive prompts, one call each.
+
+        A task with paired samples is a PROGRAM, and on it this workflow is
+        GVS5H's multiagent_solve, request for request (karamazov-9jkl, pinned by
+        samizdat.team-solve-parity-test). :program-worker :one-call is their
+        worker, one model call with no tools; :tools runs the tool-using worker
+        there instead, which their numbers do not describe. :loss-guards? adds the
+        fixes for their published loss modes, which change what ships and never
+        what a role is sent: the last passing program ships if the final one fails,
+        and a manager's concrete counterexample against passing samples is checked,
+        by two extra calls, against the program and a brute force. :program-clips and :program-sample-timeout-ms are
+        their slices and their 10 s per sample. :program-llm is what their parity run
+        asked of the model, by provider type: 128K replies, top_p 0.95, top_k 20, and
+        a four-hour clock on a call. Only :local has it, because a hosted model's
+        ceiling is its own and an unknown field can be a refused request; those run
+        on their configured values, which is one more way they are not the measured
+        setting. A llama-server slot still stops at its own context size."}
 
  :workflow-selection
  {:value

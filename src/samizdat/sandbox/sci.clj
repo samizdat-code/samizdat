@@ -203,7 +203,7 @@
 
     ;; A role reply as named sections. Pure.
     samizdat.agent.sections
-    {:vars [bullets counterexample parse reply-text strip-code]}
+    {:vars [bullets counterexample parse reply-text strip-code strip-think parse-exact strip-code-exact extract-program parse-task-list add-tasks py-repr]}
 
     ;; Plan prompt text and parsing. Pure.
     samizdat.agent.planner
