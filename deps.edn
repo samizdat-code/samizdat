@@ -162,10 +162,12 @@
         ;; logging anything without this dep throws at the first log call.
         ;; bc85090 brings DateTimeFormatterBuilder.appendFraction (PR #7/#8),
         ;; which malli.transform's date formatter needs at namespace load.
+        ;; 28d55d6 reads the field through .name: jolt 0.8.24's str of a
+        ;; ChronoField is the JDK's NanoOfSecond, and an older pin throws at
+        ;; load. No tag holds that commit yet.
         jolt-lang/time
         {:git/url "https://github.com/jolt-lang/time"
-         :git/tag "v0.0.11"
-         :git/sha "2c58d9c709a25d80608757c3026f4c656a994ef1"}}
+         :git/sha "28d55d626680fc3d843b0432c18c7cc148e24926"}}
 
  ;; The HTTP server (ring-chez-adapter) binds BSD sockets through the running
  ;; process's own libc symbols, so they must be loaded before it is required.
