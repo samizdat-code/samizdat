@@ -94,6 +94,21 @@
            vec
            not-empty))))
 
+(defn green-check
+  "What a passing sample check leaves on a branch: which program passed, on what
+  turn, and its text as a digest, so a later edit is seen. nil with no program."
+  [root artifact turn]
+  (let [f (io/file (str root) (str artifact))]
+    (when (.isFile f)
+      {:artifact artifact :turn turn :digest (hash (slurp f))})))
+
+(defn samples-pinned?
+  "Whether `green`, a branch's :green-check, still describes the program on disk:
+  its samples pin the behaviour exactly as long as nobody has changed it."
+  [root green]
+  (when-let [artifact (:artifact green)]
+    (= (:digest green) (:digest (green-check root artifact nil)))))
+
 (defn focused-cmd
   "A test command that runs ONLY the test namespaces among `changed`, with an
   exit code that reflects pass/fail (jolt's bare -e does not exit non-zero on a

@@ -359,4 +359,5 @@
    :roles/solver "prompts/roles/solver.md"
    :solver-frame "prompts/solver-frame.md"
    :check-tool "prompts/check-tool.md"
+   :check-green "prompts/check-green.md"
    :approval-classify-system "prompts/approval-classify-system.md"}}

@@ -17,7 +17,12 @@
   (is (verify/test-file? "src/samizdat/foo_spec.clj"))
   (is (verify/test-file? "test/samizdat/agent/decompose_test.clj"))
   (is (not (verify/test-file? "src/samizdat/agent/tools/knowledge.clj")))
-  (is (not (verify/test-file? "resources/cells/feature.clj"))))
+  (is (not (verify/test-file? "resources/cells/feature.clj")))
+  (testing "pytest's own naming, wherever the file sits"
+    (is (verify/test-file? "test_solution.py"))
+    (is (verify/test-file? "pkg/test_parser.py"))
+    (is (not (verify/test-file? "latest_results.py")))
+    (is (not (verify/test-file? "contest_solution.py")))))
 
 (deftest ns-from-test-path-maps-a-path-to-its-namespace
   (is (= "samizdat.agent.decompose-test"

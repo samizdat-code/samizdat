@@ -394,7 +394,7 @@
     ;; The run's token budget, nil when unbounded (karamazov-aqsr.3)
     :token-budget
     ;; What the beam driver adds
-    :problem :beam? :beam-width :turn-workflow :iterating-loop? :git-baseline
+    :problem :beam? :width-asked? :beam-width :turn-workflow :iterating-loop? :git-baseline
     :repl-session :live-branches :cancelling
     ;; A replay's switches (samizdat.heldout.child, karamazov-x0dx)
     :serial-turns? :oversight?})

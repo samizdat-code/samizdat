@@ -1203,7 +1203,7 @@
                                 :llm-adapter llm-adapter :llm-config llm-config}
                                problem)
         effort (select/effort triage)
-        selected (or (:workflow effort) (:workflow triage))
+        selected (select/chosen-workflow triage effort)
         ceiling (fn [x cap] (if (and x cap) (min x cap) (or x cap)))
         max-turns (if asked-turns max-turns (ceiling (:max-turns effort) max-turns))
         requested-width (if asked-width
@@ -1299,6 +1299,7 @@
              :serial-turns? serial-turns?
              :oversight? oversight?
              :max-turns max-turns :beam? (> width 1) :beam-width width
+             :width-asked? (some? asked-width)
              :token-budget token-budget
              :root root
              ;; What the manifest says this run is FOR — see seed-branch.

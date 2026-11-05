@@ -28,6 +28,7 @@
   dispatch."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
+            [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.loop :as aloop]
             [samizdat.agent.roles :as roles]
@@ -728,6 +729,32 @@
     (doseq [g [:progress-stalled :no-edits :studying]]
       (is (< mine (:priority (by g)))
           (str "suspect-the-test must outrank " g)))))
+
+(deftest a-passing-check-says-finish-and-is-not-a-stall
+  ;; A finished program with green samples was told "you are busy but not
+  ;; advancing", and two of those opened sibling branches on it.
+  (let [branch (fn [& kv]
+                 (apply assoc (state/new-branch {:id "B1" :problem "p"})
+                        :status :active :any-progress? true :turns-since-progress 9
+                        :current-turn 20 kv))
+        held (fn [b g] (some #(and (= g (:gate %)) (:held %))
+                             (arbiter/measurements {:branch b :max-turns 40})))
+        after (:green-finish-after-turns (gates/threshold :green-check))]
+    (testing "with no pass on record the stall gate is what it was"
+      (is (held (branch) :progress-stalled))
+      (is (not (held (branch) :check-green))))
+    (testing "just after a pass the branch is left to look at what samples miss"
+      (let [b (branch :green-check {:turn 20 :artifact "solution.py"})]
+        (is (not (held b :check-green)))
+        (is (not (held b :progress-stalled)))))
+    (testing "then it is told to finish, and is still not stalled"
+      (let [b (branch :green-check {:turn (- 20 after) :artifact "solution.py"})]
+        (is (held b :check-green))
+        (is (not (held b :progress-stalled)))))
+    (testing "it outranks the gates that would ask for more writing"
+      (let [by (fn [n] (first (filter #(= n (:gate %)) (gates/gates))))]
+        (doseq [g [:no-edits :studying :suspect-the-test]]
+          (is (< (:priority (by :check-green)) (:priority (by g))) (str g)))))))
 
 ;; --- a call the model put inside its reasoning ------------------------------
 

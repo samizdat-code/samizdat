@@ -12,6 +12,7 @@
   grader's minimal environment, or the run's sealed verify command. It takes no
   command, so it is no way round the approval policy."
   (:require [clojure.string :as str]
+            [samizdat.agent.state :as state]
             [samizdat.agent.tools.base :as base]
             [samizdat.agent.verify :as verify]
             [samizdat.eval.samples :as samples]
@@ -38,14 +39,19 @@
 (defmethod base/run-tool "run_check" [{:keys [branch root run-id config]}]
   (let [{:keys [artifact report-chars verify-timeout-ms]} (lexicon/policy :team-solve)
         cmd (get-in config [:run :verify-cmd])
-        has-samples? (seq (remove :missing (samples/paired-tests (str root "/tests"))))]
-    (base/ok branch
-             (msg (cond
-                    has-samples? (run-samples root artifact report-chars)
-                    (not (str/blank? (str cmd)))
-                    (let [r (verify/run-configured run-id cmd verify-timeout-ms)]
-                      (if (:green? r)
-                        {:passed true}
-                        {:failed true :output (:output r)}))
-                    :else {:none true}))
+        has-samples? (seq (remove :missing (samples/paired-tests (str root "/tests"))))
+        verdict (cond
+                  has-samples? (run-samples root artifact report-chars)
+                  (not (str/blank? (str cmd)))
+                  (let [r (verify/run-configured run-id cmd verify-timeout-ms)]
+                    (if (:green? r)
+                      {:passed true}
+                      {:failed true :output (:output r)}))
+                  :else {:none true})
+        ;; Only samples judge the program itself. A repo's suite is green before
+        ;; any work starts, so it says nothing about the job being finished.
+        green (when (and has-samples? (:passed verdict))
+                (verify/green-check root artifact (state/turn-count branch)))]
+    (base/ok (if green (assoc branch :green-check green) (dissoc branch :green-check))
+             (msg verdict)
              :progress? true)))

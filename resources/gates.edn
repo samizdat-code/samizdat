@@ -248,6 +248,19 @@
         armed it and the monitor was structurally blind to the one case it most
         needed to report (dirge PR 739, dirge-t5dh)."}
 
+ :green-check
+ {:value {:green-finish-after-turns 5}
+  :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-i692"]
+  :doc "How long a branch whose paired samples passed may look at what they miss
+        before :check-green tells it to finish. Not at once: on gap-intervals a
+        cross-check run after the samples passed found a real bug on tied ends."}
+
+ :max-green-nudges
+ {:value 2 :kind :re-fire-guard :capability-tunable? true
+  :provenance ["karamazov-i692"]
+  :doc "How often :check-green may re-fire on one branch."}
+
  :max-stall-nudges
  {:value 2 :kind :re-fire-guard :capability-tunable? true
   :doc "How often the stall nudge may re-fire on one branch."}
@@ -3963,7 +3976,7 @@
   ;; through :ns-whitelist-regex, so the quoted payload genuinely contains
   ;; no single quotes (provenance R3-1).
   {:value
-   {:test-file-regex "(?i)(^|/)(test|spec)s?/|[_-](test|spec)\\.[a-z]+$"
+   {:test-file-regex "(?i)(^|/)(test|spec)s?/|[_-](test|spec)\\.[a-z]+$|(^|/)test_[^/]+$"
     :root-strip-regex "^(test|gui|src)/"
     :ext-strip-regex "\\.cljc?$"
     :ns-whitelist-regex "[a-zA-Z0-9.*-]+"
@@ -4256,6 +4269,7 @@
                     "forget" "retire"}
   :settle-called
   {:orienting        #{"plan" "write_file" "edit_file" "patch"}
+   :check-green      #{"done" "give_up" "write_file" "edit_file" "patch" "run_check"}
    :no-edits         #{"write_file" "edit_file" "patch"}
    ;; A WRITE, not another test run. The steer asked the branch to form a
    ;; hypothesis about where the defect is; editing the test it doubted and
@@ -4792,6 +4806,24 @@
                 action, or closes the task"
    :window 3}
 
+  {:gate :check-green
+   :provenance ["karamazov-i692"]
+   :priority 8.9
+   :budget :max-green-nudges
+   :doc "THE CHECK PASSED, SO FINISH. Every hard-corpus loop run had a passing
+         program by worker turn 10 and carried on for hundreds of turns, because
+         nothing said a passing check was the end. Above :no-edits and :studying,
+         which would ask for more writing."
+   :measure (if-let [g (:green-check branch)]
+              (- (state/turn-count branch) (:turn g))
+              0)
+   :when (when-let [g (:green-check branch)]
+           (>= (- (state/turn-count branch) (:turn g))
+               (:green-finish-after-turns (threshold :green-check))))
+   :message-form (prompt "check-green")
+   :prediction "the branch calls done, or changes the program and checks it again"
+   :window 3}
+
   {:gate :progress-stalled
    :priority 10
    :budget :max-stall-nudges
@@ -4801,6 +4833,9 @@
    ;; the quantity the :when compares, recorded at every check (na2k.7)
    :measure (:turns-since-progress branch)
    :when (and (:any-progress? branch)
+              ;; Passing samples are not a stall: the stall count is what opens
+              ;; siblings to "approach it differently" on a finished program.
+              (nil? (:green-check branch))
               ;; Only a role that can write is told to (karamazov-1wv9):
               ;; an answerer reading is doing its job.
               (roles/may-use? (:role branch) "write_file")

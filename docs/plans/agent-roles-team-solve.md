@@ -263,10 +263,12 @@ How to read that:
 
 - There is NO measured solve-rate lift. Both arms solved everything, so this corpus cannot
   show one on this model. What it shows is cost and termination.
-- Much of the gap is a defect in `loop`, not a virtue of the method: `done` was refused
-  ("You added no test") on a correct Python program, and the branch went on writing Clojure
-  cross-checks for it. Fixing that would narrow the gap. The cheapest `loop` run, 433K tokens
-  without the supervisor, still cost three times the dearest team-solve run (140K).
+- Much of the gap is a defect in `loop`, not a virtue of the method. A correct program existed
+  by worker turn 10 in all 12 runs. Nothing treated a passing check as the end, the stall gate
+  read it as stuck, and escalation opened two siblings to "approach it differently", even at
+  an asked width of 1. "You added no test" was only 13 of 62 `done` calls. These rows predate
+  the fix below. The cheapest `loop` run, 433K tokens without the supervisor, still cost three
+  times the dearest team-solve run (140K).
 - `loop` used the older build's uncapped supervisor, which is why tokens are shown both ways.
 - GLM on an earlier build: 7/7 each on the 7 pairs before the quota ran out, median ratio 0.14.
   The other 5 pairs were provider errors, excluded.
@@ -276,6 +278,12 @@ How to read that:
   bound. Two pairs are an anecdote, and neither separates the arms on solving. The other 4
   pairs never started: Homebrew moved jolt to 0.8.24 mid-sweep and the server failed to load
   until the `jolt-lang/time` pin was bumped. They are infrastructure, not results.
+
+`loop` after that fix (karamazov-i692), GLM, 4 of the hard problems, 1800 s limit: all solved
+on one worker branch with no escalation. 2 of 4 ended by themselves, on 496K and 1.06M tokens;
+2 hit the limit at about 50 turns, on 1.38M and 1.68M. The same problems before it, 3000 s
+limit, on the 3 with valid rows: none ended, 2.3M to 3.1M tokens. Better, not fixed, and not
+re-measured against team-solve.
 
 Live scenarios on the final build, through normal workflow selection:
 

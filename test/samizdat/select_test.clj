@@ -169,6 +169,19 @@
     (is (= fb (workflow/active-loop-name {} nil))
         "the documented fallback and the code's default are the same name")))
 
+(deftest with-no-choice-the-run-takes-the-policys-fallback
+  ;; karamazov-wxpp: :fallback was documented as what a run uses when selection
+  ;; is off or the call fails, and no code read it, so editing it did nothing.
+  (with-redefs [select/policy (constantly {:fallback "critic"})]
+    (testing "triage gave nothing"
+      (is (= "critic" (select/chosen-workflow nil nil))))
+    (testing "the size table outranks the chooser, and both outrank the fallback"
+      (is (= "team-solve" (select/chosen-workflow {:workflow "loop"} {:workflow "team-solve"})))
+      (is (= "loop" (select/chosen-workflow {:workflow "loop"} {}))))
+    (testing "a configured loop still beats all of it"
+      (is (= "team" (workflow/active-loop-name {:run {:loop "team"}}
+                                               (select/chosen-workflow nil nil)))))))
+
 (deftest the-choice-reads-how-each-workflow-has-gone-here
   ;; A run sees only its own attempt, so "direct attempts on this project keep
   ;; getting stuck" is not something any single run can notice — it has to be

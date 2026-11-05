@@ -814,6 +814,28 @@
 
 ;; --- the ship gate's test rung: done is not terminal until tests pass --------
 
+(deftest paired-samples-that-passed-are-the-test-a-program-needs
+  ;; 13 of the hard corpus's refusals: a Python program whose samples passed
+  ;; was told "You added no test", and the branch wrote Clojure cross-checks.
+  (let [root (str "/tmp/samizdat-pinned-" (System/nanoTime))
+        file (str root "/solution.py")
+        _ (.mkdirs (java.io.File. root))
+        _ (spit file "print(1)\n")
+        green (verify/green-check root "solution.py" 3)
+        ship (fn [b]
+               (tools/run-tool {:branch (merge (state/new-branch {:id "B1" :problem "write solution.py"}) b)
+                                :tool-name "done" :turn 4 :root root :git-baseline "HEAD"
+                                :config {:run {:verify-focused? true :require-test? true}}
+                                :args {:answer "wrote solution.py"}}))]
+    (with-redefs [gitdiff/changed-files (fn [_ _] ["solution.py"])]
+      (testing "no pass on record: refused, as before"
+        (is (str/includes? (:result (ship nil)) "You added no test")))
+      (testing "a pass on this program: shipped"
+        (is (not (str/includes? (:result (ship {:green-check green})) "You added no test"))))
+      (testing "the program changed since: refused"
+        (spit file "print(2)\n")
+        (is (str/includes? (:result (ship {:green-check green})) "You added no test"))))))
+
 (deftest done-is-a-hard-gate-on-a-green-test-run
   (let [answer "gated the remember tool so a done with an empty diff is refused"
         ship (fn [ctx] (tools/run-tool (merge {:branch (state/new-branch {:id "B1" :problem "gate the remember tool"})

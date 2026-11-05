@@ -618,12 +618,13 @@
         next, opens them — and the run's reasoning effort goes to
         :reasoning-effort for every role from its next request. Once per run
         (:escalated? persists across rounds), and never for a run already
-        that wide."
+        that wide, or one whose caller asked for its width: that is how a local
+        model is kept to the one generation it can serve at speed."
    :effects [:db]
-   :requires [:conn :run-id :beam-width]
+   :requires [:conn :run-id :beam-width :width-asked?]
    :input  [:map [:culled :any] [:turn :int] [:escalated? {:optional true} :any]]
    :output [:map [:culled :any] [:escalated? {:optional true} :any]]}
-  (fn [{:keys [conn run-id beam-width]} {:keys [culled escalated?] :as data}]
+  (fn [{:keys [conn run-id beam-width width-asked?]} {:keys [culled escalated?] :as data}]
     (let [{:keys [enabled? after-stalls to-width reasoning-effort]} (lexicon/policy :escalation)
           stalls (or (some #(when (= "progress-stalled" (str (:gate %))) (:fired %))
                            (journal/gate-tally conn run-id))
@@ -631,7 +632,7 @@
           alive (filterv state/active? culled)
           room (- (or to-width 0) (count alive))
           target (first alive)]
-      (if (or escalated? (not enabled?) (nil? target) (not (pos? room))
+      (if (or escalated? width-asked? (not enabled?) (nil? target) (not (pos? room))
               (>= (or beam-width 1) (or to-width 0))
               (< stalls (or after-stalls 0)))
         data

@@ -729,6 +729,27 @@
         (samizdat.agent.live/forget-run! rid))
       (finally (db/close c)))))
 
+(deftest a-width-the-caller-asked-for-is-not-widened
+  ;; Width 1 is how a local model is run: two generations at once drop it to a
+  ;; third of its speed each. The Qwen loop runs were asked for 1, escalated to
+  ;; 3, and decoded at 6.6 tok/s.
+  (let [c (db/open! ":memory:")]
+    (try
+      (let [rid (runs/start-run! c {:problem "p"})
+            p (lexicon/policy :escalation)
+            escalate (:handler (cell/get-cell! :beam/escalate))
+            b1 (assoc (samizdat.agent.state/new-branch {:id "B1" :problem "p"}) :status :active)
+            data {:culled [b1] :all-now [b1] :turn 12}]
+        (runs/open-branch! c rid {:branch-id "B1"})
+        (dotimes [i (:after-stalls p)]
+          (journal/record-gate! c rid {:branch-id "B1" :turn i :gate :progress-stalled
+                                       :prediction "x"}))
+        (is (= data (escalate {:conn c :run-id rid :beam-width 1 :width-asked? true} data)))
+        (is (:escalated? (escalate {:conn c :run-id rid :beam-width 1} data))
+            "a width triage chose can still grow")
+        (samizdat.agent.live/forget-run! rid))
+      (finally (db/close c)))))
+
 (deftest escalation-opens-its-branches-on-a-fiber-whose-store-calls-wait
   ;; Run ab935047 died at :beam/spawn, right after escalating, on jolt
   ;; 0.8.12: spawn-children! opens the children in a two-collection mapv, and

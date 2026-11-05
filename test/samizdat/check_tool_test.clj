@@ -4,7 +4,8 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [samizdat.agent.tools.base :as base]
-            [samizdat.agent.tools.check]))
+            [samizdat.agent.tools.check]
+            [samizdat.agent.verify :as verify]))
 
 (defn- dir-with [program]
   (let [d (str "/tmp/samizdat-check-" (System/nanoTime))]
@@ -32,3 +33,42 @@
   (let [d (str "/tmp/samizdat-check-empty-" (System/nanoTime))]
     (.mkdirs (java.io.File. d))
     (is (str/includes? (check d) "no check"))))
+
+(defn- check-branch [root & [branch]]
+  (:branch (base/run-tool {:tool-name "run_check" :root root :run-id "r"
+                           :branch (merge {:id "W1" :current-turn 7} branch)})))
+
+(deftest green-samples-are-recorded-on-the-branch
+  ;; The stall gates count confirmed Clojure artifacts, so a finished Python
+  ;; program with a passing check read as stuck: all 12 hard-corpus loop runs
+  ;; had solution.py by worker turn 10 and went on for hundreds of turns, and
+  ;; escalation opened siblings to "approach it differently".
+  (let [good "print(sum(map(int, input().split())))"]
+    (testing "a pass is remembered, with the turn it happened on"
+      (let [g (:green-check (check-branch (dir-with good)))]
+        (is (= 7 (:turn g)))
+        (is (= "solution.py" (:artifact g)))))
+    (testing "a fail takes an earlier pass back"
+      (let [d (dir-with "print(0)")]
+        (is (nil? (:green-check (check-branch d {:green-check {:turn 1}}))))))
+    (testing "no program takes it back too"
+      (is (nil? (:green-check (check-branch (dir-with nil) {:green-check {:turn 1}})))))))
+
+(deftest a-green-verify-command-is-not-a-finished-task
+  ;; A repo's suite is green before the work starts. Only paired samples judge
+  ;; the program itself, so only they say the job is finished.
+  (let [d (str "/tmp/samizdat-check-cmd-" (System/nanoTime))]
+    (.mkdirs (java.io.File. d))
+    (with-redefs [verify/run-configured (constantly {:green? true})]
+      (let [b (:branch (base/run-tool {:tool-name "run_check" :root d :run-id "r"
+                                       :config {:run {:verify-cmd "true"}}
+                                       :branch {:id "W1" :current-turn 2 :green-check {:turn 1}}}))]
+        (is (nil? (:green-check b)))))))
+
+(deftest a-pass-pins-the-program-only-while-it-is-unchanged
+  (let [d (dir-with "print(sum(map(int, input().split())))")
+        g (:green-check (check-branch d))]
+    (is (verify/samples-pinned? d g))
+    (spit (str d "/solution.py") "print(0)\n")
+    (is (not (verify/samples-pinned? d g)) "an edit since the check proves nothing")
+    (is (not (verify/samples-pinned? d nil)) "no pass, no proof")))

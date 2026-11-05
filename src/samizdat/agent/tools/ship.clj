@@ -599,7 +599,10 @@
         ;; :verify-focused? is true; loops with neither behave exactly as before.
         verify-cmd (get-in ctx [:config :run :verify-cmd])
         verify-focused? (get-in ctx [:config :run :verify-focused?] false)
-        require-test? (get-in ctx [:config :run :require-test?] true)
+        ;; Paired samples that passed on this very program are its test: a
+        ;; program with them has nothing further to pin.
+        require-test? (and (get-in ctx [:config :run :require-test?] true)
+                           (not (verify/samples-pinned? (:root ctx) (:green-check branch))))
         ;; THE TEST FILE THIS PIECE WAS DELEGATED, from the task it holds.
         ;; A split leaves the tree RED on purpose — the stubs are the failing
         ;; tests — so a child that ran the whole suite would drown in its
