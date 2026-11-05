@@ -241,7 +241,7 @@
 
 (defn- drain-directives
   "Apply what the supervisor queued for this workflow's boundary. Returns
-  {:retask text :stop why :budget n :guidance text}. Directives scoped to a
+  {:retask text :stop why :finish answer :budget n :guidance text}. Directives scoped to a
   branch are that branch's own, and a `message` to the whole run has no worker
   to reach here, so the manager reads it."
   [{:keys [conn run-id]} round]
@@ -254,6 +254,7 @@
        (case (:kind d)
          ("retask" "switch") (applied! {:retask text})
          "stop" (applied! {:stop (or text "the supervisor stopped the run")})
+         "finish" (applied! {:finish (or text "the supervisor finished the run")})
          "budget" (if-let [n (interventions/turns-asked d)]
                     (applied! {:budget n})
                     acc)
@@ -430,6 +431,13 @@
         (do (save-ledger! ctx {:stopped (:stop drained)})
             (journal/note! conn run-id :team-solve-round
                            {:data {:round round :go "verify" :why "supervisor stop"}})
+            (assoc data :team-solve/go :verify))
+
+        ;; Not a stop: verify's script judges the work as it stands, so this
+        ;; only says there is no more of it coming.
+        (:finish drained)
+        (do (journal/note! conn run-id :team-solve-round
+                           {:data {:round round :go "verify" :why "supervisor finish"}})
             (assoc data :team-solve/go :verify))
 
         (:retask drained)
@@ -667,7 +675,7 @@
       (let [d (drain-directives ctx round)
             said (when-not (seq d) (supervisor-concluded ctx seen))]
         (cond
-          (seq (select-keys d [:retask :stop :guidance])) d
+          (seq (select-keys d [:retask :stop :finish :guidance])) d
           said {:guidance said}
           (<= left 0) d
           :else (do (cancel/sleep! poll-ms) (recur (- left poll-ms))))))))
@@ -695,6 +703,7 @@
           d (await-directive ctx round (:unstick-wait-ms p) (:unstick-poll-ms p))
           out (cond
                 (:stop d) {:go :verify :by "supervisor" :stopped (:stop d)}
+                (:finish d) {:go :verify :by "supervisor"}
                 (:retask d) {:go :work :by "supervisor" :task (:retask d)}
                 (> n (:max-unsticks p)) {:go :work :by "bound" :final? true
                                          :task (str/trim (prompt/prompt "team-solve-finalize"))}

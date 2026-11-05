@@ -551,7 +551,15 @@
     samizdat.adapter-test
     samizdat.proc-test])
 
+(defn- no-wait-at-the-cap!
+  "A run at its cap waits minutes for the supervisor, and many tests reach a cap
+  with nothing to answer. Still asks, and still sees an answer already queued."
+  []
+  (alter-var-root #'samizdat.agent.beam/await-cap-decision!
+                  (fn [f] (fn [ctx cap _ poll] (f ctx cap 0 poll)))))
+
 (defn run []
+  (no-wait-at-the-cap!)
   ;; Each test project is a fresh temp root with its own confined caches
   ;; (karamazov-1gbh); keep them out of ~/.cache and drop them afterwards.
   (let [base (str (jolt.fs/create-temp-dir))]

@@ -46,6 +46,13 @@ def main(db, run_id):
         "quiet_looks": len(kinds.get("oversight-quiet", [])),
         "stage_errors": [str(data(r).get("error"))[:200] for r in kinds.get("stage-error", [])],
         "directives": [dict(k) for k in iv],
+        "healed_with": [dict(r) for r in c.execute("""SELECT tool_name AS tool, substr(args,1,160) AS args, substr(result,1,120) AS result
+                         FROM turns WHERE run_id=? AND branch_id='SUP' AND (tool_name IN ('cell','manifest','reload_cells')
+                           OR (tool_name IN ('policy','prompt') AND args LIKE '%"save"%'))
+                           AND args NOT LIKE '%"list"%' AND args NOT LIKE '%"show"%' AND args NOT LIKE '%"versions"%'""", (run_id,))],
+        "steers_refused": c.execute("""SELECT COUNT(*) FROM turns WHERE run_id=? AND branch_id='SUP' AND tool_name='intervene'
+                           AND result LIKE '%does not work, and this run%'""", (run_id,)).fetchone()[0],
+        "loop_refreshed": len(kinds.get("loop-refreshed", [])),
         "directives_stranded": sum(1 for k in iv if k["status"] == "pending"),
         "overrode_done": sum(1 for r in kinds.get("team-solve-round", []) if data(r).get("overrode-done")),
         "counterexamples": [data(r).get("counterexample") for r in kinds.get("team-solve-round", []) if data(r).get("counterexample")],

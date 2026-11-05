@@ -392,6 +392,43 @@
       (is (= 1 (:errors (:signals (journal/last-note conn rid :oversight)))))
       (is (false? (:oversight/worth-a-look? (gather-now conn rid)))))))
 
+(deftest a-worker-that-cannot-land-its-answer-wakes-the-supervisor
+  ;; karamazov-i692: 12 quiet passes while done was refused three times on a
+  ;; verified program. The first look came at worker turn 39.
+  (let [floors {:unmet-floor 2 :idle-floor 25 :done-refused-floor 2}]
+    (is (not (worth-a-look? {:done-refused 1} floors)) "one refusal is the gate working")
+    (is (worth-a-look? {:done-refused 2} floors))
+    (let [since @(cells/cell-var 'cells.oversight 'since-last-look)]
+      (testing "counted from the last look"
+        (is (= 2 (:done-refused (since {:done-refused 2} nil {:idle-floor 25}))))
+        (is (= 1 (:done-refused (since {:done-refused 3} {:done-refused 2} {:idle-floor 25}))))))))
+
+(deftest nearing-the-turn-cap-is-the-supervisors-call
+  ;; How long a run may go is a decision, and `extend` is how it is made, but
+  ;; nothing asked anyone before the cap ended the run.
+  (let [floors {:unmet-floor 2 :idle-floor 25}
+        since @(cells/cell-var 'cells.oversight 'since-last-look)]
+    (is (worth-a-look? {:near-cap? true} floors))
+    (testing "once per cap"
+      (is (:near-cap? (since {:near-cap-at 300} nil {:idle-floor 25})))
+      (is (not (:near-cap? (since {:near-cap-at 300} {:near-cap-at 300} {:idle-floor 25}))))
+      (is (not (:near-cap? (since {:near-cap-at nil} nil {:idle-floor 25})))))
+    (testing "an extended cap can be asked about again"
+      (is (:near-cap? (since {:near-cap-at 400} {:near-cap-at 300} {:idle-floor 25}))))))
+
+(deftest gather-reads-refused-dones-and-the-cap-from-the-record
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p" :max-turns 10})
+        near (:near-cap-fraction (gates/threshold :oversight-limits))]
+    (is (number? near))
+    (cells/load-cells!)
+    (runs/open-branch! conn rid {:branch-id "B1" :problem "p"})
+    (doseq [t (range 1 (inc (long (* near 10))))]
+      (journal/record-turn! conn rid {:branch-id "B1" :turn t :tool-name "read_file" :category :neutral}))
+    (let [g ((:handler (cell/get-cell! :oversight/gather)) {:conn conn :run-id rid :config {}} {})]
+      (is (= 10 (get-in g [:oversight/signals :near-cap-at])))
+      (is (true? (:oversight/worth-a-look? g))))))
+
 (deftest unmet-and-idle-count-from-the-last-look
   (let [since @(cells/cell-var 'cells.oversight 'since-last-look)
         floors {:idle-floor 25}]
@@ -1052,7 +1089,7 @@
       ((:handler (cell/get-cell! :oversight/reason))
        ctx {:oversight/idle 30 :oversight/unmet 2 :oversight/turns [] :oversight/firings []}))
     (is (= 4 (:turn @seen)) "after SUP's own last turn, not another branch's")
-    (is (= 13 (:max-turns @seen)) "the cap moves with the start, so the pass still gets its :pass-max-turns")
+    (is (= 23 (:max-turns @seen)) "the cap moves with the start, so the pass still gets its :pass-max-turns")
     (testing "a branch with no turns yet starts at 1 under a pass's cap"
       (let [rid2 (runs/start-run! conn {:problem "q"})]
         (with-redefs [myc/run-compiled (fn [_ rctx data]
@@ -1061,7 +1098,7 @@
           ((:handler (cell/get-cell! :oversight/reason))
            (assoc ctx :run-id rid2)
            {:oversight/idle 30 :oversight/unmet 2 :oversight/turns [] :oversight/firings []}))
-        (is (= {:turn 1 :max-turns 10} @seen))))))
+        (is (= {:turn 1 :max-turns 20} @seen))))))
 
 (deftest the-measurement-in-a-notice-reads-as-words-not-edn
   ;; Run 0f4b9b55's notice said `Measured over this session: {:turns 1,

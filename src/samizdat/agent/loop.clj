@@ -1299,6 +1299,8 @@
                                            turn)
                    b)))
 
+           "finish" b ;; the round top's, at any width: it needs the whole branch set
+
            (cond
              ;; A workflow that goes a turn at a time has no round boundary, so
              ;; nothing would ever apply these. Saying so beats leaving a directive

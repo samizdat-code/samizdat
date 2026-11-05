@@ -128,6 +128,10 @@
     :summary "The held-out gate off the turn: after a save validates, the battery replays on a background lane and the edit is committed or refused there; the branch that made it is told by a message on a later turn. nil when the project has no battery, and the tool saves as before."}
    {:name samizdat.heldout/check-edit
     :summary "The held-out gate, stage 1: replay the project's battery (.samizdat/battery, stored in battery_cases) with a candidate cell, manifest or policy edit in place and without it, each case in a child process on the tree its recorded run started from, and refuse the edit when a target that passed fails. Ties accepted; a case that does not run at baseline is set aside by name. Opt-in by having cases; gates.edn :heldout. Each target is recorded in heldout_checks with its fixture, harness revision, model and scorer."}
+   {:name samizdat.workflow/refresh-turn-loop
+    :summary "The turn loop compiled again when its manifest or the cells have changed since it was last compiled, else nil. The beam asks at each round (beam/with-live-loop), so an edit reaches the running turn-at-a-time run at its next round. An edit that will not compile or is no longer per-turn leaves the running loop in place, noted :loop-refresh-failed; one that lands is noted :loop-refreshed."}
+   {:name samizdat.claims/denies-tool?
+    :summary "Whether a sentence says a tool itself does not work: the tool's whole name, at most two words, then a denial from wordlists.edn :tool-denials. intervene refuses such a directive when the run's record shows that tool working; anything else it passes."}
    {:name samizdat.heldout/draft!
     :summary "Freeze a finished run as a battery case: its replay, the expectations battery/draft-case writes, its git baseline (pinned under refs/samizdat/battery/) as the fixture, its loop and model. Behind `battery add`. Cases are written once and never rewritten."}
    {:name samizdat.heldout/live-verdict

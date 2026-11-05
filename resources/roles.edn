@@ -81,14 +81,14 @@
   :doc "The meta process. Does not care how the feature is implemented; cares
         whether the implementer is moving through its steps and what to tune
         when it is not. Reads the run's health, investigates the record, and
-        changes the harness — manifests, cells, prompts, policy — so the next
-        run does better. It does not write project code: that is the
+        changes the harness — manifests, cells, prompts, policy — so this run
+        and the next do better. It does not write project code: that is the
         implementer's job and doing it here hides the loop problem behind a
         patch."
   ;; `websearch` is investigation: a supervisor diagnosing an endpoint or a
   ;; library's behaviour has the same need an implementor does.
   :tools #{"intervene" "read_file" "read_digest" "inspect_clojure" "grep" "lsp" "resource" "inference" "diagnosis" "execution" "skill" "doc" "complete" "manual"
-           "introspect" "cells" "cell" "manifest" "prompt" "policy" "adopt"
+           "introspect" "cells" "cell" "reload_cells" "manifest" "prompt" "policy" "adopt"
            "fetch_turn" "fetch_artifact" "recall" "remember" "forget" "retire" "outcome"
            "experiment" "verdict" "papercut" "battery" "message" "eval" "shell" "websearch" "done" "give_up"}
   :prompt "roles/supervisor"

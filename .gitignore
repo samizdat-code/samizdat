@@ -59,6 +59,10 @@ __pycache__/
 
 # Built by evals/team-solve/build_hard.py: 29M of stress inputs.
 evals/team-solve/hard/
+# Copied from it by evals/team-solve/heal/build.sh.
+evals/team-solve/heal/*/task.md
+evals/team-solve/heal/*/tests/
+evals/team-solve/heal/*/hidden/
 
 # Written by evals/team-solve/run.sh.
 evals/team-solve/results.jsonl

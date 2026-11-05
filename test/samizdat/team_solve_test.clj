@@ -8,18 +8,22 @@
   closed; a stuck team reaches the supervisor and comes back or ends on its own."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
-            [clojure.test :refer [deftest testing is]]
+            [clojure.test :refer [deftest testing is use-fixtures]]
             [samizdat.agent.gates]
             [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.agent.worktree]
             [samizdat.engine.proc :as proc]
             [samizdat.agent.beam :as beam]
+            [samizdat.agent.select :as select]
+            [samizdat.cells :as cells]
             [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
             [samizdat.llm.client :as llm]
             [samizdat.store.db :as db]
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
+            [samizdat.store.runs :as runs]
+            [samizdat.store.userspace :as us]
             [samizdat.workflow :as workflow]))
 
 (def ^:private right "print(sum(map(int, input().split())))")
@@ -547,3 +551,97 @@
               (run conn d))]
       (is (= :completed (:status r)))
       (is (empty? (:review @calls))))))
+
+(deftest finish-sends-team-solve-to-its-verify-stage
+  ;; The verify stage's script judges the work, so finish there is not a claim
+  ;; anyone has to trust, and unlike stop it does not mark the run stopped.
+  (let [drain @(cells/cell-var 'cells.team-solve 'drain-directives)
+        conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})]
+    (interventions/submit! conn rid {:kind "finish" :payload {:text "the check holds"}})
+    (is (= "the check holds" (:finish (drain {:conn conn :run-id rid} 1))))
+    (is (= "applied" (:status (first (interventions/history conn rid)))))))
+
+;; End to end through the real beam and the real turn loop, karamazov-i692: what
+;; the journals showed was a correct program and a run that never ended.
+(defn- run-loop [conn d turns]
+  (with-redefs [select/triage! (constantly nil)]
+    (beam/run! {:conn conn :config {:run {:loop "loop" :root d}}
+                :llm-adapter :a :llm-config {:max-tokens 16384}
+                :problem "Sum the integers on stdin."
+                :max-turns turns :beam-width 1 :oversight? false})))
+
+(defn- worker-that-never-finishes
+  "Claims a task, writes a right program, checks it, then reads it for ever. `then` runs once,
+  after the check."
+  [conn then]
+  (let [once (atom false)]
+    (fn [_ _ messages & _]
+      (let [all (str/join "\n" (map (comp str :content) messages))]
+        (cond
+          (not (str/includes? all "Created sz-"))
+          {:content (json-call "task" {"action" "create" "title" "sum"}) :finish-reason "stop"}
+          (not (str/includes? all "Claimed sz-"))
+          {:content (json-call "task" {"action" "claim" "id" (re-find #"sz-[0-9a-f]+" all)}) :finish-reason "stop"}
+          (not (str/includes? all "Wrote "))
+          {:content (json-call "write_file" {"path" "solution.py" "content" right}) :finish-reason "stop"}
+          (not (str/includes? all "PASSED"))
+          {:content (json-call "run_check" {}) :finish-reason "stop"}
+          :else
+          (do (when (compare-and-set! once false true)
+                (then (:id (first (runs/list-runs conn)))))
+              {:content (json-call "read_file" {"path" "solution.py"}) :finish-reason "stop"}))))))
+
+(deftest finish-ends-a-loop-run-whose-worker-will-not
+  (let [conn (db/open! ":memory:")
+        d (problem-dir)
+        r (with-redefs [llm/chat (worker-that-never-finishes
+                                  conn
+                                  (fn [id]
+                                    (interventions/submit!
+                                     conn id {:kind "finish" :issued-by "supervisor"
+                                              :payload {:text "solution.py passes every sample"}})))]
+            (run-loop conn d 14))]
+    (is (= :completed (:status r)) (pr-str r))
+    (is (= "solution.py passes every sample" (:final_answer (runs/get-run conn (:run-id r)))))))
+
+(deftest a-manifest-saved-mid-run-drives-that-runs-next-round
+  (let [conn (db/open! ":memory:")
+        d (problem-dir)
+        r (with-redefs [llm/chat (worker-that-never-finishes
+                                  conn
+                                  (fn [_]
+                                    (us/save! conn :manifest "loop"
+                                              (str (:body (us/load-latest conn :manifest "loop")) "\n;; tuned\n")
+                                              "project" "tuned mid-run")))]
+            (run-loop conn d 9))]
+    (is (= 2 (:version (journal/last-note conn (:run-id r) :loop-refreshed)))
+        (pr-str (journal/last-note conn (:run-id r) :loop-refresh-failed)))))
+
+(deftest a-run-at-its-cap-asks-and-can-be-extended
+  ;; A run can go from start to cap inside the stream's spacing: one fixture spent
+  ;; 45 s and got no look at all. The cap has to be a question, not just an end.
+  (let [conn (db/open! ":memory:")
+        d (problem-dir)
+        asked (atom nil)
+        real beam/await-cap-decision!
+        r (with-redefs [llm/chat (worker-that-never-finishes conn (fn [_] nil))
+                        beam/await-cap-decision!
+                        (fn [ctx cap _ _]
+                          (reset! asked cap)
+                          (interventions/submit! (:conn ctx) (:run-id ctx)
+                                                 {:kind "finish" :issued-by "supervisor"
+                                                  :payload {:text "the check holds"}})
+                          (real ctx cap 1000 10))]
+            (beam/run! {:conn conn :config {:run {:loop "loop" :root d}}
+                        :llm-adapter :a :llm-config {:max-tokens 16384}
+                        :problem "Sum the integers on stdin."
+                        :max-turns 6 :beam-width 1}))]
+    (is (= 6 @asked))
+    (is (= :completed (:status r)) (pr-str (:status r)))
+    (is (seq (journal/notes conn (:run-id r) :workflow-signal)))))
+
+(deftest silence-at-the-cap-ends-the-run-as-before
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})]
+    (is (false? (beam/await-cap-decision! {:conn conn :run-id rid} 6 0 1)))))

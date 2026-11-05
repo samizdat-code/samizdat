@@ -106,8 +106,8 @@
     ;; The beam driver's steps. Each takes branches through turns, which reach
     ;; tools only through the tool path's policy and approval.
     samizdat.agent.beam
-    {:vars [advance-all await-resume! drain-directives! ensure-scored finish-now?
-            record-inactive! round-max-turns select-done-branch spawn-children! spent-tokens]
+    {:vars [advance-all await-cap-decision! await-resume! drain-directives! ensure-scored finish-now?
+            record-inactive! round-max-turns with-live-loop select-done-branch spawn-children! spent-tokens]
      :effects #{:net :db :run}}
 
     ;; Token-budget reservations for calls in flight (karamazov-05z0.3). In
@@ -358,7 +358,7 @@
     ;; Run and branch rows, through the store's own functions. get-branch replaced
     ;; a raw SELECT in cells/board.clj.
     samizdat.store.runs
-    {:vars [branches close-branch! extend-budget! finish-run! get-branch nth-recent-start open-branch!]
+    {:vars [branches close-branch! extend-budget! finish-run! get-branch get-run nth-recent-start open-branch!]
      :effects #{:db}}
 
     ;; The task board, through its own functions.

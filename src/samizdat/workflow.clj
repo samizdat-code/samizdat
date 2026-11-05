@@ -183,11 +183,27 @@
   ([conn name] (compile-turn-loop conn name nil))
   ([conn name opts]
    (let [{:keys [version definition]} (load-loop! conn name)]
-     {:name name
-      :version version
-      :definition definition
-      :iterating? (iterating? definition)
-      :compiled (compile-loop (turn-manifest definition) opts)})))
+     (let [compiled (compile-loop (turn-manifest definition) opts)]
+       {:name name
+        :version version
+        :definition definition
+        :iterating? (iterating? definition)
+        :compiled compiled
+        ;; What the compile bound its handlers from, for refresh-turn-loop.
+        :cells (cells/load-cells!)}))))
+
+(defn refresh-turn-loop
+  "The turn loop compiled again when its manifest or the cells have changed since
+  `known` (what compile-turn-loop or this returned), else nil. Throws when an edit
+  will not compile. The check is a version comparison and a read of the cell
+  sources, cheap beside a turn, because the beam asks every round: this is how a
+  supervisor's edit reaches the run it was made for (karamazov-i692)."
+  [conn name known opts]
+  (let [cells-now (cells/load-cells!)
+        {:keys [version]} (load-loop! conn name)]
+    (when (or (not= version (:version known))
+              (not (identical? cells-now (:cells known))))
+      (compile-turn-loop conn name opts))))
 
 (def compiled-manifest manifests/compiled-manifest)
 

@@ -134,6 +134,7 @@
             [samizdat.surgeon.outline]
             [samizdat.agent.run-state]
             [samizdat.basis]
+            [samizdat.claims]
             [samizdat.perturb]
             [samizdat.security.exposure]
             [samizdat.security.policy]

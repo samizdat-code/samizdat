@@ -13,7 +13,8 @@
 # EVAL_SCRATCH holds the projects, which are kept: each has its journal.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
-repo=$(cd "$here/../.." && pwd)
+# SAMIZDAT_REPO runs another checkout under this rig, for a before and after.
+repo=${SAMIZDAT_REPO:-$(cd "$here/../.." && pwd)}
 arm=$1; problem=$2; pass=${3:-1}; model=${4:-glm}
 port=${PORT:-3991}
 limit=${RUN_LIMIT_S:-5400}
@@ -35,10 +36,14 @@ if [ "$arm" = team-solve-noideate ]; then
   sed 's/:ideate? true/:ideate? false/' "$repo/resources/gates.edn" > "$scratch/.samizdat/gates.edn"
 fi
 printf '{:roles {:default :%s}\n :run {:loop "%s"}}\n' "$model" "$loop" > "$scratch/.samizdat/config.edn"
+# A fixture plants a fault in the project's own workflow before its first run.
+[ -x "$problems/$problem/plant.sh" ] && "$problems/$problem/plant.sh" "$repo" "$scratch"
 
 cd "$repo"
+# The `serve` task's own command. Another project's restart on this machine was
+# taking down anything named `jolt serve`.
 HARNESS_ROOT=$scratch HARNESS_PORT=$port HARNESS_NREPL_PORT=$((port + 4000)) \
-  jolt serve > "$scratch/serve.log" 2>&1 &
+  jolt -m samizdat.core > "$scratch/serve.log" 2>&1 &
 serve_pid=$!
 trap 'kill $serve_pid 2>/dev/null' EXIT
 
@@ -51,11 +56,14 @@ api() { curl -sf -m 300 -H "Authorization: Bearer $token" -H 'Content-Type: appl
 
 # The problem text itself, as the method's authors found it matters: a rewritten
 # task planned measurably worse than the original.
-body=$(python3 - "$scratch/task.md" <<'PY'
+body=$(python3 - "$scratch/task.md" "$(cat "$problems/$problem/max_turns" 2>/dev/null || echo 300)" "$arm" <<'PY'
 import json, sys
 task = open(sys.argv[1]).read()
-print(json.dumps({"problem": task + "\n\nWrite a complete, self-contained Python 3 program to solution.py. It reads stdin and prints only the answer, using only the standard library. Public sample tests are paired files tests/N.in and tests/N.out; do not modify anything under tests/.",
-                  "beam_width": 1, "max_turns": 300}))
+# team-solve on samples is GVS5H's method, one call per role, and the harness writes
+# the program, so it reads the task exactly as written. A tool-using arm has to be told.
+told = task + "\n\nWrite a complete, self-contained Python 3 program to solution.py. It reads stdin and prints only the answer, using only the standard library. Public sample tests are paired files tests/N.in and tests/N.out; do not modify anything under tests/."
+print(json.dumps({"problem": task if sys.argv[3].startswith("team-solve") else told,
+                  "beam_width": 1, "max_turns": int(sys.argv[2])}))
 PY
 )
 run_id=$(api -X POST "http://127.0.0.1:$port/v1/runs" -d "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("run_id",""))')

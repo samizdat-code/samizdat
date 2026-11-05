@@ -207,6 +207,7 @@
    :orienting "prompts/orienting.md"
    :outside-role-surface "prompts/outside-role-surface.md"
    :oversight-pass "prompts/oversight-pass.md"
+   :turn-cap-signal "prompts/turn-cap-signal.md"
    :parked "prompts/parked.md"
    :parse-error-causes "prompts/parse-error-causes.md"
    :parse-error-repaired "prompts/parse-error-repaired.md"

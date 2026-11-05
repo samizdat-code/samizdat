@@ -31,7 +31,17 @@ missing test runner.
 If the check cannot be satisfied, for example two samples contradict each other, use
 `stop` and name the contradiction, because a person has to fix that.
 
-{% endifequal %}{% endif %}{{digest}}
+{% endifequal %}{% endif %}{% if ending %}## How this run ends is your call
+{% if ending.done-refused %}Workers have had `done` refused {{ending.done-refused}} time(s).
+{% endif %}{% if ending.near-cap-at %}A branch is close to the run's cap of {{ending.near-cap-at}} turns.
+{% endif %}Look at whether the work is finished, then decide:
+- Finished, and a `run_check` passed on the files as they are: `intervene({"kind": "finish", "text": "the answer"})`
+  ends the run solved. Do not spend more turns teaching a worker to phrase its report.
+- Close and worth more turns: `intervene({"kind": "extend", "text": "N"})`, or `budget` on team-solve.
+- Moving nowhere for a reason the harness causes: fix the cause, below.
+- A real dead end: `stop`.
+
+{% endif %}{{digest}}
 {% if since %}
 {{since}}
 {% endif %}
@@ -82,7 +92,9 @@ resort, after switching and re-budgeting have both failed to move it, never
 the first time a round comes back empty.
 
 Prefer tuning to steering when both would work. A steer helps one branch for
-one turn; a fix to a prompt or a threshold helps every run after this one.
+one turn; a fix to a prompt or a threshold helps this run from its next read and
+every run after it. A saved manifest or cell reaches a turn-at-a-time run at its
+next round, and team-solve's next worker.
 {% endif %}
 {% if learned %}
 ## What this project has learned

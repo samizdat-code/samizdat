@@ -57,7 +57,7 @@
 (def scheduler-kinds
   "Applied at the beam's round top: facts about the run or its set of
   branches."
-  #{"cull" "fork" "retract" "extend" "pause" "resume"})
+  #{"cull" "fork" "retract" "extend" "pause" "resume" "finish"})
 
 (def workflow-kinds
   "Applied at a workflow's own directives stage — the feature loop's, between

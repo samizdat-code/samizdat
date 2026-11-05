@@ -98,9 +98,10 @@
       ;; thing that works. The refusal cites the count, because "this may be
       ;; wrong" with no evidence produces the same directive again.
       ;;
-      ;; Mechanical and narrow: only a claim that a TOOL does not work, over a
-      ;; record showing that tool working in this very run. Everything else
-      ;; passes, including every steering directive, which is most of them.
+      ;; Mechanical and narrow: only a statement that binds a denial to a TOOL'S
+      ;; NAME (claims/denies-tool?), over a record showing that tool working in
+      ;; this very run. Everything else passes, including every steering
+      ;; directive, which is most of them.
       (seq (claim-conflicts conn run-id text))
       (let [c (first (claim-conflicts conn run-id text))]
         (base/refusal branch (msg {:contradicted true

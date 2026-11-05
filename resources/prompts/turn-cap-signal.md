@@ -1,0 +1,1 @@
+The run has reached its turn cap of {{cap}} and ends exhausted unless you say otherwise. If the work is finished and a run_check passed on the files as they are, use `finish`. If it is close and worth more turns, use `extend` with a number. Otherwise conclude and it ends.

@@ -273,6 +273,29 @@
         pass. The full reasoning lives in its branch's messages; this is the
         index into it."}
 
+ :oversight-limits
+ {:value {:done-refused-floor 2 :near-cap-fraction 0.8 :cap-wait-ms 240000 :cap-poll-ms 2000}
+  :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-i692"]
+  :doc "When the supervisor is asked to decide about a run's ending. Refused
+        `done` calls by watched branches before it looks: on the hard corpus a
+        worker with a verified program was refused three times with no look
+        until its turn 39. And how far through the turn cap a branch gets before
+        the cap is put to it. Below :wind-down-fraction, so it answers before
+        the branch is told to wrap up. A run can reach its cap inside the
+        stream's spacing, so at the cap it also asks and waits :cap-wait-ms for
+        `extend` or `finish` before ending exhausted. Silence ends it as it
+        always did, so a dead stream cannot hang a run."}
+
+ :finish-directive
+ {:value {:requires-check? true}
+  :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-i692"]
+  :doc "Whether the `finish` directive needs a passing run_check still true of
+        the files on disk. Off, a supervisor can end a run on its own judgement,
+        which a project with no samples may need; on, it cannot ship what
+        nothing has passed."}
+
  :oversight-unmet-floor
  {:value 2 :kind :threshold :capability-tunable? true
   :doc "Gate firings a run may leave UNMET before the supervisor stream spends
@@ -1586,8 +1609,11 @@
           ;; model, and well below :job-stall-ms, which cancels the job.
           :silent-ms 900000
           ;; Turns one pass may spend. Uncapped it took the run's own cap: a pass
-          ;; spent 40 turns and 866K tokens reading a three-minute run.
-          :pass-max-turns 10
+          ;; spent 40 turns and 866K tokens reading a three-minute run. At 10 a
+          ;; pass that found a broken cell by turn 8 was forced to `done` before
+          ;; it could fix it, twice (karamazov-i692). A pass with nothing to do
+          ;; ends itself, so this bounds the ones that are doing something.
+          :pass-max-turns 20
           ;; The read timeout for the supervisor's OWN model calls, in ms;
           ;; nil keeps the run's. Its brief is a run-health digest plus a
           ;; carried context, and on GLM-5.3 with thinking those calls ran
