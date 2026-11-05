@@ -1,0 +1,47 @@
+;; TEAM-SOLVE: the manager loop from GVS5H (Lee 2026), as a samizdat manifest.
+;; Each role is a fresh context and the ledger is the run's journal.
+;;
+;;   start -> plan -> ideate -> manage -+-> work -> test -> manage
+;;                                      +-> unstick -+-> work
+;;                                      |            +-> verify
+;;                                      +-> verify -> finish
+;;
+;;   plan     one call: PLAN and TASKS
+;;   ideate   independent calls from different technique families; no code
+;;   manage   one call, then the mechanical rules: a failing check cannot be
+;;            done, the same task twice is stuck, rounds are bounded
+;;   work     one worker on one task, in a fresh context
+;;   test     a script decides: the samples, the verify command, or nothing
+;;   unstick  ask the supervisor and wait, bounded; then try something different
+;;   verify   the strict rerun, restoring the last passing work if needed
+{:description "Solve a task as a team of fresh contexts coordinated by a manager: plan, independent ideation from different techniques, then rounds of one worker task followed by a mechanical check, until the check passes and the manager agrees. Stuck rounds escalate to the supervisor. Best for a change or a program with something that can check it."
+ :input-schema [:map [:branch :map] [:turn :int]]
+
+ :progress [:plan :ideate :manage :work :test :unstick :verify]
+
+ :cells {:start   :loop/assemble
+         :plan    :team-solve/plan
+         :ideate  :team-solve/ideate
+         :manage  :team-solve/manage
+         :work    :team-solve/work
+         :test    :team-solve/test
+         :unstick :team-solve/unstick
+         :verify  :team-solve/verify
+         :finish  :loop/finish}
+
+ :edges {:start   :plan
+         :plan    :ideate
+         :ideate  :manage
+         :manage  {:work :work :unstick :unstick :verify :verify}
+         :work    :test
+         :test    :manage
+         :unstick {:work :work :verify :verify}
+         :verify  :finish
+         :finish  :end}
+
+ :dispatches
+ {:manage  [[:work    {:team-solve/go :work}]
+            [:unstick {:team-solve/go :unstick}]
+            [:verify  {:team-solve/go :verify}]]
+  :unstick [[:work    {:team-solve/go :work}]
+            [:verify  {:team-solve/go :verify}]]}}

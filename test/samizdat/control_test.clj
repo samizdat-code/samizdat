@@ -537,7 +537,8 @@
                     "resume" {}
                     "switch" {:strategy "decompose"}
                     "budget" {:turns 30}
-                    "stop" {:text "a dead end"}}]
+                    "stop" {:text "a dead end"}
+                    "retask" {:text "try a fold"}}]
       (cells/load-cells!)
       (doseq [k interventions/kinds]
         (interventions/submit! c rid {:kind k :payload (payloads k)})
@@ -551,6 +552,20 @@
               (str k " reached a boundary and was left pending"))
           (is (not (str/includes? (str (:disposition d)) "not wired"))
               (str k " is advertised to a human and rejected as unwired")))))))
+
+(deftest a-workflow-kind-is-refused-where-no-boundary-would-apply-it
+  ;; A turn-at-a-time workflow has no round boundary, so these sat queued for the
+  ;; whole run while the supervisor believed they were on their way.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          b (branch "B1")]
+      (doseq [k ["switch" "budget" "stop" "retask"]]
+        (interventions/submit! c rid {:kind k :payload {:text "x"}}))
+      (#'aloop/drain-directives! {:conn c :run-id rid :iterating-loop? false} b 1)
+      (is (= 4 (count (interventions/pending c rid))) "a whole-run workflow's boundary owns them")
+      (#'aloop/drain-directives! {:conn c :run-id rid :iterating-loop? true} b 1)
+      (is (empty? (interventions/pending c rid)))
+      (is (every? #(= "rejected" (:status %)) (interventions/history c rid))))))
 
 (deftest every-kind-has-words-and-every-word-a-kind
   ;; The names are mechanism and live in the store; what each does is prose

@@ -66,16 +66,39 @@
   from buying a pass per turn. Neither alone is enough, and that is the
   difference between evaluating a turn and polling.
 
+  A workflow that has asked for help, or a run that has gone silent, is URGENT:
+  it skips the spacing, because a side-call stage ends no turns and a team waiting
+  on the supervisor has no boundary coming.
+
   The budget is checked FIRST and binds unconditionally — including on a
   boundary. A bound a signal can lift is not a bound.
 
   What the budget counts is passes that SPENT something, not passes that
   happened; see `pass!`."
-  [{:keys [last-at passes]} {:keys [now every-ms budget boundary?]}]
+  [{:keys [last-at passes]} {:keys [now every-ms budget boundary? urgent?]}]
   (and (or (nil? budget) (< (or passes 0) budget))
        (or (nil? last-at)
+           urgent?
            (and boundary?
                 (>= (- now last-at) (or every-ms 0))))))
+
+(def ^:private urgent-kinds
+  "Journal events that ask for a look now rather than at the next boundary."
+  #{:workflow-signal :stage-error})
+
+(defn- own-event?
+  "The stream's own activity. Its turns are not the run's boundary, and its notes
+  are not the run making progress."
+  [{:keys [kind branch-id]}]
+  (or (= "SUP" branch-id)
+      (contains? #{:oversight :oversight-quiet :watch-intervention} kind)))
+
+(defn silent?
+  "Whether nothing of the run has happened for `silent-ms`, counted from whichever
+  is later: its last event, or the last look at it. Pure."
+  [{:keys [last-event-at last-at]} now silent-ms]
+  (and silent-ms
+       (>= (- now (max (or last-event-at 0) (or last-at 0))) silent-ms)))
 
 (defn pass!
   "Run one pass, and never let it out.
@@ -118,7 +141,13 @@
       (swap! state (fn [s] (-> s
                                (update :looks (fnil inc 0))
                                (update :passes (fnil inc 0)))))
-      (log/warn "oversight pass failed:" (ex-message e))))
+      (log/warn "oversight pass failed:" (ex-message e))
+      ;; On the record as well as in the log. A supervisor that cannot run looks
+      ;; exactly like one with nothing to say, unless it says so.
+      (when (and (:conn ctx) (:run-id ctx) (not (cancel/control-signal? e)))
+        (try (journal/note! (:conn ctx) (:run-id ctx) :oversight-failed
+                            {:data {:error (or (ex-message e) (str e))}})
+             (catch Throwable _ nil)))))
   nil)
 
 ;; --- phase 1: the reflex ----------------------------------------------------
@@ -260,12 +289,13 @@
 
   Disabled returns a stop function too, so a caller's teardown never has to
   ask whether the stream was ever running."
-  [{:keys [enabled? every-ms budget poll-ms now-fn reflex-fn run-id] ch :event-ch :as ctx}
+  [{:keys [enabled? every-ms budget poll-ms now-fn reflex-fn run-id silent-ms] ch :event-ch :as ctx}
    pass-fn]
   (if-not enabled?
     (constantly nil)
     (let [now (or now-fn #(System/currentTimeMillis))
-          state (atom {:passes 0 :last-at nil :carry nil :turns-ended 0})
+          state (atom {:passes 0 :last-at nil :carry nil :turns-ended 0
+                       :last-event-at (now) :urgent? false})
           tick (fn [batch]
                  (try
                    ;; ONE DRAIN of the bus per interval, shared by both phases:
@@ -274,9 +304,16 @@
                    ;; process publish onto the same one, so narrowing by run
                    ;; is not tidiness.
                    (let [arrived (when ch (filterv #(= run-id (:run-id %)) batch))
-                         ended (count (filter #(= :turn (:kind %)) arrived))]
+                         others (remove own-event? arrived)
+                         ended (count (filter #(= :turn (:kind %)) others))]
                      (when (pos? ended)
                        (swap! state update :turns-ended (fnil + 0) ended))
+                     (when (seq others)
+                       (swap! state assoc :last-event-at (now)))
+                     ;; Held until a pass takes it: a signal can arrive while a
+                     ;; pass is running, and this loop only sees it afterwards.
+                     (when (some #(contains? urgent-kinds (:kind %)) others)
+                       (swap! state assoc :urgent? true))
                      ;; PHASE 1, every interval and unbudgeted (RFC-012). The
                      ;; reflex is rule-based and cheap — it reads what the
                      ;; implementer has done and may nudge — so it is not what
@@ -298,11 +335,16 @@
                      (when (due? @state {:now (now)
                                          :every-ms every-ms
                                          :budget budget
+                                         :urgent? (or (:urgent? @state)
+                                                      (and ch (silent? @state (now) silent-ms)))
                                          :boundary? (if ch
                                                       (pos? (or (:turns-ended @state) 0))
                                                       true)})
-                       (swap! state assoc :turns-ended 0)
-                       (pass! ctx state pass-fn)
+                       (let [silence (when (and ch (silent? @state (now) silent-ms))
+                                       (- (now) (:last-event-at @state)))]
+                         (swap! state assoc :turns-ended 0 :urgent? false)
+                         (pass! (cond-> ctx silence (assoc :silent-for-ms silence))
+                                state pass-fn))
                        ;; Stamped at the END: the spacing is the gap between
                        ;; passes. From the start, a pass longer than the
                        ;; spacing — a GLM deliberation of 3-4 minutes against

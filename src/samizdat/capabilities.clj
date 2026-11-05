@@ -50,6 +50,8 @@
             [samizdat.agent.outline]
             [samizdat.agent.phases]
             [samizdat.agent.roles]
+            [samizdat.agent.sections]
+            [samizdat.eval.samples]
             [samizdat.agent.select]
             [samizdat.agent.skills]
             [samizdat.agent.state]

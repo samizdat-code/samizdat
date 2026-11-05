@@ -175,7 +175,11 @@
                 ;; first extract; the sections are the rest (system-segments).
                 :split-decision (prompt/prompt "split-decision")}]
        ((if presentation? roles/presentation-catalogue roles/scope-catalogue)
-        (prompt/render-str (or (prompt/layer :system) "")
+        ;; A role may name its own frame in roles.edn :frame, for a fresh-context
+        ;; worker that should not read the implementer's whole working method.
+        (prompt/render-str (or (some-> (:frame (roles/spec role)) prompt/prompt)
+                               (prompt/layer :system)
+                               "")
                            (merge ctx (render-segments ctx)))
         role eval-mode)))))
 
@@ -1296,6 +1300,16 @@
                    b)))
 
            (cond
+             ;; A workflow that goes a turn at a time has no round boundary, so
+             ;; nothing would ever apply these. Saying so beats leaving a directive
+             ;; queued for the rest of the run while its issuer believes it.
+             (and (contains? interventions/workflow-kinds (:kind d))
+                  (true? (:iterating-loop? ctx)))
+             (do (interventions/resolve! conn run-id (:id d) :rejected
+                                         (prompt/render "directive-rejected"
+                                                        {:no-workflow-boundary true :kind (:kind d)})
+                                         turn)
+                 b)
              ;; the workflow's own boundary owns these, in either shape
              (contains? interventions/workflow-kinds (:kind d)) b
              ;; scheduler kinds: the beam drain owns them

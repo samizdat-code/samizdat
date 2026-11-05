@@ -161,7 +161,7 @@
      :effects #{:proc :fs}}
 
     samizdat.agent.gitdiff
-    {:vars [baseline changed-files diff max-diff-chars review-diff]
+    {:vars [baseline changed-files diff max-diff-chars restore-work-tree! review-diff work-tree-id]
      :effects #{:proc}}
 
     ;; The probe's model calls and its journal line.
@@ -200,6 +200,10 @@
     ;; The phase table's withheld tools. Pure lookup.
     samizdat.agent.phases
     {:vars [withholds]}
+
+    ;; A role reply as named sections. Pure.
+    samizdat.agent.sections
+    {:vars [bullets counterexample parse reply-text strip-code]}
 
     ;; Plan prompt text and parsing. Pure.
     samizdat.agent.planner
@@ -262,7 +266,7 @@
     ;; Cancellation: whether an exception is the run being stopped, and a
     ;; cancellable fiber for a cell's own function.
     samizdat.cancel
-    {:vars [control-signal? spawn]
+    {:vars [control-signal? sleep! spawn]
      :effects #{:run}}
 
     ;; Resolves a role's provider settings from the config map. Pure.
@@ -319,6 +323,15 @@
     {:vars [branch-turns gate-firings gate-tally last-note last-turn note! notes notes-since
             progress record-side-call! retirement-candidates run-usage turns]
      :effects #{:db}}
+
+    ;; The paired-sample grader — the team-solve workflow's DETERMINISTIC
+    ;; gate. Grade an artifact against paired .in/.out cases, list them, and
+    ;; read/write the artifact file itself. Never model-facing: the cell
+    ;; passes paths it derived from the run's config, and grading runs a
+    ;; subprocess under the grader's own minimal env and timeout.
+    samizdat.eval.samples
+    {:vars [grade paired-tests read-artifact run-one write-artifact!]
+     :effects #{:fs :proc :db}}
 
     ;; The project's lessons: read, and recording one.
     samizdat.store.knowledge

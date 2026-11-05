@@ -362,7 +362,7 @@
   ;; resources/gates.edn, so a vocabulary changes at runtime without a
   ;; rebuild. Pin the move: the keys exist, carry the live vocabulary, and
   ;; settle's table still keys by gate.
-  (is (= #{"eval" "shell"} (gates/tool-vocab :verification)))
+  (is (= #{"eval" "shell" "run_check"} (gates/tool-vocab :verification)))
   (is (contains? (gates/tool-vocab :shipping) "write_file"))
   ;; EVERY tool that writes a file must be in both, or a branch using it
   ;; scores as having shipped nothing and gets nudged for work it is doing.

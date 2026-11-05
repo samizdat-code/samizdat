@@ -63,6 +63,19 @@
    {:name samizdat.agent.compaction/results-of
     :summary "The framed bodies of some tools' results inside a span. The task fold puts gates.edn :task-fold :carry (ask_human) on its line, so a person's answers outlive the task that asked them."}]}
 
+ {:group "A team of fresh contexts"
+  :entries
+  [{:name samizdat.agent.sections/parse
+    :summary "A role's reply as named sections. Team-solve reads its one-call roles this way; a missing section is the caller's decision."}
+   {:name samizdat.agent.gitdiff/work-tree-id
+    :summary "A restorable git tree of the project's work, leaving out .samizdat. Team-solve keeps the last passing work this way on a repository."}
+   {:name samizdat.agent.gitdiff/restore-work-tree!
+    :summary "Put the work back as a work-tree-id holds it, removing files created since."}
+   {:name samizdat.eval.samples/grade
+    :summary "Run a program against paired tests/N.in and N.out. A team-solve gate: a script decides, never a model."}
+   {:name samizdat.eval.samples/run-one
+    :summary "Run a program once on one input. Team-solve runs a manager's counterexample this way before believing it."}]}
+
  {:group "Probing without committing"
   :entries
   [{:name samizdat.agent.infer/of-branch

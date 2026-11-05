@@ -152,6 +152,45 @@
   [baseline]
   (and (some? baseline) (not (str/starts-with? (str baseline) "-"))))
 
+(def ^:private project-state
+  "The harness's own directory: the live database and the project's workflow.
+  Never part of the work, and overwriting it would corrupt an open database."
+  ".samizdat")
+
+(defn work-tree-id
+  "A git tree of the project's work as it stands, untracked files included,
+  .gitignore respected, the harness's own directory left out. Built in a scratch
+  index so nothing is touched. nil when git or the repo is unavailable."
+  [root]
+  (when (and root (proc/available? "git"))
+    (let [idx (java.io.File/createTempFile "samizdat-work" ".index")
+          env (assoc (secrets/scrubbed-process-env) "GIT_INDEX_FILE" (.getPath idx))]
+      (try
+        (.delete idx)
+        (when (git* env root ["add" "-A" "--" "." (str ":(exclude)" project-state)])
+          (some-> (git* env root ["write-tree"]) str/trim not-empty))
+        (finally (.delete idx))))))
+
+(defn restore-work-tree!
+  "Put the work back as `tree` holds it: its files rewritten, and files created
+  since removed. The real index and the harness's own directory are untouched.
+  True when it did. A tree id comes from `work-tree-id`, so one that looks like
+  an option is refused."
+  [root tree]
+  (when (and root (rev? tree) (proc/available? "git"))
+    (let [idx (java.io.File/createTempFile "samizdat-restore" ".index")
+          env (assoc (secrets/scrubbed-process-env) "GIT_INDEX_FILE" (.getPath idx))]
+      (try
+        (.delete idx)
+        (when (and (git* env root ["read-tree" tree])
+                   (git* env root ["checkout-index" "-a" "-f"]))
+          (doseq [path (str/split-lines (str (git* env root ["ls-files" "--others" "--exclude-standard"
+                                                             "--" "." (str ":(exclude)" project-state)])))
+                  :when (not (str/blank? path))]
+            (.delete (java.io.File. (str root "/" path))))
+          true)
+        (finally (.delete idx))))))
+
 (defn file-at
   "`path`'s content in the `baseline` commit, or nil when it was not there
   (or there is no git). The baseline commit holds untracked files too, so

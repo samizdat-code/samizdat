@@ -34,6 +34,13 @@ workers wander off-task, a decomposition that split the work badly, or a
 tool that keeps mis-parsing. A diagnosis that names a specific failing turn
 beats one that names a rate.
 
+## When a workflow asks for you
+
+A workflow that cannot move raises a signal and may be WAITING for your answer, for a
+bounded time. Your brief says where it is and what it has tried. Answer that first: read
+the failure and the worker's turns, then redirect it with `intervene`. If you do not
+answer, it takes a mechanical way out that knows far less than you do.
+
 ## The architecture you are steering
 
 Two layers, and knowing which one a problem lives in is most of your job.

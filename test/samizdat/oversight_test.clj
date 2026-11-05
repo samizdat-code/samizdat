@@ -18,6 +18,7 @@
             [samizdat.agent.gates :as gates]
             [samizdat.cells :as cells]
             [samizdat.events :as events]
+            [samizdat.prompt :as prompt]
             [mycelium.cell :as cell]
             [mycelium.core :as myc]
             [samizdat.session :as session]
@@ -1051,8 +1052,8 @@
       ((:handler (cell/get-cell! :oversight/reason))
        ctx {:oversight/idle 30 :oversight/unmet 2 :oversight/turns [] :oversight/firings []}))
     (is (= 4 (:turn @seen)) "after SUP's own last turn, not another branch's")
-    (is (= 43 (:max-turns @seen)) "the cap moves with the start, so the pass still gets 40")
-    (testing "a branch with no turns yet starts at 1 under the run's cap"
+    (is (= 13 (:max-turns @seen)) "the cap moves with the start, so the pass still gets its :pass-max-turns")
+    (testing "a branch with no turns yet starts at 1 under a pass's cap"
       (let [rid2 (runs/start-run! conn {:problem "q"})]
         (with-redefs [myc/run-compiled (fn [_ rctx data]
                                          (reset! seen {:turn (:turn data) :max-turns (:max-turns rctx)})
@@ -1060,7 +1061,7 @@
           ((:handler (cell/get-cell! :oversight/reason))
            (assoc ctx :run-id rid2)
            {:oversight/idle 30 :oversight/unmet 2 :oversight/turns [] :oversight/firings []}))
-        (is (= {:turn 1 :max-turns 40} @seen))))))
+        (is (= {:turn 1 :max-turns 10} @seen))))))
 
 (deftest the-measurement-in-a-notice-reads-as-words-not-edn
   ;; Run 0f4b9b55's notice said `Measured over this session: {:turns 1,
@@ -1256,3 +1257,106 @@
     (testing "the supervisor works under its own, smaller window"
       (is (= (get-in (gates/threshold :oversight) [:context-window])
              (get-in @seen [:rctx :llm-config :context-window]))))))
+
+;; --- a workflow that asks, and a run that goes silent ------------------------
+
+(deftest an-urgent-look-skips-the-spacing-but-not-the-budget
+  (let [st {:last-at 1000 :passes 0}]
+    (is (not (ov/due? st {:now 1001 :every-ms 120000 :budget 3 :boundary? true})))
+    (is (ov/due? st {:now 1001 :every-ms 120000 :budget 3 :urgent? true}))
+    (is (not (ov/due? (assoc st :passes 3) {:now 1001 :every-ms 120000 :budget 3 :urgent? true}))
+        "a bound a signal can lift is not a bound")))
+
+(deftest silence-counts-from-the-later-of-the-last-event-and-the-last-look
+  (is (ov/silent? {:last-event-at 0 :last-at 0} 100 100))
+  (is (not (ov/silent? {:last-event-at 50 :last-at 0} 100 100)))
+  (is (not (ov/silent? {:last-event-at 0 :last-at 50} 100 100)) "looked already: once per silence")
+  (is (not (ov/silent? {:last-event-at 0 :last-at 0} 100 nil)) "off when not configured"))
+
+(deftest a-workflow-signal-buys-a-look-with-no-turn-ending
+  ;; A side-call stage ends no turns, so a stream that only woke on :turn saw a
+  ;; whole run die without a single pass.
+  (let [ch (events/subscribe)
+        passes (atom 0)
+        stop (ov/start! {:enabled? true :poll-ms 5 :every-ms 100000 :budget 10
+                         :run-id "R-signal" :event-ch ch}
+                        (fn [_] (swap! passes inc) {:carry nil :spent? false}))]
+    (try
+      (Thread/sleep 80)
+      (is (= 1 @passes) "the first look")
+      (events/publish! {:kind :progress :run-id "R-signal" :branch-id "B1"})
+      (Thread/sleep 80)
+      (is (= 1 @passes) "ordinary progress waits for its boundary")
+      (events/publish! {:kind :workflow-signal :run-id "R-signal"})
+      (Thread/sleep 80)
+      (is (= 2 @passes) "the workflow asked, so the spacing does not apply")
+      (finally (stop) (events/unsubscribe! ch)))))
+
+(deftest a-silent-run-gets-a-look-and-the-pass-is-told
+  (let [ch (events/subscribe)
+        seen (atom [])
+        clock (atom 0)
+        stop (ov/start! {:enabled? true :poll-ms 5 :every-ms 100000 :budget 10 :silent-ms 1000
+                         :run-id "R-silent" :event-ch ch :now-fn (fn [] @clock)}
+                        (fn [ctx] (swap! seen conj (:silent-for-ms ctx)) {:carry nil :spent? false}))]
+    (try
+      (Thread/sleep 60)
+      (is (= 1 (count @seen)))
+      (is (nil? (first @seen)) "the opening look is not about silence")
+      (reset! clock 5000)
+      (Thread/sleep 60)
+      (is (= 2 (count @seen)))
+      (is (= 5000 (second @seen)))
+      (Thread/sleep 60)
+      (is (= 2 (count @seen)) "one look per silence")
+      (finally (stop) (events/unsubscribe! ch)))))
+
+(deftest the-streams-own-turns-are-not-a-boundary
+  (let [ch (events/subscribe)
+        passes (atom 0)
+        stop (ov/start! {:enabled? true :poll-ms 5 :every-ms 0 :budget 10
+                         :run-id "R-own" :event-ch ch}
+                        (fn [_] (swap! passes inc) {:carry nil :spent? false}))]
+    (try
+      (Thread/sleep 60)
+      (events/publish! {:kind :turn :run-id "R-own" :branch-id "SUP" :turn 1})
+      (Thread/sleep 60)
+      (is (= 1 @passes))
+      (finally (stop) (events/unsubscribe! ch)))))
+
+(deftest a-workflow-signal-is-worth-a-look-once
+  (let [floors {:unmet-floor 2 :idle-floor 25}
+        since @(cells/cell-var 'cells.oversight 'since-last-look)
+        signal {:kind "stuck"}]
+    (is (worth-a-look? {:workflow-signals [signal]} floors))
+    (is (worth-a-look? {:silent? true} floors))
+    (testing "read already: not news"
+      (let [news (since {:workflow-signals [signal]} {:workflow-signals 1} {:idle-floor 25})]
+        (is (not (worth-a-look? news floors)))))
+    (testing "a new one after it is"
+      (let [news (since {:workflow-signals [signal signal]} {:workflow-signals 1} {:idle-floor 25})]
+        (is (worth-a-look? news floors))))))
+
+(deftest the-brief-says-where-the-workflow-is-and-what-reaches-it
+  ;; A template error here ended the pass exactly when a stuck team asked for it.
+  (let [brief (prompt/render "oversight-pass"
+                             {:digest "D"
+                              :workflow-signals [{:workflow "team-solve" :stage "unstick"
+                                                  :kind "stuck" :detail "same task twice"}]
+                              :silent-minutes 11
+                              :position {:workflow "team-solve" :stage "unstick" :round 2 :max-rounds 10
+                                         :gate "samples 1/2" :task "fix it"
+                                         :attempts [{:round 1 :worker "done" :gate "samples 1/2" :task "write it"}]}})]
+    (is (str/includes? brief "stuck: same task twice"))
+    (is (str/includes? brief "silent for 11 minute"))
+    (is (str/includes? brief "round 2 of 10"))
+    (is (str/includes? brief "round 1, worker done, samples 1/2: write it"))
+    (is (str/includes? brief "\"kind\": \"retask\""))))
+
+(deftest a-cancelled-pass-is-not-a-failed-one
+  ;; The run ending cancels a pass in flight, which recorded as a supervisor failure.
+  (with-redefs [journal/note! (fn [& _] (throw (ex-info "must not journal" {})))]
+    (let [state (atom {:passes 0})]
+      (is (nil? (ov/pass! {:conn :c :run-id "r"} state
+                          (fn [_] (throw (InterruptedException.))))))
+      (is (= 1 (:passes @state))))))

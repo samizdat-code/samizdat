@@ -233,6 +233,11 @@
             [samizdat.perturb-test]
             [samizdat.basis-test]
             [samizdat.eval-hint-test]
+            [samizdat.sections-test]
+            [samizdat.check-tool-test]
+            [samizdat.team-solve-test]
+            [samizdat.eval-samples-test]
+            [samizdat.eval-corpus-test]
             [samizdat.grant-proposal-test]
             [samizdat.llm-test]
             [samizdat.toolspec-test]
@@ -535,6 +540,11 @@
     samizdat.perturb-test
     samizdat.basis-test
     samizdat.eval-hint-test
+    samizdat.sections-test
+    samizdat.check-tool-test
+    samizdat.team-solve-test
+    samizdat.eval-samples-test
+    samizdat.eval-corpus-test
     samizdat.grant-proposal-test
     samizdat.prompt-test
     samizdat.server-test

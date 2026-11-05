@@ -539,6 +539,11 @@
                 40 "Fallback max-turns, as workflow.clj."
                 5 "Fallback beam width when config carries none."}}
 
+   "src/samizdat/agent/sections.clj"
+   {:vocabulary {"</?think>"
+                 "The providers' reasoning tag on the wire, as in llm/message.clj: a
+                  reply that is only reasoning keeps its text with the tags off."}}
+
    "src/samizdat/llm/message.clj"
    {:threshold {90 "Error-text truncation for a log line."}
     :vocabulary {"(?s)<think>.*?</think>"

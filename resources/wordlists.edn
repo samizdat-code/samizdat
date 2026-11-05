@@ -289,7 +289,8 @@
   "resume"  "Resume scheduling."
   "switch"  "Switch the feature loop's implement strategy for its next round: board, team or decompose (text: the name). Lands at the loop's next round boundary."
   "budget"  "Set the per-owner turn budget the feature loop's following rounds run under (text: \"N\", or {\"turns\": N})."
-  "stop"    "End the run unsolved at the feature loop's next round boundary: the loop has concluded it cannot solve the task. Partial work stays on disk (text: why)."}
+  "stop"    "End the run unsolved at the feature loop's or team-solve's next round boundary: the loop has concluded it cannot solve the task. Partial work stays on disk (text: why)."
+  "retask"  "Replace team-solve's next task with this text, ending any stuck wait (text: the task). Lands at its next manager or unstick boundary."}
 
  :shell-refusal
  ;; How the shell policy phrases a refusal. Read to turn a refused command

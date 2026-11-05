@@ -1568,6 +1568,13 @@
           ;; of one pass to the start of the next.
           :every-ms 120000
           :budget 12
+          ;; A run that journals nothing for this long gets a look without
+          ;; waiting for a turn to end. Well above one model call on the local
+          ;; model, and well below :job-stall-ms, which cancels the job.
+          :silent-ms 900000
+          ;; Turns one pass may spend. Uncapped it took the run's own cap: a pass
+          ;; spent 40 turns and 866K tokens reading a three-minute run.
+          :pass-max-turns 10
           ;; The read timeout for the supervisor's OWN model calls, in ms;
           ;; nil keeps the run's. Its brief is a run-health digest plus a
           ;; carried context, and on GLM-5.3 with thinking those calls ran
@@ -1913,10 +1920,61 @@
         :cascade}), never this file's."
   :provenance ["karamazov-dcnj" "2610.21412"]}
 
+ :eval-samples
+ {:value {:per-case-timeout-ms 10000}
+  :kind :policy :capability-tunable? false
+  :provenance ["agent-roles"]
+  :doc "THE PAIRED-SAMPLE GRADER'S NUMBERS (samizdat.eval.samples).
+        :per-case-timeout-ms is the window one graded run of a solution gets
+        per test input — the same window GVS5H's sample runner used, and the
+        corpus's large stress inputs are sized to separate an O(N) answer
+        from an O(N^2) one inside it. The grader is mechanism: it decides
+        nothing else, and what the corpus IS lives under evals/team-solve/."}
+
+ :team-solve
+ {:value {:max-rounds 10
+          :max-tasks 12
+          :worker-max-turns 15
+          :stall-rounds 2
+          :max-unsticks 2
+          :max-green-revisions 1
+          :max-reviews 2
+          :unstick-wait-ms 240000
+          :unstick-poll-ms 5000
+          :call-retries 1
+          :max-call-failures 2
+          :verify-timeout-ms 600000
+          :artifact "solution.py"
+          :plan-chars 4000
+          :notes-chars 8000
+          :current-chars 20000
+          :report-chars 600
+          :cutoff-chars 9000
+          :ideate? true
+          :ideators ["team-solve-ideator-a" "team-solve-ideator-b"]
+          :temperatures {:plan 0.3 :ideate 0.4 :manage 0.2 :work 0.2 :cutoff 0.2 :review 0.2}}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-p4b3"]
+  :doc "THE TEAM-SOLVE WORKFLOW'S NUMBERS (cells/team_solve.clj). :max-rounds is
+        GVS5H's bound on the manager loop, after which one finalize round runs.
+        :stall-rounds is how many rounds an identical check failure may repeat
+        before the team goes to :unstick. :max-unsticks bounds those escalations.
+        :max-call-failures is how many role calls may fail before the run ends
+        saying the model could not be reached.
+        :max-green-revisions is how many rounds a checked counterexample may buy
+        against passing work. :max-reviews bounds the independent review of a
+        repository change: once it has refused that many times the run ends unsolved
+        with its findings, rather than ship what a reviewer refused. :unstick-wait-ms is how long :unstick waits for the
+        supervisor before taking its mechanical way out. :worker-max-turns caps
+        one worker on one task; a supervisor `budget` directive overrides it.
+        :temperatures are GVS5H's values as starting points, per step: expect to
+        retune per model. :ideate? off is the ablation arm of the empirical test.
+        :ideators names the directive prompts, one call each."}
+
  :workflow-selection
  {:value
   {:enabled?          true
-   :candidates        #{"loop" "decompose" "team" "critic" "answer"}
+   :candidates        #{"loop" "team-solve" "decompose" "team" "critic" "answer"}
    :fallback          "loop"
    :min-problem-chars 0
    ;; What the triage call may say a task IS, and how big.
@@ -1937,9 +1995,9 @@
    :effort
    {:answer      {:any     {:beam-width 1 :max-turns 40 :workflow "answer"}}
     :investigate {:any     {:beam-width 1 :max-turns 120}}
-    :change      {:trivial {:beam-width 1 :max-turns 60 :reasoning-effort "low"}
-                  :small   {:beam-width 1 :max-turns 200}
-                  :large   {:beam-width 5 :reasoning-effort "high"}}}}
+    :change      {:trivial {:beam-width 1 :max-turns 60 :reasoning-effort "low" :workflow "loop"}
+                  :small   {:beam-width 1 :max-turns 200 :workflow "team-solve"}
+                  :large   {:beam-width 5 :reasoning-effort "high" :workflow "team-solve"}}}}
   :kind :policy :capability-tunable? false
   :provenance ["karamazov-1wv9"]
   :doc "WHICH WORKFLOW DRIVES A RUN THAT DID NOT ASK FOR ONE, AND HOW HARD.
@@ -1973,8 +2031,13 @@
         which workflow suits which task, and it should be made on evidence.
 
         :fallback is what a run uses when selection is off, the call fails, or
-        the reply names nothing on the menu. It is the factory loop — what the
-        run would have used anyway — so a failure to choose costs nothing.
+        the reply names nothing on the menu. It is the factory loop, because a
+        failed triage usually means the model cannot be reached, and it must match
+        workflow/loop-name. THE DEFAULT FOR A CHANGE IS THE :effort ROW: since
+        2026-11 a small or large change runs team-solve whatever the chooser said,
+        on the evidence in docs/plans/agent-roles-team-solve.md. A trivial change,
+        a question and an investigation keep their shorter workflows. To go back,
+        drop :workflow from those two rows.
 
         An explicit :run :loop (HARNESS_LOOP, or a project's config.edn) always
         wins over selection. This fills the gap where a caller said nothing; it
@@ -4164,7 +4227,7 @@
  ;; without a rebuild. agent-test walks every name against the registered
  ;; run-tools (provenance R3-6): a name the loop cannot dispatch is a gate whose
  ;; prediction silently narrows to :unmet.
- {:verification #{"eval" "shell"}
+ {:verification #{"eval" "shell" "run_check"}
   ;; What a role that cannot write may quote figures from, beside what it
   ;; measured: for a question about the project, the source it read IS the
   ;; subject (karamazov-1wv9). A role that can write still has to measure.

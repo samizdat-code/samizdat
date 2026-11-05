@@ -209,6 +209,8 @@
                          (ex-message close-error))))
         (throw e)))))
 
+(declare unwrap-round-error)
+
 (defn ensure-scored
   "Fresh critic scores for every active branch, at most one sub-LLM call per
   branch per :critic-every window. A scoring that fails leaves the previous
@@ -705,9 +707,17 @@
                            (when cancelling (swap! cancelling assoc (:id b) (:done t)))
                            (forfeit b))
                        :err
-                       (do (log/warn "branch" (:id b) "died on turn" turn ":" (ex-message r))
-                           (assoc b :status :abandoned
-                                  :inactive-reason (str "branch error: " (ex-message r))))))))
+                       ;; The cause, not mycelium's wrapper: "execution error" told
+                       ;; nobody what broke, and the supervisor reads this note.
+                       (let [{:keys [throwable node]} (unwrap-round-error r)
+                             why (or (ex-message throwable) (str throwable))]
+                         (log/warn "branch" (:id b) "died on turn" turn "at" node ":" why)
+                         (when (and (:conn ctx) (:run-id ctx))
+                           (journal/note! (:conn ctx) (:run-id ctx) :stage-error
+                                          {:branch-id (:id b) :turn turn
+                                           :data {:stage (some-> node name) :error why}}))
+                         (assoc b :status :abandoned
+                                :inactive-reason (str "branch error: " why)))))))
         ;; SERIAL, for a replay (karamazov-x0dx): each turn runs to its end
         ;; before the next starts, in the order the branches are listed. A
         ;; held-out replay of a run that forked read 11/14 and 13/14 on the
@@ -894,6 +904,7 @@
       (oversight/start!
        (assoc ctx :enabled? true
               :every-ms (:every-ms p) :budget (:budget p) :poll-ms (:poll-ms p)
+              :silent-ms (:silent-ms p)
               ;; PHASE 1 (RFC-012), on this stream rather than a second one.
               ;; The reflex reads the implementer's steps off the bus and may
               ;; nudge; it runs every poll and spends none of the budget,
@@ -903,7 +914,8 @@
               :reflex-fn oversight/reflex!)
        (fn [pass-ctx]
          (let [out (myc/run-compiled (workflow/compiled-manifest "oversight")
-                                     pass-ctx {:oversight/carry (:carry pass-ctx)})]
+                                     pass-ctx {:oversight/carry (:carry pass-ctx)
+                                               :oversight/silent-for-ms (:silent-for-ms pass-ctx)})]
            {;; The carry: the supervisor's branch, so the next pass continues
             ;; the same conversation rather than starting one. A QUIET pass
             ;; produces no branch, and returning its nil wiped the carry — so
