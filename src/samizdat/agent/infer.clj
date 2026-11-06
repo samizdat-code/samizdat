@@ -393,7 +393,11 @@
         policy (gates/threshold :request-accounting)
         request {:provider (get-in ctx [:llm-config :provider])
                  :model (get-in ctx [:llm-config :model])
-                 :context-window (or (get-in ctx [:llm-config :context-window])
+                 ;; What the provider will take, which :context-window need not
+                 ;; be: on a model with a large window that is the ladder's
+                 ;; budget, chosen for when to fold.
+                 :context-window (or (get-in ctx [:llm-config :request-window])
+                                     (get-in ctx [:llm-config :context-window])
                                      (get-in ctx [:llm-config :max-context]))
                  :tools (tools-for-request tools)
                  :grammar grammar

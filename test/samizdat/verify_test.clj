@@ -264,3 +264,19 @@
         (finally
           (verify/unseal-run! "memo-run")
           (doseq [f (reverse (file-seq root))] (.delete f)))))))
+
+(deftest the-tdd-rung-is-about-code
+  ;; karamazov-0wvc.3: a run asked to write an answer into out.txt was refused
+  ;; for not pinning it with a test, four times, until the budget ran out.
+  (testing "a change with no code in it owes no test"
+    (is (not (str/includes? (str (verify/verify-block {:verify-on? true :result nil
+                                                       :changed ["out.txt" "notes/report.md"]
+                                                       :require-test? true}))
+                            "added no test"))))
+  (testing "a code change still does, in any language"
+    (doseq [path ["src/foo.clj" "algo.py" "lib/heap.cpp" "build.sh"]]
+      (is (str/includes? (str (verify/verify-block {:verify-on? true :result nil
+                                                    :changed [path]
+                                                    :require-test? true}))
+                         "added no test")
+          path))))

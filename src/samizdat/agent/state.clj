@@ -960,15 +960,37 @@
   over-budget-hint is already saying FOLD SOON.\" Measuring against the hard
   window means noticing pressure only once it is already fatal.
 
+  The soft ceiling follows the window when the model has one, since a size
+  that is saturation on a 32k endpoint is a quiet start on a 128k one.
+
   Pure, over the prompt-token count the provider reported."
-  [prompt-tokens {:keys [operating-ceiling advisory urgent]}]
-  (let [used (or prompt-tokens 0)]
-    (when (and (pos? used) (pos? (or operating-ceiling 0)))
-      (let [ratio (/ (double used) (double operating-ceiling))]
-        (cond (> ratio 1.0) :over
-              (>= ratio urgent) :urgent
-              (>= ratio advisory) :advisory
-              :else nil)))))
+  ([prompt-tokens policy] (context-pressure prompt-tokens policy nil))
+  ([prompt-tokens {:keys [operating-ceiling window-fraction advisory urgent]} window]
+   (let [used (or prompt-tokens 0)
+         ceiling (if (and window (pos? window) window-fraction)
+                   (* (double window) (double window-fraction))
+                   operating-ceiling)]
+     (when (and (pos? used) (pos? (or ceiling 0)))
+       (let [ratio (/ (double used) (double ceiling))]
+         (cond (> ratio 1.0) :over
+               (>= ratio urgent) :urgent
+               (>= ratio advisory) :advisory
+               :else nil))))))
+
+(defn note-lines
+  "Record `total`, the lines the run has written, against the task the branch
+  holds: :lines-written counts from where the tree stood when this task began,
+  so a split task's parts start clean."
+  [branch total]
+  (if (nil? total)
+    (assoc branch :lines-written nil)
+    (let [task (:id (:task branch))
+          base (if (= task (:lines-task branch))
+                 (or (:lines-base branch) 0)
+                 (or (:lines-total branch) 0))]
+      (assoc branch
+             :lines-task task :lines-base base :lines-total total
+             :lines-written (max 0 (- total base))))))
 
 (defn squeeze-context
   "Tighten this branch's compaction budget one notch (karamazov-d41).

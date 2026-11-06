@@ -118,7 +118,7 @@
     ;; Context-window arithmetic over message vectors. Pure.
     samizdat.agent.compaction
     {:vars [aggressive? apply-eviction apply-summary cap-oversized-results compress-window
-            estimate-tokens evictable-turns evicted-turns fold-pays? fold-task fold? pressure
+            estimate-tokens evictable-turns evicted-turns fold-pays? fold-task fold? ladder-tokens pressure
             prune-options prune-tool-outputs result-cap results-of
             snip-bought-enough? summary-budget task-span tier turn-range unpinned-in
             validate-summary]}

@@ -104,13 +104,26 @@
         extension (some-> (re-find #"\.([^.]+)$" name) second str/lower-case)]
     (get (:language-extensions policy) extension)))
 
+(defn- observed-values
+  "What a turn carried for one field, inside the selector limits. The limits
+  bind rules someone authored and `values` refuses those; this is whatever a
+  call happened to hold, which may be anything (karamazov-0wvc.10)."
+  [{:keys [max-selector-values max-value-chars]} additions]
+  (->> additions
+       (map str)
+       (remove str/blank?)
+       (map #(util/truncate-middle % max-value-chars))
+       distinct
+       (take max-selector-values)
+       vec))
+
 (defn note-facts [facts additions generation policy]
   (if (not= generation (:generation facts))
     facts
     (reduce (fn [acc [field additions]]
               (if (empty? additions)
                 acc
-                (let [additions (values policy field (vec additions))]
+                (let [additions (observed-values policy additions)]
                   (assoc acc field
                          (vec (take (:max-metadata-values policy)
                                     (distinct (concat additions (get acc field)))))))))

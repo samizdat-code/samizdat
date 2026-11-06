@@ -1168,3 +1168,17 @@
               (:advertised-tools child)))
        (is (= ["grep" "write_file"] (mapv :name (:advertised-tool-docs child))))
        (is (not (contains? (:advertised-tools child) "shell")))))))
+
+(deftest admission-is-against-the-window-the-provider-has
+  ;; karamazov-0wvc.9: :context-window can be a compaction budget under the real
+  ;; window. Priced against it, doubling a large output budget on a retry was
+  ;; refused without a call, throwing away the truncated attempt.
+  (let [tape {:id "t" :messages [{:role "system" :content "s"} {:role "user" :content "p"}] :turns []}
+        config {:context-window 128000 :max-tokens 65536}]
+    (testing "a retry over the budget but inside the provider's window goes out"
+      (is (not (false? (:ok (infer/prepare {:llm-adapter ::a
+                                            :llm-config (assoc config :request-window 1000000)}
+                                           tape {:attempt 2 :fit? true}))))))
+    (testing "with no separate figure the window still bounds a request"
+      (is (false? (:ok (infer/prepare {:llm-adapter ::a :llm-config config}
+                                      tape {:attempt 2 :fit? true})))))))

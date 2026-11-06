@@ -946,3 +946,17 @@
       ((:handler (cell/get-cell! :compaction/fold)) ctx data))
     (is (some #(= "no-progress" (get-in % [:data :action])) @notes)
         "identical structured totals are no progress, even with tools and output reserve")))
+
+(deftest the-ladder-counts-a-bounded-reply-reservation
+  ;; karamazov-0wvc.9: raising a model's output budget to 65536 had the ladder
+  ;; read a 17k opening prompt as 65% full, capping results from the first turn
+  ;; and folding at 30k.
+  (let [policy {:reply-reserve-tokens 16384}]
+    (is (= (+ 17000 16384)
+           (cmp/ladder-tokens {:input-tokens 17000 :reserved-output-tokens 65536} policy)))
+    (is (= (+ 17000 8192)
+           (cmp/ladder-tokens {:input-tokens 17000 :reserved-output-tokens 8192} policy))
+        "a smaller budget is counted as it is, so a small window still sees it")
+    (is (= 17000 (cmp/ladder-tokens {:input-tokens 17000} policy))))
+  (testing "the shipped policy names the reservation"
+    (is (pos? (:reply-reserve-tokens (samizdat.agent.gates/threshold :compaction))))))

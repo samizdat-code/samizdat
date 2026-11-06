@@ -793,8 +793,15 @@
                            (journal/note! (:conn ctx) (:run-id ctx) :stage-error
                                           {:branch-id (:id b) :turn turn
                                            :data {:stage (some-> node name) :error why}}))
-                         (assoc b :status :abandoned
-                                :inactive-reason (str "branch error: " why)))))))
+                         (if (and iterating?
+                                  (< (inc (or (:stage-errors b) 0))
+                                     (:limit (gates/threshold :stage-errors))))
+                           (-> b
+                               (update :stage-errors (fnil inc 0))
+                               (update :messages into
+                                       (handoff/stage-error (:conn ctx) (:run-id ctx) b turn why)))
+                           (assoc b :status :abandoned
+                                  :inactive-reason (str "branch error: " why))))))))
         ;; SERIAL, for a replay (karamazov-x0dx): each turn runs to its end
         ;; before the next starts, in the order the branches are listed. A
         ;; held-out replay of a run that forked read 11/14 and 13/14 on the

@@ -3020,3 +3020,16 @@
           (is (= "<tool_result tool=\"done\">\nshipped\n</tool_result>"
                  (:content (peek (:messages b')))))))
       (finally (db/close c)))))
+
+(deftest lines-written-is-the-held-tasks
+  ;; karamazov-0wvc.8: counted from the run's start, a task split as over-budget
+  ;; asks still read as over it, so the split could never clear the gate.
+  (let [b (assoc (branch-with) :task {:id "T1"})
+        b1 (state/note-lines b 600)]
+    (is (= 600 (:lines-written b1)))
+    (is (= 650 (:lines-written (state/note-lines b1 650))) "same task, it accumulates")
+    (let [b2 (state/note-lines (assoc b1 :task {:id "T2"}) 640)]
+      (is (= 40 (:lines-written b2)) "a new task starts from what was already there")
+      (is (= 90 (:lines-written (state/note-lines b2 690)))))
+    (is (nil? (:lines-written (state/note-lines b nil))) "git could not answer")))
+

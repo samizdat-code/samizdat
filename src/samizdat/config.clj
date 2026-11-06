@@ -338,6 +338,11 @@
               ;; too large folds late and risks an overflow the ladder existed
               ;; to prevent.
               :context-window 128000
+              ;; Thinking counts against this. A hard problem takes 55k in one
+              ;; step on flash, measured on Terminal-Bench regex-chess, and at
+              ;; 16384 the model never got to a call (karamazov-0wvc.7).
+              :max-tokens 65536
+              :request-window 1000000
               :base-url "https://api.deepseek.com/beta"
               ;; What the endpoint was MEASURED to do (2026-09-06): the beta
               ;; URL continues a flagged assistant prefix; `thinking {type
@@ -687,12 +692,15 @@
                   ;; documented disable wire (deepseek: thinking off; glm-5.3
                   ;; cannot disable, so: effort low).
                   :reasoning-effort (env "HARNESS_REASONING_EFFORT")
-                  :max-tokens  (or (env-long "HARNESS_MAX_TOKENS") 16384)
+                  :max-tokens  (or (env-long "HARNESS_MAX_TOKENS")
+                                   (:max-tokens defaults)
+                                   16384)
                   ;; What the compaction ladder measures pressure against. Its
                   ;; rungs are fractions of this; absent, samizdat.agent.compaction
                   ;; routes :none and no fold ever happens.
                   :context-window (or (env-long "HARNESS_CONTEXT_WINDOW")
                                       (:context-window defaults))
+                  :request-window (:request-window defaults)
                   ;; A provider default (GLM pins 0.2 for coding) wins over the
                   ;; family default of 0.7; HARNESS_TEMPERATURE overrides both.
                   :temperature (or (some-> (env "HARNESS_TEMPERATURE") parse-double)
@@ -827,8 +835,9 @@
         :api-key     (some-> (:key-env defaults) env)
         :model       (:model defaults)
         :context-window (:context-window defaults)
+        :request-window (:request-window defaults)
         :temperature (provider-temperature type)
-        :max-tokens  (or (env-long "HARNESS_MAX_TOKENS") 16384)
+        :max-tokens  (or (env-long "HARNESS_MAX_TOKENS") (:max-tokens defaults) 16384)
         :timeout-ms  (or (env-long "HARNESS_TIMEOUT_MS") 300000)
         :conn-timeout-ms (or (env-long "HARNESS_CONN_TIMEOUT_MS") 15000)
         :max-response-ms (or (env-long "HARNESS_MAX_RESPONSE_MS") 600000)

@@ -548,3 +548,9 @@
         (is (some #(and (= bad (:id %)) (= :stop (:phase %)))
                   (peripherals/notices))))
       (finally (peripherals/stop!)))))
+
+(deftest deepseek-has-room-to-think-and-others-keep-the-general-default
+  ;; karamazov-0wvc.7
+  (is (= 65536 (get-in (config/load-config {:roles {:default :deepseek}}) [:llm :max-tokens])))
+  (is (= 1000000 (get-in (config/load-config {:roles {:default :deepseek}}) [:llm :request-window])))
+  (is (= 16384 (get-in (config/load-config {:roles {:default :glm}}) [:llm :max-tokens]))))

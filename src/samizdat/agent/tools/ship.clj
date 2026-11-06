@@ -673,8 +673,8 @@
                                 (when (or verify-focused? contracted-tests) changed)))
         cmd (when verify-on? (or (verify/focused-cmd focus) verify-cmd))
         pre-doomed? (or (and (some? changed) (empty? changed))
-                        (and require-test? (some? changed) (seq changed)
-                             (not (some verify/test-file? changed))
+                        (and require-test? (some? changed)
+                             (verify/owes-test? changed)
                              (nil? contracted-tests)))
         ;; Through the run's memory of this tree (gates.edn :verify-memo):
         ;; :feature/verify runs the same command on the same tree next.

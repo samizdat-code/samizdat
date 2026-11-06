@@ -133,10 +133,14 @@
   model-supplied path into a filesystem read must come through here, and the
   lsp tool rolling its own bare io/file was the escape (karamazov-blt.28)."
   [root path]
-  (let [root* (str (fs/canonicalize root))
-        target (str (fs/canonicalize (fs/path root path)))]
-    (when (or (= target root*) (str/starts-with? target (str root* "/")))
-      target)))
+  ;; A path the filesystem cannot represent (a component over its name limit)
+  ;; throws from canonicalize. It names nothing under the root, so nil, the same
+  ;; as an escape (karamazov-0wvc.6).
+  (when-let [target (try (str (fs/canonicalize (fs/path root path)))
+                         (catch Throwable _ nil))]
+    (let [root* (str (fs/canonicalize root))]
+      (when (or (= target root*) (str/starts-with? target (str root* "/")))
+        target))))
 
 (defn- absolute? [p] (.isAbsolute (io/file (str p))))
 

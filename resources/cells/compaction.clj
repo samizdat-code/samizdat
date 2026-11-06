@@ -93,9 +93,9 @@
           p (policy)
           window (window-of llm-config)
           msgs (vec (:messages branch))
-          tokens (get-in (infer/prepare request-context (infer/of-branch branch)
-                                        {:attempt 1 :fit? false})
-                         [:accounting :total-tokens])
+          tokens (cmp/ladder-tokens (:accounting (infer/prepare request-context (infer/of-branch branch)
+                                                                {:attempt 1 :fit? false}))
+                                    p)
           ratio (cmp/pressure tokens window)
           t (and window (cmp/tier ratio (:ladder p)))
           ;; BELOW THE LADDER, a fold can still pay for itself: carrying an

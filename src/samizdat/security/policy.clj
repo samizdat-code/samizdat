@@ -754,6 +754,16 @@
 (defn- preview-stream [text cap known]
   (util/truncate-middle (secrets/redact (str text) known) cap))
 
+(defn preview-caps
+  "How much of each stream one command's preview shows, out of `total`: each
+  has its share, and what one does not use goes to the other. A fixed split
+  showed half the preview for a command with nothing on stderr."
+  [stdout-chars stderr-chars total fraction]
+  (let [stdout-share (long (Math/round (* (double total) (double fraction))))
+        stderr-share (- total stdout-share)]
+    [(max stdout-share (- total (min stderr-chars stderr-share)))
+     (max stderr-share (- total (min stdout-chars stdout-share)))]))
+
 (defn run-shell
   "Run a shell command through the full gate: decide, then (on allow) resolve
   symbolic refs, spawn with a scrubbed environment, and redact the output
@@ -956,19 +966,19 @@
                   e)))
             out (if allocation
                   (let [policy (:policy allocation)
-                        total (:preview-chars policy)
-                        stdout-cap (long (Math/round (* total (:preview-stdout-fraction policy))))
-                        stderr-cap (- total stdout-cap)
-                        stdout (preview-stream
-                                (str (:out r) (:out-tail r)
-                                     (when (:timeout r)
-                                       (str "\n[timed out after " (:ms r) "ms]"))
-                                     (when (:cancelled r) "\n[cancelled]")
-                                     (when (:message r) (str "\n" (:message r)))
-                                     (when finalization-error
-                                       (str "\n" (ex-message finalization-error))))
-                                stdout-cap known)
-                        stderr (preview-stream (str (:err r) (:err-tail r)) stderr-cap known)]
+                        stdout-text (str (:out r) (:out-tail r)
+                                         (when (:timeout r)
+                                           (str "\n[timed out after " (:ms r) "ms]"))
+                                         (when (:cancelled r) "\n[cancelled]")
+                                         (when (:message r) (str "\n" (:message r)))
+                                         (when finalization-error
+                                           (str "\n" (ex-message finalization-error))))
+                        stderr-text (str (:err r) (:err-tail r))
+                        [stdout-cap stderr-cap] (preview-caps (count stdout-text) (count stderr-text)
+                                                              (:preview-chars policy)
+                                                              (:preview-stdout-fraction policy))
+                        stdout (preview-stream stdout-text stdout-cap known)
+                        stderr (preview-stream stderr-text stderr-cap known)]
                     (str stdout (when (seq stderr) (str "\n" stderr))))
                   (cond
                     (:message r) (str (:message r))
@@ -991,8 +1001,17 @@
                             (:timeout r) :timeout
                             (:error r) :error
                             :else :complete)
-                  :artifacts (mapv :uri (vals (select-keys public-capture [:stdout :stderr])))}))
-            reference-note (when public-capture
+                  :artifacts (mapv :uri (vals (select-keys public-capture [:stdout :stderr])))
+                  ;; The caller is holding the result, so it needs no message
+                  ;; saying the command finished (karamazov-0wvc.4).
+                  :delivered? true}))
+            ;; Only when there is more to fetch than was shown.
+            streams (vals (select-keys public-capture [:stdout :stderr]))
+            reference-note (when (and public-capture
+                                      (or (not-every? #(= :complete (:status %)) streams)
+                                          (some #(false? (:complete? %)) streams)
+                                          (> (reduce + 0 (map #(long (or (:observed-bytes %) 0)) streams))
+                                             (long (:preview-chars (:policy allocation))))))
                              (str "\nCaptures: " (pr-str public-capture)))]
         ;; What ran read outside the project: the branch holds it now.
         (when outside-all

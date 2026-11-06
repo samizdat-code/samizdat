@@ -525,6 +525,16 @@
         supervisor before :provider-error-limit abandoned them. False starts
         the run anyway and leaves the outage to that limit."}
 
+ :stage-errors
+ {:value {:limit 3}
+  :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-0wvc.6"]
+  :doc "How many times a turn may throw inside the harness before its branch is
+        abandoned. Under this the branch loses the turn and is told what broke;
+        one bad call ending the only branch ended the run before the supervisor
+        could act. Iterating loops only: in a manifest where a turn is the whole
+        job, going round again would repeat all of it."}
+
  :job-stall-ms
  {:value 1800000 :kind :threshold :capability-tunable? false
   :provenance ["karamazov-abzd" "sweep5 run 2"]
@@ -1822,13 +1832,16 @@
 
  :shell-logs
  {:value {:retain-bytes-per-stream 1048576
-          :preview-chars 4000 :preview-stdout-fraction 0.5
+          :preview-chars 10000 :preview-stdout-fraction 0.5
           :search-scan-bytes 1048576 :search-results 20
           :max-age-ms 86400000 :max-count 100 :max-capacity-bytes 104857600}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-d1pw.3" "autolith retained command output"]
+  :provenance ["karamazov-d1pw.3" "autolith retained command output" "karamazov-0wvc.2"]
   :doc "Per-stream retention, inline preview allocation, bounded literal search,
-        and delivered-capture age/count/capacity retention. Active and undelivered
+        and delivered-capture age/count/capacity retention. :preview-chars is
+        what one command shows in all; :preview-stdout-fraction is stdout's share
+        when both streams want more than that, and a stream that needs less than
+        its share leaves the rest to the other (karamazov-0wvc.2). Active and undelivered
         captures are never pruned."}
 
  :async
@@ -3066,11 +3079,12 @@
         a guard on one retry, not as a steer of its own."}
 
  :context-pressure
- {:value {:operating-ceiling 24000
+ {:value {:window-fraction 0.75
+          :operating-ceiling 24000
           :advisory 0.75
           :urgent 0.90}
   :kind :threshold :capability-tunable? false
-  :provenance ["karamazov-d41" "karamazov-3y5"]
+  :provenance ["karamazov-d41" "karamazov-3y5" "karamazov-0wvc.1"]
   :doc "WHEN A PROMPT IS GETTING TOO BIG, MEASURED BEFORE IT IS FATAL.
 
         TWO CEILINGS. The HARD one is the endpoint's context window — the
@@ -3082,11 +3096,14 @@
         15% saturation with 850k headroom while its own hint is already
         saying FOLD SOON.
 
-        :operating-ceiling  prompt tokens one request should stay under.
-                            NOT the context window — leave room for the
-                            reply, the tool result, and the next exchange.
-                            24000 suits a 32k local endpoint; raise it with
-                            the window.
+        :window-fraction    the share of the model's context budget one
+                            request should stay under, which leaves room for
+                            the reply, the tool result, and the next exchange.
+        :operating-ceiling  the same in tokens, for a model with no window
+                            recorded. A fixed 24000 for everyone squeezed a
+                            128k model at turn 13, with the system prompt most
+                            of it, down to one exchange of memory for the rest
+                            of the branch (karamazov-0wvc.1).
         :advisory           fraction of the ceiling that counts as close
         :urgent             fraction at which the branch's compaction budget
                             is squeezed a notch, one turn BEFORE the wall
@@ -3658,6 +3675,12 @@
    ;; summary of its own instructions. The TAIL is what is still in play.
    :protect-head 2
    :protect-tail 5
+
+   ;; How much of a request's reply budget the ladder counts as used. The most a
+   ;; reply is likely to need, not the most it may take, so a model given a large
+   ;; output budget for its thinking is not read as nearly full from turn one
+   ;; (karamazov-0wvc.9).
+   :reply-reserve-tokens 16384
    ;; The aggressive rung halves the tail it keeps.
    :aggressive-tail 2
 
@@ -3760,7 +3783,7 @@
         role the compaction fold's summary call runs on."}
 
  :context-budget
- {:value {:tool-result-chars   4000
+ {:value {:tool-result-chars   10000
           :file-read-chars     60000
           :test-output-lines   25
           :judge-rules-chars   6000
@@ -3786,8 +3809,13 @@
           :websearch-error-chars 200
           :inbox-lines         3
           :tree-lines          8
-          :keep-pairs          10
-          :compaction-chars    50000
+          :keep-pairs          30
+          ;; Of conversation: the system prompt is not counted. Under the
+          ;; :compaction ladder's first rung on the 128k budget, so this
+          ;; and the ladder do not fire together. At 50000 and 10, on
+          ;; Terminal-Bench, the agent forgot finished work and redid it
+          ;; (karamazov-0wvc.1).
+          :compaction-chars    240000
           ;; How many exchanges the compaction frontier moves by at once
           ;; (karamazov-pdes). Measured on run 5e78b96a: advancing one
           ;; exchange per turn re-prefilled the whole verbatim window on
@@ -3805,7 +3833,11 @@
           ;; "retry at a doubled budget" contract silently degraded to a
           ;; same-budget repeat, reproducing the truncation it exists to
           ;; escape (blt.38).
-          :retry-base-tokens   8192}
+          :retry-base-tokens   8192
+          ;; Over this a new file was not written by the model, it was fetched
+          ;; or generated, and does not count against :task-line-budget
+          ;; (karamazov-0wvc.8).
+          :written-file-bytes  131072}
   :kind :cost-ceiling :capability-tunable? false
   :doc "HOW MUCH THE MODEL GETS TO SEE. Every one of these was a constant in
         code, and together they are the most project-specific numbers in the
@@ -4027,6 +4059,9 @@
   ;; no single quotes (provenance R3-1).
   {:value
    {:test-file-regex "(?i)(^|/)(test|spec)s?/|[_-](test|spec)\\.[a-z]+$|(^|/)test_[^/]+$"
+    ;; What the TDD rung is about: a change with none of these in it (a report,
+    ;; a data file, an answer written to out.txt) owes no test (karamazov-0wvc.3).
+    :code-file-regex "(?i)\\.(clj|cljc|cljs|py|pyx|ts|tsx|js|jsx|mjs|rs|go|c|h|cc|cpp|cxx|hpp|java|kt|rb|php|pl|lua|swift|cs|sh|bash|zig|hs|ml|ex|exs|sql)$"
     :root-strip-regex "^(test|gui|src)/"
     :ext-strip-regex "\\.cljc?$"
     :ns-whitelist-regex "[a-zA-Z0-9.*-]+"

@@ -315,6 +315,7 @@
    :trajectory-judge "prompts/trajectory-judge.md"
    :turn-deadline "prompts/turn-deadline.md"
    :turn-interrupted "prompts/turn-interrupted.md"
+   :turn-stage-error "prompts/turn-stage-error.md"
    :uncertain-effect "prompts/uncertain-effect.md"
    :user-simulator "prompts/user-simulator.md"
    :verify-hollow "prompts/verify-hollow.md"

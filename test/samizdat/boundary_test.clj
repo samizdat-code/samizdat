@@ -396,3 +396,10 @@
     (let [r (base/run-tool {:branch {:id "b1" :mechanics {:unknown-tools 2}}
                             :tool-name "no_such_tool"})]
       (is (= 3 (get-in r [:branch :mechanics :unknown-tools]))))))
+
+(deftest a-path-the-filesystem-cannot-represent-resolves-to-nothing
+  ;; karamazov-0wvc.6: the confinement primitive threw instead of failing closed.
+  (let [root (str (jolt.fs/create-temp-dir))]
+    (is (nil? (samizdat.agent.files/resolve-under-root
+               root (str root "/" (apply str (repeat 400 "a")) "/x.c"))))
+    (jolt.fs/delete-tree root)))

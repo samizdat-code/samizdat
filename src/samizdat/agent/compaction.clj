@@ -82,6 +82,13 @@
   (long (Math/ceil (/ (double (reduce + 0 (map #(content-chars (:content %)) messages)))
                       (double (max 1 chars-per-token))))))
 
+(defn ladder-tokens
+  "What the ladder measures of a request's accounting: its input plus the reply
+  budget, up to the policy's :reply-reserve-tokens."
+  [{:keys [input-tokens reserved-output-tokens]} {:keys [reply-reserve-tokens]}]
+  (+ (long (or input-tokens 0))
+     (min (long (or reserved-output-tokens 0)) (long (or reply-reserve-tokens 0)))))
+
 (defn pressure
   "Estimated tokens as a fraction of the window, or 0.0 when the window is
   unknown. A model whose context size nobody recorded gets no ladder rather

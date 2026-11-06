@@ -232,3 +232,22 @@
         (is (= #{".gitignore" "src/core.clj" "src/new.clj"} (set (gd/project-files dir))))
         (is (nil? (gd/project-files nil)))
         (finally (sh dir (str "rm -rf " dir)))))))
+
+(deftest changed-lines-is-what-the-model-wrote
+  ;; karamazov-0wvc.8: a downloaded model counted as lines written, so the budget
+  ;; told a run with 315 lines of code that its task was too big, on every turn.
+  (let [dir (str "/tmp/samizdat-lines-" (System/nanoTime))]
+    (try
+      (proc/run {:timeout-ms 15000} "sh" "-c" (str "mkdir -p " dir))
+      (sh dir "git init -q && git config user.email t@t.co && git config user.name t")
+      (sh dir "echo seed > seed.txt && git add -A && git commit -qm init")
+      (let [base (gd/baseline dir)]
+        (sh dir "printf 'a\\nb\\nc\\n' > app.py")
+        (is (= 3 (gd/changed-lines dir base)))
+        (testing "a large fetched text file is not writing"
+          (spit (str dir "/vocab.txt") (apply str (repeat 30000 "word\n")))
+          (is (= 3 (gd/changed-lines dir base))))
+        (testing "nor is a binary, whatever its size"
+          (sh dir "printf 'a\\0b\\n\\n\\n' > weights.bin")
+          (is (= 3 (gd/changed-lines dir base)))))
+      (finally (sh dir (str "rm -rf " dir))))))

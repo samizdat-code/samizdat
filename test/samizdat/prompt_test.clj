@@ -124,7 +124,7 @@
 (deftest a-file-level-resolves-through-io-resource
   ;; Not a cwd-relative path: it has to work inside a built binary, where
   ;; resources/ does not exist on disk.
-  (is (str/includes? (prompt/resolve-chain [{:file "system"}]) "Clojure developer"))
+  (is (str/includes? (prompt/resolve-chain [{:file "system"}]) "Your value is judgment"))
   (is (nil? (prompt/resolve-chain [{:file "no-such-prompt-anywhere"}]))))
 
 (deftest an-unknown-entry-kind-fails-loud
@@ -151,7 +151,7 @@
     (is (seq entries) "the system prompt goes through the chain")
     (is (= {:file "system"} (last entries))
         "the shipped prompt is the floor, so an unconfigured harness is unchanged")
-    (is (str/includes? (prompt/layer :system) "Clojure developer"))))
+    (is (str/includes? (prompt/layer :system) "Your value is judgment"))))
 
 (deftest an-undeclared-layer-falls-back-to-its-own-prompt-file
   ;; Adding a layer to prompt-chain.edn is opt-in; a layer with no chain
@@ -283,7 +283,7 @@
       (userspace/bind-root! "/tmp")
       (is (str/includes? (prompt/resolve-chain [{:project ".samizdat/prompts/system.md"}
                                                 {:file "system"}])
-                         "Clojure developer")
+                         "Your value is judgment")
           "with the root elsewhere the level is absent and the shipped file answers")
       (finally
         (userspace/bind-root! prev)

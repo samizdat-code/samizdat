@@ -132,7 +132,7 @@
         signals, append what the assistant actually said. On a provider failure
         this passes the data through untouched for the error route."
    :pure true
-   :requires []
+   :requires [:llm-config]
    :input  [:map [:branch :map] [:call :map] [:turn :int]]
    ;; PER-TRANSITION, because the two halves of the docstring are two shapes.
    ;; On :provider-error the handler returns `data` untouched and adds nothing
@@ -144,11 +144,13 @@
                        [:signals :any] [:said :any]]
              :tool    [:map [:branch :map] [:parsed :any]
                        [:signals :any] [:said :any]]}]}
-  (fn [_ctx {:keys [branch call turn] :as data}]
+  (fn [ctx {:keys [branch call turn request-ctx] :as data}]
     (if-not (:ok call)
       data
-      (let [{:keys [branch parsed signals said]}
-            (turn/absorb-response branch (:response call) turn)]
+      (let [{:keys [llm-config]} (or request-ctx (turn/request-context ctx branch))
+            {:keys [branch parsed signals said]}
+            (turn/absorb-response branch (:response call) turn
+                                  (or (:context-window llm-config) (:max-context llm-config)))]
         (assoc data :branch branch :parsed parsed :signals signals :said said)))))
 
 (cell/defcell :loop/provider-error

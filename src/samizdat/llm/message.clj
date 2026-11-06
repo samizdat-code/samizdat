@@ -266,7 +266,13 @@
          keep (if (and (number? batch) (> batch 1) (pos? aged))
                 (+ keep-pairs (mod aged (long batch)))
                 keep-pairs)
-         total (reduce + 0 (map (comp count str :content) messages))
+         ;; The conversation, not the frame: the system prompt is fixed and
+         ;; never compacted, so counting it says nothing about how long the
+         ;; branch has run, and one over the threshold compacted every branch
+         ;; from its first turn past keep-pairs (karamazov-0wvc.1).
+         ;; Without thinking, which `prepare` strips before the wire.
+         total (reduce + 0 (map (comp count strip-think-blocks str :content)
+                                (drop frame-size messages)))
          active? (and (>= total threshold) (> (count messages) frame-size))
          turns-by-number (into {} (map (juxt :turn identity)) turns)
          opts {:floor (or floor tape/default-floor) :roles compactable-roles}

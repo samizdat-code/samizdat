@@ -248,7 +248,9 @@
   flight, and a rewrite is work.
 
   A binary file contributes nothing rather than failing the count: numstat
-  reports `-` for it, and a budget is about code the model wrote."
+  reports `-` for it, and a budget is about code the model wrote. So do new
+  files too big to have been written in a run's turns (:written-file-bytes):
+  those were fetched or generated."
   [root baseline]
   (when (and root (rev? baseline))
     (let [num (fn [s] (or (parse-long (str s)) 0))
@@ -264,8 +266,13 @@
           ;; edited is already in the numstat above.
           untracked (some->> (seq created)
                              (map (fn [rel]
-                                    (try (-> (java.io.File. (str root) (str rel))
-                                             slurp str/split-lines count)
+                                    (try (let [f (java.io.File. (str root) (str rel))]
+                                           (if (> (.length f) (long (lexicon/budget :written-file-bytes)))
+                                             0
+                                             (let [text (slurp f)]
+                                               (if (str/includes? text (str (char 0)))
+                                                 0
+                                                 (count (str/split-lines text))))))
                                          (catch Throwable _ 0))))
                              (reduce + 0))]
       (when (or (some? tracked) (some? untracked))

@@ -729,7 +729,8 @@
   probe deliberately does not touch: a bounce that parsed badly is not a
   branch that called badly."
   ([branch response] (absorb-response branch response nil))
-  ([branch response turn]
+  ([branch response turn] (absorb-response branch response turn nil))
+  ([branch response turn window]
    (let [{:keys [tape parsed signals said]}
          (infer/absorb (infer/of-branch branch) response turn)
          ;; PROACTIVE, not reactive (karamazov-3y5). The only thing that used
@@ -744,7 +745,8 @@
          ;; move is noise.
          pressure (state/context-pressure
                    (get-in response [:usage :prompt-tokens])
-                   (gates/threshold :context-pressure))
+                   (gates/threshold :context-pressure)
+                   window)
          ;; WHAT THE CACHE WAS ASKED (karamazov-o4wm.1). The response carries
          ;; the fingerprint of the wire messages it answered; against the
          ;; branch's previous render that says whether only the tail moved
@@ -1394,8 +1396,8 @@
             ;; nothing. Carried on the branch so the gate's :when stays pure —
             ;; the same shape state/unwritten and plan-stale? use.
             branch (if (contains? (gates/tool-vocab :file-write) (str tool))
-                     (assoc branch :lines-written
-                            (gitdiff/changed-lines (:root ctx) (:git-baseline ctx)))
+                     (state/note-lines branch
+                                       (gitdiff/changed-lines (:root ctx) (:git-baseline ctx)))
                      branch)
             gate-ctx {:branch branch
                       :max-turns max-turns

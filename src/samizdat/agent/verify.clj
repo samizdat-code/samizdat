@@ -40,6 +40,14 @@
   [path]
   (boolean (re-find (re-pattern (:test-file-regex (conventions))) (str path))))
 
+(defn owes-test?
+  "Whether a set of changed paths is the kind of change the TDD ship gate is
+  about: some of it is code, and none of it is a test."
+  [changed]
+  (let [code (re-pattern (:code-file-regex (conventions)))]
+    (boolean (and (some #(re-find code (str %)) changed)
+                  (not (some test-file? changed))))))
+
 (defn ns-from-test-path
   "The Clojure namespace a test file defines: strip the leading source root
   (test/ or src/), drop the extension, '/'->'.', '_'->'-'. Returns nil for a
@@ -176,8 +184,7 @@
          "test, then call done.")
 
     ;; TDD: files changed but none is a test — the behaviour was never pinned.
-    (and require-test? (some? changed) (seq changed)
-         (not (some test-file? changed))
+    (and require-test? (some? changed) (owes-test? changed)
          (empty? contracted-tests))
     (str "You added no test, so the new behaviour is not pinned. Write a focused "
          "test that FAILS without your change and passes with it, get it green, "

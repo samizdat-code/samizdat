@@ -8,6 +8,7 @@
   terminated, and never runs beside it. Abort is the same cancel from outside."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
+            [samizdat.prompt]
             [ebb.core :as ebb]
             [samizdat.agent.beam :as beam]
             [samizdat.agent.critic :as critic]
@@ -133,12 +134,26 @@
         (is (nil? (:late-value r1)))
         (is (= 1 (:timeouts r1)))))))
 
-(deftest a-branch-that-throws-is-abandoned-not-the-beam
+(deftest a-branch-that-keeps-throwing-is-abandoned-not-the-beam
   (let [b (state/new-branch {:id "B1" :problem "p"})]
     (with-redefs [beam/advance-branch (fn [_ _ _] (throw (ex-info "kaboom" {})))]
-      (let [[r] (beam/advance-all (ctx 500) [b] 1)]
-        (is (= :abandoned (:status r)))
-        (is (re-find #"kaboom" (str (:inactive-reason r))))))))
+      (testing "the first throw costs the turn, and the branch hears why"
+        (let [[r] (beam/advance-all (ctx 500) [b] 1)]
+          (is (= :active (:status r)))
+          (is (= 1 (:stage-errors r)))
+          (is (re-find #"kaboom" (str (:content (peek (:messages r))))))))
+      (testing "telling the branch cannot itself take the run down"
+        (with-redefs [samizdat.prompt/render (fn [& _] (throw (ex-info "no such prompt" {})))]
+          (let [[r] (beam/advance-all (ctx 500) [b] 1)]
+            (is (= :active (:status r)))
+            (is (re-find #"kaboom" (str (:content (peek (:messages r)))))))))
+      (testing "at the limit the branch goes, and the beam does not"
+        (let [[r] (beam/advance-all (ctx 500) [(assoc b :stage-errors 2)] 1)]
+          (is (= :abandoned (:status r)))
+          (is (re-find #"kaboom" (str (:inactive-reason r))))))
+      (testing "a turn that is the whole job is not gone round again"
+        (let [[r] (beam/advance-all (assoc (ctx 500) :iterating-loop? false) [b] 1)]
+          (is (= :abandoned (:status r))))))))
 
 (deftest abort-cancels-the-run-task
   ;; The abort flag becomes a cancel of the run task. A run parked in a
