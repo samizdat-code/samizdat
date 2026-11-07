@@ -16,7 +16,8 @@ PROPOSED NEW STEPS:
 {{proposals|default:"(none)"}}
 {% if time-left %}
 TIME LEFT: about {{time-left}} seconds, and the run is stopped when they are gone.
-{% endif %}{% if guidance %}
+{% if not current %}Nothing exists yet, so NEXT is to write it, not to survey or probe: the worker looks things up as it writes.
+{% endif %}{% endif %}{% if guidance %}
 THE SUPERVISOR WATCHING THIS RUN SAYS:
 {{guidance}}
 {% endif %}

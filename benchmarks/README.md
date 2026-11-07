@@ -96,6 +96,8 @@ GLM-5.3, one attempt per task, three tasks, Pi not run:
 | `fix3l` | same, with tool schemas fixed | loop | 78.2%* | 45.6% | 33.7% |
 | `fix4` | mid-file repair and grader fixed | team-solve | 96.3% | 49.3% | 14.3% |
 | `fix4` | same | loop | 5.5% | 62.4% | 21.3% |
+| `fix5` | check at 45%, longer workers, solver told to wire up everything first | team-solve | 94.8% | 0.0% | 0.0% |
+| `fix5` | same | loop | 82.8% | 51.2% | 20.1% |
 
 \* under the buggy grader, at most 81.3%. `fix2`'s loop arm was stopped early, and `fix1`
 and `fix2` scored under that grader too.
@@ -114,6 +116,13 @@ GLM manages about 90K output tokens in 30 minutes. Low, high and max effort show
 useful difference in 12 probe calls, all near 55 tokens/s, and one call on figlet spent
 536 s thinking. Late integration is what is left: a program that first runs at 90% of the
 limit scores 5.5% on a task the other arm scores 96.3% on.
+
+`fix5` shows how a prompt can backfire. Told to get all of a program running first,
+team-solve's workers composed it in one go: one yj turn spent 599 s and 90K characters of
+thinking before writing, and both its figlet and yj builds were still failing at the
+limit. Their first writes moved from 626-635 s to 1119-1301 s, while loop, which does
+not get that prompt, built earlier. The prompt now asks for the entry point and build
+first, then one short file at a time.
 
 These runs do not compare samizdat with Pi. That needs Pi and samizdat on one provider
 with the fixed grader, and several attempts.

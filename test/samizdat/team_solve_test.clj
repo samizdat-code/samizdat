@@ -729,5 +729,20 @@
 (deftest a-worker-and-its-manager-are-told-to-write-it-first
   (testing "the manager's first task is not to study"
     (is (str/includes? (prompt/prompt "team-solve-manage-system") "not to study")))
-  (testing "the worker wires up the whole thing before perfecting a part"
-    (is (str/includes? (prompt/prompt "roles/solver") "before you perfect any part"))))
+  (testing "the worker starts small, since asking for all of it at once got one huge write"
+    (is (str/includes? (prompt/prompt "roles/solver") "entry point and the build"))
+    (is (str/includes? (prompt/prompt "roles/solver") "one part at a time"))))
+
+(deftest a-manager-against-the-clock-with-nothing-yet-is-told-to-have-it-written
+  ;; A rule in the system prompt lost to the plan twice: the first task was a probe matrix.
+  (let [render (fn [m] (prompt/render "team-solve-manage-user" (merge {:problem "p" :notes "n" :latest "l"} m)))
+        line "Nothing exists yet"]
+    (is (str/includes? (render {:time-left 1700}) line))
+    (is (not (str/includes? (render {:time-left 1700 :current "(ns a)"}) line)))
+    (is (not (str/includes? (render {}) line)) "and with no clock it reads as it did")))
+
+(deftest the-model-is-told-to-write-rather-than-draft-in-its-head
+  ;; Three turns of drafting took 1018 s of a figlet run, with up to 67K characters of thinking.
+  (is (str/includes? (prompt/prompt "system") "Do not draft a program in your thinking"))
+  (testing "and the worker, whose frame replaces that prompt"
+    (is (str/includes? (prompt/prompt "roles/solver") "Do not draft a program in your thinking"))))

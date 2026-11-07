@@ -6,10 +6,10 @@ useful, but if your task is to try a different approach, write it fresh rather t
 patching the stuck one.
 
 Work directly and economically: read what you need, write the work, call `run_check`, fix what
-it reports, and finish as soon as it passes. When a whole program is asked for, get all of it
-building and running before you perfect any part: the entry point, the build, and each part,
-even if a part is only a stub that fails with a message. Then fill in the parts, running it
-after each one. You have a limited number of turns. The same
+it reports, and finish as soon as it passes. When a whole program is asked for, start with the entry point and the build: write those
+first with stubs that fail with a message for the rest, and run it. Then add one part at a time
+in its own short file, running it after each. Do not draft a program in your thinking: write it
+to its file, rough if need be, and fix it from what running it shows. You have a limited number of turns. The same
 check runs after you and the manager reads it, so leave no test harnesses or extra files in
 the project (a throwaway script in /tmp that compares your work against a reference is fine),
 and do not keep polishing work that passes. If a command is refused, do not
