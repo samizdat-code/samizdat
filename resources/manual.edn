@@ -146,6 +146,10 @@
     :summary "Every node's preconditions as one report — the ctx keys and data keys it requires, what holds on every path in, and what is unsatisfied with the path that fails — before an edit rather than as the refusal after."}
    {:name samizdat.progress/interceptors
     :summary "Where each branch is in its workflow, journaled as :progress notes by every compiled manifest. Entering a node the manifest lists under `:progress [...]` at its top is a stage move (per-turn nodes do not belong there; a node the graph lacks is refused at compile), and a change in any branch field gates.edn :progress :branch-keys watches (phase, task, goal, status) is a field move. journal/progress reads them back per branch — the supervisor's view of a run, instead of its steps."}
+   {:name samizdat.memory/admit
+    :summary "What text may become a memory, by who wrote it: secrets redacted, confidence capped, and injection or unbacked rule-shaped text parked. Policy in gates.edn :memory :admission. `remember!` applies it; `samizdat.store.knowledge/quarantine` lists what was parked."}
+   {:name samizdat.store.knowledge/consolidate!
+    :summary "One pass at a run's end over the notes automatic writers inferred during it: a model keeps a few, adds up to :max-new, and the rest are retired. Keeping nothing is valid; an unreadable reply changes nothing. Numbers in gates.edn :memory :consolidation, words in prompts/memory-consolidate.md."}
    {:name samizdat.agent.revise/revise!
     :summary "Backward revision (ReHarness): after a branch ends, each memory it was shown that an earlier run wrote is put back beside the turns it was written from (knowledge source_branch/source_turn_*), with this branch's outcome as feedback only, and kept, rewritten through restate! (its lineage keeps the old wording) or retired. The :memory/revise cell (node :revisit after :distil) decides under gates.edn :memory-revise — off until the arena has measured it, clean endings only. Each call is a :revision side call and a :memory-revised note."}
    {:name samizdat.workflow/compile-loop

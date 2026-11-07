@@ -395,14 +395,32 @@
                        (update m :content #(str/replace (str %) ledger-re ""))))
                    messages))))
 
+(defn- leading-reasoning
+  "The reasoning a reply's content leads with, joined, or nil."
+  [content]
+  (let [c (str content)
+        open-tag "<think>"
+        start (str/index-of c open-tag)
+        end (str/last-index-of c "</think>")]
+    (when (and start end (< start end))
+      (not-empty (str/trim (subs c (+ start (count open-tag)) end))))))
+
 (defn prepare
   "Normalize a conversation for the wire: keyword roles become strings, prior
   assistant turns lose their think blocks, and every settled-state block but
-  the newest is dropped. System and user messages are otherwise left alone."
-  [messages]
+  the newest is dropped. System and user messages are otherwise left alone.
+
+  With :replay-reasoning? an assistant turn's reasoning goes back in its own
+  `reasoning_content` field rather than being dropped. ZCode and DeepSeek Harness,
+  their vendors' own harnesses, both keep it in history."
+  ([messages] (prepare messages {}))
+  ([messages {:keys [replay-reasoning?]}]
   (mapv (fn [{:keys [role content] :as m}]
-          (let [role (if (keyword? role) (clojure.core/name role) (str role))]
-            (assoc (select-keys m [])
+          (let [role (if (keyword? role) (clojure.core/name role) (str role))
+                reasoning (when (and replay-reasoning? (= "assistant" role))
+                            (leading-reasoning content))]
+            (assoc (cond-> (select-keys m [])
+                     reasoning (assoc :reasoning_content reasoning))
                    :role role
                    :content (-> (if (and (= "assistant" role) content)
                                   (strip-think-blocks content)
@@ -415,4 +433,4 @@
                                 (str/replace context-open "")
                                 (str/replace context-close "")
                                 str/trim))))
-        (strip-stale-ledgers messages)))
+        (strip-stale-ledgers messages))))

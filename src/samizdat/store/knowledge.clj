@@ -101,14 +101,22 @@
   (let [t (str/lower-case (str content))]
     (boolean (some #(str/includes? t (str %)) vocab))))
 
+(declare retire! standing preview)
+
+(defn- quarantine-prefix [] (:quarantine-prefix (:admission (memory/policy))))
+
 (defn remember!
   "Insert a fact and return its id. Kind defaults to 'note' — the column
   exists so later kinds (decisions, gotchas, references) need no migration."
   [conn {:keys [content kind salience confidence run-id pinned pattern-key
-                cause supersedes lineage-id flow source]}]
+                cause supersedes lineage-id flow source origin evidence?]}]
   (when (str/blank? (str content))
     (throw (ex-info "a memory needs content" {})))
-  (let [kind (or kind "note")
+  (let [{:keys [quarantine] :as admitted}
+        (memory/admit {:content content :origin origin :confidence confidence :evidence? evidence?})
+        content (:content admitted)
+        confidence (:confidence admitted)
+        kind (or kind "note")
         p (memory/policy)
         ;; Kind decides the starting importance unless the caller overrides it.
         ;; A memory arrives with a standing, not at zero: what it is worth is
@@ -142,22 +150,26 @@
                                              salience, confidence, run_id, pinned,
                                              last_run_id, pattern_key,
                                              lineage_id, current, cause, supersedes, flow,
-                                             source_branch, source_turn_from, source_turn_to)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)"
+                                             source_branch, source_turn_from, source_turn_to, origin)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)"
                                 id (str content) kind now
                                 salience confidence run-id (if pinned 1 0)
                                 run-id pattern-key
                                 (or lineage-id id) cause supersedes flow
                                 ;; Where it came from (v40): the branch and
                                 ;; the turns it was written from.
-                                (some-> (:branch source) str) (:from source) (:to source)]))
+                                (some-> (:branch source) str) (:from source) (:to source)
+                                (name (or origin :harness))]))
                 1
                 (catch Exception e
                   ;; Only a UNIQUE collision is an id problem; anything else
                   ;; (disk, lock) must surface as itself (provenance R2-15).
                   (if (db/id-collision? e) 0 (throw e))))]
         (if (pos? n)
-          (do (index! conn id content) id)
+          (do (index! conn id content)
+              (when quarantine
+                (retire! conn id {:reason (str (quarantine-prefix) quarantine)}))
+              id)
           (if (< attempt 5)
             (recur (inc attempt))
             (throw (ex-info "could not allocate a knowledge id" {}))))))))
@@ -865,8 +877,9 @@
                              (cond
                                (= "success" (:category r))
                                (let [cmd (or (not-empty (normalise-command cmd)) cmd)]
-                                 {:key (str "cmd-works:" cmd) :content (fact :cmd-works cmd)
-                                  :source {:branch (:branch_id r) :from (:turn r) :to (:turn r)}})
+                                 (when (memory/durable-command? cmd)
+                                   {:key (str "cmd-works:" cmd) :content (fact :cmd-works cmd)
+                                    :source {:branch (:branch_id r) :from (:turn r) :to (:turn r)}}))
 
                                (re-find (re-pattern (lexicon/wordlist :shell-refusal))
                                         (str (:result r)))
@@ -954,6 +967,88 @@
        (sort-by (juxt (comp - :shipped) :failed))
        vec))
 
+(defn quarantined?
+  "Whether this row was parked at admission rather than retired later."
+  [row]
+  (str/starts-with? (str (:retired_reason row)) (quarantine-prefix)))
+
+(defn quarantine-reason
+  "Why this parked row was parked."
+  [row]
+  (subs (str (:retired_reason row)) (count (quarantine-prefix))))
+
+(defn quarantine
+  "What admission has parked, newest first: for a person or the supervisor to read."
+  [conn]
+  (vec (db/fetch conn ["SELECT * FROM knowledge WHERE retired_reason LIKE ?
+                         ORDER BY created_at DESC" (str (quarantine-prefix) "%")])))
+
+(defn- consolidation-prompt
+  "The material for the pass: the run's inferred notes, and what is already known."
+  [candidates known {:keys [max-input-chars heading-notes heading-known]}]
+  (let [text (str heading-notes "\n"
+                  (str/join "\n" (map #(str (:id %) " [" (:kind %) "] " (:content %)) candidates))
+                  "\n\n" heading-known "\n"
+                  (str/join "\n" (map #(str "- " (preview (:content %) 120)) known)))]
+    (subs text 0 (min (count text) max-input-chars))))
+
+(defn- parse-consolidation
+  "{:keep #{id} :new [{:kind :content}]}, or nil when the reply says neither: a reply
+  nobody can read must not be taken for a decision to keep nothing."
+  [reply {:keys [keep-regex new-regex none-word]}]
+  (let [ls (map str/trim (str/split-lines (str reply)))
+        keeps (keep #(second (re-find (re-pattern keep-regex) %)) ls)
+        news (keep #(when-let [[_ k t] (re-find (re-pattern new-regex) %)]
+                      {:kind k :content t})
+                   ls)]
+    (when (or (seq keeps) (seq news) (some #(= none-word %) ls))
+      {:keep (set keeps) :new (vec news)})))
+
+(defn consolidate!
+  "Decide what a finished run's inferred notes leave behind (karamazov-4wky).
+
+  Only notes automatic writers inferred during this run are up for review. A
+  deliberate `remember`, a person's word, a pinned row and any with evidence keep
+  their place, and so do facts derived from exit codes, which need to stay current
+  for later runs to corroborate. `ask` is the model, injected.
+
+  Nothing changes until a reply parses: a failed call or an unreadable answer
+  leaves every note as it was. Those not kept are retired, so they stay readable."
+  [conn {:keys [run-id ask]}]
+  (let [{:keys [min-records max-known max-new] :as p} (:consolidation (memory/policy))
+        candidates (when run-id
+                     (db/fetch conn ["SELECT * FROM knowledge
+                                       WHERE run_id = ? AND current = 1 AND pinned = 0
+                                         AND origin = 'inferred' AND kind != 'overview'
+                                         AND id NOT IN (SELECT claim_id FROM knowledge_evidence)
+                                       ORDER BY created_at" run-id]))
+        skipped (fn [why] {:skipped why :kept 0 :retired 0 :added 0})]
+    (cond
+      (nil? ask) (skipped "no model")
+      (< (count candidates) min-records) (skipped (str (count candidates) " note(s), needs " min-records))
+      :else
+      (let [known (remove #(= run-id (:run_id %)) (standing conn max-known))
+            decided (try (parse-consolidation
+                          (ask (consolidation-prompt candidates known p)) p)
+                         (catch Throwable e
+                           (log/warn "consolidating the run failed:" (ex-message e))
+                           nil))]
+        (if-not decided
+          (skipped "no usable answer")
+          (let [ids (set (map :id candidates))
+                kept (filter ids (:keep decided))
+                retired (remove (set kept) ids)]
+            (doseq [id retired]
+              (retire! conn id {:reason (str/replace (:retired-reason p) "{{run}}" (str run-id))}))
+            {:kept (count kept)
+             :retired (count retired)
+             :added (->> (take max-new (:new decided))
+                         (map (fn [{:keys [kind content]}]
+                                (remember! conn {:content content :kind kind :run-id run-id :origin :inferred})))
+                         (filter #(= 1 (:current (get-by-id conn %))))
+                         doall
+                         count)}))))))
+
 (defn distil-session!
   "Write everything this session concluded into long-term memory: the patterns
   it measured, and the verdicts on the changes the supervisor made.
@@ -984,7 +1079,7 @@
   What reads the note: the next run's opening block (loop/learned-block), so
   a branch can tell an empty head start from a lost one; and the run detail
   the front ends show."
-  [conn {:keys [run-id findings experiments]}]
+  [conn {:keys [run-id findings experiments ask]}]
   (let [errors (atom [])
         ;; One half, guarded: the value on success, `absent` on a throw, and
         ;; the throw recorded under the half's name. `log/warn` as well,
@@ -1012,6 +1107,8 @@
         ;; was missing entirely: everything else here is the harness watching
         ;; itself.
         project (half :project [] #(distil-project! conn {:run-id run-id}))
+        ;; What the model's notes leave behind, judged once the whole run is in.
+        consolidated (half :consolidate nil #(consolidate! conn {:run-id run-id :ask ask}))
         ;; And curation, so the store does not become a ranking in which
         ;; everything has risen.
         decayed (half :curate 0 #(curate! conn))
@@ -1019,6 +1116,7 @@
         ;; about who is lowest.
         evicted (half :evict [] #(evict! conn))
         result {:findings (vec written) :verdicts (vec verdicts) :project (vec project)
+                :consolidated consolidated
                 :aged aged :decayed decayed :evicted (vec evicted)
                 :errors @errors}]
     ;; Best effort like every note; a journal that cannot be written is not a
@@ -1152,8 +1250,9 @@
 (defn- index-line
   "id, kind in brackets, preview — everything needed to decide whether
   to dereference this id, and nothing more."
-  [{:keys [id kind content]}]
-  (str id " [" (or kind "note") "] " (preview content 70)))
+  [{:keys [id kind content] :as row}]
+  (str id " [" (or kind "note") "] " (preview content 70)
+       (when (memory/provisional? row) " (unverified)")))
 
 (defn- fit-lines
   "Keep as many whole lines as fit beside the preamble under cap. A line

@@ -494,7 +494,7 @@
                                     on-delta tools continuation-attempt continuation-seed
                                     accounting-scope accounting-estimate]
                            :as opts}]
-   (let [request {:messages (message/prepare messages)
+   (let [request {:messages (message/prepare messages {:replay-reasoning? (config/supports? config :replay-reasoning)})
                   :accounting-scope accounting-scope
                   :accounting-estimate accounting-estimate
                   :max-tokens (or max-tokens (:max-tokens config))

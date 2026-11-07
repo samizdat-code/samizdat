@@ -256,6 +256,10 @@
             [samizdat.progress-test]
             [samizdat.introspect-branch-test]
             [samizdat.memory-exposure-test]
+            [samizdat.context-handling-test]
+            [samizdat.glm-adapter-test]
+            [samizdat.native-history-test]
+            [samizdat.memory-admission-test]
             [samizdat.memory-source-test]
             [samizdat.memory-revise-test]
             [samizdat.battery-test]
@@ -341,6 +345,10 @@
     samizdat.progress-test
     samizdat.introspect-branch-test
     samizdat.memory-exposure-test
+    samizdat.context-handling-test
+    samizdat.glm-adapter-test
+    samizdat.native-history-test
+    samizdat.memory-admission-test
     samizdat.memory-source-test
     samizdat.memory-revise-test
     samizdat.battery-test

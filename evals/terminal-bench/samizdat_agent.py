@@ -11,6 +11,8 @@ import asyncio
 import json
 import os
 import shlex
+import sqlite3
+import tempfile
 import time
 import tomllib
 from pathlib import Path
@@ -33,7 +35,7 @@ LIBS = ("ca-certificates curl git libsqlite3-0 zlib1g "
 class SamizdatAgent(BaseInstalledAgent):
     def __init__(self, *args, arm="team-solve", provider="deepseek-flash", model_id="deepseek-flash",
                  key_env="DEEPSEEK_API_KEY", provider_type="deepseek", max_turns=300,
-                 eval_mode="off", harness_effort=None, **kwargs):
+                 eval_mode="off", harness_effort=None, seed_job=None, context_window=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.arm = arm
         self.provider = provider
@@ -43,6 +45,8 @@ class SamizdatAgent(BaseInstalledAgent):
         self.max_turns = int(max_turns)
         self.eval_mode = eval_mode
         self.harness_effort = harness_effort
+        self.seed_job = seed_job
+        self.context_window = context_window
 
     @staticmethod
     def name() -> str:
@@ -97,6 +101,21 @@ class SamizdatAgent(BaseInstalledAgent):
         except Exception:
             return None
 
+    async def _seed_memory(self, environment, root):
+        """Start from the database an earlier trial of this task left, so it opens with that memory."""
+        if not self.seed_job:
+            return
+        task = Path(self.logs_dir).parent.name.split("__")[0]
+        found = sorted(Path(self.seed_job).glob(f"{task}__*/agent/samizdat.sqlite3"))
+        if not found:
+            raise RuntimeError(f"no earlier trial of {task} under {self.seed_job}")
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / "samizdat.sqlite3"
+            src, dst = sqlite3.connect(found[-1]), sqlite3.connect(copy)
+            src.backup(dst)
+            src.close(); dst.close()
+            await environment.upload_file(copy, f"{root}/.samizdat/samizdat.sqlite3")
+
     def _cleanup_command(self, git_was_ours):
         rm_git = "rm -rf .git; " if git_was_ours else ""
         return f"cd {self._root} && rm -rf .samizdat .jolt .gitignore.samizdat; {rm_git}true"
@@ -113,7 +132,7 @@ class SamizdatAgent(BaseInstalledAgent):
         self._root = (await self._sh(environment, "pwd")).stdout.strip() or "/app"
         root = self._root
         config = (
-            "{:providers {:%s {:type :%s :model %s :api-key-env \"%s\"}}\n"
+            "{:providers {:%s {:type :%s :model %s :api-key-env \"%s\"%s}}\n"
             " :roles {:default :%s}\n"
             # The grader's tests decide here and Terminus has no gate of its own.
             " :run {:loop \"%s\" :require-test? false :verify-focused? false%s}\n"
@@ -122,6 +141,7 @@ class SamizdatAgent(BaseInstalledAgent):
             # task, for benchmarks solved in Jolt.
             " :eval {:sandbox :none :mode :%s}}\n"
             % (self.provider, self.provider_type, json.dumps(self.model_id), self.key_env,
+               f" :context-window {int(self.context_window)}" if self.context_window else "",
                self.provider, self.arm, run_limit, self.eval_mode)
         )
         git = await self._sh(environment, f"cd {root} && git rev-parse --is-inside-work-tree 2>/dev/null")
@@ -131,6 +151,7 @@ class SamizdatAgent(BaseInstalledAgent):
             f"mkdir -p {root}/.samizdat",
             f"printf %s {shlex.quote(config)} > {root}/.samizdat/config.edn",
         ]))
+        await self._seed_memory(environment, root)
         if git_was_ours:
             await self._sh(environment, (
                 f"cd {root} && git init -q && printf '.samizdat/\\n' >> .git/info/exclude && git add -A "

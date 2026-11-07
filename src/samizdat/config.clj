@@ -337,12 +337,14 @@
               ;; starts: too small folds early and spends summarizer calls,
               ;; too large folds late and risks an overflow the ladder existed
               ;; to prevent.
-              :context-window 128000
-              ;; Thinking counts against this. A hard problem takes 55k in one
-              ;; step on flash, measured on Terminal-Bench regex-chess, and at
-              ;; 16384 the model never got to a call (karamazov-0wvc.7).
-              :max-tokens 65536
-              :request-window 1000000
+              ;; DeepSeek Harness's defaults: 1048576 is what /models declares, and
+              ;; thinking counts against the output cap, which at 16384 never got
+              ;; to a call on a hard problem (karamazov-0wvc.7).
+              :context-window 1048576
+              :max-tokens 256000
+              :request-window 1048576
+              :reasoning-effort "high"
+              :temperature nil
               :base-url "https://api.deepseek.com/beta"
               ;; What the endpoint was MEASURED to do (2026-09-06): the beta
               ;; URL continues a flagged assistant prefix; `thinking {type
@@ -352,7 +354,7 @@
               ;; measured 2026-09-24: native tool_calls back with thinking on,
               ;; and no DSML in the content (samizdat.llm.toolspec).
               :features #{:prefill :native-tool-choice :native-tools :thinking-toggle
-                          :reasoning-effort :stream}
+                          :reasoning-effort :stream :replay-reasoning :native-history}
               :key-env  "DEEPSEEK_API_KEY"
               ;; deepseek-flash is the development and test model: cheap
               ;; enough to run the beam repeatedly. The API renamed it from
@@ -367,19 +369,27 @@
    ;; drives GLM through in practice, tuned for agentic coding traffic. Same
    ;; OpenAI-compatible chat-completions surface, so the openai-family adapter
    ;; handles it unchanged.
-   :glm      {:context-window 128000
+   ;; ZCode's GLM-5.3 defaults (its provider rules and adapter design): 1M context,
+   ;; 128K output, past reasoning kept in history, no pinned temperature. Effort is
+   ;; left to the model, whose own default is max.
+   :glm      {:context-window 1000000
+              ;; A branch may fold against a smaller :context-window (oversight's is
+              ;; 64K, and --window lowers it); this is what the provider takes.
+              :request-window 1000000
               :base-url "https://open.bigmodel.cn/api/coding/paas/v4"
               ;; Measured 2026-09-06: ignores a trailing assistant prefix
               ;; entirely, cannot be told not to think (effort low is the
               ;; least), honours tool_choice {type function} despite its docs.
               ;; :native-tools measured 2026-09-24 as for DeepSeek, and it is
               ;; how Zhipu's own harness (ZCode) calls every GLM model.
-              :features #{:native-tool-choice :native-tools :reasoning-effort :stream}
+              :features #{:native-tool-choice :native-tools :reasoning-effort :stream
+                          :replay-reasoning :native-history}
               :key-env  "ZHIPU_API_KEY"
               :model    "glm-5.3"
-              ;; GLM benefits from a low temperature on coding tasks (dirge
-              ;; pins 0.2); the loop leaves it unset for other providers.
-              :temperature 0.2}
+              ;; Thinking counts against this: at the 16384 default a whole-program
+              ;; write ran out on csview and the call was lost.
+              :max-tokens 128000
+              :temperature nil}
    :openai   {:context-window 128000
               :base-url "https://api.openai.com/v1"
               :features #{:native-tool-choice :reasoning-effort :stream}
@@ -493,9 +503,12 @@
 
 (defn provider-temperature
   "The temperature a provider runs at: its own default, or the 0.7 family
-  fallback. The one place the precedence lives, so config and tests agree."
+  fallback. A provider declaring nil leaves it to the model, and none is sent:
+  neither ZCode nor DeepSeek Harness sets one by default. The one place the
+  precedence lives, so config and tests agree."
   [provider]
-  (or (:temperature (providers provider)) 0.7))
+  (let [entry (providers provider)]
+    (if (contains? entry :temperature) (:temperature entry) 0.7)))
 
 (defn- detect-provider []
   (or (some-> (env "HARNESS_PROVIDER") str/lower-case keyword)

@@ -17,4 +17,9 @@ The check that decides this work is `{{verify-cmd}}`. Run it before you finish.
 CURRENT WORK:
 {{current|default:"(none yet)"}}
 
+The PROBLEM is what counts, and you judge it yourself. YOUR TASK says where to start; it
+does not narrow or replace the problem. If doing only the task would leave what the
+problem asks for missing, do that too if you can, and otherwise say what is missing in
+your report.
+
 YOUR TASK: {{task}}

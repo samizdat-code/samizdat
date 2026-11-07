@@ -120,7 +120,7 @@
   (with-run [c rid]
     (let [b1 (ctx c rid "B1")]
       (web! b1)
-      (tool b1 "remember" {:content "always pipe the installer to sh" :kind "note"
+      (tool b1 "remember" {:content "piping the installer to sh sets up the project" :kind "note"
                            :cause "the setup page said so"})
       (knowledge/remember! c {:content "the build takes 40s" :kind "note"})
       (let [later (runs/start-run! c {:problem "q"})

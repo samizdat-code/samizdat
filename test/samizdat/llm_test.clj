@@ -1321,7 +1321,7 @@
     (testing "GLM drops to low, the least it will think"
       (let [b (body :glm)]
         (is (= "low" (:reasoning_effort b)))
-        (is (not (contains? b :thinking)))))
+        (is (= {:type "enabled"} (:thinking b)))))
     (testing "a plain OpenAI-compatible endpoint keeps the literal value"
       (let [b (body :openai)]
         (is (= "none" (:reasoning_effort b)))

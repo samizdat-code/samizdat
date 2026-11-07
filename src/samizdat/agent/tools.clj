@@ -384,3 +384,39 @@
 (def tool-names base/tool-names)
 (def answer-tokens ship/answer-tokens)
 (def uncovered-tokens ship/uncovered-tokens)
+
+;; --- several calls from one reply --------------------------------------------
+
+(defn batchable?
+  "Whether a call a reply sent before its last may run anyway: it can change nothing.
+  gates.edn :call-batch."
+  [{:keys [name args]}]
+  (let [{:keys [tools shell-tool shell-prefix-regex shell-allow-regex shell-deny-regex]}
+        (gates/threshold :call-batch)]
+    (boolean
+     (and (map? args)
+          (or (contains? tools name)
+              (and (= shell-tool name)
+                   (let [c (str/replace (str/trim (str (:command args)))
+                                        (re-pattern shell-prefix-regex) "")]
+                     (and (re-find (re-pattern shell-allow-regex) c)
+                          (not (re-find (re-pattern shell-deny-regex) c))))))))))
+
+(defn run-batched
+  "Run what may run of a reply's earlier calls, in the order sent, up to :max-extra.
+  Returns {:text :ran-names :still-dropped}; a refused call counts as not run. The
+  calls' effect on the branch is not kept: they can change nothing."
+  [ctx {:keys [dropped dropped-calls]}]
+  (let [{:keys [max-extra result-chars]} (gates/threshold :call-batch)
+        step (fn [{:keys [ran still] :as acc} call]
+               (let [call-ctx (assoc ctx :tool-name (:name call) :args (:args call))]
+                 (if (and (< (count ran) max-extra) (batchable? call) (not (phase-refusal call-ctx)))
+                   (let [out (str (:result (run-tool call-ctx)))]
+                     (assoc acc :ran (conj ran {:name (:name call)
+                                                :result (subs out 0 (min result-chars (count out)))})))
+                   (assoc acc :still (conj still (:name call))))))
+        {:keys [ran still]} (reduce step {:ran [] :still []} dropped-calls)]
+    {:text (if (seq ran) (prompt/render "calls-batched" {:calls ran}) "")
+     :ran-names (mapv :name ran)
+     :still-dropped (if dropped-calls still (vec dropped))}))
+

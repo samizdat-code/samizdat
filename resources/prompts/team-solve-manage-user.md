@@ -14,7 +14,9 @@ LATEST WORKER RESULT: {{latest}}
 
 PROPOSED NEW STEPS:
 {{proposals|default:"(none)"}}
-{% if guidance %}
+{% if time-left %}
+TIME LEFT: about {{time-left}} seconds, and the run is stopped when they are gone.
+{% endif %}{% if guidance %}
 THE SUPERVISOR WATCHING THIS RUN SAYS:
 {{guidance}}
 {% endif %}

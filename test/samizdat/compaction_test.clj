@@ -931,9 +931,9 @@
                           :context-window 8192 :max-tokens 64
                           :features #{:native-tools}}}
         branch {:id "fold-total-B1" :messages msgs :turns []}
-        before (get-in (infer/prepare ctx (infer/of-branch branch)
-                                      {:attempt 1 :fit? false})
-                       [:accounting :total-tokens])
+        before (cmp/ladder-tokens (:accounting (infer/prepare ctx (infer/of-branch branch)
+                                                              {:attempt 1 :fit? false}))
+                                  (gates/threshold :compaction))
         data {:compaction/tier :fold :compaction/before before
               :branch branch :turn 1}
         notes (atom [])]

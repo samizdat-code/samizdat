@@ -27,8 +27,10 @@ cd benchmarks
 ./bench.py report my-run            # the comparison, as markdown
 ```
 
-`run` also takes `--arms`, `--attempts`, `--concurrent`, `--tasks figlet yj` and
-`--dry-run`. Run `bundle` after any change to `src/` or `resources/`, or the run tests
+`run` also takes `--arms`, `--attempts`, `--concurrent`, `--tasks figlet yj`,
+`--provider glm`, `--window` and `--dry-run`. `./bench.py replay my-run --from old-run`
+runs the tasks with no memory and with what an earlier job's trials left, and says so
+when no earlier memory reached the run. `python3 -m unittest test_bench` tests the helpers. Run `bundle` after any change to `src/` or `resources/`, or the run tests
 the old code; `run` warns when the bundle does not match the tree. Stage new files
 first, since `bundle` refuses to leave them out.
 

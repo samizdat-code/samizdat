@@ -649,3 +649,68 @@
   (let [conn (db/open! ":memory:")
         rid (runs/start-run! conn {:problem "p"})]
     (is (false? (beam/await-cap-decision! {:conn conn :run-id rid} 6 0 1)))))
+
+;; --- the manager routes, the worker owns the request (karamazov-lu4p.5) --------
+
+(defn- manage-texts [calls] (mapv #(str (:content (second %))) (:manage @calls)))
+
+(deftest a-worker-that-changed-nothing-is-reported-as-having-changed-nothing
+  ;; On csview a worker spent 25 of 30 minutes on a task that wrote only to /tmp,
+  ;; and the manager had only its report to go on.
+  (let [conn (db/open! ":memory:")
+        d (repo-dir)
+        calls (atom {})
+        worker (fn [messages]
+                 (let [all (str/join "\n" (map (comp str :content) (rest messages)))]
+                   (if (or (str/includes? all "<tool_result") (str/includes? all "study"))
+                     {:content (json-call "done" {"answer" finished}) :finish-reason "stop"}
+                     {:content (json-call "write_file" {"path" "feature.txt" "content" "x"})
+                      :finish-reason "stop"})))]
+    (with-redefs [llm/chat (scripted {:calls calls :worker worker
+                                      :manager (fn [n] (case n
+                                                         0 {:next "study it"}
+                                                         1 {:next "build it"}
+                                                         {:status "done"}))})]
+      (run conn d {:problem "Add a feature file."}))
+    (let [[_ after-study after-build] (manage-texts calls)]
+      (is (str/includes? after-study "TREE DID NOT CHANGE"))
+      (is (not (str/includes? (str after-build) "TREE DID NOT CHANGE"))))))
+
+(deftest a-long-task-is-cut-to-a-pointer
+  (let [conn (db/open! ":memory:")
+        d (repo-dir)
+        limit (:repo-task-chars (lexicon/policy :team-solve))
+        long-task (str/join " " (repeat 400 "probe"))
+        r (with-redefs [llm/chat (scripted {:worker (repo-worker "feature.txt")
+                                            :manager (fn [n] (if (zero? n) {:next long-task} {:status "done"}))})]
+            (run conn d {:problem "Add a feature file."}))
+        task (:task (first (rounds conn (:run-id r))))]
+    (is (<= (count task) (+ limit 3)))
+    (is (str/starts-with? task "probe"))))
+
+(deftest the-manager-is-told-the-time-left
+  (let [conn (db/open! ":memory:")
+        d (repo-dir)
+        calls (atom {})]
+    (with-redefs [llm/chat (scripted {:calls calls :worker (repo-worker "feature.txt")
+                                      :manager (fn [_] {:status "done"})})]
+      (run conn d {:problem "Add a feature file."
+                   :config {:run {:loop "team-solve" :root d :time-limit-seconds 1800}}}))
+    (is (str/includes? (first (manage-texts calls)) "TIME LEFT"))
+    (testing "and with no limit it is not mentioned"
+      (is (not (str/includes? (prompt/render "team-solve-manage-user" {:problem "p"}) "TIME LEFT"))))))
+
+(deftest the-roles-say-who-owns-the-request
+  (let [manage (prompt/prompt "team-solve-manage-system")
+        work (prompt/render "team-solve-work" {:problem "p" :task "t"})
+        role (prompt/prompt "roles/solver")]
+    (is (str/includes? manage "goes to the worker whole"))
+    (is (str/includes? manage "builds and runs"))
+    (is (str/includes? work "where to start"))
+    (testing "the worker reports in words a program can read"
+      (doseq [w ["ready" "progress" "blocked" "failed" "dropped" "### TESTS"]]
+        (is (str/includes? role w) w)))))
+
+(deftest a-worker-has-room-for-a-repository-task
+  (is (>= (:worker-max-turns (lexicon/policy :team-solve)) 40)))
+

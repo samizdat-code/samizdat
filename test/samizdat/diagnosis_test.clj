@@ -181,10 +181,11 @@
   (let [conn (db/open! ":memory:")]
     (try
       (db/execute! conn ["ALTER TABLE diagnosis_cases DROP COLUMN open_hypotheses"])
+      (db/execute! conn ["ALTER TABLE knowledge DROP COLUMN origin"])
       (db/execute! conn ["PRAGMA user_version = 58"])
       (db/execute! conn ["INSERT INTO diagnosis_cases
                           (id, run_id, branch_id, status, hypotheses, known, trace, created_at, updated_at)
                           VALUES ('case', 'run', 'B1', 'open', '[{\"id\":\"remaining\"}]', '[]', '[]', 'now', 'now')"])
-      (is (= 59 (db/migrate! conn)))
+      (is (= 60 (db/migrate! conn)))
       (is (= ["remaining"] (mapv :id (:open_hypotheses (diagnoses/diagnosis conn "case")))))
       (finally (db/close conn)))))

@@ -381,6 +381,11 @@
   (when (and limit-seconds started-ms)
     (max 0 (long (- limit-seconds (/ (- now-ms started-ms) 1000))))))
 
+(defn run-time-left
+  "Whole seconds a run has left by the clock, or nil when it has no limit."
+  [{:keys [config started-ms]}]
+  (time-left-seconds (get-in config [:run :time-limit-seconds]) started-ms (System/currentTimeMillis)))
+
 (defn crossed-fractions
   "Which turn-budget notice thresholds this branch has now passed. The loop
   folds these into the branch so the gate stops re-firing."

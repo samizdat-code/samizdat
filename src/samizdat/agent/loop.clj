@@ -41,6 +41,7 @@
             [samizdat.agent.files :as files]
             [samizdat.agent.context-rules :as context-rules]
             [samizdat.agent.corrections :as corrections]
+            [samizdat.agent.compaction :as cmp]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.handoff :as handoff]
             [samizdat.agent.gitdiff :as gitdiff]
@@ -1066,9 +1067,14 @@
                   :said (when (= "assistant" (str (:role last-m)))
                           (handoff/clip (:content last-m) said-chars))})
                 (catch Throwable _ nil))))
-        result (or refusal
-                   (tools/run-tool (assoc ctx :branch branch :turn turn
-                                          :tool-name tool :args (:args parsed))))
+        ;; Before the call the reply is answered with: that is the order it sent them.
+        batched (when (and (not refusal) (seq (:dropped-calls parsed)))
+                  (tools/run-batched (assoc ctx :branch branch :turn turn) parsed))
+        result (cond-> (or refusal
+                           (tools/run-tool (assoc ctx :branch branch :turn turn
+                                                  :tool-name tool :args (:args parsed))))
+                 batched (-> (update :result #(str (:text batched) %))
+                             (assoc :still-dropped (:still-dropped batched))))
         storm-policy (gates/storm-policy)
         branch (-> (:branch result)
                     ;; The tool and the claim ride along so the branch can
@@ -1439,7 +1445,10 @@
                   (journal/note! conn run-id :context-block
                                  {:branch-id (:id branch) :turn turn
                                   :data (cond-> {:sizes (vec sizes)
-                                                 :total (reduce + 0 (map second sizes))}
+                                                 :total (reduce + 0 (map second sizes))
+                                                 :parts (cmp/prompt-parts
+                                                         (:messages branch)
+                                                         (:tools (:write-clip (gates/threshold :compaction))))}
                                           (seq (:contributions rule-context))
                                           (assoc :context-rules
                                                  {:generation turn
@@ -1451,10 +1460,10 @@
             ;; `---` rule — a file can carry one of those.
             body (str (message/frame-result tool (truncate (:result result) turn))
                       ;; One call runs per reply; say which others did not.
-                      (when (seq (:dropped parsed))
+                      (when-let [dropped (seq (or (:still-dropped result) (:dropped parsed)))]
                         (str "\n\n" (prompt/render "calls-dropped"
                                                     {:ran tool
-                                                     :dropped (str/join ", " (:dropped parsed))})))
+                                                     :dropped (str/join ", " dropped)})))
                       (when ctx-block (str "\n\n" ctx-block))
                       (when decision (str "\n\n---\n\n" (:message decision))))
             ;; Recorded exactly once. The row id is what a later turn settles,

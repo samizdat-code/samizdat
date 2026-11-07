@@ -163,7 +163,7 @@
           window (window-of llm-config)
           t (:compaction/tier data)
           aggressive (cmp/aggressive? t)
-          {:keys [messages freed]}
+          capped
           (cmp/cap-oversized-results
            (vec (:messages branch))
            {:cap-tokens (cmp/result-cap (:compaction/ratio data) (:ladder p) (:result-cap p))
@@ -171,6 +171,16 @@
             :protect-tail (:protect-tail p)
             :roles (:result-roles p)
             :note-fn (fn [n] (prompt/render-str (str (:clip-note p)) {:chars n}))})
+          clip (:write-clip p)
+          written (when t
+                    (cmp/clip-write-bodies
+                     (:messages capped)
+                     (assoc clip
+                            :chars-per-token (:chars-per-token p)
+                            :protect-tail (:protect-tail p)
+                            :note-fn (fn [n] (prompt/render-str (str (:note clip)) {:chars n})))))
+          messages (if written (:messages written) (:messages capped))
+          freed (+ (:freed capped) (or (:freed written) 0))
           enough? (cmp/snip-bought-enough? freed window (:snip-sufficient p) aggressive)
           route (if (and (cmp/fold? t) (not enough?)) :prune :none)]
       (when (= route :none)
@@ -219,11 +229,29 @@
 
 ;; --- fold --------------------------------------------------------------------
 
+(defn- bill!
+  "Put a summary's cost on the run's record. Best effort, like a note."
+  [conn run-id {:keys [branch turn]} llm-config reply]
+  (try (journal/record-side-call! conn run-id {:branch-id (:id branch) :turn turn :kind :compaction
+                                               :model (:model llm-config) :usage (:usage reply)})
+       (catch Throwable _ nil)))
+
+(defn- snapshot-text
+  "What the journal says this branch has done, rendered, or nil when it says nothing."
+  [conn run-id branch opts]
+  (try
+    (let [facts (cmp/snapshot-facts (journal/branch-turns conn run-id (:id branch)) opts)]
+      (when-not (cmp/snapshot-empty? facts)
+        (prompt/render "compaction-snapshot" facts)))
+    (catch Throwable e
+      (log/warn "compaction: reading the journal for a snapshot failed:" (ex-message e))
+      nil)))
+
 (defn- summarize!
   "Ask the model for a structured summary of the folded region. Returns the
   text or nil, and nil is a legitimate answer the caller must handle by NOT
   dropping anything."
-  [llm-adapter llm-config folded budget]
+  [llm-adapter llm-config folded budget on-usage]
   (try
     (let [material (str/join "\n\n"
                              (for [m folded]
@@ -231,7 +259,8 @@
           reply (llm/chat llm-adapter llm-config
                           [{:role "system"
                             :content (prompt/render "compaction-summary" {:budget budget})}
-                           {:role "user" :content material}])]
+                           {:role "user" :content material}])
+          _ (on-usage reply llm-config)]
       ;; The answer alone: a reasoning model's <think> block rides in
       ;; :content, and kept it made GLM's summaries several times their
       ;; budget (rz7t.7).
@@ -298,7 +327,7 @@
                      distinct
                      (take max-memories))]
       (doseq [f facts]
-        (knowledge/remember! conn {:content f :kind kind :run-id run-id}))
+        (knowledge/remember! conn {:content f :kind kind :run-id run-id :origin :inferred}))
       (count facts))
     (catch Throwable e
       (log/warn "compaction: distilling the fold failed:" (ex-message e))
@@ -366,15 +395,25 @@
                           (and (= :tape (:summarize-via p))
                                (= summarizer-config llm-config))
                           (summarize-on-tape! ctx branch tail budget)
-                          :else (summarize! summarizer summarizer-config folded budget))
+                          :else (summarize! summarizer summarizer-config folded budget
+                                            (fn [reply cfg] (bill! conn run-id data cfg reply))))
                 ok? (or refs edit?
                         (and summary
                              (cmp/validate-summary
                               summary
                               {:sections (template-sections)
                                :min-sections (:min-summary-sections p)
-                               :empties (:empty-bodies p)})))]
-            (if-not ok?
+                               :empties (:empty-bodies p)})))
+                raw-summary summary
+                snapshot (when-not (or evict? edit?) (snapshot-text conn run-id branch (:snapshot p)))
+                ;; The record outlives a summary that failed its check. Named on the
+                ;; note, with what was rejected, because nothing else keeps it.
+                rejected (when-not ok? (if summary "summary rejected" "summarizer produced nothing"))
+                only-snapshot? (and (not ok?) snapshot)
+                summary (cond only-snapshot? snapshot
+                              (and ok? snapshot (not refs)) (str summary "\n\n" snapshot)
+                              :else summary)]
+            (if-not (or ok? only-snapshot?)
               (do (note! conn run-id data
                          {:tier (some-> (:compaction/tier data) name)
                           :action "prune-only"
@@ -383,7 +422,7 @@
                                  summary "summary rejected"
                                  :else "summarizer produced nothing")})
                   data)
-              (let [kept (if refs 0 (distil! conn run-id summary (:distil p)))
+              (let [kept (if (or refs only-snapshot?) 0 (distil! conn run-id summary (:distil p)))
                     ;; Which role carries the marker: the operator's word
                     ;; (gates.edn :fold-role "system"/"user"), else what the
                     ;; startup probe learned about this endpoint's template
@@ -400,11 +439,15 @@
                           :else (cmp/apply-summary msgs [s e]
                                                    (prompt/prompt "compaction-marker") summary
                                                    role))
-                    after (get-in (infer/prepare
-                                   (or (:request-ctx data) (turn/request-context ctx branch))
-                                   (infer/of-branch (assoc branch :messages out))
-                                   {:attempt 1 :fit? false})
-                                  [:accounting :total-tokens])]
+                    ;; The ladder's own measure, as :compaction/before was: its reply
+                    ;; budget is capped, and a total with the whole of it made a fold
+                    ;; free tens of thousands of tokens to count as progress.
+                    after (cmp/ladder-tokens
+                           (:accounting (infer/prepare
+                                         (or (:request-ctx data) (turn/request-context ctx branch))
+                                         (infer/of-branch (assoc branch :messages out))
+                                         {:attempt 1 :fit? false}))
+                           p)]
                 (if (>= after (:compaction/before data))
                   (do (note! conn run-id data {:action "no-progress"
                                           :before (:compaction/before data) :after after})
@@ -414,6 +457,10 @@
                               ;; "cost" when measure asked below the ladder.
                               :why (some-> (:compaction/why data) name)
                               :action "fold" :folded (- e s)
+                              :summary rejected
+                              :rejected (when (= "summary rejected" rejected)
+                                          (let [t (str raw-summary) n (:rejected-preview-chars p)]
+                                            (subs t 0 (min n (count t)))))
                               :before (:compaction/before data) :after after
                               :memories kept})
                       (assoc data :branch (assoc branch :messages out)))))))))

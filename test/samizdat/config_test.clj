@@ -49,13 +49,14 @@
       ;; is the thing under test rather than dead.
       (is (= "https://open.bigmodel.cn/api/coding/paas/v4" base-url))
       (is (= "glm-5.3" model))
-      (is (= 0.2 temperature)))))
+      (is (nil? temperature)))))
 
 (deftest provider-temperature-wins-over-family-default
-  ;; A provider that pins a temperature (GLM's 0.2) beats the 0.7 family
+  ;; A provider that declares a temperature, nil included, beats the 0.7 family
   ;; default; a provider that doesn't falls back to 0.7.
-  (is (= 0.2 (config/provider-temperature :glm)))
-  (is (= 0.7 (config/provider-temperature :deepseek))))
+  (is (nil? (config/provider-temperature :glm)))
+  (is (nil? (config/provider-temperature :deepseek)))
+  (is (= 0.7 (config/provider-temperature :openai))))
 
 (defn- temp-project-root
   "A temp dir with .samizdat/ created; caller passes config.edn content or nil."
@@ -172,7 +173,7 @@
       (is (= "https://open.bigmodel.cn/api/coding/paas/v4" base-url)
           "GLM's endpoint, not whichever provider the environment detected")
       (is (= "glm-5.3" model))
-      (is (= 0.2 temperature) "and GLM's coding temperature")))
+      (is (nil? temperature) "and GLM's, which is none")))
   (testing "a project file's choice beats the global one's"
     (with-files [root "{:roles {:default :glm}}" "{:roles {:default :deepseek}}"]
       (let [{:keys [provider base-url model]} (:llm (config/load-config {:run {:root root}}))]
@@ -422,7 +423,7 @@
     (is (= :glm (:provider llm)))
     (is (= "glm-9" (:model llm)))
     (is (str/includes? (:base-url llm) "bigmodel"))
-    (is (= 0.2 (:temperature llm)) "the preset's own defaults still apply")))
+    (is (= 128000 (:max-tokens llm)) "the preset's own defaults still apply")))
 
 (deftest api-key-env-names-the-variable-holding-the-key
   (is (= home (:api-key (:llm (config/load-config
@@ -549,8 +550,10 @@
                   (peripherals/notices))))
       (finally (peripherals/stop!)))))
 
-(deftest deepseek-has-room-to-think-and-others-keep-the-general-default
+(deftest reasoning-providers-have-room-to-think-and-others-keep-the-general-default
   ;; karamazov-0wvc.7
-  (is (= 65536 (get-in (config/load-config {:roles {:default :deepseek}}) [:llm :max-tokens])))
-  (is (= 1000000 (get-in (config/load-config {:roles {:default :deepseek}}) [:llm :request-window])))
-  (is (= 16384 (get-in (config/load-config {:roles {:default :glm}}) [:llm :max-tokens]))))
+  (is (= 256000 (get-in (config/load-config {:roles {:default :deepseek}}) [:llm :max-tokens])))
+  (is (= 1048576 (get-in (config/load-config {:roles {:default :deepseek}}) [:llm :request-window])))
+  (is (= 1048576 (get-in (config/load-config {:roles {:default :deepseek}}) [:llm :context-window])))
+  (is (= 128000 (get-in (config/load-config {:roles {:default :glm}}) [:llm :max-tokens])))
+  (is (= 16384 (get-in (config/load-config {:roles {:default :openai}}) [:llm :max-tokens]))))

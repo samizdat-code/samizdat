@@ -93,6 +93,7 @@
             [samizdat.store.failures :as failures]
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
+            [samizdat.agent.reflect :as reflect]
             [samizdat.store.knowledge :as knowledge]
             [samizdat.store.runs :as runs]
             [samizdat.userspace :as userspace]
@@ -1146,6 +1147,7 @@
         (try
           (let [{:keys [findings verdicts]}
                 (knowledge/distil-session! conn {:run-id run-id
+                                                 :ask (reflect/consolidator ctx)
                                                  :findings (session/findings
                                                             ;; THIS RUN's window, not the
                                                             ;; whole-process tally: counters

@@ -428,7 +428,7 @@
         rid (runs/start-run! c {:problem "p"})]
     (runs/open-branch! c rid {:branch-id "B1"})
     (journal/record-turn! c rid {:branch-id "B1" :turn 1 :tool-name "shell"
-                                 :args {:command "cat deps.edn"} :result "{:paths}"
+                                 :args {:command "jolt -M:test"} :result "{:paths}"
                                  :category "success"})
     (journal/record-turn! c rid {:branch-id "B1" :turn 2 :tool-name "shell"
                                  :args {:command "find . | head -5"}
@@ -437,7 +437,7 @@
     (let [facts (knowledge/distil-project! c {:run-id rid})]
       (is (= 2 (count facts)))
       (let [contents (map (comp :content #(knowledge/get-by-id c %) :id) facts)]
-        (is (some #(str/includes? % "`cat deps.edn` works") contents))
+        (is (some #(str/includes? % "`jolt -M:test` works") contents))
         (is (some #(str/includes? % "refused by the shell policy") contents)
             "a refusal is a fact from the other side, and saves the next run
              the turn it would spend learning the same refusal")))
@@ -451,11 +451,11 @@
       (let [rid2 (runs/start-run! c {:problem "p2"})]
         (runs/open-branch! c rid2 {:branch-id "B1"})
         (journal/record-turn! c rid2 {:branch-id "B1" :turn 1 :tool-name "shell"
-                                      :args {:command "cat deps.edn"} :result "x"
+                                      :args {:command "jolt -M:test"} :result "x"
                                       :category "success"})
         (let [again (knowledge/distil-project! c {:run-id rid2})]
           (is (every? :repeat? again))
-          (is (= 2 (:corroborations (knowledge/by-pattern c "cmd-works:cat deps.edn")))))))))
+          (is (= 2 (:corroborations (knowledge/by-pattern c "cmd-works:jolt -M:test")))))))))
 
 (deftest a-recurring-finding-is-corroborated-not-penalised
   ;; karamazov-blt.25: the outcome axis means "did ACTING on this memory

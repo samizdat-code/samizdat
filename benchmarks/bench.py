@@ -4,6 +4,7 @@
   bench.py setup                 clone ProgramBench at the pinned commit, build the tasks
   bench.py bundle                build the samizdat bundle from the current tree
   bench.py run NAME [options]    run the arms, writing jobs/NAME-<arm> and jobs/NAME.json
+  bench.py replay NAME --from JOB   the same tasks with no memory and with JOB's
   bench.py report NAME           print the comparison as markdown
 """
 import argparse, json, os, re, sqlite3, subprocess, sys, urllib.request
@@ -23,13 +24,21 @@ MODEL = "deepseek/deepseek-flash"
 # pilot 2. Both arms are priced with it so they compare; the bill itself came to about 0.62
 # of this, so use the balance change in jobs/NAME.json for what was actually spent.
 RATES = (0.3e-6, 0.006e-6, 1.2e-6)
+NOISE = 0.05  # score gap below this says nothing: the same task moved far more than this between pilots
 HANG_SECS = 300  # a bash call open this long at the end of a trial, with nothing after it
+SAMIZDAT = ["--agent-import-path", "samizdat_agent:SamizdatAgent", "--ak", "eval_mode=project"]
 ARMS = {
     "pi": ["-a", "pi", "-m", MODEL, "--ak", "reasoning_effort=high", "--ak", "version=1.5.0"],
-    "samizdat": ["--agent-import-path", "samizdat_agent:SamizdatAgent", "--ak", "arm=loop",
-                 "--ak", "eval_mode=project", "--ak", "harness_effort=high"],
+    "samizdat": SAMIZDAT + ["--ak", "arm=loop"],
+    "samizdat-memory": SAMIZDAT + ["--ak", "arm=loop"],
+    "team-solve": SAMIZDAT + ["--ak", "arm=team-solve"],
     "hermes": ["--agent-import-path", "hermes_effort:HermesEffort", "-m", MODEL],
 }
+# What each vendor's own harness defaults to.
+DEFAULT_EFFORT = {"deepseek": "high", "glm": "max"}
+# Samizdat's model. Pi and Hermes stay on MODEL: compare arms only on the same one.
+PROVIDERS = {"deepseek": [], "glm": ["--ak", "provider=glm", "--ak", "provider_type=glm", "--ak", "model_id=glm-5.3",
+                                     "--ak", "key_env=ZHIPU_API_KEY"]}
 FETCH = re.compile(r"\b(curl|wget|git clone|cargo (install|download|fetch)|pip3? install|npm install|apt(-get)? install)\b")
 
 
@@ -78,11 +87,64 @@ def balance():
 
 
 def harbor_cmd(name, arm, args):
-    cmd = ["harbor", "run", "-p", str(TASKS), *ARMS[arm], "-n", str(args.concurrent), "-k", str(args.attempts),
+    extra = PROVIDERS[args.provider] if arm in ("samizdat", "samizdat-memory", "team-solve") else []
+    if arm in ("samizdat", "samizdat-memory", "team-solve"):
+        extra = extra + ["--ak", f"harness_effort={args.effort or DEFAULT_EFFORT[args.provider]}"]
+    if args.window and arm in ("samizdat", "samizdat-memory", "team-solve"):
+        extra = extra + ["--ak", f"context_window={args.window}"]
+    if arm == "samizdat-memory":
+        extra = extra + ["--ak", f"seed_job={JOBS / args.seed_job}"]
+    cmd = ["harbor", "run", "-p", str(TASKS), *ARMS[arm], *extra, "-n", str(args.concurrent), "-k", str(args.attempts),
            "-o", str(JOBS), "--job-name", f"{name}-{arm}", "-y"]
     for t in args.tasks or []:
         cmd += ["-i", t]
     return cmd
+
+
+def replay(args):
+    """The same tasks with no memory and with what an earlier job's trial left."""
+    args.arms = "samizdat,samizdat-memory"
+    if not (JOBS / args.seed_job).is_dir():
+        sys.exit(f"no job {args.seed_job} under {JOBS}")
+    run(args)
+
+
+def delivered(trial_dir):
+    """Memories from an earlier run that were put in front of this one."""
+    db = Path(trial_dir) / "agent/samizdat.sqlite3"
+    if not db.exists():
+        return 0
+    c = sqlite3.connect(db)
+    run_id = c.execute("select id from runs order by started_at desc limit 1").fetchone()[0]
+    old = {r[0] for r in c.execute("select id from knowledge where run_id is not ?", (run_id,))}
+    shown = set()
+    for data in c.execute("select data from events where run_id = ? and kind in ('recall','exposed')", (run_id,)):
+        try:
+            shown |= set(json.loads(data[0]).get("ids") or [])
+        except (TypeError, ValueError):
+            pass
+    return len(shown & old)
+
+
+def memory_verdict(off, on, shown):
+    """The weakest claim the pair supports, in words."""
+    if not shown:
+        return "not measured: no earlier memory reached the run"
+    if on - off >= NOISE:
+        return "better with memory"
+    if off - on >= NOISE:
+        return "worse with memory"
+    return "no visible difference"
+
+
+def replay_report(per):
+    print("| Task | No memory | With memory | Memories shown | Verdict |\n|---|---|---|---|---|")
+    for task in sorted(set(per["samizdat"]) & set(per["samizdat-memory"])):
+        off = mean(t["score"] or 0 for t in per["samizdat"][task])
+        on = mean(t["score"] or 0 for t in per["samizdat-memory"][task])
+        shown = sum(delivered(t["dir"]) for t in per["samizdat-memory"][task])
+        print(f"| {task} | {pct(off)} | {pct(on)} | {shown} | {memory_verdict(off, on, shown)} |")
+    print()
 
 
 def run(args):
@@ -93,8 +155,9 @@ def run(args):
             sys.exit(f"{meta_path} exists: pick another name")
         if not TASKS.exists():
             sys.exit("no tasks: run bench.py setup")
-        if not os.environ.get("DEEPSEEK_API_KEY"):
-            sys.exit("DEEPSEEK_API_KEY is not set")
+        key = "ZHIPU_API_KEY" if args.provider == "glm" else "DEEPSEEK_API_KEY"
+        if not os.environ.get(key) or ("pi" in arms and not os.environ.get("DEEPSEEK_API_KEY")):
+            sys.exit(f"{key} is not set")
     env = dict(os.environ, DOCKER_DEFAULT_PLATFORM="linux/amd64", PYTHONPATH=f"{PB}{os.pathsep}{RIG}",
                PATH=f"{Path.home()}/.local/bin{os.pathsep}{os.environ['PATH']}")
     cmds = {a: harbor_cmd(args.name, a, args) for a in arms}
@@ -105,13 +168,13 @@ def run(args):
     version = subprocess.run(["harbor", "--version"], env=env, capture_output=True, text=True).stdout.strip()
     if version != HARBOR:
         print(f"warning: harbor {version}, results so far are from {HARBOR}", file=sys.stderr)
-    if "samizdat" in arms:
+    if {"samizdat", "samizdat-memory", "team-solve"} & set(arms):
         built = (RIG / "samizdat-bundle.rev").read_text().strip()
         if built != tree_rev()[0]:
             print(f"warning: bundle is {built[:12]}, not this tree: bench.py bundle", file=sys.stderr)
     now = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     meta = {"name": args.name, "arms": cmds, "started": now(), "balance_before": balance(), "harbor": version,
-            "commit": sh("git", "rev-parse", "HEAD"), "model": MODEL, "attempts": args.attempts,
+            "commit": sh("git", "rev-parse", "HEAD"), "model": MODEL, "provider": args.provider, "attempts": args.attempts,
             "bundle": (RIG / "samizdat-bundle.rev").read_text().strip() if (RIG / "samizdat-bundle.rev").exists() else None,
             "programbench": PROGRAMBENCH[1], "jolt": JOLT_TAG}
     JOBS.mkdir(exist_ok=True)
@@ -160,7 +223,13 @@ def pi_trial(d, secs):
 def samizdat_trial(d):
     c = sqlite3.connect(d / "agent/samizdat.sqlite3")
     hit, miss, cout = c.execute("select sum(cache_hit_tokens),sum(cache_miss_tokens),sum(completion_tokens) from turns").fetchone()
-    return {"tokens": (miss or 0, hit or 0, cout or 0),
+    parts = Counter()
+    for (data,) in c.execute("select data from events where kind='context-block' and branch_id!='SUP'"):
+        try:
+            parts.update(json.loads(data).get("parts") or {})
+        except ValueError:
+            pass
+    return {"tokens": (miss or 0, hit or 0, cout or 0), "parts": parts,
             "tools": Counter(dict(c.execute("select tool_name,count(*) from turns where branch_id!='SUP' group by 1"))),
             "gates": Counter(dict(c.execute("select gate,count(*) from gate_firings group by 1"))),
             "commands": [r[0] or "" for r in c.execute("select args from turns where tool_name in ('shell','eval')")]}
@@ -222,11 +291,16 @@ def report(args):
     print(f"## {args.name}\n")
     if meta.exists():
         m = json.loads(meta.read_text())
-        spent = None if None in (m.get("balance_before"), m.get("balance_after")) else m["balance_before"] - m["balance_after"]
-        print(f"model {m['model']}, {m['attempts']} attempt(s) per task, commit {m['commit'][:12]}, bundle {str(m['bundle'])[:12]}, "
-              f"harbor {m['harbor']}, started {m['started']}" + (f", ${spent:.2f} billed for all arms" if spent is not None else "") + "\n")
-    print("| Task | " + " | ".join(names) + " |\n|---|" + "---|" * len(names))
+        # The balance is DeepSeek's, so it says nothing about a run with no arm on it.
+        on_deepseek = m.get("provider", "deepseek") == "deepseek" or "pi" in m["arms"] or "hermes" in m["arms"]
+        spent = None if None in (m.get("balance_before"), m.get("balance_after")) or not on_deepseek \
+            else m["balance_before"] - m["balance_after"]
+        print(f"Pi on {m['model']}, samizdat on {m.get('provider', 'deepseek')}, {m['attempts']} attempt(s) per task, commit {m['commit'][:12]}, bundle {str(m['bundle'])[:12]}, "
+              f"harbor {m['harbor']}, started {m['started']}" + (f", DeepSeek balance fell ${spent:.2f} during the run, all arms and anything else on that key" if spent is not None else "") + "\n")
     per = {n: by_task(ts) for n, ts in arms.items()}
+    if "samizdat-memory" in per and "samizdat" in per:
+        replay_report(per)
+    print("| Task | " + " | ".join(names) + " |\n|---|" + "---|" * len(names))
     for task in tasks:
         cells = []
         for n in names:
@@ -264,6 +338,11 @@ def report(args):
     row("eval calls", lambda n: sum(t["tools"]["eval"] for t in arms[n]))
     row("shell calls", lambda n: sum(t["tools"]["shell"] + t["tools"]["bash"] for t in arms[n]))
     print()
+    totals = {n: sum((t.get("parts") or Counter() for t in arms[n]), Counter()) for n in names}
+    for n, p in totals.items():
+        if p:
+            whole = sum(p.values())
+            print(f"What {n}'s prompts held, by characters: " + ", ".join(f"{k} {100 * v / whole:.0f}%" for k, v in p.most_common()) + "\n")
     flags = [(n, t["task"], "foreign files", ", ".join(t["foreign"])) for n in names for t in arms[n] if t["foreign"]]
     flags += [(n, t["task"], "score missing", t["exception"] or t["error"]) for n in names for t in arms[n] if t["score"] is None]
     flags += [(n, t["task"], "possible fetch", m[max(0, x.start() - 50):x.end() + 70]) for n in names for t in arms[n]
@@ -286,14 +365,21 @@ def main():
     s = a.add_subparsers(dest="cmd", required=True)
     s.add_parser("setup").set_defaults(fn=setup)
     s.add_parser("bundle").set_defaults(fn=bundle)
-    r = s.add_parser("run")
-    r.add_argument("name")
-    r.add_argument("--arms", default="pi,samizdat")
-    r.add_argument("--attempts", type=int, default=3)
-    r.add_argument("--concurrent", type=int, default=1, help="trials at once per arm")
-    r.add_argument("--tasks", nargs="*", help="task names, default all")
-    r.add_argument("--dry-run", action="store_true")
-    r.set_defaults(fn=run)
+    for cmd, fn in (("run", run), ("replay", replay)):
+        r = s.add_parser(cmd)
+        r.add_argument("name")
+        if cmd == "run":
+            r.add_argument("--arms", default="pi,samizdat")
+        else:
+            r.add_argument("--from", dest="seed_job", required=True, help="the job whose trials' memory to start from")
+        r.add_argument("--attempts", type=int, default=1 if cmd == "replay" else 3)
+        r.add_argument("--provider", default="deepseek", choices=list(PROVIDERS), help="samizdat's model")
+        r.add_argument("--concurrent", type=int, default=1, help="trials at once per arm")
+        r.add_argument("--effort", choices=["low", "high", "max"], help="samizdat's reasoning effort, default the vendor's")
+        r.add_argument("--window", type=int, help="samizdat's context window, where compaction measures from")
+        r.add_argument("--tasks", nargs="*", help="task names, default all")
+        r.add_argument("--dry-run", action="store_true")
+        r.set_defaults(fn=fn)
     p = s.add_parser("report")
     p.add_argument("name")
     p.set_defaults(fn=report)

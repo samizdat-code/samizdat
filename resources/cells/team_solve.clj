@@ -15,6 +15,7 @@
   (:require [clojure.string :as str]
             [mycelium.cell :as cell]
             [mycelium.core :as myc]
+            [samizdat.agent.gates :as gates]
             [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.agent.loop :as turn]
             [samizdat.agent.sections :as sections]
@@ -746,12 +747,16 @@
                                          :tasks (task-lines (:tasks l))
                                          :latest (:latest l)
                                          :proposals (str/join "\n" (map #(str "- " %) (:proposals l)))
-                                         :guidance (:guidance drained)}))
+                                         :guidance (:guidance drained)
+                                         :time-left (gates/run-time-left ctx)}))
               sec (sections/parse reply)
               status (if (str/starts-with? (str/lower-case (str/trim (str (get sec "STATUS")))) "done")
                        "done" "continue")
-              next-task (or (first (sections/bullets (get sec "NEXT")))
-                            (some-> (get sec "NEXT") str/trim not-empty))
+              ;; A pointer, not a plan: on csview a first task that was a whole probing
+              ;; programme took the worker's entire budget. The worker has the request.
+              next-task (some-> (or (first (sections/bullets (get sec "NEXT")))
+                                    (some-> (get sec "NEXT") str/trim not-empty))
+                                (clip (:repo-task-chars p)))
               curated (or (not-empty (parse-tasks (get sec "TASKS") (:max-tasks p))) (:tasks l))
               ;; Manager continued but named nothing: the first open task.
               next-task (or next-task
@@ -881,7 +886,9 @@
                                :verify-cmd (get-in config [:run :verify-cmd])})
           l (save-ledger! ctx {:round round})
           _ (position! ctx :work l)
+          tree-before (gitdiff/work-tree-id (:root ctx))
           r (run-solver ctx bid prob (:task l) (or (:worker-turns l) (:worker-max-turns p)))
+          tree-after (gitdiff/work-tree-id (:root ctx))
           finished? (= :done (:verdict r))
           sec (sections/parse (:answer r))
           summary (if finished?
@@ -897,7 +904,10 @@
                                           :status (str/trim (str (get sec "STATUS")))
                                           :summary summary
                                           :reason (:reason r)
-                                          :branch bid}
+                                          :branch bid
+                                          ;; Mechanical, so a report cannot talk past it.
+                                          ;; Unknown without git, and then nothing is said.
+                                          :tree-unchanged (boolean (and tree-before (= tree-before tree-after)))}
                                  :proposals (into (vec (:proposals l))
                                                   (remove #(= "none" (str/lower-case %))
                                                           (sections/bullets (get sec "NEXT"))))}
@@ -932,7 +942,8 @@
                    :worker (:verdict w) :gate (:summary g)}
           latest (str/trim (prompt/render "team-solve-worker-result"
                                           {:gate (:report g) :cut cut? :task (:task l)
-                                           :status (:status w) :summary (:summary w)}))
+                                           :status (:status w) :summary (:summary w)
+                                           :tree-unchanged (:tree-unchanged w)}))
           l (save-ledger! ctx {:gate g :stall stall :latest latest
                                :attempts (conj (vec (:attempts l)) attempt)})]
       (when (and (:ran g) (:ok g)) (keep-best! ctx round))

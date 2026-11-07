@@ -117,7 +117,7 @@
 
     ;; Context-window arithmetic over message vectors. Pure.
     samizdat.agent.compaction
-    {:vars [aggressive? apply-eviction apply-summary cap-oversized-results compress-window
+    {:vars [aggressive? apply-eviction apply-summary cap-oversized-results clip-write-bodies snapshot-facts snapshot-empty? compress-window
             estimate-tokens evictable-turns evicted-turns fold-pays? fold-task fold? ladder-tokens pressure
             prune-options prune-tool-outputs result-cap results-of
             snip-bought-enough? summary-budget task-span tier turn-range unpinned-in
@@ -144,7 +144,7 @@
 
     ;; Reads of the policy tables. Pure lookups.
     samizdat.agent.gates
-    {:vars [threshold tool-vocab]}
+    {:vars [run-time-left threshold tool-vocab]}
 
     ;; Which tools a role may call, read from the role table. Pure lookup; the
     ;; supervisor's gather asks it which branches can write (karamazov-rz7t.1).

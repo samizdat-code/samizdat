@@ -77,6 +77,17 @@
   [path text whole?]
   (source/vet text {:whole? whole? :clojure? (clojure-file? path)}))
 
+(defn- vet-edit
+  "Vet an edit's result. {:refuse note} when the edit is what breaks the file, and
+  {:still-broken note} when the file did not load before it either: refusing that would
+  lock the file, since no one edit can clear two errors, and leave only a whole rewrite."
+  [path before after]
+  (let [{:keys [problem note]} (vet-source path after false)]
+    (when problem
+      (if (:problem (vet-source path before false))
+        {:still-broken note}
+        {:refuse note}))))
+
 (defn- exam-note!
   "Record that a write took assertions out of the exam, and say so in the tool
   result — or nil when it did not, or when the path is not part of the exam.
@@ -497,10 +508,10 @@
               (miss branch (msg (assoc err :anchor-error true
                                        :path path
                                        (name (:reason err)) true)))
-              (let [{:keys [problem note]} (vet-source path result false)]
+              (let [{:keys [refuse still-broken]} (vet-edit path content result)]
                 (cond
-                  problem
-                  (miss branch (msg {:refused true :path path :syntax note}))
+                  refuse
+                  (miss branch (msg {:refused true :path path :syntax refuse}))
                   ;; Asked only once the patch is known to apply
                   ;; (karamazov-0e2c.22, after xi's doomed-edit).
                   (workflow-refused? ctx root abs)
@@ -509,7 +520,8 @@
                   (let [exam-msg (exam-note! ctx path (slurp abs) result)]
                     (spit abs result)
                     {:result (str (msg {:patched true :path path :edits (count edits)
-                                        :plural (when (> (count edits) 1) "s")})
+                                        :plural (when (> (count edits) 1) "s")
+                                        :still-broken still-broken})
                                   exam-msg)
                      :category :success :progress? true :branch branch}))))))
         (miss branch (msg {:outside-root true :path path :verb "patched"}))))))
@@ -802,8 +814,8 @@
                                      (str (subs s 0 start) new-text (subs s end)))
                                    content
                                    (sort-by first > (if replace-all? ranges [(first ranges)])))
-                    {:keys [problem note]} (vet-source path edited false)]
-                (if problem
+                    {:keys [refuse still-broken]} (vet-edit path content edited)]
+                (if refuse
                   ;; REFUSED, and the file is left exactly as it was
                   ;; (karamazov-2d3). It used to write the broken text, report
                   ;; :success with :progress? true — so a branch earned credit
@@ -814,13 +826,14 @@
                   ;; re-parents code); the answer is to refuse, not to narrate.
                   ;; vis: "a syntax-breaking batch is refused whole and the
                   ;; file is left untouched."
-                  (miss branch (msg {:refused true :path path :syntax note}))
+                  (miss branch (msg {:refused true :path path :syntax refuse}))
                   (let [exam-msg (exam-note! ctx path (slurp abs) edited)]
                     (spit abs edited)
                     {:result (str (let [n (if replace-all? (count ranges) 1)]
                                     (msg {:edited true :path path :replacements n
                                           :plural (when (> n 1) "s")
-                                          :fallback fallback}))
+                                          :fallback fallback
+                                          :still-broken still-broken}))
                                   exam-msg)
                      :category :success :progress? true :branch branch
                      :fallback fallback}))))))

@@ -867,7 +867,15 @@
                    ;; the turn can say so rather than leave the model waiting
                    ;; on a result that is never coming (run de04432c).
                    (> n 1) (assoc :dropped (mapv #(or (second (re-find #"\"name\"\s*:\s*\"([^\"]+)\"" %)) "?")
-                                                 (pop fenced))))
+                                                 (pop fenced))
+                                  ;; The same calls whole, for the ones that may
+                                  ;; still run. Position for position with :dropped.
+                                  :dropped-calls (mapv (fn [b]
+                                                         (let [{:keys [ok value]} (read-json (repair-json b))]
+                                                           (if (and ok (map? value) (string? (:name value)))
+                                                             (select-keys value [:name :args])
+                                                             {:name (or (second (re-find #"\"name\"\s*:\s*\"([^\"]+)\"" b)) "?")})))
+                                                       (pop fenced))))
             first-try (read-json body)]
         (if (:ok first-try)
           (let [parsed (:value first-try)]

@@ -68,6 +68,7 @@
             [samizdat.agent.state :as state]
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
+            [samizdat.agent.reflect :as reflect]
             [samizdat.store.knowledge :as knowledge]
             [samizdat.store.runs :as runs]
             [samizdat.store.userspace :as us])
@@ -426,6 +427,8 @@
         _ (verify/seal-run! run-id root config)
         ctx {:conn conn :run-id run-id :config config
              :llm-adapter llm-adapter :llm-config llm-config
+             ;; When this run began, for a wall-clock limit, as the beam's driver does.
+             :started-ms (System/currentTimeMillis)
              ;; The injected model call, when the caller supplied one — the
              ;; same named-or-dropped hazard as the beam's ctx above.
              :complete complete
@@ -532,6 +535,9 @@
         ;; the common path measured everything and remembered none of it.
         (try
           (knowledge/distil-session! conn {:run-id run-id
+                                           :ask (reflect/consolidator {:conn conn :run-id run-id
+                                                                       :llm-adapter llm-adapter
+                                                                       :llm-config llm-config})
                                            :findings (session/findings
                                                             ;; THIS RUN's window, not the
                                                             ;; whole-process tally: counters

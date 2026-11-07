@@ -165,6 +165,20 @@
         (is (not (:repaired? r))))
       (finally (fs/delete-tree root)))))
 
+(deftest a-patch-to-a-file-that-already-will-not-load-is-kept
+  (let [root (str "/tmp/samizdat-files-" (random-uuid))]
+    (fs/create-dirs root)
+    (try
+      (spit (str root "/a.clj") "(defn f [] (+ 1 2])\n(defn g [] (+ 3 4])\n")
+      (let [read-back (:result (files/read-file (ctx root "read_file" {:path "a.clj" :anchors true})))
+            anchor (re-find #"2:[0-9a-f]+" read-back)
+            r (files/patch-file (ctx root "patch" {:path "a.clj"
+                                                   :edits [{:from anchor :replace "(defn g [] (+ 3 4))"}]}))]
+        (is (= :success (:category r)) (:result r))
+        (is (str/includes? (:result r) "still does not load"))
+        (is (str/includes? (slurp (str root "/a.clj")) "(+ 3 4)")))
+      (finally (fs/delete-tree root)))))
+
 (deftest anchored-read-and-patch-round-trip
   ;; karamazov-0kk: the model spends a coordinate it was HANDED instead of
   ;; reproducing the text it is replacing.

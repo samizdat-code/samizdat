@@ -53,7 +53,10 @@
   gates.edn entry and every sentence the model reads is a prompt, because a
   compaction policy compiled into `src/` is one the supervisor cannot tune —
   and the supervisor is the role that watches runs run out of context."
-  (:require [clojure.string :as str]
+  (:require [clojure.data.json :as json]
+            [clojure.string :as str]
+            [clojure.walk :as walk]
+            [samizdat.llm.fence :as fence]
             [samizdat.llm.message :as message]))
 
 ;; --- measuring ---------------------------------------------------------------
@@ -179,6 +182,106 @@
     {:messages out
      :freed (long (Math/ceil (/ (double (max 0 (- before after)))
                                 (double (max 1 chars-per-token)))))}))
+
+;; --- old write bodies --------------------------------------------------------
+
+(defn- clip-strings
+  "Every string in `args` longer than `limit` replaced by what `note-fn` says of it."
+  [args limit note-fn]
+  (walk/postwalk #(if (and (string? %) (> (count %) limit)) (note-fn (count %)) %) args))
+
+(defn- clip-write-call
+  "`content` with its write call's long strings clipped, or itself when it holds none."
+  [content {:keys [tools body-chars note-fn]}]
+  (let [{:keys [name args]} (fence/parse-tool-call content)
+        at (str/index-of content "```tool-call")]
+    (if (and at (contains? tools name) (map? args))
+      (let [clipped (clip-strings args body-chars note-fn)]
+        (if (= clipped args)
+          content
+          (str (subs content 0 at) "```tool-call\n"
+               (json/write-str {:name name :args clipped}) "\n```")))
+      content)))
+
+(defn clip-write-bodies
+  "Old write calls with their bodies clipped, outside the protected tail, in one
+  batch: `{:messages :freed}`.
+
+  What a write put in a file is on disk, and on these runs write calls take as
+  much room as tool results. All or nothing against :min-freed-tokens, because any
+  rewrite of old history costs the prompt cache from that point on, and clipping
+  a little each turn would pay that every turn."
+  [messages {:keys [protect-tail chars-per-token min-freed-tokens] :as opts}]
+  (let [cutoff (max 0 (- (count messages) protect-tail))
+        out (vec (map-indexed
+                  (fn [i m]
+                    (if (and (< i cutoff) (= "assistant" (str (:role m)))
+                             (not (:pinned? m)) (string? (:content m)))
+                      (assoc m :content (clip-write-call (:content m) opts))
+                      m))
+                  messages))
+        chars #(reduce + 0 (map (fn [m] (content-chars (:content m))) %))
+        freed (long (Math/ceil (/ (double (max 0 (- (chars messages) (chars out))))
+                                  (double (max 1 chars-per-token)))))]
+    (if (< freed min-freed-tokens)
+      {:messages messages :freed 0}
+      {:messages out :freed freed})))
+
+(defn prompt-parts
+  "Characters of a transcript by what they are: {:system :summaries :results :calls
+  :writes}. `write-tools` names the calls that carry file bodies."
+  [messages write-tools]
+  (let [write? (fn [c] (some #(str/includes? c (str "\"" % "\"")) write-tools))
+        part (fn [{:keys [role content compaction?]}]
+               (let [r (str role)]
+                 (cond compaction? :summaries
+                       (= "system" r) :system
+                       (not= "assistant" r) :results
+                       (write? (str content)) :writes
+                       :else :calls)))]
+    (reduce (fn [acc m] (update acc (part m) + (content-chars (:content m))))
+            {:system 0 :summaries 0 :results 0 :calls 0 :writes 0}
+            messages)))
+
+;; --- what a fold keeps without asking a model ---------------------------------
+
+(defn- turn-args [t]
+  (let [a (:args t)]
+    (if (string? a) (try (json/read-str a :key-fn keyword) (catch Throwable _ nil)) a)))
+
+(defn- last-line [text limit]
+  (let [l (or (last (remove str/blank? (str/split-lines (str text)))) "")]
+    (subs l 0 (min limit (count l)))))
+
+(defn snapshot-facts
+  "What a run has done, read from its journal rather than from a model:
+  {:files [{:path :turn}] :commands [{:command :turn :category :last}] :errors [...]}.
+  One entry per file and per command, at its latest turn. :errors are commands whose
+  latest run failed."
+  [turns {:keys [max-files max-commands max-errors result-chars write-tools command-tools]}]
+  (let [latest (fn [k rows]
+                 (vals (reduce (fn [acc r]
+                                 (assoc acc (k r) (assoc r :order (:turn r))))
+                               {} rows)))
+        by-turn #(vec (sort-by :turn %))
+        tail (fn [n v] (vec (take-last n v)))
+        files (for [t turns :when (contains? write-tools (:tool_name t))
+                    :let [a (turn-args t)]
+                    p (distinct (keep identity (cons (:path a) (map :file (:edits a)))))]
+                {:path (str p) :turn (:turn t)})
+        commands (for [t turns :when (contains? command-tools (:tool_name t))
+                       :let [c (:command (turn-args t))] :when c]
+                   {:command c :turn (:turn t) :category (str (:category t))
+                    :last (last-line (:result t) result-chars)})
+        recent (by-turn (map #(dissoc % :order) (latest :command commands)))]
+    {:files (vec (take max-files (sort-by :path (map #(dissoc % :order) (latest :path files)))))
+     :commands (tail max-commands recent)
+     :errors (tail max-errors (filterv #(= "failure" (:category %)) recent))}))
+
+(defn snapshot-empty?
+  "Whether a snapshot has nothing to say."
+  [{:keys [files commands errors]}]
+  (and (empty? files) (empty? commands) (empty? errors)))
 
 ;; --- pruning tool output ------------------------------------------------------
 
