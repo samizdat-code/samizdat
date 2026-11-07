@@ -17,7 +17,12 @@
   (is (verify/test-file? "src/samizdat/foo_spec.clj"))
   (is (verify/test-file? "test/samizdat/agent/decompose_test.clj"))
   (is (not (verify/test-file? "src/samizdat/agent/tools/knowledge.clj")))
-  (is (not (verify/test-file? "resources/cells/feature.clj"))))
+  (is (not (verify/test-file? "resources/cells/feature.clj")))
+  (testing "pytest's own naming, wherever the file sits"
+    (is (verify/test-file? "test_solution.py"))
+    (is (verify/test-file? "pkg/test_parser.py"))
+    (is (not (verify/test-file? "latest_results.py")))
+    (is (not (verify/test-file? "contest_solution.py")))))
 
 (deftest ns-from-test-path-maps-a-path-to-its-namespace
   (is (= "samizdat.agent.decompose-test"
@@ -259,3 +264,19 @@
         (finally
           (verify/unseal-run! "memo-run")
           (doseq [f (reverse (file-seq root))] (.delete f)))))))
+
+(deftest the-tdd-rung-is-about-code
+  ;; karamazov-0wvc.3: a run asked to write an answer into out.txt was refused
+  ;; for not pinning it with a test, four times, until the budget ran out.
+  (testing "a change with no code in it owes no test"
+    (is (not (str/includes? (str (verify/verify-block {:verify-on? true :result nil
+                                                       :changed ["out.txt" "notes/report.md"]
+                                                       :require-test? true}))
+                            "added no test"))))
+  (testing "a code change still does, in any language"
+    (doseq [path ["src/foo.clj" "algo.py" "lib/heap.cpp" "build.sh"]]
+      (is (str/includes? (str (verify/verify-block {:verify-on? true :result nil
+                                                    :changed [path]
+                                                    :require-test? true}))
+                         "added no test")
+          path))))

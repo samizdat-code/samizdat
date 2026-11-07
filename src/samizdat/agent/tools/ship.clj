@@ -375,6 +375,9 @@
                   ;; The checklist items the answer has not accounted for
                   ;; (karamazov-dsfx); empty when nothing is owed.
                   ~'unaccounted-checklist (get ~'ctx :unaccounted-checklist)
+                  ~'checklist-items   (get ~'ctx :checklist-items)
+                  ;; `done` calls refused in an unbroken row before this one.
+                  ~'done-streak       (get ~'ctx :done-streak 0)
                   ;; Pre-existing tests changed or deleted with no reason
                   ;; given (karamazov-fgsb); empty when none.
                   ~'unexplained-tests (get ~'ctx :unexplained-tests)]
@@ -589,6 +592,8 @@
                  :can-write? (roles/may-use? (:role branch) "write_file")
                  :advisory? advisory?
                  :unaccounted-checklist (checklist/unaccounted items accounted)
+                 :checklist-items items
+                 :done-streak (state/done-streak branch)
                  :unexplained-tests (exam/unexplained touched-tests explained (or prior-explained #{}))})
         ;; The test rung — what makes the loop test-driven rather than one-shot.
         ;; `done` is not terminal until the unit's tests actually pass: run the
@@ -599,7 +604,10 @@
         ;; :verify-focused? is true; loops with neither behave exactly as before.
         verify-cmd (get-in ctx [:config :run :verify-cmd])
         verify-focused? (get-in ctx [:config :run :verify-focused?] false)
-        require-test? (get-in ctx [:config :run :require-test?] true)
+        ;; Paired samples that passed on this very program are its test: a
+        ;; program with them has nothing further to pin.
+        require-test? (and (get-in ctx [:config :run :require-test?] true)
+                           (not (verify/samples-pinned? (:root ctx) (:green-check branch))))
         ;; THE TEST FILE THIS PIECE WAS DELEGATED, from the task it holds.
         ;; A split leaves the tree RED on purpose — the stubs are the failing
         ;; tests — so a child that ran the whole suite would drown in its
@@ -670,8 +678,8 @@
                                 (when (or verify-focused? contracted-tests) changed)))
         cmd (when verify-on? (or (verify/focused-cmd focus) verify-cmd))
         pre-doomed? (or (and (some? changed) (empty? changed))
-                        (and require-test? (some? changed) (seq changed)
-                             (not (some verify/test-file? changed))
+                        (and require-test? (some? changed)
+                             (verify/owes-test? changed)
                              (nil? contracted-tests)))
         ;; Through the run's memory of this tree (gates.edn :verify-memo):
         ;; :feature/verify runs the same command on the same tree next.

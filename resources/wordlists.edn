@@ -277,7 +277,7 @@
  ;; applies it), the words are here, and a coherence test keeps the two
  ;; sets equal. Three boundaries own them: a branch's own steer boundary
  ;; (message, review), the beam's round top (cull, fork, retract, extend,
- ;; pause, resume), and the feature loop's directives stage (switch, budget,
+ ;; pause, resume, finish), and the feature loop's directives stage (switch, budget,
  ;; stop) — see RFC-012.
  {"message" "Inject text into a branch's next turn."
   "review"  "Tell a branch to cross-check and ship what it has."
@@ -289,7 +289,9 @@
   "resume"  "Resume scheduling."
   "switch"  "Switch the feature loop's implement strategy for its next round: board, team or decompose (text: the name). Lands at the loop's next round boundary."
   "budget"  "Set the per-owner turn budget the feature loop's following rounds run under (text: \"N\", or {\"turns\": N})."
-  "stop"    "End the run unsolved at the feature loop's next round boundary: the loop has concluded it cannot solve the task. Partial work stays on disk (text: why)."}
+  "stop"    "End the run unsolved at the feature loop's or team-solve's next round boundary: the loop has concluded it cannot solve the task. Partial work stays on disk (text: why)."
+  "finish"  "End the run SOLVED with this text as its answer, when the work is finished and only the worker's `done` is in the way. A turn-at-a-time run needs a passing run_check still true of the files on disk, and is refused otherwise; team-solve goes to its verify stage, whose check decides (text: the answer)."
+  "retask"  "Replace team-solve's next task with this text, ending any stuck wait (text: the task). Lands at its next manager or unstick boundary."}
 
  :shell-refusal
  ;; How the shell policy phrases a refusal. Read to turn a refused command
@@ -383,6 +385,14 @@
   ["&quot;" "\""] ["&#39;" "'"]
   ["[ \t]+" " "]
   ["\n{3,}" "\n\n"]]
+
+ :tool-denials
+ ;; What claims/denies-tool? reads as a tool not working, when it directly
+ ;; follows the tool's name. Not `not`, `no` or `fails`: those are ordinary
+ ;; steering beside any tool named with an English word (karamazov-i692).
+ ["does not work" "doesn't work" "do not work" "don't work" "will not work"
+  "won't work" "not working" "cannot" "can't" "is broken" "is unavailable"
+  "is not available" "isn't available"]
 
  :negation-markers
  ;; What makes a memory a DENIAL rather than an assertion (karamazov-ei6t.8).

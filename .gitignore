@@ -52,3 +52,20 @@ PLAN.md
 docs/superpowers
 .superpowers/
 .worktrees/
+
+# Python bytecode cache from the eval corpus builder.
+__pycache__/
+*.pyc
+
+# Built by evals/team-solve/build_hard.py: 29M of stress inputs.
+evals/team-solve/hard/
+# Copied from it by evals/team-solve/heal/build.sh.
+evals/team-solve/heal/*/task.md
+evals/team-solve/heal/*/tests/
+evals/team-solve/heal/*/hidden/
+
+# Written by evals/team-solve/run.sh.
+evals/team-solve/results.jsonl
+evals/terminal-bench/samizdat-bundle.*
+evals/terminal-bench/jobs/
+evals/terminal-bench/__pycache__/

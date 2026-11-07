@@ -63,6 +63,19 @@
    {:name samizdat.agent.compaction/results-of
     :summary "The framed bodies of some tools' results inside a span. The task fold puts gates.edn :task-fold :carry (ask_human) on its line, so a person's answers outlive the task that asked them."}]}
 
+ {:group "A team of fresh contexts"
+  :entries
+  [{:name samizdat.agent.sections/parse
+    :summary "A role's reply as named sections. Team-solve reads its one-call roles this way; a missing section is the caller's decision."}
+   {:name samizdat.agent.gitdiff/work-tree-id
+    :summary "A restorable git tree of the project's work, leaving out .samizdat. Team-solve keeps the last passing work this way on a repository."}
+   {:name samizdat.agent.gitdiff/restore-work-tree!
+    :summary "Put the work back as a work-tree-id holds it, removing files created since."}
+   {:name samizdat.eval.samples/grade
+    :summary "Run a program against paired tests/N.in and N.out. A team-solve gate: a script decides, never a model."}
+   {:name samizdat.eval.samples/run-one
+    :summary "Run a program once on one input. Team-solve runs a manager's counterexample this way before believing it."}]}
+
  {:group "Probing without committing"
   :entries
   [{:name samizdat.agent.infer/of-branch
@@ -115,6 +128,10 @@
     :summary "The held-out gate off the turn: after a save validates, the battery replays on a background lane and the edit is committed or refused there; the branch that made it is told by a message on a later turn. nil when the project has no battery, and the tool saves as before."}
    {:name samizdat.heldout/check-edit
     :summary "The held-out gate, stage 1: replay the project's battery (.samizdat/battery, stored in battery_cases) with a candidate cell, manifest or policy edit in place and without it, each case in a child process on the tree its recorded run started from, and refuse the edit when a target that passed fails. Ties accepted; a case that does not run at baseline is set aside by name. Opt-in by having cases; gates.edn :heldout. Each target is recorded in heldout_checks with its fixture, harness revision, model and scorer."}
+   {:name samizdat.workflow/refresh-turn-loop
+    :summary "The turn loop compiled again when its manifest or the cells have changed since it was last compiled, else nil. The beam asks at each round (beam/with-live-loop), so an edit reaches the running turn-at-a-time run at its next round. An edit that will not compile or is no longer per-turn leaves the running loop in place, noted :loop-refresh-failed; one that lands is noted :loop-refreshed."}
+   {:name samizdat.claims/denies-tool?
+    :summary "Whether a sentence says a tool itself does not work: the tool's whole name, at most two words, then a denial from wordlists.edn :tool-denials. intervene refuses such a directive when the run's record shows that tool working; anything else it passes."}
    {:name samizdat.heldout/draft!
     :summary "Freeze a finished run as a battery case: its replay, the expectations battery/draft-case writes, its git baseline (pinned under refs/samizdat/battery/) as the fixture, its loop and model. Behind `battery add`. Cases are written once and never rewritten."}
    {:name samizdat.heldout/live-verdict
@@ -129,6 +146,10 @@
     :summary "Every node's preconditions as one report — the ctx keys and data keys it requires, what holds on every path in, and what is unsatisfied with the path that fails — before an edit rather than as the refusal after."}
    {:name samizdat.progress/interceptors
     :summary "Where each branch is in its workflow, journaled as :progress notes by every compiled manifest. Entering a node the manifest lists under `:progress [...]` at its top is a stage move (per-turn nodes do not belong there; a node the graph lacks is refused at compile), and a change in any branch field gates.edn :progress :branch-keys watches (phase, task, goal, status) is a field move. journal/progress reads them back per branch — the supervisor's view of a run, instead of its steps."}
+   {:name samizdat.memory/admit
+    :summary "What text may become a memory, by who wrote it: secrets redacted, confidence capped, and injection or unbacked rule-shaped text parked. Policy in gates.edn :memory :admission. `remember!` applies it; `samizdat.store.knowledge/quarantine` lists what was parked."}
+   {:name samizdat.store.knowledge/consolidate!
+    :summary "One pass at a run's end over the notes automatic writers inferred during it: a model keeps a few, adds up to :max-new, and the rest are retired. Keeping nothing is valid; an unreadable reply changes nothing. Numbers in gates.edn :memory :consolidation, words in prompts/memory-consolidate.md."}
    {:name samizdat.agent.revise/revise!
     :summary "Backward revision (ReHarness): after a branch ends, each memory it was shown that an earlier run wrote is put back beside the turns it was written from (knowledge source_branch/source_turn_*), with this branch's outcome as feedback only, and kept, rewritten through restate! (its lineage keeps the old wording) or retired. The :memory/revise cell (node :revisit after :distil) decides under gates.edn :memory-revise — off until the arena has measured it, clean endings only. Each call is a :revision side call and a :memory-revised note."}
    {:name samizdat.workflow/compile-loop
@@ -291,6 +312,12 @@
     :summary "Re-read gates.edn from userspace and recompile the steer table. The policy tool's save does this for you."}
    {:name samizdat.agent.gates/message-context
     :summary "The render context a gate's prose is selmer-rendered against: turn count and budget, the branch's stated goal, its last failure, and whether it may call `split`. A :message-form in gates.edn passes it to sp/render-str so a gate written that way gets the same {% if %} and {{...}} as a plain :message-file."}
+   {:name samizdat.agent.gates/time-used
+    :summary "Share of a run's wall-clock limit spent, nil when the run has none. A limit comes from config.edn :run :time-limit-seconds; the :time-wind-down and :time-last-call gates read this against gates.edn :time-budget, at most :max-time-steers times a run."}
+   {:name samizdat.agent.gates/time-left-seconds
+    :summary "Seconds left of a run's wall-clock limit, nil when the run has none; a gate's prose gets it as {{time-left-seconds}}."}
+   {:name samizdat.llm.fence/install-orphan-tools!
+    :summary "Set the table that names the tool for a damaged tool call whose invoke line was lost, by which parameters it carries. Order matters: first match wins. The table is gates.edn :orphan-call."}
    {:name samizdat.userspace/save!
     :summary "Append a new version of any userspace piece (:cell :manifest :policy :prompt), with a rationale the history shows. Prefer the matching tool, which validates first and requires the rationale."}
    {:name samizdat.userspace/revert!

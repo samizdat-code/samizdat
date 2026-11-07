@@ -1,0 +1,1 @@
+**Time is nearly up:** about {{time-left-seconds}} seconds left. Call `done` now with what you have, and say plainly what is and is not finished. The run is about to be stopped, and what is on disk is what counts.

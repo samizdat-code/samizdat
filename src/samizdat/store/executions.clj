@@ -46,7 +46,7 @@
         (update :specification read)
         (update :lineage #(when % (read %))))))
 
-(defn complete! [conn id {:keys [status artifacts]}]
+(defn complete! [conn id {:keys [status artifacts delivered?]}]
   (let [now (db/now)]
     (db/atomic
      conn
@@ -57,8 +57,9 @@
        (db/execute! conn
                     ["INSERT OR IGNORE INTO execution_receipts
                       (execution_id, status, artifacts, delivery_status, created_at)
-                      VALUES (?, ?, ?, 'pending', ?)"
-                     id (name (or status :complete)) (write (or artifacts [])) now])))))
+                      VALUES (?, ?, ?, ?, ?)"
+                     id (name (or status :complete)) (write (or artifacts []))
+                     (if delivered? "delivered" "pending") now])))))
 
 (defn receipt [conn id]
   (when-let [row (db/fetch-one conn ["SELECT * FROM execution_receipts WHERE execution_id = ?" id])]

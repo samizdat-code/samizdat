@@ -117,7 +117,9 @@
 (defn scan
   "Lexer-aware delimiter scan of Clojure source. Returns one of:
     {:balance :balanced}
-    {:balance :unclosed :stack [[opener idx] ...]}   ; openers with no closer
+    {:balance :unclosed :stack [[opener idx] ...]    ; openers with no closer
+              :inside idx}                           ; first opener at the margin
+                                                     ; with another still open
     {:balance :stray :at idx :char c}                ; a closer with no opener
     {:balance :mismatch :at idx :open-at idx
               :expected c :got c}                    ; wrong closer
@@ -126,14 +128,16 @@
   skipped, so they never count toward the balance."
   [s]
   (let [n (count s)]
-    (loop [i 0, stack []]              ; stack of [opener-char index]
+    (loop [i 0, stack [], inside nil]  ; stack of [opener-char index]
       (if (>= i n)
-        (if (empty? stack) {:balance :balanced} {:balance :unclosed :stack stack})
+        (if (empty? stack)
+          {:balance :balanced}
+          (cond-> {:balance :unclosed :stack stack} inside (assoc :inside inside)))
         (let [c (nth s i)]
           (cond
             ;; char literal: backslash consumes the next char (which may be a
             ;; delimiter, e.g. \( ) — skip both.
-            (= c \\) (recur (+ i 2) stack)
+            (= c \\) (recur (+ i 2) stack inside)
 
             ;; string: jump past it. An unterminated string is its own status,
             ;; not a delimiter imbalance.
@@ -143,15 +147,20 @@
                          ;; closes the string at EOF and when it is ESCAPED —
                          ;; only an unescaped one actually closed it (provenance A-5).
                          (if (and (> e 0) (= (nth s (dec n)) \") (not (escaped? s (dec n))))
-                           (recur n stack)               ; closed exactly at EOF
+                           (recur n stack inside)        ; closed exactly at EOF
                            {:balance :unterminated-string :at i})
-                         (recur e stack)))
+                         (recur e stack inside)))
 
             ;; line comment: skip to end of line.
             (= c \;) (let [nl (str/index-of s "\n" i)]
-                       (if nl (recur (inc nl) stack) (recur n stack)))
+                       (if nl (recur (inc nl) stack inside) (recur n stack inside)))
 
-            (opener->closer c) (recur (inc i) (conj stack [c i]))
+            ;; An opener at the margin with another still open is a new top-level
+            ;; form inside the last one: the closer is missing above here, whatever
+            ;; the end of the file looks like. Forgotten once the stack empties.
+            (opener->closer c) (recur (inc i) (conj stack [c i])
+                                      (or (when (seq stack) inside)
+                                          (when (and (seq stack) (= \newline (nth s (dec i)))) i)))
 
             (closer->opener c)
             ;; The opener's INDEX travels with the mismatch. It was already on
@@ -160,12 +169,12 @@
             ;; close was opened — which is the half a model needs to fix it.
             (if-let [[open open-at] (peek stack)]
               (if (= open (closer->opener c))
-                (recur (inc i) (pop stack))
+                (recur (inc i) (pop stack) inside)
                 {:balance :mismatch :at i :open-at open-at
                  :expected (opener->closer open) :got c})
               {:balance :stray :at i :char c})
 
-            :else (recur (inc i) stack)))))))
+            :else (recur (inc i) stack inside)))))))
 
 (defn read-error
   "The reader's own complaint about `content`, or nil when it reads. Wrapped in
@@ -198,14 +207,15 @@
     :does-not-read        every delimiter balances and it still is not
                           Clojure — carries the reader's own words"
   [s]
-  (let [{:keys [balance stack at open-at expected got]} (scan s)
+  (let [{:keys [balance stack inside at open-at expected got]} (scan s)
         pos (fn [i] (line-col s i))]
     (case balance
       :balanced (when-let [err (read-error s)]
                   {:reason :does-not-read :error err})
 
-      :unclosed (merge {:reason :unclosed :count (count stack)}
-                       (pos (second (first stack))))
+      :unclosed (cond-> (merge {:reason :unclosed :count (count stack)}
+                               (pos (second (first stack))))
+                  inside (assoc :inside-line (:line (pos inside))))
 
       :stray (merge {:reason :stray} (pos at))
 
@@ -302,7 +312,7 @@
       mid-token comes back closed as `(:)` — balanced, and not a keyword.\"
       `(:)` is exactly what a truncated model write produces."
   [s]
-  (let [{:keys [balance stack]} (scan s)
+  (let [{:keys [balance stack inside]} (scan s)
         ;; The indentation rung, tried wherever the stack has to give up —
         ;; and only there, so a trailing truncation still takes the exact
         ;; stack repair and still reports :auto-closed. Its accept gate is
@@ -328,9 +338,11 @@
       ;; Guard: it must actually read afterwards (a mid-file unclosed that
       ;; happens to balance by appending would fail this or re-parent, and an
       ;; unterminated string is not repairable by appending closers).
+      ;; It always reads when a form was left open mid-file, with the rest of the file
+      ;; inside it, so a later top-level form sends this to the rung that can place it.
       (let [closers (apply str (map (comp opener->closer first) (reverse stack)))
             repaired (str s closers)]
-        (if (reads? repaired)
+        (if (and (nil? inside) (reads? repaired))
           {:status :repaired :content repaired :reason :auto-closed
            :count (count stack) :closers closers}
           (refuse)))

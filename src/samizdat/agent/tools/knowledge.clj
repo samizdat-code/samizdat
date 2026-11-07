@@ -104,6 +104,8 @@
                         :kind kind
                         :confidence (some-> (base/arg ctx :confidence) str parse-double)
                         :run-id (:run-id ctx)
+                        :origin :agent
+                        :evidence? (boolean (or (seq evidence-items) (seq premises) (seq cited)))
                         ;; WHY you believe it, not just that you do. A memory
                         ;; with no recorded origin can only be deleted later,
                         ;; never reconsidered — and the next run cannot judge a
@@ -118,9 +120,13 @@
                         ;; And where it was written from (karamazov-4dn8.3).
                         :source {:branch (:id branch) :from (:turn ctx) :to (:turn ctx)}})
               _ (doseq [item evidence-items] (evidence/add! conn id item))
-              _ (doseq [premise premises] (evidence/add-premise! conn id premise))]
-          (base/ok branch (msg {:remembered true :id id :kind kind
-                                :content content}))))))))
+              _ (doseq [premise premises] (evidence/add-premise! conn id premise))
+              row (knowledge/get-by-id conn id)]
+          (if (knowledge/quarantined? row)
+            (base/fail branch (prompt/render "memory-directive"
+                                             {:reason (knowledge/quarantine-reason row)}))
+            (base/ok branch (msg {:remembered true :id id :kind kind
+                                  :content (:content row)})))))))))
 
 (defmethod base/run-tool "outcome" [{:keys [branch conn] :as ctx}]
   ;; The axis that makes memory a loop rather than a list. Kind, use and

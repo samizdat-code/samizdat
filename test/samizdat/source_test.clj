@@ -220,3 +220,9 @@
     (is (= :failure (:category r)))
     (is (re-find #"\S" (str/replace (:result r) #"(?i)eval error:" ""))
         (str "nothing after the label: " (pr-str (:result r))))))
+
+(deftest a-form-swallowing-the-next-is-explained
+  (with-redefs [samizdat.lisp/indent-repair (constantly nil)]
+    (let [{:keys [note]} (source/vet "(defn a [s]\n  (inc s)\n\n(defn b [] 2)\n" {:whole? true :clojure? true})]
+      (is (str/includes? note "line 1"))
+      (is (str/includes? note "Line 4")))))

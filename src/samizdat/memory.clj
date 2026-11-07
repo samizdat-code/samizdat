@@ -34,12 +34,51 @@
   (RFC-001)."
   (:require [clojure.set :as set]
             [clojure.string :as str]
-            [samizdat.lexicon :as lexicon]))
+            [samizdat.lexicon :as lexicon]
+            [samizdat.security.secrets :as secrets]))
 
 (defn policy
   "The memory model's constants, from gates.edn."
   []
   (lexicon/policy :memory))
+
+(defn durable-command?
+  "Whether a shell command is worth one memory: it builds, tests or runs the
+  project, rather than looking around once. Patterns in :fact-command."
+  [cmd]
+  (let [{:keys [max-chars prefix-regex noise-regex]} (:fact-command (policy))
+        c (str/trim (str cmd))
+        bare (str/replace c (re-pattern prefix-regex) "")]
+    (and (seq bare)
+         (<= (count c) max-chars)
+         (not (re-find (re-pattern noise-regex) bare)))))
+
+(defn admit
+  "What `content` may become, given who wrote it: {:content :confidence
+  :quarantine}. Content has secrets redacted, confidence is capped by origin, and
+  :quarantine is the reason it must not stand, or nil.
+
+  An origin of nil is the harness, whose derived facts come from exit codes."
+  [{:keys [content origin confidence evidence?]}]
+  (let [{:keys [ceiling secret-regex injection-regex directive-regex reasons]} (:admission (policy))
+        origin (or origin :harness)
+        text (-> (secrets/redact (str content))
+                 (str/replace (re-pattern secret-regex) "$1=<redacted>"))
+        cap (double (get ceiling origin (:inferred ceiling)))]
+    {:content text
+     :confidence (when confidence (min (double confidence) cap))
+     :quarantine (cond
+                   (= :user origin) nil
+                   (re-find (re-pattern injection-regex) text) (:injection reasons)
+                   (and (#{:agent :inferred} origin) (not evidence?)
+                        (re-find (re-pattern directive-regex) text))
+                   (:directive reasons))}))
+
+(defn provisional?
+  "Whether a stored memory still rests on a single run."
+  [{:keys [pinned origin corroborations]}]
+  (not (or (= 1 pinned) (= "user" origin)
+           (>= (or corroborations 1) (:established-runs (policy))))))
 
 (defn base-salience
   "The starting importance for a memory of `kind`.

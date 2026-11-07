@@ -158,7 +158,7 @@
                        restated (when (= "OVERVIEW" section)
                                   (knowledge/restate! conn (:id existing) line))]
                    {:id (or restated (:id existing)) :kind kind :repeat? true})
-                 {:id (knowledge/remember! conn {:content line :kind kind
+                 {:id (knowledge/remember! conn {:content line :kind kind :origin :inferred
                                                  :run-id run-id :pattern-key key
                                                  :confidence 0.7 :source source})
                   :kind kind :repeat? false})))]
@@ -170,6 +170,21 @@
       (when (and (contains? (set shown) id) (= 1 (:current (knowledge/get-by-id conn id))))
         (knowledge/record-outcome! conn id false)))
     written))
+
+(defn consolidator
+  "The model call `knowledge/consolidate!` is handed at a run's end, with its cost
+  on the record. nil with no model."
+  [{:keys [conn run-id llm-adapter llm-config]}]
+  (when llm-adapter
+    (fn [text]
+      (let [answer (llm/chat llm-adapter llm-config
+                             [{:role "system" :content (prompt/prompt "memory-consolidate")}
+                              {:role "user" :content text}]
+                             {:temperature 0.0})]
+        (journal/record-side-call! conn run-id {:kind :consolidation
+                                                :model (:model llm-config)
+                                                :usage (:usage answer)})
+        (:content answer)))))
 
 (defn distil-task!
   "Run the reflection and write what it found. Returns what was written.

@@ -97,7 +97,7 @@
   (is (re-find #"defcell :loop/assemble" (us/body :cell "loop")))
   ;; The frame; the turn format moved into the system-turn segment
   ;; (karamazov-o4wm.4), so both are read here.
-  (is (re-find #"Clojure developer" (us/body :prompt "system")))
+  (is (re-find #"Your value is judgment" (us/body :prompt "system")))
   (is (re-find #"tool call" (us/body :prompt "system-turn")))
   (is (map? (us/edn-body :manifest "loop")))
   (is (map? (us/edn-body :policy "gates")))

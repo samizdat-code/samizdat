@@ -294,7 +294,12 @@
                            (str " — " (subs (str (:body resp))
                                             0 (min 300 (count (str (:body resp))))))))}
       overflow? (assoc :reason :context-overflow)
-      cap?      (assoc :reason :usage-cap))))
+      cap?      (assoc :reason :usage-cap)
+      ;; A window that will reopen, which the loop waits out rather than counting
+      ;; towards an outage.
+      (and (not overflow?) (not cap?)
+           (or (= 429 status) (retryable-code? decoded)))
+      (assoc :reason :rate-limited))))
 
 (defn- post-once* [adapter config request url]
   (let [;; Whether the prefill in the request was actually sent — the adapter
@@ -494,11 +499,14 @@
                                     on-delta tools continuation-attempt continuation-seed
                                     accounting-scope accounting-estimate]
                            :as opts}]
-   (let [request {:messages (message/prepare messages)
+   (let [request {:messages (message/prepare messages {:replay-reasoning? (config/supports? config :replay-reasoning)})
                   :accounting-scope accounting-scope
                   :accounting-estimate accounting-estimate
                   :max-tokens (or max-tokens (:max-tokens config))
                   :temperature (or temperature (:temperature config))
+                  ;; Sampling a role's policy asked of a model that takes it.
+                  :top-p (:top-p config)
+                  :top-k (:top-k config)
                   ;; Passed through as given; the adapter decides whether it
                   ;; can honour it, and one that cannot must ignore it rather
                   ;; than approximate it.

@@ -68,6 +68,7 @@
             [samizdat.agent.state :as state]
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
+            [samizdat.agent.reflect :as reflect]
             [samizdat.store.knowledge :as knowledge]
             [samizdat.store.runs :as runs]
             [samizdat.store.userspace :as us])
@@ -183,11 +184,27 @@
   ([conn name] (compile-turn-loop conn name nil))
   ([conn name opts]
    (let [{:keys [version definition]} (load-loop! conn name)]
-     {:name name
-      :version version
-      :definition definition
-      :iterating? (iterating? definition)
-      :compiled (compile-loop (turn-manifest definition) opts)})))
+     (let [compiled (compile-loop (turn-manifest definition) opts)]
+       {:name name
+        :version version
+        :definition definition
+        :iterating? (iterating? definition)
+        :compiled compiled
+        ;; What the compile bound its handlers from, for refresh-turn-loop.
+        :cells (cells/load-cells!)}))))
+
+(defn refresh-turn-loop
+  "The turn loop compiled again when its manifest or the cells have changed since
+  `known` (what compile-turn-loop or this returned), else nil. Throws when an edit
+  will not compile. The check is a version comparison and a read of the cell
+  sources, cheap beside a turn, because the beam asks every round: this is how a
+  supervisor's edit reaches the run it was made for (karamazov-i692)."
+  [conn name known opts]
+  (let [cells-now (cells/load-cells!)
+        {:keys [version]} (load-loop! conn name)]
+    (when (or (not= version (:version known))
+              (not (identical? cells-now (:cells known))))
+      (compile-turn-loop conn name opts))))
 
 (def compiled-manifest manifests/compiled-manifest)
 
@@ -410,6 +427,8 @@
         _ (verify/seal-run! run-id root config)
         ctx {:conn conn :run-id run-id :config config
              :llm-adapter llm-adapter :llm-config llm-config
+             ;; When this run began, for a wall-clock limit, as the beam's driver does.
+             :started-ms (System/currentTimeMillis)
              ;; The injected model call, when the caller supplied one — the
              ;; same named-or-dropped hazard as the beam's ctx above.
              :complete complete
@@ -516,6 +535,9 @@
         ;; the common path measured everything and remembered none of it.
         (try
           (knowledge/distil-session! conn {:run-id run-id
+                                           :ask (reflect/consolidator {:conn conn :run-id run-id
+                                                                       :llm-adapter llm-adapter
+                                                                       :llm-config llm-config})
                                            :findings (session/findings
                                                             ;; THIS RUN's window, not the
                                                             ;; whole-process tally: counters

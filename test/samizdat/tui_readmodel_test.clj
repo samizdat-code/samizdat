@@ -89,7 +89,7 @@
     (let [rid (runs/start-run! c {:problem "p" :provider "deepseek-flash"
                                   :model "deepseek-v4-flash"})]
       (try
-        (is (= {:provider "deepseek-flash" :model "deepseek-v4-flash" :context_window 128000}
+        (is (= {:provider "deepseek-flash" :model "deepseek-v4-flash" :context_window 1048576}
                (:llm (:run (api-runs/get-run c rid cfg))))
             "the run's own provider and ITS window, not the server's default")
         (testing "and a live switch, which the row never learns about"

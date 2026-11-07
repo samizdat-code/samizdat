@@ -28,6 +28,8 @@
   dispatch."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
+            [samizdat.agent.arbiter :as arbiter]
+            [mycelium.cell :as cell]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.loop :as aloop]
             [samizdat.agent.roles :as roles]
@@ -208,9 +210,9 @@
     (is (some? g) "the gate exists in gates.edn")
     (is (= :max-no-edit-nudges (:budget g)) "and is bounded, so it cannot nag forever")
     (is (some? (:prediction g)) "it declares a prediction, like every gate")
-    (is (= #{"write_file" "edit_file" "patch"}
+    (is (= #{"write_file" "edit_file" "patch" "done" "give_up"}
            (get (gates/tool-vocab :settle-called) :no-edits))
-        "settled by the thing it asks for: a file actually written")))
+        "settled by a file actually written, or by finishing")))
 
 ;; --- gate health, per branch -------------------------------------------------
 ;; Run ace34d83: :no-edits fired 6 times and was ignored 3 of them — every one
@@ -729,6 +731,32 @@
       (is (< mine (:priority (by g)))
           (str "suspect-the-test must outrank " g)))))
 
+(deftest a-passing-check-says-finish-and-is-not-a-stall
+  ;; A finished program with green samples was told "you are busy but not
+  ;; advancing", and two of those opened sibling branches on it.
+  (let [branch (fn [& kv]
+                 (apply assoc (state/new-branch {:id "B1" :problem "p"})
+                        :status :active :any-progress? true :turns-since-progress 9
+                        :current-turn 20 kv))
+        held (fn [b g] (some #(and (= g (:gate %)) (:held %))
+                             (arbiter/measurements {:branch b :max-turns 40})))
+        after (:green-finish-after-turns (gates/threshold :green-check))]
+    (testing "with no pass on record the stall gate is what it was"
+      (is (held (branch) :progress-stalled))
+      (is (not (held (branch) :check-green))))
+    (testing "just after a pass the branch is left to look at what samples miss"
+      (let [b (branch :green-check {:turn 20 :artifact "solution.py"})]
+        (is (not (held b :check-green)))
+        (is (not (held b :progress-stalled)))))
+    (testing "then it is told to finish, and is still not stalled"
+      (let [b (branch :green-check {:turn (- 20 after) :artifact "solution.py"})]
+        (is (held b :check-green))
+        (is (not (held b :progress-stalled)))))
+    (testing "it outranks the gates that would ask for more writing"
+      (let [by (fn [n] (first (filter #(= n (:gate %)) (gates/gates))))]
+        (doseq [g [:no-edits :studying :suspect-the-test]]
+          (is (< (:priority (by :check-green)) (:priority (by g))) (str g)))))))
+
 ;; --- a call the model put inside its reasoning ------------------------------
 
 (deftest a-call-emitted-inside-the-reasoning-is-recovered
@@ -1068,3 +1096,37 @@
         (doseq [t ["done" "write_file" "edit_file"]]
           (is (not= :planning-declares-a-plan
                     (:refusal-rule (base/phase-refusal {:branch building :tool-name t})))))))))
+
+(deftest a-hosted-window-holds-off-the-squeeze-through-the-loop
+  (let [response {:content "fine" :finish-reason "stop" :usage {:prompt-tokens 22000}}
+        fresh (state/new-branch {:id "B1" :problem "p"})
+        parse (:handler (cell/get-cell! :llm/parse))
+        through-the-cell (fn [window]
+                           (parse {} {:branch fresh :turn 3
+                                      :call {:ok true :response response}
+                                      :request-ctx {:llm-config {:context-window window}}}))]
+    (is (nil? (:context-squeeze (:branch (aloop/absorb-response fresh response 3 128000)))))
+    (is (= 1 (:context-squeeze (:branch (aloop/absorb-response fresh response 3 nil)))))
+    (testing "the shipped cell hands the loop the model's window"
+      (is (nil? (:context-squeeze (:branch (through-the-cell 128000)))))
+      (is (= 1 (:context-squeeze (:branch (through-the-cell 32000))))))))
+
+(deftest the-squeeze-waits-for-compaction
+  ;; karamazov-0wvc.1: the squeeze halves the compaction budget for the rest of
+  ;; the branch. Priced at 24000 tokens it fired at turn 13, on the system prompt
+  ;; and a few results, and left the agent one exchange of memory. It is the last
+  ;; resort, so it must sit above where ordinary compaction engages, with room for
+  ;; a frame of what the system prompt and tools cost.
+  (let [{:keys [window-fraction urgent] :as policy} (gates/threshold :context-pressure)
+        {:keys [compaction-chars]} (gates/threshold :context-budget)
+        {:keys [chars-per-token]} (gates/threshold :compaction)
+        frame-tokens 20000
+        hosted-window 128000]
+    (is (< (+ frame-tokens (/ compaction-chars chars-per-token))
+           (* hosted-window window-fraction urgent)))
+    (testing "at the size that used to fire it, a hosted model is under no pressure"
+      (is (nil? (state/context-pressure 22000 policy hosted-window))))
+    (testing "the ceiling scales with the window, so a small endpoint still gets warning"
+      (is (= :urgent (state/context-pressure 22500 policy 32768))))
+    (testing "no window known, the fixed ceiling answers"
+      (is (= :urgent (state/context-pressure 22000 policy nil))))))

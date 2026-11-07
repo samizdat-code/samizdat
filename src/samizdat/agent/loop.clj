@@ -37,10 +37,12 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
+            [samizdat.cancel :as cancel]
             [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.files :as files]
             [samizdat.agent.context-rules :as context-rules]
             [samizdat.agent.corrections :as corrections]
+            [samizdat.agent.compaction :as cmp]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.handoff :as handoff]
             [samizdat.agent.gitdiff :as gitdiff]
@@ -175,7 +177,11 @@
                 ;; first extract; the sections are the rest (system-segments).
                 :split-decision (prompt/prompt "split-decision")}]
        ((if presentation? roles/presentation-catalogue roles/scope-catalogue)
-        (prompt/render-str (or (prompt/layer :system) "")
+        ;; A role may name its own frame in roles.edn :frame, for a fresh-context
+        ;; worker that should not read the implementer's whole working method.
+        (prompt/render-str (or (some-> (:frame (roles/spec role)) prompt/prompt)
+                               (prompt/layer :system)
+                               "")
                            (merge ctx (render-segments ctx)))
         role eval-mode)))))
 
@@ -471,7 +477,7 @@
                             (if-let [t (:task branch)]
                               (prompt/render "task-current"
                                              {:id (:id t) :title (:title t)})
-                              (prompt/prompt "task-none")))]
+                              (prompt/render "task-none" {:closed-id (:closed-task branch)})))]
                    ;; The run's settled state, first and complete: what is
                    ;; established and — the half nothing carried before — what
                    ;; is RULED OUT. Read from the artifacts table every turn, so
@@ -694,13 +700,20 @@
                      (when (and run-id (:id branch)) [run-id (:id branch)]))
    (log/warn "branch" (:id branch) "turn" turn "model call failed:" error)
    ;; Failed calls in a row, which :loop/route weighs against gates.edn
-   ;; :provider-error-limit; absorb-response clears it (karamazov-e8iw).
-   (let [branch (update branch :consecutive-provider-errors (fnil inc 0))]
+   ;; :provider-error-limit; absorb-response clears it (karamazov-e8iw). A rate
+   ;; limit is counted apart, against its own wider limit: it lifts by itself, and
+   ;; five in a row took under a minute.
+   (let [rate-limited? (contains? #{:rate-limited :rate-limit-latch} reason)
+         branch (update branch (if rate-limited? :consecutive-rate-limits :consecutive-provider-errors)
+                        (fnil inc 0))]
    (journal/record-turn! conn run-id
                          {:branch-id (:id branch) :turn turn
                           :tool-name "__provider_error__" :result error
                           :category "neutral" :task-id (:id (:task branch))})
-   (if (#{:context-overflow :context-window-exceeded} reason)
+   (when rate-limited? (cancel/sleep! (:pause-ms (gates/threshold :rate-limit))))
+   (cond
+     rate-limited? branch
+     (#{:context-overflow :context-window-exceeded} reason)
      ;; The prompt outgrew the window, or local fitting exhausted its rewrites.
      ;; 'Try again' is exactly wrong here — the failure is upstream of the model
      ;; seeing anything, the next assemble would be just as oversized, and
@@ -709,6 +722,7 @@
      ;; fits, and the model continues none the wiser, which is how compaction
      ;; always works.
      (state/squeeze-context branch)
+     :else
      (state/add-message branch "user"
                         (str "[harness] The provider call failed: " error
                              " Try again.")
@@ -725,7 +739,8 @@
   probe deliberately does not touch: a bounce that parsed badly is not a
   branch that called badly."
   ([branch response] (absorb-response branch response nil))
-  ([branch response turn]
+  ([branch response turn] (absorb-response branch response turn nil))
+  ([branch response turn window]
    (let [{:keys [tape parsed signals said]}
          (infer/absorb (infer/of-branch branch) response turn)
          ;; PROACTIVE, not reactive (karamazov-3y5). The only thing that used
@@ -740,7 +755,8 @@
          ;; move is noise.
          pressure (state/context-pressure
                    (get-in response [:usage :prompt-tokens])
-                   (gates/threshold :context-pressure))
+                   (gates/threshold :context-pressure)
+                   window)
          ;; WHAT THE CACHE WAS ASKED (karamazov-o4wm.1). The response carries
          ;; the fingerprint of the wire messages it answered; against the
          ;; branch's previous render that says whether only the tail moved
@@ -778,7 +794,7 @@
                           (state/record-mechanics signals)
                           ;; The provider answered: whatever outage the
                           ;; count measured is over (karamazov-e8iw).
-                          (dissoc :last-prefix :model-change :consecutive-provider-errors))
+                          (dissoc :last-prefix :model-change :consecutive-provider-errors :consecutive-rate-limits))
                 (contains? #{:urgent :over} pressure) state/squeeze-context
                 wire (assoc :last-wire wire :last-prefix prefix)
                 model-change (assoc :model-reported reported
@@ -1060,9 +1076,14 @@
                   :said (when (= "assistant" (str (:role last-m)))
                           (handoff/clip (:content last-m) said-chars))})
                 (catch Throwable _ nil))))
-        result (or refusal
-                   (tools/run-tool (assoc ctx :branch branch :turn turn
-                                          :tool-name tool :args (:args parsed))))
+        ;; Before the call the reply is answered with: that is the order it sent them.
+        batched (when (and (not refusal) (seq (:dropped-calls parsed)))
+                  (tools/run-batched (assoc ctx :branch branch :turn turn) parsed))
+        result (cond-> (or refusal
+                           (tools/run-tool (assoc ctx :branch branch :turn turn
+                                                  :tool-name tool :args (:args parsed))))
+                 batched (-> (update :result #(str (:text batched) %))
+                             (assoc :still-dropped (:still-dropped batched))))
         storm-policy (gates/storm-policy)
         branch (-> (:branch result)
                     ;; The tool and the claim ride along so the branch can
@@ -1295,7 +1316,19 @@
                                            turn)
                    b)))
 
+           "finish" b ;; the round top's, at any width: it needs the whole branch set
+
            (cond
+             ;; A workflow that goes a turn at a time has no round boundary, so
+             ;; nothing would ever apply these. Saying so beats leaving a directive
+             ;; queued for the rest of the run while its issuer believes it.
+             (and (contains? interventions/workflow-kinds (:kind d))
+                  (true? (:iterating-loop? ctx)))
+             (do (interventions/resolve! conn run-id (:id d) :rejected
+                                         (prompt/render "directive-rejected"
+                                                        {:no-workflow-boundary true :kind (:kind d)})
+                                         turn)
+                 b)
              ;; the workflow's own boundary owns these, in either shape
              (contains? interventions/workflow-kinds (:kind d)) b
              ;; scheduler kinds: the beam drain owns them
@@ -1378,11 +1411,17 @@
             ;; nothing. Carried on the branch so the gate's :when stays pure —
             ;; the same shape state/unwritten and plan-stale? use.
             branch (if (contains? (gates/tool-vocab :file-write) (str tool))
-                     (assoc branch :lines-written
-                            (gitdiff/changed-lines (:root ctx) (:git-baseline ctx)))
-                     branch)
+                     (state/note-lines branch
+                                       (gitdiff/changed-lines (:root ctx) (:git-baseline ctx)))
+                     (state/rebase-lines branch))
+            limit (get-in ctx [:config :run :time-limit-seconds])
+            now (System/currentTimeMillis)
             gate-ctx {:branch branch
                       :max-turns max-turns
+                      ;; Against the wall clock, for :time-wind-down and
+                      ;; :time-last-call. nil without a limit.
+                      :time-used (gates/time-used limit (:started-ms ctx) now)
+                      :time-left-seconds (gates/time-left-seconds limit (:started-ms ctx) now)
                       ;; How wide the beam already is, so the reproduction
                       ;; rung knows whether the run can afford offspring.
                       :branch-count (or (:branch-count ctx) 1)
@@ -1415,7 +1454,10 @@
                   (journal/note! conn run-id :context-block
                                  {:branch-id (:id branch) :turn turn
                                   :data (cond-> {:sizes (vec sizes)
-                                                 :total (reduce + 0 (map second sizes))}
+                                                 :total (reduce + 0 (map second sizes))
+                                                 :parts (cmp/prompt-parts
+                                                         (:messages branch)
+                                                         (:tools (:write-clip (gates/threshold :compaction))))}
                                           (seq (:contributions rule-context))
                                           (assoc :context-rules
                                                  {:generation turn
@@ -1427,10 +1469,10 @@
             ;; `---` rule — a file can carry one of those.
             body (str (message/frame-result tool (truncate (:result result) turn))
                       ;; One call runs per reply; say which others did not.
-                      (when (seq (:dropped parsed))
+                      (when-let [dropped (seq (or (:still-dropped result) (:dropped parsed)))]
                         (str "\n\n" (prompt/render "calls-dropped"
                                                     {:ran tool
-                                                     :dropped (str/join ", " (:dropped parsed))})))
+                                                     :dropped (str/join ", " dropped)})))
                       (when ctx-block (str "\n\n" ctx-block))
                       (when decision (str "\n\n---\n\n" (:message decision))))
             ;; Recorded exactly once. The row id is what a later turn settles,

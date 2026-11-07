@@ -268,6 +268,10 @@ mcp({action, server?, tool?, arguments?})
     servers; tools {server}, each tool with its description and argument
     schema; call {server, tool, arguments}. A server's policy may ask a
     person before a call, or refuse tools it does not trust.
+run_check({})
+    Run this run's own check on the work as it stands: the paired samples in
+    tests/, or the configured verify command. Says what passed or the first
+    failure. Takes no arguments, and is how to run a program on the samples.
 wait({seconds?, until?, every?})
     Wait for the world instead of checking it every turn. {seconds} sleeps.
     {until, every?, seconds?} runs `until` — the run's own configured test

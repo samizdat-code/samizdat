@@ -58,4 +58,5 @@ the same breath as its parent is overhead.
 This is your task until you close it. Everything you do from here should serve
 it; if you find work that does not, make it another task rather than widening
 this one. Close it with `task close` when the contract is met, and say what you
-did — then claim the next one.
+did. If the board holds more, claim the next one. If what you were asked for is
+then in place, call `done`: that is what ends the run, and a closed task does not.

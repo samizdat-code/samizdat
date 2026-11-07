@@ -362,7 +362,7 @@
   ;; resources/gates.edn, so a vocabulary changes at runtime without a
   ;; rebuild. Pin the move: the keys exist, carry the live vocabulary, and
   ;; settle's table still keys by gate.
-  (is (= #{"eval" "shell"} (gates/tool-vocab :verification)))
+  (is (= #{"eval" "shell" "run_check"} (gates/tool-vocab :verification)))
   (is (contains? (gates/tool-vocab :shipping) "write_file"))
   ;; EVERY tool that writes a file must be in both, or a branch using it
   ;; scores as having shipped nothing and gets nudged for work it is doing.
@@ -813,6 +813,28 @@
             "a zero-sized page does not claim that more rows exist")))))
 
 ;; --- the ship gate's test rung: done is not terminal until tests pass --------
+
+(deftest paired-samples-that-passed-are-the-test-a-program-needs
+  ;; 13 of the hard corpus's refusals: a Python program whose samples passed
+  ;; was told "You added no test", and the branch wrote Clojure cross-checks.
+  (let [root (str "/tmp/samizdat-pinned-" (System/nanoTime))
+        file (str root "/solution.py")
+        _ (.mkdirs (java.io.File. root))
+        _ (spit file "print(1)\n")
+        green (verify/green-check root "solution.py" 3)
+        ship (fn [b]
+               (tools/run-tool {:branch (merge (state/new-branch {:id "B1" :problem "write solution.py"}) b)
+                                :tool-name "done" :turn 4 :root root :git-baseline "HEAD"
+                                :config {:run {:verify-focused? true :require-test? true}}
+                                :args {:answer "wrote solution.py"}}))]
+    (with-redefs [gitdiff/changed-files (fn [_ _] ["solution.py"])]
+      (testing "no pass on record: refused, as before"
+        (is (str/includes? (:result (ship nil)) "You added no test")))
+      (testing "a pass on this program: shipped"
+        (is (not (str/includes? (:result (ship {:green-check green})) "You added no test"))))
+      (testing "the program changed since: refused"
+        (spit file "print(2)\n")
+        (is (str/includes? (:result (ship {:green-check green})) "You added no test"))))))
 
 (deftest done-is-a-hard-gate-on-a-green-test-run
   (let [answer "gated the remember tool so a done with an empty diff is refused"
@@ -2933,7 +2955,7 @@
                                               {:parsed {:name "read_file" :args {:path "x"}}
                                                :result {:result "x" :category :neutral}})]
                      (:content (peek (:messages b')))))
-            none (samizdat.prompt/prompt "task-none")]
+            none (samizdat.prompt/render "task-none" {})]
         (is (not (str/includes? (step :answerer) none)) "an answerer is not sent for a tool it lacks")
         (is (str/includes? (step :implementor) none) "an implementor still is"))
       (finally (db/close c)))))
@@ -2987,7 +3009,7 @@
             "the injected harness line is inside the frame")
         (is (str/includes? (subs m 0 close) "<\\/tool_result>")
             "the forged close is escaped, so it could not end the frame early")
-        (is (str/includes? (subs m close) (samizdat.prompt/prompt "task-none"))
+        (is (str/includes? (subs m close) (samizdat.prompt/render "task-none" {}))
             "the harness's own block follows the frame"))
       (testing "the done path frames too"
         (let [b (state/new-branch {:id "B1" :problem "p"})
@@ -2998,3 +3020,16 @@
           (is (= "<tool_result tool=\"done\">\nshipped\n</tool_result>"
                  (:content (peek (:messages b')))))))
       (finally (db/close c)))))
+
+(deftest lines-written-is-the-held-tasks
+  ;; karamazov-0wvc.8: counted from the run's start, a task split as over-budget
+  ;; asks still read as over it, so the split could never clear the gate.
+  (let [b (assoc (branch-with) :task {:id "T1"})
+        b1 (state/note-lines b 600)]
+    (is (= 600 (:lines-written b1)))
+    (is (= 650 (:lines-written (state/note-lines b1 650))) "same task, it accumulates")
+    (let [b2 (state/note-lines (assoc b1 :task {:id "T2"}) 640)]
+      (is (= 40 (:lines-written b2)) "a new task starts from what was already there")
+      (is (= 90 (:lines-written (state/note-lines b2 690)))))
+    (is (nil? (:lines-written (state/note-lines b nil))) "git could not answer")))
+

@@ -196,6 +196,12 @@
     (let [t (get (:effort (policy)) kind)]
       (or (get t size) (get t :any)))))
 
+(defn chosen-workflow
+  "The workflow a run takes from selection: the size table's row, then the
+  chooser's answer, then the policy's :fallback."
+  [triage effort]
+  (or (:workflow effort) (:workflow triage) (:fallback (policy))))
+
 (defn triage!
   "Ask what `problem` is: {:kind :size :workflow}, or nil to leave every
   decision alone.

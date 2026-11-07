@@ -189,3 +189,27 @@
         (is (= 1 (count (:outputs facts))) "blank assistant output is not a selector value")
         (is (= 1024 (count (first (:outputs facts))))
             "the larger capture limit must not bypass the selector value limit")))))
+
+(deftest what-a-turn-observed-is-bounded-not-refused
+  ;; karamazov-0wvc.10: a model put a whole C file in write_file's path, the
+  ;; selector check threw on it, and the run ended at the arbiter. The limits
+  ;; bind rules someone authored; what a call happened to carry is only data.
+  (let [huge (apply str (repeat 2000 "x"))]
+    (with-redefs [gates/threshold (fn [k]
+                                    (if (= :instructions k)
+                                      {:path-args ["path" "paths"]}
+                                      policy))
+                  userspace/body (fn [_ _] nil)]
+      (let [run (fn [args result]
+                  (:facts (context-rules/boundary
+                           {:root "/work"} {:role :implementor :messages []}
+                           {:name "write_file" :args args} result 1)))]
+        (testing "an oversized value"
+          (is (every? #(<= (count %) 1024) (:paths (run {:path huge} {:category :failure})))))
+        (testing "an oversized diagnostic"
+          (is (every? #(<= (count %) 1024)
+                      (:diagnostics (run {:path "a.c"} {:category :failure :error huge})))))
+        (testing "more values than a selector may hold"
+          (is (<= (count (:paths (run {:paths (mapv #(str "f" %) (range 20))} {:category :success})))
+                  (:max-selector-values policy))))))))
+

@@ -98,3 +98,34 @@
         (is (true? (:progress? r)))
         (is (seq (db/fetch c ["SELECT id FROM interventions"])))))
     (db/close c)))
+
+(deftest the-denial-has-to-bind-to-the-tool
+  ;; karamazov-i692. 132 of 290 supervisor steers across the eval journals were
+  ;; refused by this check, nearly all because the tool's name is an English
+  ;; word sharing a sentence with a "not". Each string below is one it refused.
+  (let [record (turns ["task" "neutral"] ["done" "neutral"] ["check" "neutral"]
+                      ["plan" "neutral"] ["shell" "neutral"] ["eval" "neutral"])
+        tools ["task" "done" "check" "plan" "shell" "eval"]]
+    (testing "a steer is not a claim that a tool it mentions is broken"
+      (doseq [steer ["write it as 'the modulus 1e9+7 required by the task and present in solution.py', not as an unattributed figure."
+                     "Do not call done again before that test has actually run green."
+                     "No new tasks, no re-verification, no writes — the solution is done."
+                     "Break the stall with ONE concrete call now, not a plan."
+                     "Do not create a new task, do not re-read solution.py, do not re-run the brute-force check."
+                     "solution.py is confirmed correct and does not need further checking."
+                     "shell, not eval, not write_file"
+                     "Your t28 `task close` failed because `id` was missing."
+                     "More brute-force comparisons in `eval` (t24, t25) cannot satisfy that gate."
+                     "Your two `done` refusals were about the CONTENT of your answer, not the work."]]
+        (is (empty? (claims/contradicted-by-record steer record tools)) steer)))
+    (testing "the harm it exists for is still refused"
+      (doseq [[claim tool] [["shell does not work in this sandbox" "shell"]
+                            ["`eval` doesn't work here, stop using it" "eval"]
+                            ["the eval tool cannot load any flight namespace" "eval"]
+                            ["Requires through eval do not work in this project" "eval"]
+                            ["the shell is broken" "shell"]
+                            ["task is unavailable" "task"]]]
+        (is (= [tool] (mapv :tool (claims/contradicted-by-record claim record tools))) claim)))
+    (testing "a name inside a longer word is not the tool"
+      (is (empty? (claims/contradicted-by-record "subtask does not work" record tools)))
+      (is (empty? (claims/contradicted-by-record "the shell-script does not work" record tools))))))

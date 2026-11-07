@@ -1,0 +1,1 @@
+Write a brute force for this problem in Python, using only the standard library: the most direct program that is certainly correct on small inputs, however slow. It reads stdin and prints only the answer, in the problem's exact format. Do not try to be efficient. Reply with one fenced python block and nothing else.

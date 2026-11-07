@@ -36,6 +36,7 @@
             [samizdat.config :as config]
             [samizdat.lexicon :as lexicon]
             [samizdat.llm.adapter :as adapter]
+            [samizdat.llm.native-history :as native-history]
             [samizdat.util :as util]))
 (def ^:private usage-cap-re
   "Memoized against the lexicon's generation, so an added gateway phrasing
@@ -150,9 +151,13 @@
   (if (= "none" effort)
     (case provider-id
       :deepseek {:thinking {:type "disabled"}}
-      :glm      {:reasoning_effort "low"}
+      :glm      {:thinking {:type "enabled"} :reasoning_effort "low"}
       {:reasoning_effort "none"})
-    {:reasoning_effort effort}))
+    (case provider-id
+      ;; As ZCode sends it. GLM-5.3 has low, high and max, and no medium.
+      :glm {:thinking {:type "enabled"}
+            :reasoning_effort (if (= "medium" effort) "high" effort)}
+      {:reasoning_effort effort})))
 
 (defrecord OpenAIAdapter [provider-id label reasoning-key max-tokens-key]
   adapter/Adapter
@@ -174,7 +179,7 @@
       {"Authorization" (str "Bearer " k)}
       {}))
 
-  (chat-body [this config {:keys [messages max-tokens temperature prefill force-tool
+  (chat-body [this config {:keys [top-p top-k messages max-tokens temperature prefill force-tool
                                   cache-key reasoning-effort grammar reasoning-budget tools]}]
    ;; The gate is the protocol method on THIS adapter (provenance R3-14), so the
    ;; answer a caller can query and the answer chat-body acts on are one
@@ -209,7 +214,13 @@
          ;; renders tools into the prefix.
          native (when (and (seq tools) (config/supports? config :native-tools)
                            (not use-prefill?) (not grammar*))
-                  (mapv (fn [t] {:type "function" :function t}) tools))]
+                  (mapv (fn [t] {:type "function" :function t}) tools))
+         ;; Given native tools, history goes the same way: real tool messages, as
+         ;; the vendors' own harnesses send it. Never beside a prefill, which
+         ;; refuses native calls, so such a turn stays text.
+         messages (if (and native (config/supports? config :native-history))
+                    (native-history/project messages)
+                    messages)]
     (cond-> {:model (:model config)
              :messages (if use-prefill?
                          ;; `:prefix true` is what makes the provider CONTINUE
@@ -222,6 +233,8 @@
                          messages)}
       max-tokens (assoc max-tokens-key max-tokens)
       temperature (assoc :temperature temperature)
+      top-p (assoc :top_p top-p)
+      top-k (assoc :top_k top-k)
       ;; Only when the run stated something. Whether a model thinks was
       ;; previously a property of which one happened to be configured rather
       ;; than something a run stated; this makes it explicit and recorded. The

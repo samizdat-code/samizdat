@@ -77,6 +77,29 @@
   [path text whole?]
   (source/vet text {:whole? whole? :clojure? (clojure-file? path)}))
 
+(defn- vet-edit
+  "Vet an edit's result. {:refuse note} when the edit is what breaks the file, and
+  {:still-broken note} when the file did not load before it either: refusing that would
+  lock the file, since no one edit can clear two errors, and leave only a whole rewrite."
+  [path before after]
+  (let [{:keys [problem note]} (vet-source path after false)]
+    (when problem
+      (if (:problem (vet-source path before false))
+        {:still-broken note}
+        {:refuse note}))))
+
+(defn- keep-what-loads?
+  "Whether a whole-file write that will not load should be refused to keep the file as it
+  stands: only past the share of a run's time limit where there may be no next turn to
+  fix it, and only when the file loads now."
+  [{:keys [config started-ms]} path abs]
+  (let [used (gates/time-used (get-in config [:run :time-limit-seconds]) started-ms
+                              (System/currentTimeMillis))]
+    (boolean (and used
+                  (>= used (:wind-down (gates/threshold :time-budget)))
+                  (fs/exists? abs)
+                  (not (:problem (vet-source path (slurp abs) false)))))))
+
 (defn- exam-note!
   "Record that a write took assertions out of the exam, and say so in the tool
   result — or nil when it did not, or when the path is not part of the exam.
@@ -133,10 +156,14 @@
   model-supplied path into a filesystem read must come through here, and the
   lsp tool rolling its own bare io/file was the escape (karamazov-blt.28)."
   [root path]
-  (let [root* (str (fs/canonicalize root))
-        target (str (fs/canonicalize (fs/path root path)))]
-    (when (or (= target root*) (str/starts-with? target (str root* "/")))
-      target)))
+  ;; A path the filesystem cannot represent (a component over its name limit)
+  ;; throws from canonicalize. It names nothing under the root, so nil, the same
+  ;; as an escape (karamazov-0wvc.6).
+  (when-let [target (try (str (fs/canonicalize (fs/path root path)))
+                         (catch Throwable _ nil))]
+    (let [root* (str (fs/canonicalize root))]
+      (when (or (= target root*) (str/starts-with? target (str root* "/")))
+        target))))
 
 (defn- absolute? [p] (.isAbsolute (io/file (str p))))
 
@@ -493,10 +520,10 @@
               (miss branch (msg (assoc err :anchor-error true
                                        :path path
                                        (name (:reason err)) true)))
-              (let [{:keys [problem note]} (vet-source path result false)]
+              (let [{:keys [refuse still-broken]} (vet-edit path content result)]
                 (cond
-                  problem
-                  (miss branch (msg {:refused true :path path :syntax note}))
+                  refuse
+                  (miss branch (msg {:refused true :path path :syntax refuse}))
                   ;; Asked only once the patch is known to apply
                   ;; (karamazov-0e2c.22, after xi's doomed-edit).
                   (workflow-refused? ctx root abs)
@@ -505,7 +532,8 @@
                   (let [exam-msg (exam-note! ctx path (slurp abs) result)]
                     (spit abs result)
                     {:result (str (msg {:patched true :path path :edits (count edits)
-                                        :plural (when (> (count edits) 1) "s")})
+                                        :plural (when (> (count edits) 1) "s")
+                                        :still-broken still-broken})
                                   exam-msg)
                      :category :success :progress? true :branch branch}))))))
         (miss branch (msg {:outside-root true :path path :verb "patched"}))))))
@@ -798,8 +826,8 @@
                                      (str (subs s 0 start) new-text (subs s end)))
                                    content
                                    (sort-by first > (if replace-all? ranges [(first ranges)])))
-                    {:keys [problem note]} (vet-source path edited false)]
-                (if problem
+                    {:keys [refuse still-broken]} (vet-edit path content edited)]
+                (if refuse
                   ;; REFUSED, and the file is left exactly as it was
                   ;; (karamazov-2d3). It used to write the broken text, report
                   ;; :success with :progress? true — so a branch earned credit
@@ -810,13 +838,14 @@
                   ;; re-parents code); the answer is to refuse, not to narrate.
                   ;; vis: "a syntax-breaking batch is refused whole and the
                   ;; file is left untouched."
-                  (miss branch (msg {:refused true :path path :syntax note}))
+                  (miss branch (msg {:refused true :path path :syntax refuse}))
                   (let [exam-msg (exam-note! ctx path (slurp abs) edited)]
                     (spit abs edited)
                     {:result (str (let [n (if replace-all? (count ranges) 1)]
                                     (msg {:edited true :path path :replacements n
                                           :plural (when (> n 1) "s")
-                                          :fallback fallback}))
+                                          :fallback fallback
+                                          :still-broken still-broken}))
                                   exam-msg)
                      :category :success :progress? true :branch branch
                      :fallback fallback}))))))
@@ -906,6 +935,9 @@
               ;; the model replacing a file it has decided is wrong, and
               ;; refusing it would leave no way to do that.
               content* (or code content)]
+          (if (and problem (keep-what-loads? ctx path abs))
+            (miss branch (msg {:kept-loading true :path path :syntax note}))
+            (do
           (when-let [parent (fs/parent abs)]
             (fs/create-dirs parent))
           ;; The file as it stands, before this write replaces it — "" when
@@ -925,5 +957,5 @@
                                 :syntax note})
                           exam-msg)
              :category :success :progress? true :branch branch
-             :repaired? (boolean repaired)})))
+             :repaired? (boolean repaired)})))))
         (miss branch (msg {:outside-root true :path path :verb "written"}))))))

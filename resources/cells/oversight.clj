@@ -87,6 +87,20 @@
     failed to carry a requirement or the ship gate let it through, and both
     are the harness's words failing. No floor; one is the signal.
 
+  - THE WORKFLOW ASKED. A cell raised a :workflow-signal: it knows it is stuck in
+    a way no counter here can see, and it may be waiting for the answer. No floor.
+
+  - THE RUN WENT SILENT. Nothing journalled for :oversight :silent-ms. A stage
+    that makes side calls ends no turns, so nothing else would wake this.
+
+  - A WORKER CANNOT LAND ITS ANSWER. `done` refused repeatedly, which is the
+    last step of the work failing, and nothing else here reads it as distress:
+    gates are met, files were written, nothing crashed (karamazov-i692).
+
+  - THE RUN IS NEARING ITS TURN CAP. Whether it deserves more turns, should
+    ship what it has or should stop is a decision, and `extend`, `finish` and
+    `stop` are how it is made. Once per cap.
+
   - something is ON OFFER to the project's workflow and this run has not
     shown it yet: a role or template a later release shipped, or a version
     the project stored before its workflow lived in files (karamazov-1a51.6).
@@ -105,10 +119,14 @@
   idle, no crash, cap far off, something DID ship, nothing refused. That is
   what the last trigger is for."
   [{:keys [unmet-gates idle-turns errors at-cap? nothing-shipped? refused
-           sent-back-green? offers]}
-   {:keys [unmet-floor idle-floor]}]
+           sent-back-green? offers workflow-signals silent? done-refused near-cap?]}
+   {:keys [unmet-floor idle-floor done-refused-floor]}]
   (boolean (or (>= (or unmet-gates 0) unmet-floor)
                (>= (or idle-turns 0) idle-floor)
+               (and done-refused-floor (>= (or done-refused 0) done-refused-floor))
+               near-cap?
+               (seq workflow-signals)
+               silent?
                (seq errors)
                (seq refused)
                at-cap?
@@ -162,15 +180,21 @@
     come from the journal in order, so the count is a position.
   - the round's flags (at the cap, nothing shipped, green work sent back):
     once per round, the round being how many :route notes there are.
+  - workflow signals: the entries past the ones already read, like errors.
+  - silence: the driver only reports it once per silence, so it is news when set.
+  - refused dones: the firings since, like unmet.
+  - the cap: once per cap, so an `extend` can be asked about again.
   - offers are already once per run."
   [{:keys [unmet idle idle-by-branch errors refused round at-cap? nothing-shipped?
-           sent-back-green? offers]}
+           sent-back-green? offers workflow-signals silent? done-refused near-cap-at]}
    prev {:keys [idle-floor]}]
   (let [new-round? (or (nil? prev) (not= round (:round prev)))
         ;; A note round-trips through JSON, so the branch ids come back as
         ;; keywords; compare them by name.
         p-by (into {} (map (fn [[k v]] [(name k) v])) (:idle-by-branch prev))]
     {:unmet-gates (- (or unmet 0) (if prev (or (:unmet prev) 0) 0))
+     :done-refused (- (or done-refused 0) (if prev (or (:done-refused prev) 0) 0))
+     :near-cap? (boolean (and near-cap-at (not= near-cap-at (:near-cap-at prev))))
      :idle-turns (if (seq idle-by-branch)
                    (reduce max 0 (map (fn [[b n]] (idle-news n (get p-by (name b)) idle-floor))
                                       idle-by-branch))
@@ -180,6 +204,8 @@
      :at-cap? (and at-cap? new-round?)
      :nothing-shipped? (and nothing-shipped? new-round?)
      :sent-back-green? (and sent-back-green? new-round?)
+     :workflow-signals (seq (drop (if prev (or (:workflow-signals prev) 0) 0) workflow-signals))
+     :silent? silent?
      :offers offers}))
 
 (defn sent-back-green?
@@ -253,7 +279,7 @@
    ;; Nothing. That is the docstring's claim made checkable: the stream reads
    ;; the journal, so it depends on nothing having been handed to it, and a
    ;; cell declaring no input is a cell no stalled stage can starve.
-   :input  [:map]
+   :input  [:map [:oversight/silent-for-ms {:optional true} :any]]
    ;; PER-TRANSITION, because the two edges leave with genuinely different
    ;; maps. The :quiet side is also the fallback's shape — a gather that threw
    ;; still routes, carrying only the decision not to look further — so
@@ -269,12 +295,17 @@
                       [:oversight/self-graded :any]
                       [:oversight/refused :any]
                       [:oversight/signals :any]
+                      [:oversight/workflow-signals :any]
+                      [:oversight/position :any]
+                      [:oversight/silent-for-ms :any]
                       [:oversight/worth-a-look? :boolean]]
              :quiet  [:map [:oversight/worth-a-look? :boolean]]}]}
   (fn [{:keys [conn run-id]} data]
     (safely :gather
      (fn []
        (let [turns (journal/turns conn run-id)
+             ;; What a workflow says about itself, which no counter can infer.
+             workflow-signals (vec (journal/notes conn run-id :workflow-signal))
              firings (journal/gate-firings conn run-id)
              unmet (count (filter #(= "unmet" (str (:outcome %))) firings))
              ;; Turns since anything was written. The stream's cheapest and
@@ -357,7 +388,15 @@
              ;; What a pass that spends a call records, so the next gather
              ;; can tell new evidence from evidence already read.
              signals {:unmet unmet :idle since :idle-by-branch by-branch
+                      :done-refused (count (filter #(= "done-blocked" (str (:gate %))) firings))
+                      ;; The run's cap, once a branch is close to it.
+                      :near-cap-at (let [cap (:max_turns (runs/get-run conn run-id))
+                                         most (reduce max 0 (vals (frequencies (map :branch_id watched))))]
+                                     (when (and cap (pos? cap)
+                                                (>= most (* cap (:near-cap-fraction (gates/threshold :oversight-limits)))))
+                                       cap))
                       :errors (count errors) :refused (count refusals)
+                      :workflow-signals (count workflow-signals)
                       :round (count (journal/notes conn run-id :route))}]
          (assoc data
                 :oversight/turns watched
@@ -377,6 +416,9 @@
                 :oversight/crashes crashes
                 :oversight/offers (vec offers)
                 :oversight/signals signals
+                :oversight/workflow-signals workflow-signals
+                :oversight/position (journal/last-note conn run-id :workflow-position)
+                :oversight/silent-for-ms (:oversight/silent-for-ms data)
                 :oversight/worth-a-look?
                 (worth-a-look? (since-last-look
                                 (assoc signals
@@ -384,11 +426,14 @@
                                        :at-cap? (at-cap? round)
                                        :nothing-shipped? (nothing-shipped? results)
                                        :sent-back-green? (sent-back-green? round)
+                                       :workflow-signals workflow-signals
+                                       :silent? (some? (:oversight/silent-for-ms data))
                                        :offers offers)
                                 (:signals (journal/last-note conn run-id :oversight))
                                 {:idle-floor idle-floor})
                                {:unmet-floor (gates/threshold :oversight-unmet-floor)
-                                :idle-floor idle-floor}))))
+                                :idle-floor idle-floor
+                                :done-refused-floor (:done-refused-floor (gates/threshold :oversight-limits))}))))
      (assoc data :oversight/worth-a-look? false))))
 
 ;; --- reason -----------------------------------------------------------------
@@ -418,7 +463,7 @@
   ;; a pass is not charged for how the one before it ended.
   (cond-> (-> b
               (dissoc :final-answer :verdict :done? :inactive-reason
-                      :consecutive-mechanics-failures :consecutive-provider-errors)
+                      :consecutive-mechanics-failures :consecutive-provider-errors :consecutive-rate-limits)
               (assoc :status :active :advisory? true))
     brief (update :messages (fnil conj []) {:role "user" :content brief})))
 
@@ -513,6 +558,7 @@
             ;; that silently reports 0/0 because nobody declared the key is
             ;; the bug this closes (karamazov-u5uy).
             [:oversight/results :any]
+            [:oversight/signals {:optional true} :any]
             [:oversight/self-graded {:optional true} :any]
             [:oversight/refused {:optional true} :any]
             [:oversight/round {:optional true} :any]
@@ -521,7 +567,10 @@
             [:oversight/carry {:optional true} :any]
             [:oversight/progress {:optional true} :any]
             [:oversight/statuses {:optional true} :any]
-            [:oversight/idle-by-branch {:optional true} :any]]
+            [:oversight/idle-by-branch {:optional true} :any]
+            [:oversight/workflow-signals {:optional true} :any]
+            [:oversight/position {:optional true} :any]
+            [:oversight/silent-for-ms {:optional true} :any]]
    ;; :oversight/branch only on the path that ran — the fallback records a
    ;; verdict and an explanation, and there is no branch to carry.
    :output [:map [:oversight/verdict :keyword] [:oversight/answer :any]
@@ -774,7 +823,22 @@
                              (visible-sections carry))
              prob (prompt/render "oversight-pass"
                                  (merge full (dissoc shown :instructions)
-                                        {:again (nil? (:instructions shown))}))
+                                        {:again (nil? (:instructions shown))
+                                         :position (:oversight/position data)
+                                         ;; Any refused done or nearby cap: how the
+                                         ;; run ends is put to the supervisor.
+                                         :ending (let [{:keys [done-refused near-cap-at]} (:oversight/signals data)]
+                                                   (when (or (pos? (or done-refused 0)) near-cap-at)
+                                                     {:done-refused (when (pos? (or done-refused 0)) done-refused)
+                                                      :near-cap-at near-cap-at}))
+                                         ;; Only what arrived since the last look.
+                                         :workflow-signals
+                                         (seq (drop (or (:workflow-signals
+                                                         (:signals (journal/last-note conn run-id :oversight)))
+                                                        0)
+                                                    (:oversight/workflow-signals data)))
+                                         :silent-minutes (some-> (:oversight/silent-for-ms data)
+                                                                 (quot 60000))}))
              brief-id (inc (reduce max 0 (keys (:brief-shown carry))))
              ;; ONE branch for the run, carried by the stream. Opened once;
              ;; re-opening an existing id is a no-op that returns the row.
@@ -814,7 +878,13 @@
                       ;; before the implementer's would (karamazov-rz7t.6).
                       w (assoc-in [:llm-config :context-window]
                                   (supervisor-window (get-in rc [:llm-config :context-window]) w))
-                      (and (pos? done) (:max-turns rc)) (update :max-turns + done)))
+                      ;; A pass keeps an allowance of its own, on top of the turns
+                      ;; this branch has already spent.
+                      (:pass-max-turns (gates/threshold :oversight))
+                      (assoc :max-turns (+ done (:pass-max-turns (gates/threshold :oversight))))
+                      (and (pos? done) (:max-turns rc)
+                           (nil? (:pass-max-turns (gates/threshold :oversight))))
+                      (update :max-turns + done)))
              out (myc/run-compiled (wf/compiled-manifest "supervisor")
                                    rctx
                                    {:branch b :turn (inc done)})]

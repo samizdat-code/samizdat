@@ -176,9 +176,13 @@
   (prompt/render "checklist-answer" {:rows (rows items entries)}))
 
 (defn refusal
-  "The ship refusal naming each unaccounted item."
-  [missing]
-  (prompt/render "checklist-missing" {:missing missing}))
+  "The ship refusal naming each unaccounted item, and with `items`, every id
+  the next call has to carry: entries do not carry over between `done` calls."
+  ([missing] (refusal missing nil))
+  ([missing items]
+   (prompt/render "checklist-missing"
+                  {:missing missing
+                   :all-ids (str/join ", " (map :id items))})))
 
 (defn record
   "The checklist as a journal value: items, and entries as a vector (a

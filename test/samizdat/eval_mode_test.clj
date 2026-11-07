@@ -196,5 +196,9 @@
         (is (set? s))
         (is (not (contains? s "eval"))
             "surface ignored the operator's .samizdat/config.edn"))
+      (testing "the core surface loses the REPL with it, so the shipped role table
+                still validates and a run can start (karamazov-0wvc.5)"
+        (is (not (contains? (roles/core-tools :implementor) "eval")))
+        (is (empty? (remove (roles/surface :implementor) (roles/core-tools :implementor)))))
       (finally
         (userspace/bind-root! prior)))))

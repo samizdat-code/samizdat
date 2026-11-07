@@ -16,6 +16,8 @@
             [ebb.core :as ebb]
             [mycelium.cell :as cell]
             [samizdat.agent.beam :as beam]
+            [samizdat.agent.gates]
+            [samizdat.agent.instructions]
             [samizdat.agent.select :as select]
             [samizdat.lexicon :as lexicon]
             [samizdat.agent.state :as state]
@@ -729,6 +731,27 @@
         (samizdat.agent.live/forget-run! rid))
       (finally (db/close c)))))
 
+(deftest a-width-the-caller-asked-for-is-not-widened
+  ;; Width 1 is how a local model is run: two generations at once drop it to a
+  ;; third of its speed each. The Qwen loop runs were asked for 1, escalated to
+  ;; 3, and decoded at 6.6 tok/s.
+  (let [c (db/open! ":memory:")]
+    (try
+      (let [rid (runs/start-run! c {:problem "p"})
+            p (lexicon/policy :escalation)
+            escalate (:handler (cell/get-cell! :beam/escalate))
+            b1 (assoc (samizdat.agent.state/new-branch {:id "B1" :problem "p"}) :status :active)
+            data {:culled [b1] :all-now [b1] :turn 12}]
+        (runs/open-branch! c rid {:branch-id "B1"})
+        (dotimes [i (:after-stalls p)]
+          (journal/record-gate! c rid {:branch-id "B1" :turn i :gate :progress-stalled
+                                       :prediction "x"}))
+        (is (= data (escalate {:conn c :run-id rid :beam-width 1 :width-asked? true} data)))
+        (is (:escalated? (escalate {:conn c :run-id rid :beam-width 1} data))
+            "a width triage chose can still grow")
+        (samizdat.agent.live/forget-run! rid))
+      (finally (db/close c)))))
+
 (deftest escalation-opens-its-branches-on-a-fiber-whose-store-calls-wait
   ;; Run ab935047 died at :beam/spawn, right after escalating, on jolt
   ;; 0.8.12: spawn-children! opens the children in a two-collection mapv, and
@@ -794,4 +817,59 @@
       (is (not= "active" (:status (runs/get-branch c rid "SUP"))))
       (is (= "active" (:status (runs/get-branch c rid "B1")))
           "a working branch is the driver's to close, with its own reason")
+      (finally (db/close c)))))
+
+;; --- a turn that throws costs the turn ---------------------------------------
+
+(defn- loop-run-calling
+  "A real `loop` run on a scripted model that calls `tool-args` write_file until
+  told otherwise, then gives up. Returns the run result, the model's call count
+  and what the last call was sent."
+  [conn root path & {:keys [max-calls] :or {max-calls 2}}]
+  (let [calls (atom 0)
+        last-sent (atom nil)
+        r (with-redefs [llm/chat
+                        (fn [_ _ messages & _]
+                          (reset! last-sent messages)
+                          (if (<= (swap! calls inc) (dec max-calls))
+                            {:content (str "```tool-call\n{\"name\":\"write_file\",\"args\":{\"path\":\"" path
+                                           "\",\"content\":\"x\"}}\n```")
+                             :finish-reason "stop"}
+                            {:content "```tool-call\n{\"name\":\"give_up\",\"args\":{\"reason\":\"enough\"}}\n```"
+                             :finish-reason "stop"}))]
+            (beam/run! {:conn conn
+                        :config {:run {:loop "loop" :root root :beam-width 1}}
+                        :root root
+                        :llm-adapter :a :llm-config {:max-tokens 16384}
+                        :problem "Write the file." :max-turns 8}))]
+    {:r r :calls @calls :last-sent @last-sent}))
+
+(deftest an-overlong-path-from-the-model-does-not-end-the-run
+  ;; karamazov-0wvc.6: canonicalize throws on a path with an oversized component.
+  ;; The instruction-file walk does that after the tool has run, outside its
+  ;; guard, and two Terminal-Bench runs ended there with "File name too long".
+  (let [c (db/open! ":memory:")
+        root (str "/tmp/samizdat-long-path-" (System/nanoTime))
+        long-part (apply str (repeat 400 "a"))]
+    (.mkdirs (java.io.File. root))
+    (try
+      (let [{:keys [r calls]} (loop-run-calling c root (str root "/" long-part "/x.c"))]
+        (is (empty? (journal/notes c (:run-id r) :stage-error)))
+        (is (<= 2 calls) "the model got a next turn"))
+      (finally (db/close c)))))
+
+(deftest a-stage-error-costs-the-turn-then-the-branch
+  (let [c (db/open! ":memory:")
+        root (str "/tmp/samizdat-stage-error-" (System/nanoTime))]
+    (.mkdirs (java.io.File. root))
+    (try
+      (with-redefs [samizdat.agent.instructions/pending
+                    (fn [& _] (throw (ex-info "the-cause" {})))]
+        (let [limit (:limit (samizdat.agent.gates/threshold :stage-errors))
+              {:keys [r calls last-sent]} (loop-run-calling c root "x.c" :max-calls 20)
+              errs (journal/notes c (:run-id r) :stage-error)]
+          (is (= limit (count errs)) (pr-str errs))
+          (is (= limit calls) "each error cost one turn, and the branch outlasted all but the last")
+          (is (str/includes? (str/join "\n" (map (comp str :content) last-sent)) "the-cause")
+              "the branch is told what broke")))
       (finally (db/close c)))))

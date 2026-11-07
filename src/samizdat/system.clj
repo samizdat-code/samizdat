@@ -269,6 +269,7 @@
          ;; per call through compiled-manifest, so a manifest or cell edit
          ;; takes effect on the very next malformed call; fence's repair-json
          ;; fails open to its built-in chain if the manifest is broken.
+         _ (fence/install-orphan-tools! (gates/threshold :orphan-call))
          _ (fence/install-repair!
             (fn [body]
               (:body (myc/run-compiled (manifests/compiled-manifest "repair")

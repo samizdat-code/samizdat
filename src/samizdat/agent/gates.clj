@@ -239,6 +239,9 @@
      ;; it is being steered because something broke — what broke, in the
      ;; failure's own words, with the turn number that makes it fetchable.
      :goal (state/stated-goal branch)
+     ;; What the whole run was asked for. The goal above narrows to the subtask
+     ;; held, and a run ends on the request, not the subtask.
+     :problem (:problem branch)
      ;; WHETHER THIS BRANCH IS PLANNING OR BUILDING, so a template can say
      ;; "declare it with plan" to the one and "land it" to the other. The
      ;; turn-budget notice told every design branch to land what it could
@@ -327,8 +330,8 @@
   the same {{...}} convention and the same engine (samizdat.prompt) as
   every other prompt seam."
   [{:keys [message-file message-suffix]}]
-  (fn [{:keys [branch max-turns]}]
-    (let [ctx (message-context branch max-turns)]
+  (fn [{:keys [branch max-turns time-left-seconds]}]
+    (let [ctx (assoc (message-context branch max-turns) :time-left-seconds time-left-seconds)]
       (str (some-> message-file sp/prompt (sp/render-str ctx))
            (some-> message-suffix (sp/render-str ctx))))))
 
@@ -364,6 +367,24 @@
   "The compiled gate `k`, or nil."
   [k]
   (get (by-name*) k))
+
+(defn time-used
+  "The share of a run's `limit-seconds` gone at `now-ms`, or nil when it has no
+  limit or no start."
+  [limit-seconds started-ms now-ms]
+  (when (and limit-seconds started-ms)
+    (/ (double (- now-ms started-ms)) (* 1000.0 limit-seconds))))
+
+(defn time-left-seconds
+  "Whole seconds of `limit-seconds` left at `now-ms`, never below zero."
+  [limit-seconds started-ms now-ms]
+  (when (and limit-seconds started-ms)
+    (max 0 (long (- limit-seconds (/ (- now-ms started-ms) 1000))))))
+
+(defn run-time-left
+  "Whole seconds a run has left by the clock, or nil when it has no limit."
+  [{:keys [config started-ms]}]
+  (time-left-seconds (get-in config [:run :time-limit-seconds]) started-ms (System/currentTimeMillis)))
 
 (defn crossed-fractions
   "Which turn-budget notice thresholds this branch has now passed. The loop

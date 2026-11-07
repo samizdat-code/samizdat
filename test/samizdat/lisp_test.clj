@@ -53,6 +53,29 @@
       (is (= :repaired (:status r)))
       (is (some? (read-string (str "(do " (:content r) ")")))))))
 
+(deftest a-form-left-open-mid-file-is-not-closed-at-the-end
+  ;; yj on ProgramBench: one missing paren on line 113, and a closer appended at the end
+  ;; of the file put -main and everything else inside that function. It read, it loaded
+  ;; without a word, and the program had no entry point.
+  (let [s "(defn a [s]\n  (inc s)\n\n(defn b [] 2)\n\n(defn -main [] (b))\n"
+        r (lisp/balance s)]
+    (testing "indentation says where the closer goes"
+      (is (= :repaired (:status r)))
+      (is (= :auto-indented (:reason r)))
+      (is (= "(defn a [s]\n  (inc s))\n\n(defn b [] 2)\n\n(defn -main [] (b))\n" (:content r)))))
+  (testing "where indentation cannot help, it is refused and both lines are named"
+    (with-redefs [lisp/indent-repair (constantly nil)]
+      (let [r (lisp/balance "(defn a [s]\n  (inc s)\n\n(defn b [] 2)\n")]
+        (is (= :unbalanced (:status r)))
+        (is (= :unclosed (:reason r)))
+        (is (= 1 (:line r)))
+        (is (= 4 (:inside-line r))))))
+  (testing "a real truncation is still closed"
+    (is (= :auto-closed (:reason (lisp/balance "(defn a [] 1)\n\n(defn f [x]\n  (let [y (* x 2)]")))))
+  (testing "something at the margin of a string or a comment is not a form"
+    (is (= :auto-closed (:reason (lisp/balance "(defn f []\n  \"text\n(not code)\"\n  ;; note\n  (g"))))
+    (is (= :auto-closed (:reason (lisp/balance "(def x\n;(old)\n  (g"))))))
+
 (deftest trims-a-trailing-overclose
   (testing "one extra trailing closer is removed"
     (let [r (lisp/balance "(defn f [] 1))")]

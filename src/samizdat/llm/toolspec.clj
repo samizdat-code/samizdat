@@ -75,6 +75,16 @@
        (map #(str/replace % #"\?$" ""))
        (filter #(re-matches #"[A-Za-z_][A-Za-z0-9_]*" %))))
 
+(defn- action-args
+  "The arguments on the action lines under a signature ending in `...`, such as
+  `create {title, body?}`. Those are what `...` stands for, and a schema without them
+  gets calls without them."
+  [lines]
+  (->> lines
+       (take-while #(re-find #"^\s+\S" %))
+       (keep #(second (re-find #"^\s+[a-z_-]+\s+\{([^}]*)\}" %)))
+       (mapcat arg-names)))
+
 (defn signatures
   "Every tool signature documented in `text`, first definition of each name
   kept, as {:name :description :parameters}. `limit` caps a description's
@@ -88,10 +98,12 @@
                   (when-let [[_ nm args] (re-matches signature-re line)]
                     {:name nm
                      :description (description (drop (inc i) lines) limit)
-                     :parameters {:type "object"
-                                  :properties (into {}
-                                                    (map (fn [a] [(keyword a) {}]))
-                                                    (arg-names args))}})))
+                     :parameters (let [more? (str/includes? (str args) "...")
+                                       body (drop (inc i) lines)
+                                       names (concat (arg-names args) (when more? (action-args body)))]
+                                   (cond-> {:type "object"
+                                            :properties (into {} (map (fn [a] [(keyword a) {}])) names)}
+                                     more? (assoc :additionalProperties true)))})))
           (reduce (fn [acc s] (if (some #(= (:name s) (:name %)) acc) acc (conj acc s))) [])))))
 
 (defn for-messages

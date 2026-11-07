@@ -435,6 +435,7 @@
                     (applied! (assoc acc :budget (min n 200)))
                     (rejected! {:budget-no-turns true}))
          "stop"   (applied! (assoc acc :stop true :stop-reason (interventions/text-of d)))
+         "retask" (rejected! {:retask-elsewhere true})
          acc)))
    {:switch nil :budget nil :stop nil :stop-reason nil :applied []}
    (filter #(contains? interventions/workflow-kinds (:kind %))

@@ -1,0 +1,1 @@
+[SAMPLE TESTS: PASSED all {{total}} public samples -- the solution looks correct.] 

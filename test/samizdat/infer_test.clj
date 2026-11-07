@@ -1168,3 +1168,51 @@
               (:advertised-tools child)))
        (is (= ["grep" "write_file"] (mapv :name (:advertised-tool-docs child))))
        (is (not (contains? (:advertised-tools child) "shell")))))))
+
+(deftest admission-is-against-the-window-the-provider-has
+  ;; karamazov-0wvc.9: :context-window can be a compaction budget under the real
+  ;; window. Priced against it, doubling a large output budget on a retry was
+  ;; refused without a call, throwing away the truncated attempt.
+  (let [tape {:id "t" :messages [{:role "system" :content "s"} {:role "user" :content "p"}] :turns []}
+        config {:context-window 128000 :max-tokens 65536}]
+    (testing "a retry over the budget but inside the provider's window goes out"
+      (is (not (false? (:ok (infer/prepare {:llm-adapter ::a
+                                            :llm-config (assoc config :request-window 1000000)}
+                                           tape {:attempt 2 :fit? true}))))))
+    (testing "with no separate figure the window still bounds a request"
+      (is (false? (:ok (infer/prepare {:llm-adapter ::a :llm-config config}
+                                      tape {:attempt 2 :fit? true})))))))
+
+(deftest a-rate-limit-is-waited-out-not-counted-as-an-outage
+  ;; GLM limited the account for a few minutes (429, code 1302), and five failed calls
+  ;; in a row ended team-solve's yj with 28 of its 30 minutes left. loop recovered.
+  (let [b (state/new-branch {:id "B" :problem "p"})
+        slept (atom [])
+        step (fn [branch reason]
+               (with-redefs [journal/record-turn! (fn [& _] nil)
+                             samizdat.cancel/sleep! (fn [ms] (swap! slept conj ms))]
+                 (aloop/provider-error-step {} branch 1 "429" reason)))]
+    (testing "it does not count towards the limit for failures"
+      (let [b' (step b :rate-limited)]
+        (is (nil? (:consecutive-provider-errors b')))
+        (is (= 1 (:consecutive-rate-limits b')))
+        (is (= (:messages b) (:messages b')) "and nothing is added to the model's context")
+        (is (= [(:pause-ms (gates/threshold :rate-limit))] @slept) "and it waits")))
+    (testing "a latch is the same thing"
+      (is (= 1 (:consecutive-rate-limits (step b :rate-limit-latch)))))
+    (testing "anything else still counts, and does not wait"
+      (reset! slept [])
+      (is (= 1 (:consecutive-provider-errors (step b :call-failed))))
+      (is (empty? @slept)))))
+
+(deftest a-rate-limit-that-never-lifts-still-ends-the-branch
+  (cells/load-cells!)
+  (let [route (:handler (cell/get-cell! :loop/route))
+        limit (:limit (gates/threshold :rate-limit))
+        b (assoc (state/new-branch {:id "B" :problem "p"}) :consecutive-rate-limits limit)]
+    (is (> limit (gates/threshold :provider-error-limit)))
+    (let [d (route {:max-turns 1000} {:branch b :turn 3})]
+      (is (= :abandoned (:verdict d)))
+      (is (re-find #"provider failed" (str (get-in d [:branch :inactive-reason])))))
+    (is (= :continue (:verdict (route {:max-turns 1000}
+                                      {:branch (update b :consecutive-rate-limits dec) :turn 3}))))))

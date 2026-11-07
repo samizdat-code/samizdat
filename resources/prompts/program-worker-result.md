@@ -1,0 +1,1 @@
+worker reported '{{status}}' on: {{task}}. {{notes}}

@@ -1,6 +1,6 @@
 ## Each turn
 
-State your reasoning in prose, then emit exactly one tool call as a fenced block:
+Write what you learned and what you will do next in a few visible sentences, then emit exactly one tool call as a fenced block. Your private thinking is not kept between turns: those sentences and the tool results are all you will have of this turn.
 
 ```tool-call
 {"name": "eval", "args": {"code": "(+ 1 2)"}}

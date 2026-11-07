@@ -84,6 +84,13 @@
     (let [base (or (some-> (git root "stash" "create") str/trim not-empty) "HEAD")]
       (or (whole-tree-commit root base) base))))
 
+(defn- generated?
+  "A path no run wrote: the harness's own state, a tool cache, build output
+  (lexicon :generated-path-regex). An image's own .git carries no ignore rule
+  for any of them."
+  [path]
+  (boolean (re-find (re-pattern (lexicon/budget :generated-path-regex)) (str path))))
+
 (defn- untracked-split
   "The untracked paths, split by what `baseline` holds of them: :stale — in
   the baseline with the same content, so not the run's; :created — not in
@@ -99,7 +106,7 @@
                        (lines (apply git root "ls-tree" "-r" baseline "--" untracked)))
             now (zipmap untracked (lines (apply git root "hash-object" "--" untracked)))]
         {:stale (set (filter #(and (held %) (= (held %) (now %))) untracked))
-         :created (vec (remove held untracked))}))))
+         :created (vec (remove #(or (held %) (generated? %)) untracked))}))))
 
 (defn- porcelain-counts
   "Split `git status --porcelain` into git's own three kinds.
@@ -151,6 +158,45 @@
   "Whether `baseline` can be passed on as a revision."
   [baseline]
   (and (some? baseline) (not (str/starts-with? (str baseline) "-"))))
+
+(def ^:private project-state
+  "The harness's own directory: the live database and the project's workflow.
+  Never part of the work, and overwriting it would corrupt an open database."
+  ".samizdat")
+
+(defn work-tree-id
+  "A git tree of the project's work as it stands, untracked files included,
+  .gitignore respected, the harness's own directory left out. Built in a scratch
+  index so nothing is touched. nil when git or the repo is unavailable."
+  [root]
+  (when (and root (proc/available? "git"))
+    (let [idx (java.io.File/createTempFile "samizdat-work" ".index")
+          env (assoc (secrets/scrubbed-process-env) "GIT_INDEX_FILE" (.getPath idx))]
+      (try
+        (.delete idx)
+        (when (git* env root ["add" "-A" "--" "." (str ":(exclude)" project-state)])
+          (some-> (git* env root ["write-tree"]) str/trim not-empty))
+        (finally (.delete idx))))))
+
+(defn restore-work-tree!
+  "Put the work back as `tree` holds it: its files rewritten, and files created
+  since removed. The real index and the harness's own directory are untouched.
+  True when it did. A tree id comes from `work-tree-id`, so one that looks like
+  an option is refused."
+  [root tree]
+  (when (and root (rev? tree) (proc/available? "git"))
+    (let [idx (java.io.File/createTempFile "samizdat-restore" ".index")
+          env (assoc (secrets/scrubbed-process-env) "GIT_INDEX_FILE" (.getPath idx))]
+      (try
+        (.delete idx)
+        (when (and (git* env root ["read-tree" tree])
+                   (git* env root ["checkout-index" "-a" "-f"]))
+          (doseq [path (str/split-lines (str (git* env root ["ls-files" "--others" "--exclude-standard"
+                                                             "--" "." (str ":(exclude)" project-state)])))
+                  :when (not (str/blank? path))]
+            (.delete (java.io.File. (str root "/" path))))
+          true)
+        (finally (.delete idx))))))
 
 (defn file-at
   "`path`'s content in the `baseline` commit, or nil when it was not there
@@ -209,7 +255,10 @@
   flight, and a rewrite is work.
 
   A binary file contributes nothing rather than failing the count: numstat
-  reports `-` for it, and a budget is about code the model wrote."
+  reports `-` for it, and a budget is about code the model wrote. So do new
+  files too big to have been written in a run's turns (:written-file-bytes):
+  those were fetched or generated. Nor do paths `untracked-split` leaves out as
+  generated, which appear beside the work the first time something runs."
   [root baseline]
   (when (and root (rev? baseline))
     (let [num (fn [s] (or (parse-long (str s)) 0))
@@ -225,8 +274,13 @@
           ;; edited is already in the numstat above.
           untracked (some->> (seq created)
                              (map (fn [rel]
-                                    (try (-> (java.io.File. (str root) (str rel))
-                                             slurp str/split-lines count)
+                                    (try (let [f (java.io.File. (str root) (str rel))]
+                                           (if (> (.length f) (long (lexicon/budget :written-file-bytes)))
+                                             0
+                                             (let [text (slurp f)]
+                                               (if (str/includes? text (str (char 0)))
+                                                 0
+                                                 (count (str/split-lines text))))))
                                          (catch Throwable _ 0))))
                              (reduce + 0))]
       (when (or (some? tracked) (some? untracked))

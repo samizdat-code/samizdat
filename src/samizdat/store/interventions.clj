@@ -57,13 +57,14 @@
 (def scheduler-kinds
   "Applied at the beam's round top: facts about the run or its set of
   branches."
-  #{"cull" "fork" "retract" "extend" "pause" "resume"})
+  #{"cull" "fork" "retract" "extend" "pause" "resume" "finish"})
 
 (def workflow-kinds
   "Applied at a workflow's own directives stage — the feature loop's, between
-  its verify and its route — because they decide that workflow's NEXT ROUND
+  its verify and its route, and team-solve's manager and unstick boundaries —
+  because they decide that workflow's NEXT ROUND
   and nothing at the turn or scheduler level has anywhere to put them."
-  #{"switch" "budget" "stop"})
+  #{"switch" "budget" "stop" "retask"})
 
 (def kinds
   "Every directive kind that may be queued: the NAMES, which are mechanism —
