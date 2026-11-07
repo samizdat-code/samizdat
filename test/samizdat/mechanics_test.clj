@@ -210,9 +210,9 @@
     (is (some? g) "the gate exists in gates.edn")
     (is (= :max-no-edit-nudges (:budget g)) "and is bounded, so it cannot nag forever")
     (is (some? (:prediction g)) "it declares a prediction, like every gate")
-    (is (= #{"write_file" "edit_file" "patch"}
+    (is (= #{"write_file" "edit_file" "patch" "done" "give_up"}
            (get (gates/tool-vocab :settle-called) :no-edits))
-        "settled by the thing it asks for: a file actually written")))
+        "settled by a file actually written, or by finishing")))
 
 ;; --- gate health, per branch -------------------------------------------------
 ;; Run ace34d83: :no-edits fired 6 times and was ignored 3 of them — every one

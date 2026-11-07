@@ -228,7 +228,7 @@
 
     ;; Branch-map functions. Pure.
     samizdat.agent.state
-    {:vars [active? add-message finish-planning planned? unwritten banked-in-last branch-id-for build-residual-report
+    {:vars [active? add-message finish-planning planned? unwritten done-streak banked-in-last branch-id-for build-residual-report
             confirmed-artifacts new-branch own-turn-count parked? plan reframe-active?
             render-residual-report residual]}
 
@@ -403,7 +403,7 @@
     samizdat.agent.state {:vars [active? confirmed-artifacts confirmed-in-last
                                  has-relevant-confirmed? last-failure orienting-too-long?
                                  own-turn-count plan-stale? planned? planning?
-                                 safe-state-due? stated-goal turn-count unwritten]}
+                                 safe-state-due? stated-goal turn-count unwritten done-streak]}
     samizdat.agent.storm {:vars [oscillation-blocked? repeat-blocked?]}
     samizdat.agent.supervisor {:vars [over-studying? repeating-one-failure? stall-nudge
                                       unchanged-failure]}

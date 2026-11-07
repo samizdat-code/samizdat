@@ -18,6 +18,7 @@
             [samizdat.agent.budget :as budget]
             [samizdat.agent.compaction :as cmp]
             [samizdat.agent.gates :as gates]
+            [samizdat.store.tasks :as tasks]
             [samizdat.agent.infer :as infer]
             [samizdat.agent.instructions :as instr]
             [samizdat.agent.loop :as turn]
@@ -203,14 +204,20 @@
   "Fold the task this call closed down to one line, when its span is long
   enough to be worth the cache rewrite (gates.edn :task-fold). Only a close of
   the HELD task: a close of someone's backlog row, or one the tool refused,
-  leaves the held task in place and folds nothing."
-  [parsed before branch]
-  (let [{:keys [enabled? min-messages carry]} (gates/threshold :task-fold)
+  leaves the held task in place and folds nothing. Nor with nothing left on the
+  board, under :only-with-next?: the line left behind says what closed and not
+  what it found, and a branch with no next task needs that to decide it is
+  finished."
+  [{:keys [conn run-id]} parsed before branch]
+  (let [{:keys [enabled? min-messages carry only-with-next?]} (gates/threshold :task-fold)
         held (:task before)
         args (:args parsed)
         closed? (and enabled? held (nil? (:task branch))
                      (= "task" (:name parsed))
-                     (= "close" (str (or (:action args) (get args "action")))))
+                     (= "close" (str (or (:action args) (get args "action"))))
+                     (or (not only-with-next?) (nil? conn)
+                         (some #(= "open" (str (:status %)))
+                               (tasks/board conn {:run-id run-id}))))
         span (when closed? (cmp/task-span (:messages branch) (:id held)))]
     (if (and span (>= (- (second span) (first span)) min-messages))
       (let [[from to] (cmp/turn-range (subvec (vec (:messages branch)) (first span) (second span)))
@@ -239,7 +246,7 @@
     (let [out (turn/tool-step ctx branch turn parsed)]
       (merge data (update out :branch
                           #(->> %
-                                (fold-closed-task parsed branch)
+                                (fold-closed-task ctx parsed branch)
                                 (load-instructions ctx parsed)))))))
 
 (cell/defcell :journal/record

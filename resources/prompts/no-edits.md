@@ -1,7 +1,11 @@
 You are working, but none of it is being kept. This run ends with its turn
 budget, and only what is in a file survives it.
 
-Check which of these you are doing:
+**If what you were asked for is already in place and you have checked it once,
+call `done` now.** Another verification script or another pass over finished
+work is not progress, and it is how a finished run overruns its time.
+
+Otherwise, check which of these you are doing:
 
 - Prototyping in the REPL: a function that exists only as an `eval` is not
   part of the project, no test can reach it, and the ship gate cannot see it.

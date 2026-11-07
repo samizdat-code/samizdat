@@ -1405,6 +1405,8 @@
              ;; What this run changed, for the ship gate's focused verify and
              ;; for a finalization critic reading the run's own diff.
              ;; Journalled, so a resume measures from the same point.
+             ;; When this run began, for a wall-clock limit (gates.edn :time-budget).
+             :started-ms (System/currentTimeMillis)
              :git-baseline (let [b (gitdiff/baseline root)]
                              (when (and b conn run-id)
                                (journal/note! conn run-id :git-baseline {:data {:ref b}}))

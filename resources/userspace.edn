@@ -327,6 +327,8 @@
    :watch-intervention "prompts/watch-intervention.md"
    :webfetch-tool "prompts/webfetch-tool.md"
    :websearch-tool "prompts/websearch-tool.md"
+   :time-last-call "prompts/time-last-call.md"
+   :time-wind-down "prompts/time-wind-down.md"
    :wind-down "prompts/wind-down.md"
    :workflow-history "prompts/workflow-history.md"
    :workflow-select "prompts/workflow-select.md"

@@ -475,7 +475,7 @@
                             (if-let [t (:task branch)]
                               (prompt/render "task-current"
                                              {:id (:id t) :title (:title t)})
-                              (prompt/prompt "task-none")))]
+                              (prompt/render "task-none" {:closed-id (:closed-task branch)})))]
                    ;; The run's settled state, first and complete: what is
                    ;; established and — the half nothing carried before — what
                    ;; is RULED OUT. Read from the artifacts table every turn, so
@@ -1398,9 +1398,15 @@
             branch (if (contains? (gates/tool-vocab :file-write) (str tool))
                      (state/note-lines branch
                                        (gitdiff/changed-lines (:root ctx) (:git-baseline ctx)))
-                     branch)
+                     (state/rebase-lines branch))
+            limit (get-in ctx [:config :run :time-limit-seconds])
+            now (System/currentTimeMillis)
             gate-ctx {:branch branch
                       :max-turns max-turns
+                      ;; Against the wall clock, for :time-wind-down and
+                      ;; :time-last-call. nil without a limit.
+                      :time-used (gates/time-used limit (:started-ms ctx) now)
+                      :time-left-seconds (gates/time-left-seconds limit (:started-ms ctx) now)
                       ;; How wide the beam already is, so the reproduction
                       ;; rung knows whether the run can afford offspring.
                       :branch-count (or (:branch-count ctx) 1)

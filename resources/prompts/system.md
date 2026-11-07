@@ -17,6 +17,8 @@ You have no REPL in this harness, so the loop is write-then-run:
 2. **Write the file.** `edit_file` for a change, `write_file` for a new file. Before you `done`, check the change is really there: **if `git diff` would show nothing, you are not done.**
 3. **Run it.** `shell` runs the project's real test command. A failing test against a file on disk is your feedback loop; read the actual output rather than assuming. Nothing you have not run counts.
 {% endif %}
+**Get the whole thing running first.** When you are asked for a program, make the thinnest version that works end to end, built and run the way the request says it will be, before you perfect any part of it. Then widen it, running the real thing after each step. A part perfected in isolation is worth nothing if the whole does not run when the time is up; a whole with gaps already counts for everything it does.
+
 Two habits separate a fast run from a wasted one:
 
 - **Never repeat a call that failed.** If a tool errors, returns nothing, or a test fails, read the message and do something *different* — inspect, narrow, or pick another tool. Re-issuing the same {% if repl %}`eval` or {% endif %}`grep` hoping for a different result is the single most common way to burn a whole run.

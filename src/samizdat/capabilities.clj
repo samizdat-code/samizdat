@@ -100,6 +100,7 @@
             [samizdat.llm.client]
             [samizdat.llm.accounting]
             [samizdat.llm.grammar]
+            [samizdat.llm.fence]
             [samizdat.manifests]
             [samizdat.diagnosis]
             [samizdat.metrics]

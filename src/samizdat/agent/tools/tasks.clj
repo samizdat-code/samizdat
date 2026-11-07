@@ -86,6 +86,7 @@
   [branch t]
   (-> branch
       (assoc :task {:id (:id t) :title (:title t)})
+      (dissoc :closed-task)
       (task-statement t)))
 
 (defn- holding
@@ -172,7 +173,16 @@
                                           :run-id (when-not (base/arg ctx :backlog) run-id)
                                           ;; What this branch had read goes with it.
                                           :flow (flow/carried ctx)})]
-              (base/ok branch (str "Created " (task-line (tasks/get-task conn id))))))
+              ;; Nothing held: what was just created is what comes next, and
+              ;; every model spent a turn saying so, or asking to claim with no
+              ;; id (32 refused task calls in Terminal-Bench next-30).
+              (if-let [t (when (and (not (holding conn branch))
+                                    (not (base/arg ctx :backlog)))
+                           (tasks/claim! conn id run-id (:id branch)))]
+                (base/ok (take-task branch t)
+                         (str "Created " (task-line t) "\nClaimed " (:id t))
+                         :progress? true)
+                (base/ok branch (str "Created " (task-line (tasks/get-task conn id)))))))
 
         "list"
         (let [rows (tasks/board conn {:run-id run-id})]
@@ -211,7 +221,9 @@
               (base/malformed branch (str "No task " (base/arg ctx :id) "."))))
 
         "claim"
-        (or (want :id)
+        (or (when (and (nil? (base/arg ctx :id)) (holding conn branch))
+              (base/ok branch (str "Already working on " (task-line (holding conn branch)))))
+            (want :id)
             ;; One task at a time. Refused rather than silently switched: a
             ;; branch that picks up a second task has abandoned the first
             ;; without saying so, and "until it is done" stops meaning
@@ -308,7 +320,7 @@
                     ;; at finished work.
                     branch (cond-> branch
                              (= (:id t) (:id (:task branch)))
-                             (-> (assoc :task nil)
+                             (-> (assoc :task nil :closed-task (:id t))
                                  ;; the finished statement stops being pinned,
                                  ;; so compaction can fold it away (swd)
                                  (state/unpin-task-statement (:id t))))]

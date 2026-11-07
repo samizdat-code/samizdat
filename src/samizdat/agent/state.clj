@@ -992,6 +992,26 @@
              :lines-task task :lines-base base :lines-total total
              :lines-written (max 0 (- total base))))))
 
+(defn rebase-lines
+  "The held task changed with no file written: start its count here. note-lines
+  runs only on a write, so without this a split left the old task's total on the
+  branch for the over-budget gate to read, turn after turn."
+  [branch]
+  (let [task (:id (:task branch))]
+    (if (and (:lines-written branch) (not= task (:lines-task branch)))
+      (assoc branch
+             :lines-task task
+             :lines-base (or (:lines-total branch) 0)
+             :lines-written 0)
+      branch)))
+
+(defn done-streak
+  "How many of the branch's latest turns in an unbroken row called `done`."
+  [branch]
+  (->> (rseq (vec (:turns branch)))
+       (take-while #(= "done" (str (:tool %))))
+       count))
+
 (defn squeeze-context
   "Tighten this branch's compaction budget one notch (karamazov-d41).
 

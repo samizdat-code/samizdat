@@ -375,6 +375,9 @@
                   ;; The checklist items the answer has not accounted for
                   ;; (karamazov-dsfx); empty when nothing is owed.
                   ~'unaccounted-checklist (get ~'ctx :unaccounted-checklist)
+                  ~'checklist-items   (get ~'ctx :checklist-items)
+                  ;; `done` calls refused in an unbroken row before this one.
+                  ~'done-streak       (get ~'ctx :done-streak 0)
                   ;; Pre-existing tests changed or deleted with no reason
                   ;; given (karamazov-fgsb); empty when none.
                   ~'unexplained-tests (get ~'ctx :unexplained-tests)]
@@ -589,6 +592,8 @@
                  :can-write? (roles/may-use? (:role branch) "write_file")
                  :advisory? advisory?
                  :unaccounted-checklist (checklist/unaccounted items accounted)
+                 :checklist-items items
+                 :done-streak (state/done-streak branch)
                  :unexplained-tests (exam/unexplained touched-tests explained (or prior-explained #{}))})
         ;; The test rung — what makes the loop test-driven rather than one-shot.
         ;; `done` is not terminal until the unit's tests actually pass: run the

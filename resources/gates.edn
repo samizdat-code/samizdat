@@ -76,11 +76,12 @@
         :userspace {:mode :shipped}) boots the shipped workflow outright."}
 
  :wakeups
- {:value {:max-wait-ms 1800000 :poll-floor-ms 15000}
+ {:value {:max-wait-ms 840000 :poll-floor-ms 15000}
   :kind :threshold :capability-tunable? false
-  :provenance ["karamazov-05z0.21"]
-  :doc "The `wait` tool's bounds. A wait lasts at most :max-wait-ms (thirty
-        minutes) whatever it asks for, and polls its condition no more often
+  :provenance ["karamazov-05z0.21" "karamazov-0wvc"]
+  :doc "The `wait` tool's bounds. A wait lasts at most :max-wait-ms (fourteen
+        minutes, under :turn-deadline-ms, which would cancel a longer one as a
+        hung turn) whatever it asks for, and polls its condition no more often
         than every :poll-floor-ms, so a branch waiting on a build costs one
         turn and a handful of check runs rather than a turn a look."}
 
@@ -384,6 +385,15 @@
         Four is deliberately tight. The nudge is cheap, bounded by
         :max-no-edit-nudges, and the cost it prevents is a whole run's turns
         spent in a REPL whose state dies with the run."}
+
+ :max-paperwork-refusals
+ {:value 3 :kind :re-fire-guard :capability-tunable? true
+  :provenance ["karamazov-0wvc"]
+  :doc "How many `done` calls in an unbroken row may be refused over accounting
+        (the checklist, a plan's unwritten files) before the answer is let
+        through. The work is on disk either way, and these rungs protect a
+        record of it. datasurgeon gave up over a plan naming files it had moved;
+        code-minimap spent its last 14 turns answering a checklist."}
 
  :max-no-edit-nudges
  {:value 3 :kind :re-fire-guard :capability-tunable? true
@@ -701,6 +711,38 @@
         done call for a branch with confirmed artifacts: UCLA's harness found a
         run with no reserved shipping tail spends its whole budget exploring
         and ships nothing."}
+
+ :time-budget
+ {:value {:wind-down 0.7 :last-call 0.9}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-0wvc"]
+  :doc "Shares of a run's wall-clock limit (config.edn :run :time-limit-seconds,
+        none by default) at which the branch is told to wrap up, and then made
+        to attempt a done. The turn cap cannot stand in for this: a turn takes
+        two seconds or two minutes. Six of the thirty Terminal-Bench next-30
+        trials had passing files and ran out their limit never knowing there
+        was one, and an overrun scores zero."}
+
+ :max-time-steers
+ {:value 2 :kind :re-fire-guard :capability-tunable? false
+  :provenance ["karamazov-0wvc"]
+  :doc "How often each wall-clock rung may speak on one branch."}
+
+ :orphan-call
+ {:value [[["command"] "shell"]
+          [["path" "old_text"] "edit_file"]
+          [["path" "new_text"] "edit_file"]
+          [["path" "content"] "write_file"]
+          [["path" "edits"] "patch"]
+          [["seconds"] "wait"]
+          [["answer"] "done"]
+          [["path"] "read_file"]]
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-0wvc"]
+  :doc "Which tool a damaged call means when the provider lost its opening tag
+        and only parameters are left (samizdat.llm.fence/orphan-call), most
+        specific first. Only ever consulted where the turn was about to be
+        answered 'no tool-call block'."}
 
  :max-wind-down-steers
  {:value 1 :kind :re-fire-guard :capability-tunable? false
@@ -3573,9 +3615,9 @@
         Not capability-tunable: it describes source files, not a branch."}
 
  :task-fold
- {:value {:enabled? true :min-messages 12 :carry ["ask_human"]}
+ {:value {:enabled? true :min-messages 12 :carry ["ask_human"] :only-with-next? true}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-d5wo.5"]
+  :provenance ["karamazov-d5wo.5" "karamazov-0wvc"]
   :doc "FOLD A TASK'S WORK WHEN IT CLOSES (the :tool/dispatch cell;
         compaction/task-span and fold-task are the mechanism;
         prompts/task-folded.md is the line left behind).
@@ -3837,7 +3879,11 @@
           ;; Over this a new file was not written by the model, it was fetched
           ;; or generated, and does not count against :task-line-budget
           ;; (karamazov-0wvc.8).
-          :written-file-bytes  131072}
+          :written-file-bytes  131072
+          ;; Untracked paths that tools make, not the model. A Jolt project's
+          ;; .jolt/ cache read as hundreds of lines on the first write, so the
+          ;; over-budget gate fired before any real code existed (karamazov-0wvc).
+          :generated-path-regex "^(\\.samizdat/|\\.jolt/|\\.cpcache/|\\.nrepl-port$|\\.clj-kondo/|\\.lsp/|[^/]+\\.build/)"}
   :kind :cost-ceiling :capability-tunable? false
   :doc "HOW MUCH THE MODEL GETS TO SEE. Every one of these was a constant in
         code, and together they are the most project-specific numbers in the
@@ -4129,8 +4175,12 @@
      ;; which apply, :ship-checklist says how), and every item needs an
      ;; entry by id: met, not met or n/a, with a reason. A not-met ships —
      ;; an honest limit is a result (karamazov-ylte.1); silence does not.
-     :when (seq unaccounted-checklist)
-     :message-form (checklist/refusal unaccounted-checklist)
+     ;; Bounded: an unbroken row of refused `done` calls is a model that cannot
+     ;; satisfy this, and past the limit the answer ships with the items
+     ;; recorded as unaccounted. code-minimap spent 14 turns here.
+     :when (and (seq unaccounted-checklist)
+                (< done-streak (samizdat.agent.gates/threshold :max-paperwork-refusals)))
+     :message-form (checklist/refusal unaccounted-checklist checklist-items)
      :provenance ["karamazov-dsfx"]}
     {:name :exam-ratchet
      ;; karamazov-fgsb: a run may change or delete a test that was there
@@ -4355,7 +4405,7 @@
   :settle-called
   {:orienting        #{"plan" "write_file" "edit_file" "patch"}
    :check-green      #{"done" "give_up" "write_file" "edit_file" "patch" "run_check"}
-   :no-edits         #{"write_file" "edit_file" "patch"}
+   :no-edits         #{"write_file" "edit_file" "patch" "done" "give_up"}
    ;; A WRITE, not another test run. The steer asked the branch to form a
    ;; hypothesis about where the defect is; editing the test it doubted and
    ;; editing the implementation it now believes is wrong are both that
@@ -4380,6 +4430,8 @@
    :turn-budget      #{"done" "give_up"}
    :wind-down        #{"done"}
    :last-call        #{"done" "give_up"}
+   :time-wind-down   #{"done" "give_up"}
+   :time-last-call   #{"done" "give_up"}
    ;; The planning branch's terminal is its declaration, so its wind-down
    ;; rungs are met by `plan` — a `done` from it is refused before dispatch.
    :plan-wind-down   #{"plan"}
@@ -4545,6 +4597,35 @@
                 an account of what was tried, or a genuinely different
                 approach"
    :window 2}
+
+  {:gate :time-last-call
+   :provenance ["karamazov-0wvc"]
+   :priority 2.65
+   :budget :max-time-steers
+   :tool "done"
+   :doc "Nearly out of the run's wall-clock limit: force a done attempt. Same
+         reasoning as :last-call, against time rather than turns."
+   :when (and (state/active? branch)
+              (not (state/planning? branch))
+              (:time-used ctx)
+              (>= (:time-used ctx) (:last-call (threshold :time-budget))))
+   :message-file "time-last-call"
+   :prediction "the branch ships"
+   :window 2}
+
+  {:gate :time-wind-down
+   :provenance ["karamazov-0wvc"]
+   :priority 3.25
+   :budget :max-time-steers
+   :doc "Past the share of the run's wall-clock limit reserved for finishing.
+         Told once or twice, with the seconds left, and :time-last-call follows."
+   :when (and (state/active? branch)
+              (not (state/planning? branch))
+              (:time-used ctx)
+              (>= (:time-used ctx) (:wind-down (threshold :time-budget))))
+   :message-file "time-wind-down"
+   :prediction "the branch ships"
+   :window 3}
 
   {:gate :wind-down
    :priority 3

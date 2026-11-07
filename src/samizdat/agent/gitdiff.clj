@@ -84,6 +84,13 @@
     (let [base (or (some-> (git root "stash" "create") str/trim not-empty) "HEAD")]
       (or (whole-tree-commit root base) base))))
 
+(defn- generated?
+  "A path no run wrote: the harness's own state, a tool cache, build output
+  (lexicon :generated-path-regex). An image's own .git carries no ignore rule
+  for any of them."
+  [path]
+  (boolean (re-find (re-pattern (lexicon/budget :generated-path-regex)) (str path))))
+
 (defn- untracked-split
   "The untracked paths, split by what `baseline` holds of them: :stale — in
   the baseline with the same content, so not the run's; :created — not in
@@ -99,7 +106,7 @@
                        (lines (apply git root "ls-tree" "-r" baseline "--" untracked)))
             now (zipmap untracked (lines (apply git root "hash-object" "--" untracked)))]
         {:stale (set (filter #(and (held %) (= (held %) (now %))) untracked))
-         :created (vec (remove held untracked))}))))
+         :created (vec (remove #(or (held %) (generated? %)) untracked))}))))
 
 (defn- porcelain-counts
   "Split `git status --porcelain` into git's own three kinds.
@@ -250,7 +257,8 @@
   A binary file contributes nothing rather than failing the count: numstat
   reports `-` for it, and a budget is about code the model wrote. So do new
   files too big to have been written in a run's turns (:written-file-bytes):
-  those were fetched or generated."
+  those were fetched or generated. Nor do paths `untracked-split` leaves out as
+  generated, which appear beside the work the first time something runs."
   [root baseline]
   (when (and root (rev? baseline))
     (let [num (fn [s] (or (parse-long (str s)) 0))

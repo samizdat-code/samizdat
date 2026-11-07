@@ -105,6 +105,7 @@
             [samizdat.eval-deadline-test]
             [samizdat.events-flow-test]
             [samizdat.lsp-cancel-test]
+            [samizdat.finish-signal-test]
             [samizdat.tasks-test]
             [samizdat.kernel-write-test]
             [samizdat.knowledge-test]
@@ -413,6 +414,7 @@
     samizdat.eval-deadline-test
     samizdat.events-flow-test
     samizdat.lsp-cancel-test
+    samizdat.finish-signal-test
     samizdat.tasks-test
     samizdat.kernel-write-test
     samizdat.knowledge-test

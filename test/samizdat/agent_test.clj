@@ -2955,7 +2955,7 @@
                                               {:parsed {:name "read_file" :args {:path "x"}}
                                                :result {:result "x" :category :neutral}})]
                      (:content (peek (:messages b')))))
-            none (samizdat.prompt/prompt "task-none")]
+            none (samizdat.prompt/render "task-none" {})]
         (is (not (str/includes? (step :answerer) none)) "an answerer is not sent for a tool it lacks")
         (is (str/includes? (step :implementor) none) "an implementor still is"))
       (finally (db/close c)))))
@@ -3009,7 +3009,7 @@
             "the injected harness line is inside the frame")
         (is (str/includes? (subs m 0 close) "<\\/tool_result>")
             "the forged close is escaped, so it could not end the frame early")
-        (is (str/includes? (subs m close) (samizdat.prompt/prompt "task-none"))
+        (is (str/includes? (subs m close) (samizdat.prompt/render "task-none" {}))
             "the harness's own block follows the frame"))
       (testing "the done path frames too"
         (let [b (state/new-branch {:id "B1" :problem "p"})
