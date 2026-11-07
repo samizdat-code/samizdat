@@ -12,6 +12,7 @@
             [samizdat.llm.adapter :as adapter]
             [samizdat.llm.adapter.openai :as openai]
             [samizdat.llm.message :as message]
+            [samizdat.llm.toolspec :as toolspec]
             [samizdat.prompt :as prompt]))
 
 (def ^:private glm (:glm config/providers-for-test))
@@ -100,3 +101,21 @@
     (is (>= (:request-window glm) (:context-window glm)))
     (is (not (false? (:ok prepared))))
     (is (true? (get-in prepared [:accounting :admissible?])))))
+
+(deftest a-tool-with-actions-declares-what-its-actions-take
+  ;; `task({action, ...})` became a schema naming only `action`. Sent as real tool
+  ;; messages, GLM sent exactly that, `task create` needed a title it never got, and a
+  ;; write needs a claimed task, so nothing could be written.
+  (let [specs (into {} (map (juxt :name identity))
+                    (toolspec/signatures (slurp (clojure.java.io/resource "prompts/system-tools.md"))))
+        props (fn [tool] (set (keys (get-in specs [tool :parameters :properties]))))]
+    (testing "the arguments named on its action lines"
+      (is (every? (props "task") [:action :title :body :parentId :id :status :reason]))
+      (is (every? (props "message") [:action :body :to]))
+      (is (every? (props "cell") [:action :name :version :clj])))
+    (testing "and it can be sent others, since the signature says there are more"
+      (is (true? (get-in specs ["task" :parameters :additionalProperties]))))
+    (testing "a signature that lists everything stays closed to that list"
+      (is (nil? (get-in specs ["edit_file" :parameters :additionalProperties]))))
+    (testing "only argument names, not the code in its examples"
+      (is (not-any? #(re-find #"^:" (name %)) (props "manifest"))))))
