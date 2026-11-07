@@ -2578,3 +2578,15 @@
                            (range 1 21)))
         turns (mapv (fn [i] {:turn i :tool "shell" :category :success}) (range 1 21))]
     (is (= msgs (message/compact msgs turns {:keep-pairs 4 :threshold-chars 5000 :batch 1})))))
+
+(deftest a-rate-limit-says-so-when-its-retries-run-out
+  (let [a (registry/adapter-for :glm)
+        cfg {:model "m" :max-retries 0}
+        reason (fn [status body]
+                 (with-redefs [http/post (fn [& _] {:status status :body (json/write-str body)})]
+                   (try (client/chat a cfg [{:role "user" :content "x"}]) nil
+                        (catch Exception e (:reason (ex-data e))))))]
+    (is (= :rate-limited (reason 429 {:error {:code "1302" :message "rate limit"}})))
+    (is (= :rate-limited (reason 400 {:error {:code "1302" :message "rate limit"}})) "GLM's code under another status")
+    (is (= :usage-cap (reason 429 {:error {:code "1308" :message "达到使用上限"}})) "a cap is not a window")
+    (is (= :call-failed (reason 500 {:error {:message "boom"}})))))

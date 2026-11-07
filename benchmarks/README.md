@@ -98,6 +98,8 @@ GLM-5.3, one attempt per task, three tasks, Pi not run:
 | `fix4` | same | loop | 5.5% | 62.4% | 21.3% |
 | `fix5` | check at 45%, longer workers, solver told to wire up everything first | team-solve | 94.8% | 0.0% | 0.0% |
 | `fix5` | same | loop | 82.8% | 51.2% | 20.1% |
+| `fix6` | start small, do not draft in thinking, manager told in its own message | team-solve | 96.0% | 56.9% | 0.0%, rate limited |
+| `fix6` | same | loop | 62.9% | 50.2% | 42.9% |
 
 \* under the buggy grader, at most 81.3%. `fix2`'s loop arm was stopped early, and `fix1`
 and `fix2` scored under that grader too.
@@ -123,6 +125,12 @@ thinking before writing, and both its figlet and yj builds were still failing at
 limit. Their first writes moved from 626-635 s to 1119-1301 s, while loop, which does
 not get that prompt, built earlier. The prompt now asks for the entry point and build
 first, then one short file at a time.
+
+`fix6`'s loop arm had no turn over 20K characters of thinking, after `fix5`'s one, while
+team-solve's still had three each on csview and figlet (400 s and 686 s). Its yj scored 0
+for a different reason: GLM rate limited the account for a few minutes (429, code 1302),
+and five failed calls in a row ended the run at 169 s. loop hit the same limit and carried
+on to its best yj so far. A rate limit is now waited out, and a usage cap still stops at once.
 
 These runs do not compare samizdat with Pi. That needs Pi and samizdat on one provider
 with the fixed grader, and several attempts.

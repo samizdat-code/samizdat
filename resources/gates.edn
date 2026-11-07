@@ -196,6 +196,15 @@
         cap. Run 3020cbca's supervisor made 2810 calls to a server that was not
         running, and 74ddebb8's 1002 that all failed the same way."}
 
+ :rate-limit
+ {:value {:pause-ms 20000 :limit 30} :kind :threshold :capability-tunable? false
+  :provenance ["fix6 team-solve yj"]
+  :doc "A provider's rate limit lifts by itself, so a branch waits :pause-ms after a call
+        that failed on one, on top of the client's own retries, and gives up after :limit
+        in a row, about 17 minutes. Counted apart from :provider-error-limit: GLM limited
+        the account for a few minutes and five failures in under a minute ended a run with
+        28 of its 30 minutes left."}
+
  :cull-recent-window
  {:value 5 :kind :threshold :capability-tunable? false
   :doc "A confirmed artifact this recently protects a branch from culling."}

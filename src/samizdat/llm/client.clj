@@ -294,7 +294,12 @@
                            (str " — " (subs (str (:body resp))
                                             0 (min 300 (count (str (:body resp))))))))}
       overflow? (assoc :reason :context-overflow)
-      cap?      (assoc :reason :usage-cap))))
+      cap?      (assoc :reason :usage-cap)
+      ;; A window that will reopen, which the loop waits out rather than counting
+      ;; towards an outage.
+      (and (not overflow?) (not cap?)
+           (or (= 429 status) (retryable-code? decoded)))
+      (assoc :reason :rate-limited))))
 
 (defn- post-once* [adapter config request url]
   (let [;; Whether the prefill in the request was actually sent — the adapter

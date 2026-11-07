@@ -37,6 +37,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
+            [samizdat.cancel :as cancel]
             [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.files :as files]
             [samizdat.agent.context-rules :as context-rules]
@@ -699,13 +700,20 @@
                      (when (and run-id (:id branch)) [run-id (:id branch)]))
    (log/warn "branch" (:id branch) "turn" turn "model call failed:" error)
    ;; Failed calls in a row, which :loop/route weighs against gates.edn
-   ;; :provider-error-limit; absorb-response clears it (karamazov-e8iw).
-   (let [branch (update branch :consecutive-provider-errors (fnil inc 0))]
+   ;; :provider-error-limit; absorb-response clears it (karamazov-e8iw). A rate
+   ;; limit is counted apart, against its own wider limit: it lifts by itself, and
+   ;; five in a row took under a minute.
+   (let [rate-limited? (contains? #{:rate-limited :rate-limit-latch} reason)
+         branch (update branch (if rate-limited? :consecutive-rate-limits :consecutive-provider-errors)
+                        (fnil inc 0))]
    (journal/record-turn! conn run-id
                          {:branch-id (:id branch) :turn turn
                           :tool-name "__provider_error__" :result error
                           :category "neutral" :task-id (:id (:task branch))})
-   (if (#{:context-overflow :context-window-exceeded} reason)
+   (when rate-limited? (cancel/sleep! (:pause-ms (gates/threshold :rate-limit))))
+   (cond
+     rate-limited? branch
+     (#{:context-overflow :context-window-exceeded} reason)
      ;; The prompt outgrew the window, or local fitting exhausted its rewrites.
      ;; 'Try again' is exactly wrong here — the failure is upstream of the model
      ;; seeing anything, the next assemble would be just as oversized, and
@@ -714,6 +722,7 @@
      ;; fits, and the model continues none the wiser, which is how compaction
      ;; always works.
      (state/squeeze-context branch)
+     :else
      (state/add-message branch "user"
                         (str "[harness] The provider call failed: " error
                              " Try again.")
@@ -785,7 +794,7 @@
                           (state/record-mechanics signals)
                           ;; The provider answered: whatever outage the
                           ;; count measured is over (karamazov-e8iw).
-                          (dissoc :last-prefix :model-change :consecutive-provider-errors))
+                          (dissoc :last-prefix :model-change :consecutive-provider-errors :consecutive-rate-limits))
                 (contains? #{:urgent :over} pressure) state/squeeze-context
                 wire (assoc :last-wire wire :last-prefix prefix)
                 model-change (assoc :model-reported reported

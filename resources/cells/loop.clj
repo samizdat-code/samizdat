@@ -358,6 +358,11 @@
                         (gates/threshold :provider-error-limit))
                     :abandoned
 
+                    ;; Rate limits lift by themselves, so they get far longer.
+                    (>= (or (:consecutive-rate-limits branch) 0)
+                        (:limit (gates/threshold :rate-limit)))
+                    :abandoned
+
                     ;; The run has spent its token budget (the arbiter read
                     ;; it): every loop's branch ends, nested ones included.
                     (:over-budget? data) :exhausted
@@ -373,7 +378,8 @@
         (assoc-in [:branch :inactive-reason]
                   (str/trim (prompt/render "abandoned-reason"
                                            (if (state/active? branch)
-                                             {:provider-errors (:consecutive-provider-errors branch)}
+                                             {:provider-errors (+ (or (:consecutive-provider-errors branch) 0)
+                                                                  (or (:consecutive-rate-limits branch) 0))}
                                              {:status (some-> (:status branch) name)}))))
 
         (= verdict :continue)
