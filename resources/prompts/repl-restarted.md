@@ -1,0 +1,1 @@
+[harness] {% if stopped %}The REPL had stopped, so it was started again.{% endif %}{% if asked %}The REPL was restarted, as you asked.{% endif %} Everything defined in it before is gone: load your namespaces again with `(require 'your.ns :reload)`.

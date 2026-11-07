@@ -753,6 +753,16 @@
         :never names the calls that end a turn or reshape the harness; they are named back
         to the model, not run."}
 
+ :load-on-write
+ {:value {:enabled? true :timeout-ms 15000 :extensions [".clj" ".cljc"]}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-92kq"]
+  :doc "Whether a Clojure file written while the branch has a project REPL is loaded there
+        straight away, with the outcome in the write's own result. memdoor builds after
+        every Go edit for the same reason: a model that has to remember to check learns
+        late that a file is broken. Agents ran 49 fresh `jolt -e` processes in 14 runs to
+        find out what a reload would have told them."}
+
  :code-metrics
  {:value {:severities #{:critical} :extensions [".clj" ".cljc"] :max-files 20 :max-shown 5}
   :kind :policy :capability-tunable? true
@@ -761,6 +771,17 @@
         that writes a file. :critical alone to begin with: its warnings fire on about one
         function in ten by its own measure, and a steer that frequent is noise. Add
         :warning to ask for more."}
+
+ :shell-roundtrips
+ {:value 3 :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-92kq"]
+  :doc "Shell calls in a row, with no eval between them, before :shell-roundtrips suggests
+        one script instead."}
+
+ :max-code-mode-steers
+ {:value 3 :kind :re-fire-guard :capability-tunable? false
+  :provenance ["karamazov-92kq"]
+  :doc "How often :shell-roundtrips may speak on one branch."}
 
  :max-metric-steers
  {:value 3 :kind :re-fire-guard :capability-tunable? false
@@ -3569,12 +3590,16 @@
         cut the opening uses, so one var reads the same in both."}
 
  :eval-bridge
- {:value {:enabled? false
-          :tools #{"read_file" "read_digest" "grep" "glob" "lsp" "doc" "recall"}
+ {:value {:enabled? true
+          :tools #{"read_file" "read_digest" "grep" "glob" "lsp" "doc" "recall"
+                   "write_file" "edit_file" "patch" "shell" "run_check" "mcp"}
           :cells? true
+          ;; An eval with the bridge on may run a build through tool/shell, so its own
+          ;; default deadline is this rather than the REPL's 10 s.
+          :eval-timeout-ms 120000
           :call-timeout-ms 60000 :poll-ms 50}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-xn0h.7" "karamazov-xn0h.8" "karamazov-xn0h.9"]
+  :provenance ["karamazov-xn0h.7" "karamazov-xn0h.8" "karamazov-xn0h.9" "karamazov-92kq"]
   :doc "TOOLS CALLABLE AS FUNCTIONS FROM INSIDE AN EVAL in the project image:
         (tool/grep {:pattern \"x\"}) returns the tool's result text to the
         form, which can bind, filter and combine it before anything reaches
@@ -3584,7 +3609,11 @@
         journaled as an :eval-call note on the turn that made it; it is not
         a turn of its own.
 
-        OFF BY DEFAULT, MEASURED (karamazov-xn0h.9, 2026-10-11): the xn0h9
+        ON BY DEFAULT, WITH WRITES AND SHELL (karamazov-92kq, 2026-11-07): the code-mode
+        pattern, a script that orchestrates several calls in one turn, steered to by the
+        :shell-roundtrips gate, as round trips are the cost under a clock. It is measured
+        in the lean comparison. Before, it was off by default, on this measurement
+        (karamazov-xn0h.9, 2026-10-11): the xn0h9
         arms on horizon-fade, GLM-5.3 n=2 and DeepSeek flash n=1. Branches
         bridged about one eval in ten, and those calls were 2-3% of the
         tool-result text a branch read; turns, tokens and acceptance did
@@ -4546,6 +4575,7 @@
    :wind-down        #{"done"}
    :last-call        #{"done" "give_up"}
    :time-whole-running #{"shell" "write_file" "edit_file" "patch" "done" "give_up"}
+   :shell-roundtrips #{"eval" "done" "give_up"}
    :metrics-worse    #{"write_file" "edit_file" "patch" "done" "give_up"}
    :time-nothing-written #{"write_file" "edit_file" "patch" "done" "give_up"}
    :time-wind-down   #{"write_file" "edit_file" "patch" "done" "give_up"}
@@ -5354,6 +5384,26 @@
                       (threshold :task-line-budget) ".")
    :prediction "the branch splits the task or says why it is one change"
    :window 3}
+
+  {:gate :shell-roundtrips
+   :provenance ["karamazov-92kq"]
+   :priority 10.48
+   :doc "Several shell calls in a row, each a round trip, where one eval script calling
+         tool/shell and the other tools as functions would do the lot in one turn and keep
+         only what matters. Only where the branch has a project REPL with the bridge on."
+   :when (let [n (threshold :shell-roundtrips)
+               recent (take-last n (:turns branch))]
+           (and (state/active? branch)
+                (:code-mode? ctx)
+                (roles/may-use? (:role branch) "eval")
+                (= n (count recent))
+                (every? (fn [t] (= "shell" (:tool t))) recent)
+                (< (count (filter (fn [f] (and (= :shell-roundtrips (:gate f)) (not (:settled f))))
+                                  (:gate-history branch)))
+                   (threshold :max-code-mode-steers))))
+   :message-file "shell-roundtrips"
+   :prediction "the branch does its next steps in one eval script"
+   :window 2}
 
   {:gate :metrics-worse
    :provenance ["jolt-metrics"]

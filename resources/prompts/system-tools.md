@@ -46,7 +46,7 @@ plan({files, tests?, goal?, rfc?, checklist?})
     problem is, and you may call plan again the moment you learn it is
     somewhere else. You cannot finish with a declared file unwritten, so the
     list is a promise rather than a wish.
-eval({code, timeout_ms?})
+eval({code, timeout_ms?, restart?})
     Evaluate Clojure in the {% if harness-image %}live harness image{% else %}project's own image{% endif %} and see the value and any
     printed output. This is how to work: try a form, inspect what it returns,
     and iterate BEFORE writing it to a file. Definitions persist across your
@@ -58,7 +58,10 @@ eval({code, timeout_ms?})
     inspecting takes one. Reach for that before reaching for four calls. You can
     require and exercise the project's own namespaces here too.
     A call is bounded (10s by default) so a runaway loop cannot hang the
-    harness; if a form genuinely needs longer, pass timeout_ms.
+    harness; if a form genuinely needs longer, pass timeout_ms. If the REPL is
+    in a bad state (a stuck var, a broken namespace you cannot reload), pass
+    `restart: true` to start a fresh one before the form runs; a REPL whose
+    process died is restarted for you. Either way its definitions are gone.
 {% if harness-image %}    LIVE means you share this process. The timeout covers a slow form, not a
     form that ends the process: calling a `-main`, or anything that reaches
     `System/exit`, kills the harness mid-run and takes every other branch with
@@ -71,14 +74,24 @@ eval({code, timeout_ms?})
     (`jolt -M:test`) — that is a child process and its exit code is the point.
     In eval, call the test namespaces directly (`(clojure.test/run-tests
     'flight.mechanics-test)`) rather than the runner that wraps them.
-{% if bridge-tools %}    TOOLS ARE FUNCTIONS INSIDE EVAL TOO: {% for t in bridge-tools %}`tool/{{t}}`{% if not forloop.last %}, {% endif %}{% endfor %}.
-    Each takes the map of arguments the tool takes and returns its result
-    text, so one eval can search, read, and keep only what matters:
-      (let [hits (tool/grep {:pattern "defn place-order"})]
-        (->> (clojure.string/split-lines hits) (take 5)))
-    A call is checked exactly as the tool call would be, and a refusal or a
-    failure throws where the call was made. Only the eval's final value
-    comes back to you, so return the part you need, not every result.
+{% if bridge-tools %}    CODE MODE: TOOLS ARE FUNCTIONS INSIDE EVAL, AND THIS IS THE WAY TO WORK.
+    {% for t in bridge-tools %}`tool/{{t}}`{% if not forloop.last %}, {% endif %}{% endfor %}.
+    Each takes the map of arguments the tool takes and returns its result text.
+    When the next steps are several — write a file, build, run it, compare its
+    output with a reference — do them in ONE eval script, not one call each:
+    every separate call is a round trip, and the script can loop, filter and
+    keep only what you need to see.
+      (let [_     (tool/write_file {:path "src/app/core.clj" :content src})
+            build (tool/shell {:command "./compile.sh 2>&1 | tail -3"})
+            same? (fn [args] (= (tool/shell {:command (str "/tmp/ref " args)})
+                                (tool/shell {:command (str "./app " args)})))]
+        {:build build :failing (remove same? ["-h" "-n 3 in.txt" "--bad"])})
+    Try code in the REPL itself rather than starting a fresh `jolt -e` from the
+    shell, which loses every definition each time. A call made from a script is
+    checked exactly as the tool call would be, and a refusal or a failure throws
+    where the call was made. A script with a bridge call may run up to two
+    minutes without a timeout_ms. Only the eval's final value comes back to you,
+    so return the part you need.
 {% endif %}propose_cell({name, body, rationale})
     Offer a helper worth keeping beyond this run as a callable cell: a
     `(cell/defcell :lex/name {:doc … :callable true :pure true :requires []

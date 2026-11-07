@@ -27,9 +27,42 @@
             [samizdat.agent.tools.base :as base]
             [samizdat.sdiff.address :as address]
             [samizdat.sdiff.core :as sdiff]
+            [samizdat.agent.gates :as gates]
             [samizdat.prompt :as prompt]
+            [samizdat.repl.route :as route]
             [samizdat.security.exposure :as exposure]
             [samizdat.userspace :as userspace]))
+
+(defn- declared-ns
+  "The namespace a Clojure source declares, from its `(ns name` head, or nil."
+  [source]
+  (when-let [i (str/index-of source "(ns ")]
+    (let [tail (str/triml (subs source (+ i 4)))
+          ends (keep #(str/index-of tail %) [" " "\n" ")" "\t" (str (char 13))])]
+      (not-empty (subs tail 0 (if (seq ends) (apply min ends) (count tail)))))))
+
+(defn- with-load-check
+  "A Clojure file written while the branch has a project REPL is loaded there, and the
+  write's result says whether it loaded: a model learns a file it wrote is broken without
+  having to remember to reload it (memdoor's build-after-edit, done the Clojure way).
+  gates.edn :load-on-write."
+  [{:keys [category] :as result} {:keys [root branch] :as ctx}]
+  (let [{:keys [enabled? timeout-ms extensions]} (gates/threshold :load-on-write)
+        path (str (get-in ctx [:args :path]))]
+    (if-not (and enabled? (= :success category)
+                 (some #(str/ends-with? path %) extensions)
+                 (= :project (route/image-of ctx)))
+      result
+      (let [source (try (slurp (str root "/" path)) (catch Throwable _ nil))
+            ns-name (some-> source declared-ns)]
+        (if-not ns-name
+          result
+          (let [r (try (route/eval-for ctx (str "(require '" ns-name " :reload)")
+                                       (:repl-session branch) timeout-ms)
+                       (catch Throwable e {:ok false :error (or (ex-message e) (str e))}))]
+            (update result :result str "\n"
+                    (str/trim (prompt/render "load-on-write"
+                                             {:ns ns-name :loaded (:ok r) :error (:error r)})))))))))
 
 (defn- with-userspace-check
   "A successful write to a file that serves a role of the project's workflow
@@ -110,17 +143,17 @@
   ;; The sibling notice rides the RESULT rather than gating the call: workers
   ;; sharing a tree are collaborating, and which version should win is not the
   ;; harness's judgement to make. See samizdat.agent.files/stale-note.
-  (-> (files/write-file ctx) (files/with-stale ctx) (with-userspace-check ctx)))
+  (-> (files/write-file ctx) (files/with-stale ctx) (with-userspace-check ctx) (with-load-check ctx)))
 
 (defmethod base/run-tool "edit_file" [ctx]
-  (-> (files/edit-file ctx) (files/with-stale ctx) (with-userspace-check ctx)))
+  (-> (files/edit-file ctx) (files/with-stale ctx) (with-userspace-check ctx) (with-load-check ctx)))
 
 (defmethod base/run-tool "patch" [ctx]
   ;; Anchored editing (karamazov-0kk). Beside edit_file rather than replacing
   ;; it: clojure-mcp made the same bet on addressed editing and later demoted
   ;; its own to a fallback, so which one a model actually reaches for is a
   ;; question to MEASURE, not to assume.
-  (-> (files/patch-file ctx) (files/with-stale ctx) (with-userspace-check ctx)))
+  (-> (files/patch-file ctx) (files/with-stale ctx) (with-userspace-check ctx) (with-load-check ctx)))
 
 (defmethod base/run-tool "glob" [{:keys [branch root] :as ctx}]
   ;; Find files by NAME (karamazov-fn68). :neutral — locating establishes

@@ -67,3 +67,36 @@
                                 {:role :implementer :turns turns})
                  :max-turns 300 :time-used (:first-write (gates/threshold :time-budget)) :time-left-seconds 100}]
         (is (not (contains? (set (map :gate (arbiter/eligible ctx))) :time-nothing-written)))))))
+
+(deftest code-mode-is-on-and-can-do-the-work
+  ;; A script in eval calls tools as functions, so one turn can write, build, run and
+  ;; compare instead of a round trip for each (the "code mode" pattern).
+  (let [{:keys [enabled? tools eval-timeout-ms]} (gates/threshold :eval-bridge)]
+    (is enabled?)
+    (is (every? tools ["read_file" "write_file" "edit_file" "shell" "run_check" "mcp"]))
+    (is (>= eval-timeout-ms 60000) "long enough for a script that builds")))
+
+(deftest shell-round-trips-are-steered-to-a-script
+  (let [n (gates/threshold :shell-roundtrips)
+        at (fn [turns & {:as extra}]
+             (set (map :gate (arbiter/eligible
+                              {:branch (merge (state/new-branch {:id "B1" :problem "p"})
+                                              {:role :implementer :turns turns} extra)
+                               :max-turns 300 :code-mode? true}))))
+        shells (vec (repeat n {:tool "shell"}))]
+    (is (contains? (at shells) :shell-roundtrips))
+    (is (not (contains? (at (conj (vec (butlast shells)) {:tool "eval"}))
+                        :shell-roundtrips)) "a script in between resets it")
+    (is (not (contains? (at (vec (butlast shells))) :shell-roundtrips)) "not before the run")
+    (testing "not where there is no project REPL to script in"
+      (is (not (contains? (set (map :gate (arbiter/eligible
+                                           {:branch (merge (state/new-branch {:id "B1" :problem "p"})
+                                                           {:role :implementer :turns shells})
+                                            :max-turns 300 :code-mode? false})))
+                          :shell-roundtrips))))
+    (testing "the message shows how"
+      (let [d (arbiter/decide {:branch (merge (state/new-branch {:id "B1" :problem "p"})
+                                              {:role :implementer :turns shells})
+                               :max-turns 300 :code-mode? true})]
+        (is (= :shell-roundtrips (:gate d)))
+        (is (re-find #"tool/shell" (:message d)))))))

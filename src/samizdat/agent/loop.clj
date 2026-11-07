@@ -39,6 +39,7 @@
             [clojure.tools.logging :as log]
             [samizdat.agent.code-metrics :as code-metrics]
             [samizdat.cancel :as cancel]
+            [samizdat.repl.route :as route]
             [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.files :as files]
             [samizdat.agent.context-rules :as context-rules]
@@ -1458,6 +1459,10 @@
             now (System/currentTimeMillis)
             gate-ctx {:branch branch
                       :max-turns max-turns
+                      ;; Whether the branch can script its tool calls in a project REPL,
+                      ;; which :shell-roundtrips steers it to.
+                      :code-mode? (and (:enabled? (route/bridge-policy))
+                                       (= :project (try (route/image-of ctx) (catch Throwable _ nil))))
                       ;; Against the wall clock, for :time-wind-down and
                       ;; :time-last-call. nil without a limit.
                       :time-used (gates/time-used limit (:started-ms ctx) now)

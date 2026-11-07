@@ -261,6 +261,8 @@
             [samizdat.native-history-test]
             [samizdat.code-metrics-test]
             [samizdat.shell-writes-test]
+            [samizdat.repl-restart-test]
+            [samizdat.load-on-write-test]
             [samizdat.memory-admission-test]
             [samizdat.memory-source-test]
             [samizdat.memory-revise-test]
@@ -352,6 +354,8 @@
     samizdat.native-history-test
     samizdat.code-metrics-test
     samizdat.shell-writes-test
+    samizdat.repl-restart-test
+    samizdat.load-on-write-test
     samizdat.memory-admission-test
     samizdat.memory-source-test
     samizdat.memory-revise-test

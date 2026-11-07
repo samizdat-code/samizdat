@@ -134,12 +134,16 @@
   [{:keys [branch repl-session] :as ctx} code note]
   (let [timeout (some-> (base/arg ctx :timeout-ms) str str/trim not-empty parse-long)
         session (or (:repl-session branch) repl-session)
+        restart? (contains? #{"true" "yes" "1"} (str/lower-case (str (base/arg ctx :restart))))
         prefix (if note (str "[harness] " note "\n") "")
         ;; WHICH IMAGE, decided per role by the operator's config. Everything
         ;; below is unchanged: route/eval-for answers in the same shape
         ;; repl/eval-code always did, so the redaction boundary, the syntax
         ;; gate and the timeout flag all still apply exactly as they did.
-        r (route/eval-for (assoc ctx :bridge (bridge-handler ctx)) code session timeout)]
+        r (route/eval-for (assoc ctx :bridge (bridge-handler ctx) :restart? restart?) code session timeout)
+        prefix (if-let [why (:restarted r)]
+                 (str (str/trim (prompt/render "repl-restarted" {(name why) true})) "\n" prefix)
+                 prefix)]
     (if (:ok r)
       (base/ok branch (scrubbed (str prefix "=> " (:value r)
                                      (when (seq (:out r)) (str "\n" (:out r))))))

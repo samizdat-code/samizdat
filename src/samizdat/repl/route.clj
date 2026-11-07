@@ -343,7 +343,11 @@
   "Evaluate `code` for `ctx`, in whichever image its role and the operator's
   config put it. Same result shape as `repl/eval-code`, always."
   [{:keys [root] :as ctx} code session timeout-ms]
-  (let [timeout (or timeout-ms repl/default-eval-timeout-ms)]
+  ;; A script that calls tools through the bridge may run a build, so it gets the
+  ;; bridge's own default deadline rather than the REPL's.
+  (let [timeout (or timeout-ms
+                    (when (:bridge ctx) (:eval-timeout-ms (bridge-policy)))
+                    repl/default-eval-timeout-ms)]
     (case (image-of ctx)
       :off {:ok false :error (prompt/render "image-off" {}) :error-type "eval-off"}
       ;; THE SUPERVISOR'S IMAGE IS STILL THE LIVE ONE, so the last door to the
@@ -408,11 +412,19 @@
         (let [backend (sandbox/backend-for (config/eval-sandbox root)
                                            (System/getProperty "os.name")
                                            (some? (fs/which "bwrap")))]
-          (if-let [im (image-for! root backend)]
-            (eval-project im root (not= :none backend) code session timeout
-                          (bridge-for im ctx))
-            {:ok false :error-type "image-down"
-             :error (prompt/render "image-down" {})}))))))
+          ;; A REPL IN A BAD STATE IS STARTED AGAIN: by itself when its process has
+          ;; died, and when the branch asks because it is alive but wedged. Either
+          ;; way the definitions it held are gone, and the result says so.
+          (let [cached (get @images root)
+                restarted (cond (:restart? ctx) (when cached :asked)
+                                (and cached (not (image/alive? cached))) :stopped)
+                _ (when (or restarted (:restart? ctx)) (release! root))]
+            (if-let [im (image-for! root backend)]
+              (cond-> (eval-project im root (not= :none backend) code session timeout
+                                    (bridge-for im ctx))
+                restarted (assoc :restarted restarted))
+              {:ok false :error-type "image-down"
+               :error (prompt/render "image-down" {})})))))))
 
 ;; --- doc and complete answer out of the SAME image ---------------------------
 ;;
