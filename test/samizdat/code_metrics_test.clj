@@ -1,0 +1,135 @@
+;; samizdat - a self-hosting agentic harness
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+(ns samizdat.code-metrics-test
+  "What a run makes worse, measured with jolt-metrics against where the tree started.
+  A project's existing complexity is not the run's to answer for."
+  (:require [clojure.data.json :as json]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest testing is]]
+            [jolt.fs :as fs]
+            [samizdat.agent.arbiter :as arbiter]
+            [samizdat.agent.beam :as beam]
+            [samizdat.agent.code-metrics :as cm]
+            [samizdat.agent.gates :as gates]
+            [samizdat.agent.gitdiff :as gitdiff]
+            [samizdat.agent.state :as state]
+            [samizdat.llm.client :as llm]
+            [samizdat.store.db :as db]
+            [samizdat.agent.select :as select]
+            [clojure.java.shell :as sh]))
+
+(defn- branches [n]
+  (apply str (for [i (range n)] (str "(= x " i ") " i " "))))
+
+(defn- tangled
+  "A function well over the critical cyclomatic limit."
+  [name n]
+  (str "(defn " name " [x]\n  (cond " (branches n) ":else 0))\n"))
+
+(def ^:private plain "(ns a)\n(defn small [] 1)\n")
+(def ^:private policy (gates/threshold :code-metrics))
+
+(deftest what-the-run-introduced-is-found
+  (let [found (cm/findings policy {"a.clj" plain} {"a.clj" (str plain (tangled "big" 30))})]
+    (is (= ["big"] (map :name found)))
+    (is (= :critical (:severity (first found))))
+    (is (= "a.clj" (:path (first found))))))
+
+(deftest what-was-already-there-is-not
+  (let [old (str plain (tangled "old" 30))]
+    (testing "untouched"
+      (is (empty? (cm/findings policy {"a.clj" old} {"a.clj" (str old "(defn more [] 2)\n")}))))
+    (testing "made worse is the run's"
+      (is (= ["old"] (map :name (cm/findings policy {"a.clj" old}
+                                             {"a.clj" (str plain (tangled "old" 45))})))))
+    (testing "made better is not"
+      (is (empty? (cm/findings policy {"a.clj" old} {"a.clj" (str plain (tangled "old" 25))}))))))
+
+(deftest a-new-file-counts-and-a-warning-does-not
+  (is (= ["big"] (map :name (cm/findings policy {} {"b.clj" (str "(ns b)\n" (tangled "big" 30))}))))
+  (is (empty? (cm/findings policy {} {"b.clj" (str "(ns b)\n" (tangled "medium" 12))}))
+      "over the warning limit, under the critical one"))
+
+(deftest what-cannot-be-read-is-left-alone
+  ;; A half-written file is another gate's business, and must not throw on the write path.
+  (is (empty? (cm/findings policy {} {"bad.clj" "(defn f [] (+ 1"})))
+  (is (empty? (cm/findings policy {} {"notes.md" "# not clojure"})))
+  (is (empty? (cm/findings policy {} {}))))
+
+(deftest the-report-names-where-and-what
+  (let [text (cm/report policy (cm/findings policy {} {"b.clj" (str "(ns b)\n" (tangled "big" 30))}))]
+    (is (str/includes? text "b.clj"))
+    (is (str/includes? text "big"))
+    (is (str/includes? text "cyclomatic"))))
+
+(deftest it-reads-the-tree-against-the-baseline
+  (let [root (str "/tmp/samizdat-metrics-" (random-uuid))
+        git (fn [& args] (apply sh/sh (concat ["git"] args [:dir root])))]
+    (fs/create-dirs root)
+    (try
+      (spit (str root "/a.clj") (str plain (tangled "old" 30)))
+      (git "init" "-q") (git "add" "-A")
+      (git "-c" "user.name=t" "-c" "user.email=t@t" "commit" "-qm" "base")
+      (let [base (gitdiff/baseline root)]
+        (is (empty? (cm/of-tree root base policy)))
+        (spit (str root "/b.clj") (str "(ns b)\n" (tangled "fresh" 30)))
+        (is (= ["fresh"] (map :name (cm/of-tree root base policy)))))
+      (finally (fs/delete-tree root))))
+  (testing "no baseline, nothing to compare"
+    (is (empty? (cm/of-tree "/tmp" nil policy)))))
+
+(defn- ctx [m] {:branch (merge (state/new-branch {:id "B1" :problem "p"}) {:role :implementer} m) :max-turns 300})
+(defn- fired [c] (set (map :gate (arbiter/eligible c))))
+(def ^:private found [{:path "a.clj" :name "big" :severity :critical}])
+
+(deftest the-gate
+  (testing "speaks when the run made something worse, and says what"
+    (is (contains? (fired (ctx {:metric-findings found})) :metrics-worse))
+    (let [d (arbiter/decide (ctx {:metric-findings found :metric-report "a.clj big"}))]
+      (is (= :metrics-worse (:gate d)))
+      (is (str/includes? (:message d) "a.clj big"))))
+  (testing "not otherwise"
+    (is (not (contains? (fired (ctx {})) :metrics-worse)))
+    (is (not (contains? (fired (ctx {:metric-findings []})) :metrics-worse))))
+  (testing "not against a clock, where cleaning up costs what is left"
+    (is (not (contains? (fired (assoc (ctx {:metric-findings found}) :time-used 0.4)) :metrics-worse))))
+  (testing "a limited number of times, however it settles"
+    (let [n (gates/threshold :max-metric-steers)
+          told (vec (mapcat (fn [t] [{:gate :metrics-worse :turn t} {:gate :metrics-worse :turn t :settled :met}])
+                            (range n)))]
+      (is (contains? (fired (ctx {:metric-findings found :gate-history (vec (take 2 told))})) :metrics-worse))
+      (is (not (contains? (fired (ctx {:metric-findings found :gate-history told})) :metrics-worse)))))
+  (testing "a write answers it"
+    (is (contains? (:metrics-worse (gates/tool-vocab :settle-called)) "edit_file"))))
+
+(defn- call [tool args]
+  {:content (str "```tool-call\n" (json/write-str {:name tool :args args}) "\n```") :finish-reason "stop"})
+
+(deftest a-real-run-that-writes-tangled-code-hears-about-it
+  (let [root (str "/tmp/samizdat-metrics-run-" (System/nanoTime))
+        git (fn [& args] (apply sh/sh (concat ["git"] args [:dir root])))
+        conn (db/open! ":memory:")
+        said (atom [])
+        model (fn [_ _ messages & _]
+                (let [all (str/join "\n" (map (comp str :content) messages))]
+                  (swap! said conj all)
+                  (cond
+                    (not (str/includes? all "Created sz-")) (call "task" {"action" "create" "title" "do it"})
+                    (not (str/includes? all "Claimed sz-")) (call "task" {"action" "claim" "id" (re-find #"sz-[0-9a-f]+" all)})
+                    (not (str/includes? all "Wrote ")) (call "write_file" {"path" "src/a.clj" "content" (str "(ns a)\n" (tangled "big" 30))})
+                    :else (call "read_file" {"path" "src/a.clj"}))))]
+    (.mkdirs (java.io.File. (str root "/src")))
+    (spit (str root "/README.md") "x\n")
+    (git "init" "-q") (git "add" "-A")
+    (git "-c" "user.name=t" "-c" "user.email=t@t" "commit" "-qm" "base")
+    (with-redefs [llm/chat model select/triage! (constantly nil)]
+      (beam/run! {:conn conn :config {:run {:loop "loop" :root root}}
+                  :llm-adapter :a :llm-config {:max-tokens 16384}
+                  :problem "Write a." :max-turns 8 :beam-width 1 :oversight? false}))
+    (is (seq (db/fetch conn ["SELECT id FROM gate_firings WHERE gate = 'metrics-worse'"]))
+        (pr-str (db/fetch conn ["SELECT gate FROM gate_firings"])))
+    
+    (let [msg (:message (first (db/fetch conn ["SELECT message FROM gate_firings WHERE gate = 'metrics-worse'"])))]
+      (is (str/includes? (str msg) "cyclomatic") (pr-str msg)))
+    (is (some #(str/includes? % "cyclomatic") @said) "and the model heard it")))

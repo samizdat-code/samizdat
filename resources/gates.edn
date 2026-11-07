@@ -752,6 +752,21 @@
         written without seeing an earlier one's result, which is harmless for a read
         and not for a write. The rest are still named back to the model."}
 
+ :code-metrics
+ {:value {:severities #{:critical} :extensions [".clj" ".cljc"] :max-files 20 :max-shown 5}
+  :kind :policy :capability-tunable? true
+  :provenance ["jolt-metrics"]
+  :doc "What :metrics-worse counts, read from jolt-metrics' refactoring queue on each turn
+        that writes a file. :critical alone to begin with: its warnings fire on about one
+        function in ten by its own measure, and a steer that frequent is noise. Add
+        :warning to ask for more."}
+
+ :max-metric-steers
+ {:value 3 :kind :re-fire-guard :capability-tunable? false
+  :provenance ["jolt-metrics"]
+  :doc "How often :metrics-worse may speak on one branch. A lifetime count, because a
+        write settles it as met, and a budget restarts at a met settlement."}
+
  :max-time-steers
  {:value 2 :kind :re-fire-guard :capability-tunable? false
   :provenance ["karamazov-0wvc"]
@@ -4517,6 +4532,7 @@
    :wind-down        #{"done"}
    :last-call        #{"done" "give_up"}
    :time-whole-running #{"shell" "write_file" "edit_file" "patch" "done" "give_up"}
+   :metrics-worse    #{"write_file" "edit_file" "patch" "done" "give_up"}
    :time-nothing-written #{"write_file" "edit_file" "patch" "done" "give_up"}
    :time-wind-down   #{"write_file" "edit_file" "patch" "done" "give_up"}
    :time-last-call   #{"done" "give_up"}
@@ -5323,6 +5339,25 @@
                       " lines, against a budget of "
                       (threshold :task-line-budget) ".")
    :prediction "the branch splits the task or says why it is one change"
+   :window 3}
+
+  {:gate :metrics-worse
+   :provenance ["jolt-metrics"]
+   :priority 10.47
+   :doc "The branch has written a function past a critical limit for complexity, nesting or
+         size, or made one worse, as jolt-metrics measures it against the baseline. A
+         suggestion: code can need that shape, and the branch can say so. Quiet against a
+         clock, where cleaning up spends what is left, and below the gates about landing
+         work at all."
+   :when (and (state/active? branch)
+              (roles/may-use? (:role branch) "write_file")
+              (not (:time-used ctx))
+              (seq (:metric-findings branch))
+              (< (count (filter (fn [f] (and (= :metrics-worse (:gate f)) (not (:settled f))))
+                                (:gate-history branch)))
+                 (threshold :max-metric-steers)))
+   :message-form (str (prompt "metrics-worse") "\n" (:metric-report branch))
+   :prediction "the branch simplifies what it wrote or says why it is that shape"
    :window 3}
 
   {:gate :studying

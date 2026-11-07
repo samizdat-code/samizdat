@@ -992,6 +992,12 @@
              :lines-task task :lines-base base :lines-total total
              :lines-written (max 0 (- total base))))))
 
+(defn note-metrics
+  "Record what the run has made worse, for the :metrics-worse gate, whose :when stays
+  pure by reading it off the branch. nil means it could not tell, which clears it."
+  [branch found report]
+  (assoc branch :metric-findings (vec found) :metric-report report))
+
 (defn rebase-lines
   "The held task changed with no file written: start its count here. note-lines
   runs only on a write, so without this a split left the old task's total on the

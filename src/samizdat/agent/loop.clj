@@ -37,6 +37,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
+            [samizdat.agent.code-metrics :as code-metrics]
             [samizdat.cancel :as cancel]
             [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.files :as files]
@@ -1411,8 +1412,13 @@
             ;; nothing. Carried on the branch so the gate's :when stays pure —
             ;; the same shape state/unwritten and plan-stale? use.
             branch (if (contains? (gates/tool-vocab :file-write) (str tool))
-                     (state/note-lines branch
-                                       (gitdiff/changed-lines (:root ctx) (:git-baseline ctx)))
+                     (let [policy (gates/threshold :code-metrics)
+                           ;; Its gate is quiet against a clock, so that is not paid for.
+                           found (when-not (get-in ctx [:config :run :time-limit-seconds])
+                                   (code-metrics/of-tree (:root ctx) (:git-baseline ctx) policy))]
+                       (-> branch
+                           (state/note-lines (gitdiff/changed-lines (:root ctx) (:git-baseline ctx)))
+                           (state/note-metrics found (code-metrics/report policy found))))
                      (state/rebase-lines branch))
             limit (get-in ctx [:config :run :time-limit-seconds])
             now (System/currentTimeMillis)

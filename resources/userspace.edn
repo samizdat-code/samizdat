@@ -332,6 +332,8 @@
    :webfetch-tool "prompts/webfetch-tool.md"
    :websearch-tool "prompts/websearch-tool.md"
    :time-last-call "prompts/time-last-call.md"
+   :metric-finding "prompts/metric-finding.md"
+   :metrics-worse "prompts/metrics-worse.md"
    :time-nothing-written "prompts/time-nothing-written.md"
    :time-whole-running "prompts/time-whole-running.md"
    :time-wind-down "prompts/time-wind-down.md"

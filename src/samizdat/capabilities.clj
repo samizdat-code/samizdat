@@ -142,6 +142,7 @@
             [samizdat.security.sandbox]
             [samizdat.session]
             [samizdat.memory]
+            [samizdat.agent.code-metrics]
             [samizdat.store.captures]
             [samizdat.store.knowledge]
             [samizdat.store.evidence]

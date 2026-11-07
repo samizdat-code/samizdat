@@ -85,6 +85,13 @@
         ;; priors, a forecast ledger, calibration, scoring — the core of
         ;; bayesian-news-model taken out, no dependencies of its own. The
         ;; arena's reliability statistics read it (karamazov-gvdk).
+        ;; Complexity and maintainability of what a run writes, for the :metrics-worse
+        ;; gate. Reads source without evaluating it, and has no dependencies of its own.
+        io.github.jlt-commons/jolt-metrics
+        {:git/url "https://github.com/jlt-commons/jolt-metrics"
+         :git/tag "v0.1.0"
+         :git/sha "986cc1107b4df592b286bb0f2e38855528a22dde"}
+
         io.github.jlt-commons/augur
         {:git/url "https://github.com/jlt-commons/augur"
          :git/tag "v0.4.1"
