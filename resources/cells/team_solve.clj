@@ -813,13 +813,21 @@
 
 ;; --- the worker -----------------------------------------------------------------
 
+(defn- worker-turn-cap
+  "How many turns one worker gets: what the run set for itself, else the policy's, which
+  is larger when the clock is what limits the run."
+  [ctx l p]
+  (or (:worker-turns l)
+      (if (gates/run-time-left ctx) (:worker-max-turns-timed p) (:worker-max-turns p))))
+
 (defn- run-solver
   "One worker on one task: its own branch, a fresh context, a turn cap, and a board
   row it holds, so the tree's single-writer rule sees whose change this is. A crash
   is a result, so the manager and the supervisor can both read it."
   [{:keys [conn run-id] :as ctx} bid prob title turns]
   (let [task-id (tasks/create! conn {:title (clip title (:report-chars (policy))) :body prob
-                                     :run-id run-id :contract prob})]
+                                     :run-id run-id :contract prob})
+        work-exists? (boolean (artifact? ctx))]
     (try
       (let [suffix (wf/prompt-text "roles/solver")
             rctx (wf/role-ctx ctx :solver)
@@ -836,6 +844,8 @@
                      ;; the work passes, so `done` must always get its report
                      ;; through: the ship rungs refused it for its whole budget.
                      :advisory? true
+                     ;; A worker after the first starts on what is already there.
+                     :work-exists? work-exists?
                      :task {:id (:id claimed) :title (:title claimed)})
             out (myc/run-compiled (wf/compiled-manifest "solver") rctx {:branch b :turn 1})
             done? (= :done (:verdict out))]
@@ -887,7 +897,7 @@
           l (save-ledger! ctx {:round round})
           _ (position! ctx :work l)
           tree-before (gitdiff/work-tree-id (:root ctx))
-          r (run-solver ctx bid prob (:task l) (or (:worker-turns l) (:worker-max-turns p)))
+          r (run-solver ctx bid prob (:task l) (worker-turn-cap ctx l p))
           tree-after (gitdiff/work-tree-id (:root ctx))
           finished? (= :done (:verdict r))
           sec (sections/parse (:answer r))

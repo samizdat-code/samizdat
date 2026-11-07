@@ -713,10 +713,13 @@
         and ships nothing."}
 
  :time-budget
- {:value {:first-write 0.15 :first-write-again 0.25 :whole-running 0.33 :whole-running-again 0.55 :wind-down 0.85 :last-call 0.93}
+ {:value {:first-write 0.15 :first-write-again 0.25 :whole-running 0.33 :whole-running-again 0.45 :wind-down 0.85 :last-call 0.93}
   :kind :policy :capability-tunable? false
   :provenance ["karamazov-0wvc"]
-  :doc "Shares of a run's wall-clock limit (config.edn :run :time-limit-seconds,
+  :doc "whole-running-again was 0.55 until GLM's fix4: the check at 0.33 lands as the first
+        files appear and changes nothing, and the second is what got runs building, so it
+        comes as soon as there is something to wire up.
+        Shares of a run's wall-clock limit (config.edn :run :time-limit-seconds,
         none by default) at which the branch is told to wrap up, and then made
         to attempt a done, and before those, once, asked whether the whole thing
         runs yet. Wind-down was 0.7 until three ProgramBench runs stopped editing 7
@@ -2053,6 +2056,7 @@
  {:value {:max-rounds 10
           :max-tasks 12
           :worker-max-turns 40
+          :worker-max-turns-timed 100
           :repo-task-chars 400
           :stall-rounds 2
           :max-unsticks 2
@@ -2097,6 +2101,9 @@
         with its findings, rather than ship what a reviewer refused. :unstick-wait-ms is how long :unstick waits for the
         supervisor before taking its mechanical way out. :worker-max-turns caps
         one worker on one task; a supervisor `budget` directive overrides it.
+        :worker-max-turns-timed replaces it when the run has a time limit: there the
+        clock is the limit, and a worker pushed to finish with time left hands over to
+        one that has to read everything again.
         :temperatures are GVS5H's values as starting points, per step: expect to
         retune per model. :ideate? off is the ablation arm of the empirical test.
         :ideators names the directive prompts, one call each.
@@ -4718,6 +4725,7 @@
                 (:time-used ctx)
                 (< n (threshold :max-time-steers))
                 (>= (:time-used ctx) (if (zero? n) (:first-write p) (:first-write-again p)))
+                (not (:work-exists? branch))
                 (not-any? (fn [t] (contains? (tool-vocab :file-write) (:tool t))) (:turns branch))))
    :message-file "time-nothing-written"
    :prediction "the branch writes the first version of what the request names"
@@ -5295,6 +5303,8 @@
    ;; team-solve worker has no `task` tool to do it with.
    :when (and (state/active? branch)
               (roles/may-use? (:role branch) "task")
+              ;; Against a clock the time gates steer, and reorganising costs what is left.
+              (not (:time-used ctx))
               (number? (:lines-written branch))
               (> (:lines-written branch) (threshold :task-line-budget)))
    :message-form (str (prompt "over-budget")

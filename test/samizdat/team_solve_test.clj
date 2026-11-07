@@ -714,3 +714,20 @@
 (deftest a-worker-has-room-for-a-repository-task
   (is (>= (:worker-max-turns (lexicon/policy :team-solve)) 40)))
 
+(deftest against-a-clock-the-clock-limits-a-worker
+  ;; A worker at its turn cap with a third of the time left was pushed to finish, and the
+  ;; next one started from nothing and spent its turns re-reading the code.
+  (let [cap @(cells/cell-var 'cells.team-solve 'worker-turn-cap)
+        p (lexicon/policy :team-solve)]
+    (is (= (:worker-max-turns p) (cap {} {} p)))
+    (is (= (:worker-max-turns-timed p)
+           (cap {:started-ms 0 :config {:run {:time-limit-seconds 1800}}} {} p)))
+    (is (> (:worker-max-turns-timed p) (:worker-max-turns p)))
+    (testing "a budget the run set for itself still wins"
+      (is (= 7 (cap {:started-ms 0 :config {:run {:time-limit-seconds 1800}}} {:worker-turns 7} p))))))
+
+(deftest a-worker-and-its-manager-are-told-to-write-it-first
+  (testing "the manager's first task is not to study"
+    (is (str/includes? (prompt/prompt "team-solve-manage-system") "not to study")))
+  (testing "the worker wires up the whole thing before perfecting a part"
+    (is (str/includes? (prompt/prompt "roles/solver") "before you perfect any part"))))

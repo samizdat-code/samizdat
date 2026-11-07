@@ -330,3 +330,18 @@
                          [(:wind-down p) :time-wind-down]]]
       (is (contains? (at used :implementer) gate))
       (is (not (contains? (at used :supervisor) gate))))))
+
+(deftest a-later-worker-is-not-told-nothing-has-been-written
+  ;; Its own branch has written nothing, but an earlier worker's program is on disk.
+  (let [{:keys [first-write]} (gates/threshold :time-budget)]
+    (is (contains? (fired-with first-write [] :turns []) :time-nothing-written))
+    (is (not (contains? (fired-with first-write [] :turns [] :work-exists? true) :time-nothing-written)))))
+
+(deftest a-run-against-the-clock-is-not-told-to-split-its-task
+  ;; Fired 8 times on one 30-minute rebuild, each asking it to stop and reorganise.
+  (let [lines (inc (gates/threshold :task-line-budget))
+        at (fn [used] (set (map :gate (arbiter/eligible
+                                       (update (ctx-at used) :branch merge
+                                               {:role :implementer :lines-written lines})))))]
+    (is (contains? (at nil) :over-budget))
+    (is (not (contains? (at 0.4) :over-budget)))))

@@ -75,9 +75,50 @@ Hermes is wired in as an arm but does not work yet: its install fails on
 ## Findings so far
 
 These are from one attempt per task, which is not enough for a verdict. On
-`datasurgeon`, Pi scored 82% in pilot 1 and 0% in pilot 2.
+`datasurgeon`, Pi scored 82% in pilot 1 and 0% in pilot 2. `loop` on GLM's csview
+went from 78.2% to 5.5% between two runs.
 
-Pilot 2, before the fixes listed below:
+**A grader bug understates pilot 1, pilot 2 and every run before `fix4`.** The base
+images carry libtmux, whose pytest plugin crashes pytest 9, so branches that let plugins
+autoload ran no tests. The original csview scored 81.3% under that grader and scores
+99.7% now, so 65 of its 348 tests could never pass. Grading the original program checks
+this, with the same grader. So far: csview 99.7%, figlet 99.8%, yj 100%. The other seven
+tasks are unchecked and their old scores may be low too, for both arms. The trials' source
+was not kept, so the old scores can't be regraded.
+
+GLM-5.3, one attempt per task, three tasks, Pi not run:
+
+| Run | Changed | Arm | csview | figlet | yj |
+|---|---|---|---|---|---|
+| `fix1` | old settings | both | 0% | 0% | 0% |
+| `fix2` | ZCode's settings | team-solve | 1.4% | 0.0% | 19.9% |
+| `fix3` | supervisor fix, first-write warning, real tool messages | team-solve | 79.0%* | 39.4% | 6.8% |
+| `fix3l` | same, with tool schemas fixed | loop | 78.2%* | 45.6% | 33.7% |
+| `fix4` | mid-file repair and grader fixed | team-solve | 96.3% | 49.3% | 14.3% |
+| `fix4` | same | loop | 5.5% | 62.4% | 21.3% |
+
+\* under the buggy grader, at most 81.3%. `fix2`'s loop arm was stopped early, and `fix1`
+and `fix2` scored under that grader too.
+
+What moved GLM, most to least certain:
+
+- **Tool schemas.** `task({action, ...})` became a native schema naming only `action`.
+  GLM sent just that, so it could not claim a task and could not write.
+- **A repair that hid missing functions.** A paren missing mid-file was closed at the end
+  of the file, so the file loaded with `-main` nested inside another function and no error.
+  It went away in `fix4`: no auto-closes and no `unbound fn` in six trials.
+- **Vendor settings and real tool messages.** First writes moved from 14 to 23 minutes in,
+  to as early as 3, though most are still 6 to 13.
+
+GLM manages about 90K output tokens in 30 minutes. Low, high and max effort showed no
+useful difference in 12 probe calls, all near 55 tokens/s, and one call on figlet spent
+536 s thinking. Late integration is what is left: a program that first runs at 90% of the
+limit scores 5.5% on a task the other arm scores 96.3% on.
+
+These runs do not compare samizdat with Pi. That needs Pi and samizdat on one provider
+with the fixed grader, and several attempts.
+
+Pilot 2, on DeepSeek, before the fixes listed below and under the buggy grader:
 
 | Task | Pi | Samizdat |
 |---|---|---|

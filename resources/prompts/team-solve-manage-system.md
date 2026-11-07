@@ -29,8 +29,9 @@ result, then:
   worker should start, in a sentence or two. It names a target and adds no steps,
   requirements, checklists or plans of your own, and it is cut off if it runs long.
 - Until what the PROBLEM asks for exists, builds and runs the way it says it will be
-  run, NEXT is to make that so, with gaps if need be. Studying or documenting comes
-  after, when it is needed to fix something specific.
+  run, NEXT is to make that so, with gaps if need be. That includes the first task: it
+  is to write the thing, not to study it, and the worker looks things up as it goes.
+  Studying or documenting comes after, when it is needed to fix something specific.
 - A worker's status is its own claim: `ready` means the work exists and its checks
   pass, and a draft is `blocked` even if some tests pass. A line saying the project
   tree did not change is a fact, and outranks the report. If TIME LEFT is given, weigh
