@@ -77,7 +77,10 @@ def run_branch(branch, tests):
     run = WORKSPACE / "eval" / "run.sh"
     run.write_text(re.sub(r"--timeout=\d+", f"--timeout={TEST_TIMEOUT}",
                           run.read_text().replace("--timeout-method=thread", "--timeout-method=signal")))
-    env = dict(os.environ, PYTEST_XDIST_AUTO_NUM_WORKERS="2")
+    # The base images carry libtmux, whose pytest plugin crashes pytest 9 at startup, so a
+    # branch that lets plugins autoload ran no tests and scored 0 even for the original
+    # program (65 of csview's 348).
+    env = dict(os.environ, PYTEST_XDIST_AUTO_NUM_WORKERS="2", PYTEST_ADDOPTS="-p no:libtmux")
     try:
         subprocess.run(["bash", "eval/run.sh"], cwd=WORKSPACE, env=env, capture_output=True, timeout=BRANCH_TIMEOUT)
     except subprocess.TimeoutExpired:
