@@ -102,6 +102,8 @@ GLM-5.3, one attempt per task, three tasks, Pi not run:
 | `fix6` | same | loop | 62.9% | 50.2% | 42.9% |
 | `fix7` | rate limits waited out; ideation still on | team-solve | 38.5% | 30.9% | 62.8% |
 | `fix7` | same | loop | 95.1% | 41.7% | 0.0%, build failed |
+| `fix8` | ideation skipped on a clock, writes near the limit keep what loads | team-solve | 22.4% | 49.7% | 20.6% |
+| `fix8` | same | loop | 90.2% | 52.1% | 1.3% |
 
 \* under the buggy grader, at most 81.3%. `fix2`'s loop arm was stopped early, and `fix1`
 and `fix2` scored under that grader too.
@@ -144,6 +146,25 @@ figlet stays at 30-62% on both arms. Rebuilding two trials from saved source and
 journal shows real bugs in the programs: smushing and spacing off by a column in byte-exact
 tests, and fonts not found. The original passes these tests, so they are not the rig's. A
 Jolt-built binary took about 470 ms to run, against 30 ms for the original, under emulation.
+
+`fix8` found no new harness bug. loop's yj scored 1.3% because a `recur` meant for an outer
+loop spun forever on any flag, a bug of its own that real Clojure would share, and its last
+check ran the no-flag case. GLM queued calls for part of this run: csview's trials spent an
+estimated 520 to 790 s waiting before any output, against 80 to 200 s in earlier runs, and
+produced 29K to 43K tokens rather than 65K to 85K, so their scores are not comparable.
+
+Across `fix4` to `fix8`, 15 trials per arm under the fixed grader:
+
+| Task | loop median | team-solve median | loop range | team-solve range |
+|---|---|---|---|---|
+| csview | 82.8% | 94.8% | 5.5-95.1% | 22.4-96.3% |
+| figlet | 51.2% | 49.3% | 41.7-62.4% | 0-56.9% |
+| yj | 20.1% | 14.3% | 0-42.9% | 0-62.8% |
+| All | 50.2% | 38.5% | | |
+
+The harness changed between these runs and each task has only five trials, so this
+shows the spread, not a winner. Neither arm is ahead overall. Single attempts cannot
+measure a change smaller than this spread.
 
 These runs do not compare samizdat with Pi. That needs Pi and samizdat on one provider
 with the fixed grader, and several attempts.
