@@ -88,6 +88,18 @@
         {:still-broken note}
         {:refuse note}))))
 
+(defn- keep-what-loads?
+  "Whether a whole-file write that will not load should be refused to keep the file as it
+  stands: only past the share of a run's time limit where there may be no next turn to
+  fix it, and only when the file loads now."
+  [{:keys [config started-ms]} path abs]
+  (let [used (gates/time-used (get-in config [:run :time-limit-seconds]) started-ms
+                              (System/currentTimeMillis))]
+    (boolean (and used
+                  (>= used (:wind-down (gates/threshold :time-budget)))
+                  (fs/exists? abs)
+                  (not (:problem (vet-source path (slurp abs) false)))))))
+
 (defn- exam-note!
   "Record that a write took assertions out of the exam, and say so in the tool
   result — or nil when it did not, or when the path is not part of the exam.
@@ -923,6 +935,9 @@
               ;; the model replacing a file it has decided is wrong, and
               ;; refusing it would leave no way to do that.
               content* (or code content)]
+          (if (and problem (keep-what-loads? ctx path abs))
+            (miss branch (msg {:kept-loading true :path path :syntax note}))
+            (do
           (when-let [parent (fs/parent abs)]
             (fs/create-dirs parent))
           ;; The file as it stands, before this write replaces it — "" when
@@ -942,5 +957,5 @@
                                 :syntax note})
                           exam-msg)
              :category :success :progress? true :branch branch
-             :repaired? (boolean repaired)})))
+             :repaired? (boolean repaired)})))))
         (miss branch (msg {:outside-root true :path path :verb "written"}))))))

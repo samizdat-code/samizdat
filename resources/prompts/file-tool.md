@@ -11,7 +11,8 @@ The tests are the only thing standing between "the code runs" and "the code is r
 
 Add surrounding context to old_text to narrow it, or pass replace_all: true to change every occurrence.{% endif %}{% if edited %}Edited {{path}} ({{replacements}} replacement{{plural}}).{% if fallback %}
 [harness] matched via {{fallback}} fallback — exact text not found; whitespace tolerated.{% endif %}{% if still-broken %}
-[harness] Kept, but it still does not load: {{still-broken}}{% endif %}{% endif %}{% if refused %}Nothing was written — {{path}} is unchanged. That edit would leave it unable to load: {{syntax}}
+[harness] Kept, but it still does not load: {{still-broken}}{% endif %}{% endif %}{% if kept-loading %}Nothing was written — {{path}} is unchanged, because the run is nearly out of time, this text will not load and the file as it stands does: {{syntax}}
+Fix that and send it again, or leave the file as it is.{% endif %}{% if refused %}Nothing was written — {{path}} is unchanged. That edit would leave it unable to load: {{syntax}}
 Send the edit again with that fixed. If this was meant to be one half of a two-step change, make both halves in a single edit_file call, or write the whole file with write_file.{% endif %}{% if wrote %}Wrote {{chars}} chars to {{path}}.{% if repaired %}
 [harness] {{syntax}}{% endif %}{% if broken %}
 [harness] Written as given, but it will not load: {{syntax}}{% endif %}{% endif %}{% if unbalanced-generic %}the delimiters no longer balance{% endif %}

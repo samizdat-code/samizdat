@@ -746,3 +746,16 @@
   (is (str/includes? (prompt/prompt "system") "Do not draft a program in your thinking"))
   (testing "and the worker, whose frame replaces that prompt"
     (is (str/includes? (prompt/prompt "roles/solver") "Do not draft a program in your thinking"))))
+
+(deftest against-a-clock-the-team-goes-straight-to-work
+  ;; One ideator call thought for 609 s, the per-call limit, and was thrown away. With the
+  ;; second, csview's first worker started at 890 s of 1800.
+  (let [conn (db/open! ":memory:")
+        d (problem-dir)
+        calls (atom {})]
+    (with-redefs [llm/chat (scripted {:programs [right] :calls calls
+                                      :manager (fn [n] (if (zero? n) {:next "implement it"} {:status "done"}))})]
+      (run conn d {:config {:run {:loop "team-solve" :root d :time-limit-seconds 1800}}}))
+    (is (empty? (:ideate @calls)))
+    (is (seq (:plan @calls)) "the plan is still made")
+    (is (seq (:manage @calls)) "and the manager still picks the first task")))

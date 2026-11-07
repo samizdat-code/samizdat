@@ -179,6 +179,44 @@
         (is (str/includes? (slurp (str root "/a.clj")) "(+ 3 4)")))
       (finally (fs/delete-tree root)))))
 
+(deftest near-the-limit-a-write-that-will-not-load-keeps-the-version-that-does
+  ;; With 100 s left a yj rewrite broke a parser that loaded, and the build failed for good.
+  (let [root (str "/tmp/samizdat-files-" (random-uuid))
+        good "(ns a)\n(defn f [] 1)\n"
+        bad "(ns a)\n(defn f [] 2]\n"
+        now (System/currentTimeMillis)
+        clock (fn [used] {:config {:run {:time-limit-seconds 1000}} :started-ms (- now (long (* used 1000 1000)))})
+        write! (fn [m args] (files/write-file (merge (ctx root "write_file" args) m)))
+        path (str root "/a.clj")]
+    (fs/create-dirs root)
+    (try
+      (testing "in the last stretch it is refused and the file stays"
+        (spit path good)
+        (let [r (write! (clock 0.9) {:path "a.clj" :content bad})]
+          (is (= good (slurp path)))
+          (is (not (:progress? r)))
+          (is (str/includes? (:result r) "Nothing was written"))))
+      (testing "earlier it is written, since a next turn can fix it"
+        (spit path good)
+        (write! (clock 0.5) {:path "a.clj" :content bad})
+        (is (= bad (slurp path))))
+      (testing "and with no limit"
+        (spit path good)
+        (write! {} {:path "a.clj" :content bad})
+        (is (= bad (slurp path))))
+      (testing "a file that already does not load has nothing to protect"
+        (spit path bad)
+        (write! (clock 0.9) {:path "a.clj" :content "(ns a)\n(defn f [] 3]\n"})
+        (is (str/includes? (slurp path) "3")))
+      (testing "nor does a new file"
+        (write! (clock 0.9) {:path "b.clj" :content bad})
+        (is (= bad (slurp (str root "/b.clj")))))
+      (testing "a write that loads goes through"
+        (spit path good)
+        (write! (clock 0.9) {:path "a.clj" :content "(ns a)\n(defn f [] 4)\n"})
+        (is (str/includes? (slurp path) "4")))
+      (finally (fs/delete-tree root)))))
+
 (deftest anchored-read-and-patch-round-trip
   ;; karamazov-0kk: the model spends a coordinate it was HANDED instead of
   ;; reproducing the text it is replacing.

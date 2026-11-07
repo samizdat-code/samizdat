@@ -600,7 +600,10 @@
           l (ledger ctx)
           user (prompt/render "team-solve-ideate-user"
                               {:problem (:problem l) :plan (:plan l)})
-          replies (when (:ideate? p)
+          ;; Against a clock the ideas cost more than they bring: one call on csview ran
+          ;; to the 600 s call limit and was thrown away, and the manager's first task
+          ;; is to write the thing anyway.
+          replies (when (and (:ideate? p) (not (gates/run-time-left ctx)))
                     (mapv (fn [directive]
                             (ask ctx :ideator :ideate
                                  (prompt/render "team-solve-ideate-system"

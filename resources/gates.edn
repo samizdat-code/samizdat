@@ -2114,7 +2114,8 @@
         clock is the limit, and a worker pushed to finish with time left hands over to
         one that has to read everything again.
         :temperatures are GVS5H's values as starting points, per step: expect to
-        retune per model. :ideate? off is the ablation arm of the empirical test.
+        retune per model. :ideate? off is the ablation arm of the empirical test, and a run with
+        a time limit skips ideation whatever it says.
         :ideators names the directive prompts, one call each.
 
         A task with paired samples is a PROGRAM, and on it this workflow is

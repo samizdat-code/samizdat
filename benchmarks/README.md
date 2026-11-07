@@ -100,6 +100,8 @@ GLM-5.3, one attempt per task, three tasks, Pi not run:
 | `fix5` | same | loop | 82.8% | 51.2% | 20.1% |
 | `fix6` | start small, do not draft in thinking, manager told in its own message | team-solve | 96.0% | 56.9% | 0.0%, rate limited |
 | `fix6` | same | loop | 62.9% | 50.2% | 42.9% |
+| `fix7` | rate limits waited out; ideation still on | team-solve | 38.5% | 30.9% | 62.8% |
+| `fix7` | same | loop | 95.1% | 41.7% | 0.0%, build failed |
 
 \* under the buggy grader, at most 81.3%. `fix2`'s loop arm was stopped early, and `fix1`
 and `fix2` scored under that grader too.
@@ -131,6 +133,17 @@ team-solve's still had three each on csview and figlet (400 s and 686 s). Its yj
 for a different reason: GLM rate limited the account for a few minutes (429, code 1302),
 and five failed calls in a row ended the run at 169 s. loop hit the same limit and carried
 on to its best yj so far. A rate limit is now waited out, and a usage cap still stops at once.
+
+In `fix7`, one ideator call ran to the 600 s call limit and was thrown away, so csview's first
+worker started at 890 s of 1800 and team-solve scored 38.5%. A timed run now skips ideation.
+loop's yj had a build at 234 s, but at 1681 s a whole-file rewrite of a parser left it not
+loading, and it scored 0. In the last 15% of a timed run, such a write is now refused
+if the file loads as it stands.
+
+figlet stays at 30-62% on both arms. Rebuilding two trials from saved source and from the
+journal shows real bugs in the programs: smushing and spacing off by a column in byte-exact
+tests, and fonts not found. The original passes these tests, so they are not the rig's. A
+Jolt-built binary took about 470 ms to run, against 30 ms for the original, under emulation.
 
 These runs do not compare samizdat with Pi. That needs Pi and samizdat on one provider
 with the fixed grader, and several attempts.
