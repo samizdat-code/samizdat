@@ -319,3 +319,14 @@
                                                {:role role :lines-written lines})))))]
     (is (contains? (at :implementer) :over-budget))
     (is (not (contains? (at :solver) :over-budget)))))
+
+(deftest the-supervisor-is-not-told-to-get-the-build-running
+  ;; Its branch sees the same clock but its job is the run, not the program.
+  (let [p (gates/threshold :time-budget)
+        at (fn [used role] (set (map :gate (arbiter/eligible
+                                            (update (ctx-at used) :branch assoc :role role)))))]
+    (doseq [[used gate] [[(:first-write p) :time-nothing-written]
+                         [(:whole-running p) :time-whole-running]
+                         [(:wind-down p) :time-wind-down]]]
+      (is (contains? (at used :implementer) gate))
+      (is (not (contains? (at used :supervisor) gate))))))

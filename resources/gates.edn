@@ -4691,6 +4691,7 @@
          Told once or twice, with the seconds left, and :time-last-call follows. A
          lifetime count, because a write settles this gate as met."
    :when (and (state/active? branch)
+                (not= :supervisor (:role branch))
               (not (state/planning? branch))
               (:time-used ctx)
               (< (count (filter (fn [f] (and (= :time-wind-down (:gate f)) (not (:settled f)))) (:gate-history branch)))
@@ -4711,6 +4712,7 @@
    :when (let [p (threshold :time-budget)
                n (count (filter (fn [f] (and (= :time-nothing-written (:gate f)) (not (:settled f)))) (:gate-history branch)))]
            (and (state/active? branch)
+                (not= :supervisor (:role branch))
                 (not (state/planning? branch))
                 (roles/may-use? (:role branch) "write_file")
                 (:time-used ctx)
@@ -4730,6 +4732,7 @@
    :when (let [p (threshold :time-budget)
                n (count (filter (fn [f] (and (= :time-whole-running (:gate f)) (not (:settled f)))) (:gate-history branch)))]
            (and (state/active? branch)
+                (not= :supervisor (:role branch))
                 (not (state/planning? branch))
                 (:time-used ctx)
                 (< n (threshold :max-whole-running-checks))
