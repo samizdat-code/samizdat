@@ -36,6 +36,7 @@ def provenance():
 
 
 def build(report):
+    keep_source()
     prov = report["provenance"] = provenance()
     if not (WORKSPACE / "compile.sh").exists():
         return "no compile.sh"
@@ -53,6 +54,20 @@ def build(report):
     shutil.copy(built, BUILT)
     BUILT.chmod(0o755)
     return None
+
+
+def keep_source():
+    """Save what the trial wrote before branches wipe it, so a grader fix can regrade it."""
+    try:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(LOGS / "source.tar.gz", "w:gz") as t:
+            for p in WORKSPACE.rglob("*"):
+                rel = p.relative_to(WORKSPACE)
+                if p.is_file() and not p.is_symlink() and (p.suffix in (".clj", ".cljc") or rel.name in ("compile.sh", "deps.edn")) \
+                        and rel.parts[0] not in (".samizdat", ".git"):
+                    t.add(p, arcname=str(rel))
+    except OSError as e:
+        print(f"source not kept: {e}", file=sys.stderr)
 
 
 def passed_in(xml_path):
