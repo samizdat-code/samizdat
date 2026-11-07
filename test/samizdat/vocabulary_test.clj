@@ -8,6 +8,7 @@
             [clojure.test :refer [deftest testing is]]
             [jolt.fs :as fs]
             [samizdat.agent.gates :as gates]
+            [samizdat.engine.proc :as proc]
             [samizdat.prompt]
             [samizdat.vocabulary :as vocab]))
 
@@ -171,3 +172,19 @@
     (with-redefs [samizdat.prompt/render (fn [& a] (swap! renders inc) (apply render a))]
       (vocab/render entries (assoc policy :max-chars (+ one 200))))
     (is (< @renders 30) (str @renders " renders"))))
+
+(deftest a-symlink-out-of-the-directory-is-not-read
+  (let [base (str "/tmp/samizdat-vocab-" (System/nanoTime))
+        root (str base "/src")]
+    (.mkdirs (java.io.File. (str root "/sub")))
+    (spit (str root "/a.clj") "(ns a)\n")
+    (spit (str root "/sub/b.clj") "(ns sub.b)\n")
+    (spit (str base "/out.clj") "(ns out)\n")
+    (proc/run {:dir root} "ln" "-s" (str base "/out.clj") "sub/linked.clj")
+    (try
+      (let [found (#'vocab/source-files root {:extensions [".clj"] :max-files 10})]
+        (is (= 2 (count found)) (pr-str found))
+        (is (not-any? #(str/includes? % "linked") found))
+        (testing "and a file directly in the directory counts"
+          (is (some #(str/ends-with? % "/a.clj") found))))
+      (finally (fs/delete-tree base)))))

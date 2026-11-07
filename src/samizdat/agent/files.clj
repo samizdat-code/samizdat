@@ -620,7 +620,11 @@
          ;; file has no meaningful relative name, so it reports itself.
          project (for [ext clojure-exts
                        p (fs/glob root* (str "{*." ext ",**/*." ext "}"))
-                       :let [rel (str (fs/relativize root* (fs/canonicalize (str p))))]
+                       ;; A link out of the root is not the project's, and these lines
+                       ;; go straight to the model.
+                       :let [abs (str (fs/canonicalize (str p)))]
+                       :when (under? root* abs)
+                       :let [rel (str (fs/relativize root* abs))]
                        :when (in-scope? scopes rel)]
                    [(str p) rel])
          referenced (for [r refs
@@ -667,7 +671,9 @@
                                                   (coll? paths) paths
                                                   :else [paths])))]
      (->> (fs/glob root* (str pattern))
-          (map #(str (fs/relativize root* (fs/canonicalize (str %)))))
+          (map #(str (fs/canonicalize (str %))))
+          (filter #(under? root* %))
+          (map #(str (fs/relativize root* %)))
           (filter #(in-scope? scopes %))
           ;; Sorted, so two runs asking the same question get the same answer
           ;; in the same order — a result set that reshuffles per call reads as

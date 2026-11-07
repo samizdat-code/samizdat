@@ -76,6 +76,20 @@
         (spit (str root "/b.clj") (str "(ns b)\n" (tangled "fresh" 30)))
         (is (= ["fresh"] (map :name (cm/of-tree root base policy)))))
       (finally (fs/delete-tree root))))
+  (testing "a link out of the project is not read"
+    (let [base (str "/tmp/samizdat-metrics-" (random-uuid))
+          root (str base "/p")
+          git (fn [& args] (apply sh/sh (concat ["git"] args [:dir root])))]
+      (fs/create-dirs root)
+      (try
+        (spit (str root "/a.clj") plain)
+        (spit (str base "/out.clj") (str "(ns out)\n" (tangled "outside" 30)))
+        (git "init" "-q") (git "add" "-A")
+        (git "-c" "user.name=t" "-c" "user.email=t@t" "commit" "-qm" "base")
+        (let [b (gitdiff/baseline root)]
+          (sh/sh "ln" "-s" (str base "/out.clj") "linked.clj" :dir root)
+          (is (empty? (cm/of-tree root b policy))))
+        (finally (fs/delete-tree base)))))
   (testing "no baseline, nothing to compare"
     (is (empty? (cm/of-tree "/tmp" nil policy)))))
 

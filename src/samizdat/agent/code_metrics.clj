@@ -9,6 +9,7 @@
   noticing must never be able to fail the write it is noticing."
   (:require [clojure.string :as str]
             [metrics.core :as metrics]
+            [samizdat.agent.files :as files]
             [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.prompt :as prompt]))
 
@@ -69,8 +70,5 @@
       (let [paths (take max-files paths)]
         (findings policy
                   (into {} (map (juxt identity #(gitdiff/file-at root baseline %))) paths)
-                  (into {} (for [p paths
-                                 :let [f (java.io.File. (str root "/" p))]
-                                 :when (.exists f)]
-                             [p (slurp f)])))))
+                  (files/read-sources root paths))))
     (catch Throwable _ nil)))

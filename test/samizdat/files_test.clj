@@ -25,7 +25,8 @@
             [jolt.fs :as fs]
             [samizdat.agent.files :as files]
             [samizdat.agent.tools]
-            [samizdat.approval :as approval]))
+            [samizdat.approval :as approval]
+            [samizdat.engine.proc :as proc]))
 
 (defn- ctx [root tool args]
   {:tool-name tool :args args :branch {:id "B1"} :root root})
@@ -216,6 +217,22 @@
         (write! (clock 0.9) {:path "a.clj" :content "(ns a)\n(defn f [] 4)\n"})
         (is (str/includes? (slurp path) "4")))
       (finally (fs/delete-tree root)))))
+
+(deftest a-symlink-out-of-the-project-is-not-searched
+  ;; grep handed back the lines of a file outside the root, through a link inside it.
+  (let [base (str "/tmp/samizdat-files-" (random-uuid))
+        root (str base "/proj")
+        secret (str base "/creds.clj")]
+    (fs/create-dirs (str root "/src"))
+    (spit secret "(def token \"TOP-SECRET\")\n")
+    (spit (str root "/src/a.clj") "(def token \"mine\")\n")
+    (proc/run {:dir root} "ln" "-s" secret "src/creds.clj")
+    (try
+      (let [hits (files/grep-project root "token")]
+        (is (= ["src/a.clj"] (mapv :path hits)))
+        (is (not (str/includes? (pr-str hits) "TOP-SECRET"))))
+      (is (= ["src/a.clj"] (files/glob-project root "**/*.clj")))
+      (finally (fs/delete-tree base)))))
 
 (deftest anchored-read-and-patch-round-trip
   ;; karamazov-0kk: the model spends a coordinate it was HANDED instead of
