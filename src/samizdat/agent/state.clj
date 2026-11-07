@@ -926,7 +926,7 @@
        ;; The TURN HISTORY, not :repl-written — that only tracks files a plan
        ;; declared, and a branch that wrote without one is still a branch that
        ;; is working rather than orienting.
-       (not-any? (set tools) (keep :tool (:turns branch)))
+       (not-any? #(or (contains? (set tools) (:tool %)) (:wrote %)) (:turns branch))
        (>= (count (:turns branch)) n)))
 
 (defn plan-stale?
@@ -946,7 +946,7 @@
   (let [ts (vec (:turns branch))]
     (and (seq (unwritten branch))
          (>= (count ts) n)
-         (not-any? (set tools) (keep :tool (take-last n ts))))))
+         (not-any? #(or (contains? (set tools) (:tool %)) (:wrote %)) (take-last n ts)))))
 
 (defn context-pressure
   "How close the LAST request came to the operating ceiling: nil, `:advisory`,
@@ -1030,6 +1030,18 @@
   the durable record that it did."
   [branch]
   (update branch :context-squeeze (fnil inc 0)))
+
+(defn note-tree-writes
+  "Record files a turn changed on disk, given the stamps before and after it: each one is
+  discharged from the plan, and the turn is marked :wrote when it was not a file tool's
+  own write. Keeps `stamps` for the next turn to compare against."
+  [branch stamps file-tool?]
+  (let [old (or (:tree-stamps branch) {})
+        changed (vec (keep (fn [[p s]] (when (not= s (get old p)) p)) stamps))]
+    (cond-> (assoc branch :tree-stamps stamps)
+      (seq changed) (as-> b (reduce note-write b changed))
+      (and (seq changed) (not file-tool?) (seq (:turns branch)))
+      (update :turns (fn [ts] (conj (pop (vec ts)) (assoc (peek (vec ts)) :wrote true)))))))
 
 (defn add-turn
   "Record one turn on the branch. `entry` carries :turn, :tool, :category, and

@@ -108,21 +108,19 @@
       (is (= (count (convo)) (count (get-in out [:branch :messages])))))))
 
 (deftest which-calls-may-run-beside-another
+  ;; Every call a reply makes runs, as Pi, deepseek-harness and memdoor run them: round
+  ;; trips are the cost under a clock. What ends a turn or reshapes the harness stays last.
   (doseq [c [{:name "read_file" :args {:path "a"}}
-             {:name "grep" :args {:pattern "x"}}
-             {:name "shell" :args {:command "ls -la"}}
-             {:name "shell" :args {:command "cd /workspace; sed -n 1,20p a.txt"}}
-             {:name "shell" :args {:command "grep -n foo src/a.clj | head -5"}}]]
-    (is (tools/batchable? c) (pr-str c)))
-  (doseq [c [{:name "write_file" :args {:path "a" :content "x"}}
+             {:name "write_file" :args {:path "a" :content "x"}}
+             {:name "edit_file" :args {:path "a" :old_text "x" :new_text "y"}}
              {:name "shell" :args {:command "jolt test"}}
-             {:name "shell" :args {:command "cat a > b"}}
-             {:name "shell" :args {:command "ls; rm -rf x"}}
-             {:name "shell" :args {:command "find . -delete"}}
              {:name "shell" :args {:command "sed -i s/a/b/ f"}}
-             {:name "shell" :args {:command "cat a | sh"}}
-             {:name "shell" :args {:command "echo $(rm x)"}}
-             {:name "done" :args {}}]]
+             {:name "eval" :args {:code "(+ 1 2)"}}]]
+    (is (tools/batchable? c) (pr-str c)))
+  (doseq [c [{:name "done" :args {}}
+             {:name "give_up" :args {}}
+             {:name "plan" :args {}}
+             {:name "read_file" :args "not a map"}]]
     (is (not (tools/batchable? c)) (pr-str c))))
 
 (deftest a-reply-keeps-the-calls-it-could-not-run-first
@@ -136,25 +134,28 @@
             {:name "write_file" :args {:path "b" :content "x"}}]
            (:dropped-calls p)))))
 
-(deftest read-only-calls-run-first-and-the-rest-are-still-named
+(deftest earlier-calls-run-in-order-and-each-sees-the-last
   (let [ran (atom [])]
-    (with-redefs [samizdat.agent.tools/phase-refusal (fn [_] nil)
+    (with-redefs [samizdat.agent.tools/phase-refusal (fn [{:keys [tool-name]}] (when (= "grep" tool-name) {:result "refused"}))
                   samizdat.agent.tools/run-tool
-                  (fn [{:keys [tool-name]}] (swap! ran conj tool-name)
-                    {:result (str tool-name " out") :category :success})]
-      (let [{:keys [text ran-names still-dropped]}
+                  (fn [{:keys [tool-name branch]}]
+                    (swap! ran conj [tool-name (:seen branch)])
+                    {:result (str tool-name " out") :category :success
+                     :branch (update branch :seen (fnil conj []) tool-name)})]
+      (let [{:keys [text ran-names still-dropped branch]}
             (tools/run-batched {:branch {:id "B1"}}
-                               {:dropped ["read_file" "write_file" "grep" "read_file" "read_file" "read_file"]
+                               {:dropped ["read_file" "write_file" "grep" "done" "shell"]
                                 :dropped-calls [{:name "read_file" :args {:path "a"}}
                                                 {:name "write_file" :args {:path "b"}}
                                                 {:name "grep" :args {:pattern "x"}}
-                                                {:name "read_file" :args {:path "c"}}
-                                                {:name "read_file" :args {:path "d"}}
-                                                {:name "read_file" :args {:path "e"}}]})]
-        (is (= ["read_file" "grep" "read_file"] @ran ran-names))
-        (is (= ["write_file" "read_file" "read_file"] still-dropped) "over the limit, and the write")
-        (is (str/includes? text "read_file out"))
-        (is (str/includes? text "grep out"))))))
+                                                {:name "done" :args {}}
+                                                {:name "shell" :args {:command "ls"}}]})]
+        (is (= ["read_file" "write_file" "shell"] ran-names))
+        (is (= [["read_file" nil] ["write_file" ["read_file"]] ["shell" ["read_file" "write_file"]]] @ran)
+            "each call runs on the branch the one before left")
+        (is (= ["read_file" "write_file" "shell"] (:seen branch)) "and the branch comes back")
+        (is (= ["grep" "done"] still-dropped) "a refused call and done are named, not run")
+        (is (str/includes? text "write_file out"))))))
 
 (deftest old-write-bodies-leave-the-prompt-in-one-batch
   (let [body (apply str (repeat 6000 "z"))
@@ -207,3 +208,34 @@
                            (cmp/snapshot-facts turns (snap-opts {})))]
     (is (str/includes? msg "src/a.clj"))
     (is (str/includes? msg "./compile.sh"))))
+
+(deftest a-long-result-keeps-its-end-and-scales-with-the-window
+  ;; A comparison script's summary is its last line, and the clip used to keep only the
+  ;; first 10,000 characters. Pi and deepseek-harness keep the tail, up to about 50 KB.
+  (let [clip @#'samizdat.agent.loop/truncate
+        body (str "START\n" (apply str (repeat 200000 "x")) "\nSUMMARY pass=19 fail=6")
+        big (clip body 3 1000000)
+        small (clip body 3 32000)]
+    (is (str/starts-with? big "START"))
+    (is (str/ends-with? big "SUMMARY pass=19 fail=6") "the end survives")
+    (is (str/includes? big "clipped"))
+    (testing "a large window shows far more than the old 10,000"
+      (is (> (count big) 30000)))
+    (testing "a small local model's window is not flooded"
+      (is (< (count small) (count big)))
+      (is (str/ends-with? small "SUMMARY pass=19 fail=6")))
+    (testing "a short result is untouched"
+      (is (= "ok" (clip "ok" 3 1000000))))))
+
+(deftest history-is-kept-verbatim-longer-on-a-large-window
+  ;; Past 240,000 characters every exchange older than the last 30 became a one-line
+  ;; digest, which dropped the original program's probe outputs. Pi kept its whole
+  ;; history up to its window, 295K tokens on figlet.
+  (let [policy (gates/threshold :context-budget)
+        squeeze (gates/threshold :context-squeeze)
+        budget (fn [w] (:threshold-chars (infer/squeezed-budget policy 0 squeeze w)))]
+    (is (= (:compaction-chars policy) (budget nil)) "no window, as before")
+    (is (= (:compaction-chars policy) (budget 32000)) "a small window never goes below it")
+    (is (> (budget 1000000) (* 4 (:compaction-chars policy))) "a 1M window keeps far more")
+    (testing "a squeeze still shrinks it"
+      (is (< (:threshold-chars (infer/squeezed-budget policy 2 squeeze 1000000)) (budget 1000000))))))

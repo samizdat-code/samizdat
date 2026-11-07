@@ -260,6 +260,7 @@
             [samizdat.glm-adapter-test]
             [samizdat.native-history-test]
             [samizdat.code-metrics-test]
+            [samizdat.shell-writes-test]
             [samizdat.memory-admission-test]
             [samizdat.memory-source-test]
             [samizdat.memory-revise-test]
@@ -350,6 +351,7 @@
     samizdat.glm-adapter-test
     samizdat.native-history-test
     samizdat.code-metrics-test
+    samizdat.shell-writes-test
     samizdat.memory-admission-test
     samizdat.memory-source-test
     samizdat.memory-revise-test

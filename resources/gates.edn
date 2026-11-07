@@ -738,19 +738,20 @@
         was one, and an overrun scores zero."}
 
  :call-batch
- {:value {:tools #{"read_file" "read_digest" "grep" "glob" "list_files" "doc" "manual" "recall" "fetch_turn"}
-          :shell-tool "shell"
-          :shell-prefix-regex "^cd\\s+\\S+\\s*(&&|;)\\s*"
-          :shell-allow-regex "^(cat|sed|head|tail|ls|tree|grep|rg|find|wc|file|od|xxd|strings|nm|which|pwd|diff|cmp|stat|sort|uniq)\\b"
-          :shell-deny-regex "[>;&`$]|\\bsed\\s+(-\\S*\\s+)*-\\S*i|-delete|-exec|\\|\\s*(sh|bash|zsh|dash|python\\S*|perl|ruby|node|jolt|xargs|tee|awk|sed)\\b"
-          :max-extra 3 :result-chars 3000}
+ {:value {;; Every other call runs, in order. These end a turn or reshape the harness, so
+          ;; they stay where a reply puts them last.
+          :never #{"done" "give_up" "plan" "thesis" "branch_theses" "split" "reload_cells"
+                   "adopt" "policy" "prompt" "manifest" "cell"}
+          :max-extra 10 :result-chars 12000}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-lu4p"]
-  :doc "Which calls may run beside the one a reply is answered with. One tool call
-        runs per reply; the others used to be dropped, and each one cost a round trip
-        to send again. Only calls that cannot change anything run: a later call was
-        written without seeing an earlier one's result, which is harmless for a read
-        and not for a write. The rest are still named back to the model."}
+  :doc "Which of a reply's calls run besides its last. All of them now, in order, each on
+        the branch the one before left, as Pi, deepseek-harness and memdoor do: each call
+        that was dropped cost a round trip to send again, and round trips are the cost
+        under a clock. Read-only calls alone ran until 2026-11-07. A call written without
+        seeing an earlier one's result can go wrong, which the model sees in that result.
+        :never names the calls that end a turn or reshape the harness; they are named back
+        to the model, not run."}
 
  :code-metrics
  {:value {:severities #{:critical} :extensions [".clj" ".cljc"] :max-files 20 :max-shown 5}
@@ -1999,7 +2000,7 @@
 
  :tool-clip
  {:value
-  {:message "\n… [{{shown}} of {{total}} chars shown — the rest was clipped. Ask for the part you still need (a narrower command, a `read_file` with an `offset`, or a filter{% if turn %}, or `read_digest {turns: [{{turn}}], question}` to ask about the whole of this result{% endif %}), not the same call again.]"
+  {:message "\n… [{{shown}} of {{total}} chars shown, from the start and the end — the middle was clipped. Ask for the part you still need (a narrower command, a `read_file` with an `offset`, or a filter{% if turn %}, or `read_digest {turns: [{{turn}}], question}` to ask about the whole of this result{% endif %}), not the same call again.]"
    ;; What a clipped result keeps on its turn row for read_digest {turns}
    ;; (karamazov-05z0.15): the whole result up to this, so one huge output
    ;; cannot fill the journal.
@@ -3926,7 +3927,14 @@
         role the compaction fold's summary call runs on."}
 
  :context-budget
- {:value {:tool-result-chars   10000
+ {:value {:tool-result-chars   40000
+          ;; One result may take this share of the model's window, in tokens times
+          ;; :chars-per-token, but never less than :tool-result-floor characters. The
+          ;; head share is what is kept from the start; the rest comes from the end.
+          :tool-result-window-share 0.04
+          :tool-result-floor   6000
+          :tool-result-head-share 0.3
+          :chars-per-token     4
           :file-read-chars     60000
           :test-output-lines   25
           :judge-rules-chars   6000
@@ -3959,6 +3967,9 @@
           ;; Terminal-Bench, the agent forgot finished work and redid it
           ;; (karamazov-0wvc.1).
           :compaction-chars    240000
+          ;; On a model with a large window, history stays verbatim up to this share of
+          ;; it (tokens times :chars-per-token), never below :compaction-chars.
+          :compaction-window-share 0.3
           ;; How many exchanges the compaction frontier moves by at once
           ;; (karamazov-pdes). Measured on run 5e78b96a: advancing one
           ;; exchange per turn re-prefilled the whole verbatim window on
@@ -4488,6 +4499,9 @@
   :shipping #{"write_file" "edit_file" "patch" "shell" "reload_cells"
               "manifest" "done" "give_up" "thesis" "branch_theses"}
   :file-write #{"write_file" "edit_file" "patch"}
+  ;; Tools that can change files without being file tools. A turn on one is checked
+  ;; against the tree, and counts as a write when it changed a file.
+  :tree-writers #{"shell" "bash" "eval"}
   ;; The storm guard's tool classification (karamazov-ekk). :storm-exempt is
   ;; the read-only surface — repeated identical reads are over-studying's
   ;; business, not a storm — plus done/give_up, whose repetition belongs to
@@ -4752,7 +4766,7 @@
                 (< n (threshold :max-time-steers))
                 (>= (:time-used ctx) (if (zero? n) (:first-write p) (:first-write-again p)))
                 (not (:work-exists? branch))
-                (not-any? (fn [t] (contains? (tool-vocab :file-write) (:tool t))) (:turns branch))))
+                (not-any? (fn [t] (supervisor/shipped? (tool-vocab :file-write) t)) (:turns branch))))
    :message-file "time-nothing-written"
    :prediction "the branch writes the first version of what the request names"
    :window 3}

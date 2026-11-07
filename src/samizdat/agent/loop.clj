@@ -257,20 +257,39 @@
                   (or (not require-relevance?)
                       (state/advances-thesis? branch (:claim artifact)))))))
 
+(defn- result-window
+  "The model's window in tokens, which a tool result's budget scales with."
+  [ctx]
+  (or (get-in ctx [:llm-config :request-window])
+      (get-in ctx [:llm-config :context-window])
+      (get-in ctx [:llm-config :max-context])))
+
 (defn- truncate
-  "Clip a tool result to the budget, ending with what the model can DO about
-  it. See gates.edn :tool-clip for why the marker carries the sizes and the
-  instruction rather than the bare word `truncated`. `turn`, when given, is
-  named in the marker, since the whole result is kept on that turn's row for
-  read_digest {turns} (karamazov-05z0.15)."
-  ([s] (truncate s nil))
-  ([s turn]
+  "Clip a tool result to the budget, keeping its start and its end: what a command prints
+  last, a test summary or a diff's total, is as often the point as what it prints first.
+  The budget grows with the model's window, up to gates.edn :context-budget
+  :tool-result-chars, so a small local model is not flooded. The marker says what to do
+  about the cut (see gates.edn :tool-clip). `turn`, when given, is named in it, since the
+  whole result is kept on that turn's row for read_digest {turns} (karamazov-05z0.15)."
+  ([s] (truncate s nil nil))
+  ([s turn] (truncate s turn nil))
+  ([s turn window]
    (let [s (str s)
-         cap (max-result-chars)]
+         {:keys [tool-result-chars tool-result-window-share tool-result-floor
+                 tool-result-head-share chars-per-token]} (gates/threshold :context-budget)
+         cap (if window
+               (max tool-result-floor
+                    (min tool-result-chars
+                         (long (* tool-result-window-share window chars-per-token))))
+               tool-result-chars)]
      (if (> (count s) cap)
-       (str (subs s 0 cap)
-            (prompt/render-str (:message (gates/threshold :tool-clip))
-                               {:shown cap :total (count s) :turn turn}))
+       (let [head (long (* cap tool-result-head-share))
+             tail (- cap head)]
+         (str (subs s 0 head)
+              (prompt/render-str (:message (gates/threshold :tool-clip))
+                                 {:shown cap :total (count s) :turn turn})
+              "\n"
+              (subs s (- (count s) tail))))
        s))))
 
 (defn- unclipped
@@ -984,6 +1003,18 @@
           branch
           (transition-effects {:result result :artifact artifact})))
 
+(defn- note-tree-writes
+  "After a call that could write files, what it changed on disk: a shell heredoc writes a
+  file as surely as write_file does, and both models write most files that way."
+  [branch ctx tool refused?]
+  (let [file-tool? (contains? (gates/tool-vocab :file-write) tool)]
+    (if (or refused?
+            (not (or file-tool? (contains? (gates/tool-vocab :tree-writers) tool))))
+      branch
+      (if-let [stamps (gitdiff/file-stamps (:root ctx) (:git-baseline ctx))]
+        (state/note-tree-writes branch stamps file-tool?)
+        branch))))
+
 (defn- note-storm
   "The storm guard's per-call bookkeeping (karamazov-ekk): note the
   dispatched call in the branch's window, count consecutive withholds as
@@ -1080,6 +1111,8 @@
         ;; Before the call the reply is answered with: that is the order it sent them.
         batched (when (and (not refusal) (seq (:dropped-calls parsed)))
                   (tools/run-batched (assoc ctx :branch branch :turn turn) parsed))
+        ;; The earlier calls may have written or read, so the last runs on what they left.
+        branch (or (:branch batched) branch)
         result (cond-> (or refusal
                            (tools/run-tool (assoc ctx :branch branch :turn turn
                                                   :tool-name tool :args (:args parsed))))
@@ -1116,7 +1149,8 @@
                                 :verify? (storm/verify-call?
                                           tool (:args parsed)
                                           (get-in ctx [:config :run :verify-cmd]))}
-                               storm-policy))
+                               storm-policy)
+                   (note-tree-writes ctx tool (some? refusal)))
         ;; 29 of gen-20's 57 failures were four identical (tool, message)
         ;; pairs, and the harness answered the fifth exactly as it answered
         ;; the first. Say something different instead.
@@ -1399,7 +1433,7 @@
       ;; a message that does not say which tool produced it gets the generic
       ;; preview instead, which is the one shape that carries nothing.
       (state/add-message branch "user"
-                         (message/frame-result tool (truncate (:result result) turn))
+                         (message/frame-result tool (truncate (:result result) turn (result-window ctx)))
                          {:turn turn :tool tool})
       ;; Coverage answers whether the safe-state rung's fallback is honest:
       ;; the green cursor still points into a turn log the journal can
@@ -1473,8 +1507,8 @@
             ;; then the harness's own blocks (karamazov-o4wm.3): what the
             ;; model can trust about who is speaking is the frame, not the
             ;; `---` rule — a file can carry one of those.
-            body (str (message/frame-result tool (truncate (:result result) turn))
-                      ;; One call runs per reply; say which others did not.
+            body (str (message/frame-result tool (truncate (:result result) turn (result-window ctx)))
+                      ;; Say which of the reply's other calls did not run.
                       (when-let [dropped (seq (or (:still-dropped result) (:dropped parsed)))]
                         (str "\n\n" (prompt/render "calls-dropped"
                                                     {:ran tool

@@ -119,3 +119,9 @@
       (is (nil? (get-in specs ["edit_file" :parameters :additionalProperties]))))
     (testing "only argument names, not the code in its examples"
       (is (not-any? #(re-find #"^:" (name %)) (props "manifest"))))))
+
+(deftest the-prompt-does-not-say-thinking-is-dropped
+  ;; DeepSeek and GLM have their reasoning replayed, so telling them it is gone was false.
+  (let [turn (prompt/prompt "system-turn")]
+    (is (not (str/includes? turn "not kept between turns")))
+    (is (str/includes? turn "visible sentences"))))

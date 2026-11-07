@@ -405,7 +405,7 @@
                                  own-turn-count plan-stale? planned? planning?
                                  safe-state-due? stated-goal turn-count unwritten done-streak]}
     samizdat.agent.storm {:vars [oscillation-blocked? repeat-blocked?]}
-    samizdat.agent.supervisor {:vars [over-studying? repeating-one-failure? stall-nudge
+    samizdat.agent.supervisor {:vars [over-studying? shipped? repeating-one-failure? stall-nudge
                                       unchanged-failure]}
     samizdat.agent.tools.ship {:vars [asks-the-reader? engages-problem? unfinished-claim?]}
     samizdat.prompt {:vars [render-str]}})

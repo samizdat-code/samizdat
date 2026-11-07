@@ -23,7 +23,11 @@
 ;; of the config layer. Shipping tools change or run something — real
 ;; movement toward finishing; anything else counts as studying.
 
-(defn shipped? [tools entry] (contains? tools (:tool entry)))
+(defn shipped?
+  "Whether a turn wrote a file: by a file tool, or through the shell, which the loop marks
+  :wrote when the tree changed under it."
+  [tools entry]
+  (boolean (or (contains? tools (:tool entry)) (:wrote entry))))
 
 (defn over-studying?
   "The branch shipped something at some point, then spent the last `threshold`
@@ -69,7 +73,7 @@
   [writes turns]
   (->> (vec turns)
        reverse
-       (take-while #(not (contains? writes (str (:tool %)))))
+       (take-while #(not (or (contains? writes (str (:tool %))) (:wrote %))))
        reverse
        vec))
 

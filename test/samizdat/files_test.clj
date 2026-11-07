@@ -325,7 +325,8 @@
   ;; `eval` — ten turns of forty to read the file it was told to start from.
   (let [dir (str (fs/create-temp-dir))
         big (str/join "\n" (map #(str "line " % " " (apply str (repeat 60 \x)))
-                                (range 400)))
+                                (range 1200)))
+        ;; Larger than one page at :tool-result-chars, which is now 40,000.
         _ (spit (str dir "/big.txt") big)
         read #(files/read-file {:branch {:id "B1"} :root dir :args %})
         p1 (:result (read {:path "big.txt"}))]
@@ -340,8 +341,8 @@
         (is (str/includes? p2 (str "line " next-line " ")))
         (is (not (str/includes? p2 "line 0 ")))))
     (testing "paging reaches the end, where nothing more is offered"
-      (let [last-page (:result (read {:path "big.txt" :offset 395}))]
-        (is (str/includes? last-page "line 399"))
+      (let [last-page (:result (read {:path "big.txt" :offset 1195}))]
+        (is (str/includes? last-page "line 1199"))
         (is (not (str/includes? last-page "Continue with")))))
     (testing "limit bounds the page in lines"
       (let [r (:result (read {:path "big.txt" :offset 10 :limit 3}))]

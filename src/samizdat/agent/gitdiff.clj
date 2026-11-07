@@ -238,6 +238,17 @@
       (when (or (some? tracked) (seq created))
         (vec (distinct (concat (remove stale tracked) created)))))))
 
+(defn file-stamps
+  "{path [modified-ms size]} for the files the run has changed since `baseline`, or nil
+  when git cannot say. Comparing two of these tells which files a turn wrote, whatever
+  tool wrote them."
+  [root baseline]
+  (when-let [paths (changed-files root baseline)]
+    (into {} (keep (fn [p]
+                     (let [f (java.io.File. (str root "/" p))]
+                       (when (.isFile f) [p [(.lastModified f) (.length f)]]))))
+          paths)))
+
 (defn changed-lines
   "How many lines the run has WRITTEN since `baseline`: added plus deleted,
   tracked and untracked together. nil when git cannot answer.
