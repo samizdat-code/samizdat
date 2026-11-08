@@ -89,8 +89,8 @@
         ;; gate. Reads source without evaluating it, and has no dependencies of its own.
         io.github.jlt-commons/jolt-metrics
         {:git/url "https://github.com/jlt-commons/jolt-metrics"
-         ;; main past v0.2.2, for metrics.entropy (unusual changes), not yet in a release.
-         :git/sha "45960ca2cc7f605e4b14843b6f23ac01fe3aa797"}
+         :git/tag "v0.3.1"
+         :git/sha "284cbd6ec353293c1273337e2c18b34cd7e1c5e0"}
 
         io.github.jlt-commons/augur
         {:git/url "https://github.com/jlt-commons/augur"
