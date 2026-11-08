@@ -30,6 +30,8 @@ PORT = 3985
 RUN_MARGIN = 75
 STOP_MARGIN = 45
 TERMINAL = {"completed", "failed", "exhausted", "aborted", "abandoned", "cancelled", "parked"}
+# Whether the server process exists, without procps: a minimal image has no pgrep.
+ALIVE = "grep -qs 'samizdat[.]core' /proc/[0-9]*/cmdline"
 LIBS = "ca-certificates curl git libsqlite3-0 zlib1g"
 # OpenSSL 3 when the image has a package for it. An image too old for one (Debian 11)
 # keeps its OpenSSL 1.1, which jolt's TLS also works with, so a missing package is no
@@ -219,6 +221,11 @@ class SamizdatAgent(BaseInstalledAgent):
                 while True:
                     got = await self._api(environment, token, "GET", f"/v1/runs/{run_id}")
                     misses = misses + 1 if got is None else 0
+                    if misses >= 3 and (await self._sh(environment, ALIVE)).return_code == 0:
+                        # Alive but not answering: a task saturating a one-CPU container
+                        # starves the server. Keep waiting; the limit still applies.
+                        meta["slow_polls"] = meta.get("slow_polls", 0) + misses
+                        misses = 0
                     if misses >= 3:
                         # An OOM kill looks like this. Nothing more can happen, so
                         # score what is on disk now rather than idling to the limit.
