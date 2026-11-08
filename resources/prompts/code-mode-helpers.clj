@@ -213,6 +213,123 @@
     (apply sh "rm" (if (:r opts) "-rf" "-f") ps)
     nil))
 
+;; --- background processes (karamazov-6p51.6) ----------------------------------
+;;
+;; A server, a watcher or a slow build, started from the image and left
+;; running. They are the image's children, so they live in its sandbox and go
+;; when the image does, at the run's teardown: nothing is orphaned. Output goes
+;; to a log under .samizdat/processes/.
+
+(ns samizdat.code.process
+  (:refer-clojure :exclude [list])
+  (:require [clojure.string :as str]
+            [clojure.java.io :as io]
+            [jolt.process :as p]))
+
+(defonce ^:private table (atom {}))
+(defonce ^:private counter (atom 0))
+
+(defn- entry [pid]
+  (or (get @table (if (string? pid) (parse-long pid) pid))
+      (throw (ex-info (str "no process " pid " started from this REPL; (process/list) shows them")
+                      {:pid pid}))))
+
+(defn- last-lines [log n]
+  (let [f (io/file log)]
+    (if (.exists f)
+      (str/join "\n" (take-last n (str/split-lines (slurp f))))
+      "")))
+
+(defn start
+  "Start a shell command in the background: (process/start \"npm run dev\"),
+  options first for :dir and :env. Returns {:pid :log}."
+  ([cmd] (start {} cmd))
+  ([{:keys [dir env]} cmd]
+   (let [n (swap! counter inc)
+         log (str ".samizdat/processes/" n ".log")
+         _ (io/make-parents (io/file log))
+         pr (p/process (cond-> {:out :write :out-file (io/file log) :err :out}
+                         dir (assoc :dir (str dir))
+                         env (assoc :extra-env (into {} (map (fn [[k v]] [(name k) (str v)]) env))))
+                       "sh" "-c" (str cmd))
+         pid (.pid (:proc pr))]
+     (swap! table assoc pid {:pid pid :cmd (str cmd) :log log :proc pr
+                             :started (System/currentTimeMillis)})
+     {:pid pid :log log})))
+
+(defn output
+  "The last n lines (default 20) of a background process's output."
+  ([pid] (output pid 20))
+  ([pid n] (last-lines (:log (entry pid)) n)))
+
+(defn wait
+  "Wait for a background process to exit, up to timeout-ms (default 120000):
+  {:status :exited :exit n :output last-lines}, or {:status :running}."
+  ([pid] (wait pid 120000))
+  ([pid timeout-ms]
+   (let [{:keys [proc log]} (entry pid)
+         r (deref proc timeout-ms ::running)]
+     (if (= ::running r)
+       {:status :running :output (last-lines log 20)}
+       {:status :exited :exit (:exit r) :output (last-lines log 20)}))))
+
+(defn list
+  "The background processes started from this REPL."
+  []
+  (vec (for [{:keys [pid cmd log proc started]} (sort-by :pid (vals @table))]
+         (cond-> {:pid pid :cmd cmd :log log :running? (p/alive? proc)
+                  :seconds (quot (- (System/currentTimeMillis) started) 1000)}
+           (not (p/alive? proc)) (assoc :exit (:exit @proc))))))
+
+(defn stop
+  "Stop a background process and everything it started."
+  [pid]
+  (let [{:keys [proc] :as e} (entry pid)]
+    (p/destroy-tree proc)
+    ;; Until it is gone, so a list right after does not still show it running.
+    (let [r (deref proc 2000 nil)]
+      (when-not r (try (.destroyForcibly ^java.lang.Process (:proc proc)) (catch Exception _ nil)))
+      {:pid (:pid e) :stopped true :exit (:exit r)})))
+
+(defn poll-until
+  "Run a shell command until it succeeds (:until :exit-zero, the default) or
+  its output matches :pattern (:until :stdout-matches), every :interval-ms
+  (2000) for up to :timeout-ms (120000). Returns {:met? :attempts :out}."
+  ([cmd] (poll-until cmd {}))
+  ([cmd {:keys [until pattern interval-ms timeout-ms]
+         :or {until :exit-zero interval-ms 2000 timeout-ms 120000}}]
+   (let [deadline (+ (System/currentTimeMillis) timeout-ms)
+         re (when pattern (if (string? pattern) (re-pattern pattern) pattern))]
+     (loop [n 1]
+       (let [r (p/sh "sh" "-c" (str cmd))
+             met? (case until
+                    :stdout-matches (boolean (and re (re-find re (str (:out r)))))
+                    (zero? (:exit r)))]
+         (if (or met? (> (System/currentTimeMillis) deadline))
+           {:met? met? :attempts n :out (str (:out r) (:err r))}
+           (do (Thread/sleep interval-ms) (recur (inc n)))))))))
+
+(defn poll-url
+  "Probe a URL until it answers with :status (a number or a set; default any
+  2xx), every :interval-ms (1000) for up to :timeout-ms (60000).
+  Returns {:met? :attempts :status}; :status is nil while nothing listens."
+  ([url] (poll-url url {}))
+  ([url {:keys [status interval-ms timeout-ms] :or {interval-ms 1000 timeout-ms 60000}}]
+   (let [deadline (+ (System/currentTimeMillis) timeout-ms)
+         ok? (cond (set? status) status
+                   (number? status) #{status}
+                   :else #(<= 200 % 299))]
+     (loop [n 1]
+       (let [r (p/sh "curl" "-s" "-o" "/dev/null" "-m" "5" "-w" "%{http_code}" (str url))
+             code (parse-long (str/trim (str (:out r))))
+             code (when (and code (pos? code)) code)
+             met? (boolean (and code (ok? code)))]
+         (if (or met? (> (System/currentTimeMillis) deadline))
+           {:met? met? :attempts n :status code}
+           (do (Thread/sleep interval-ms) (recur (inc n)))))))))
+
+(in-ns 'samizdat.code)
+
 ;; --- installing --------------------------------------------------------------
 
 (def shadowed
@@ -227,5 +344,6 @@
     (binding [*ns* n]
       (refer-clojure)
       (doseq [s shadowed] (ns-unmap n s))
-      (refer 'samizdat.code))
+      (refer 'samizdat.code)
+      (alias 'process 'samizdat.code.process))
     :ok))

@@ -81,7 +81,10 @@ eval({code, timeout_ms?, restart?, wait?, abort?})
     (ls d) (glob "src/**/*.clj") → paths; (grep #"re" path?) → ["path:line:text"];
     (stat p) (exists? p); (spit f s) (edit f old new), checked like write_file;
     (mkdir d) (mv a b) (cp a b) (rm f); (curl url opts) → {:status :body};
-    (json s) (json-str x). The tools too, returning their result text:
+    (json s) (json-str x); background processes: (process/start "cmd") →
+    {:pid :log} (process/output pid n) (process/wait pid ms) (process/list)
+    (process/stop pid) (process/poll-url url {:status 200}) (process/poll-until
+    "cmd"). The tools too, returning their result text:
     {% for t in bridge-tools %}`tool/{{t}}`{% if not forloop.last %}, {% endif %}{% endfor %}.
     When the next steps are several — write a file, build, run it, compare its
     output with a reference — do them in ONE eval script, not one call each:

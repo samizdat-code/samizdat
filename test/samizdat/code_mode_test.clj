@@ -86,7 +86,17 @@
             (ev "(spit \"out.txt\" \"abc\")")
             (is (= "abc" (slurp (str root "/out.txt"))))
             (is (= "[1 2 3]" (:value (ev "(into [] cat [[1 2] [3]])")))))
-          (is (= #{"shell" "write_file"} (set @calls)) "programs and writes took the bridge")))
+          (is (= #{"shell" "write_file"} (set @calls)) "programs and writes took the bridge")
+          (testing "a background process runs, reports, and goes with the image"
+            (let [pid (:value (ev "(:pid (process/start \"echo up; sleep 120\"))"))]
+              (is (re-matches #"\d+" (str pid)))
+              (Thread/sleep 500)
+              (is (= "\"up\"" (:value (ev (str "(process/output " pid ")")))))
+              (is (= "true" (:value (ev "(:running? (first (process/list)))"))))
+              (image/stop! im)
+              (Thread/sleep 500)
+              (is (not= 0 (:exit (process/sh "kill" "-0" (str pid))))
+                  "stopping the image stopped its background process")))))
       (finally (when im (image/stop! im))))))
 
 (deftest a-shell-call-that-a-helper-replaces-is-hinted

@@ -23,6 +23,9 @@ You are a {% if repl %}Clojure {% endif %}developer working in the project on di
       (spit f s) (spit f s {:append true}) (edit f old new) → the write's report; checked like write_file
       (mkdir d) (mv a b) (cp a b) (rm f …) (rm {:r true} d)   (which "cmd") → path or nil
       (curl url {:method :post :headers {…} :body s}) → {:status :body}   (json s) → data   (json-str x) → JSON
+      Servers, watchers, slow builds: (process/start "cmd") → {:pid :log}, left running   (process/output pid n) → its last lines
+      (process/wait pid ms) → {:status :exited :exit} or {:status :running}   (process/list)   (process/stop pid)
+      (process/poll-url "http://localhost:8080" {:status 200}) and (process/poll-until "cmd") wait for one to be ready
       (tool/read_file {:path …}), (tool/grep {:pattern …}) and the other tools, as text.
     One still running after a minute comes back and goes on in the background: then `wait: true` (no code) waits for its result and `abort: true` stops it. A script with a call to the shell or a tool may run ten minutes in all; otherwise pass timeout_ms. `restart: true` starts a fresh REPL when this one is in a bad state.
 {% endif %}read_file({path, offset, limit, outline, form, at})
