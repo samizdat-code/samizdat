@@ -751,6 +751,16 @@
 (defn- redact-capture-file [source target known]
   (spit target (secrets/redact (slurp source) known)))
 
+(defn- stream-text
+  "One stream of a finished command as data for a script (karamazov-6p51.4):
+  the redacted capture file when there was one, the redacted text the
+  process returned otherwise, cut to `cap` characters. Not the preview: a
+  script filters what it gets, so it gets all of it up to the cap."
+  [path text known cap]
+  (let [s (or (when path (try (slurp path) (catch Throwable _ nil)))
+              (secrets/redact (str text) known))]
+    (if (and cap (> (count s) cap)) (subs s 0 cap) s)))
+
 (defn- preview-stream [text cap known]
   (util/truncate-middle (secrets/redact (str text) known) cap))
 
@@ -1036,6 +1046,17 @@
            ;; the loop weights a timeout heavier on the failure streak and drops
            ;; the storm window's retry allowance for the call that hung.
            :timeout? (boolean (:timeout r))
+           ;; The same run as data, for a script calling the tool through
+           ;; the eval bridge: it composes on the exit code and the streams
+           ;; rather than parsing the text written for the model.
+           :data (let [cap (:data-chars (gates/threshold :eval-bridge))]
+                   {:exit (:exit r) :timeout? (boolean (:timeout r))
+                    :out (stream-text (when (and allocation (not finalization-error))
+                                        (:stdout-read-path allocation))
+                                      (str (:out r) (:out-tail r)) known cap)
+                    :err (stream-text (when (and allocation (not finalization-error))
+                                        (:stderr-read-path allocation))
+                                      (str (:err r) (:err-tail r)) known cap)})
            :policy {:effect :allow}}
           public-capture (assoc :captures public-capture))))))
 

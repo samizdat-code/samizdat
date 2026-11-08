@@ -75,20 +75,24 @@ eval({code, timeout_ms?, restart?})
     In eval, call the test namespaces directly (`(clojure.test/run-tests
     'flight.mechanics-test)`) rather than the runner that wraps them.
 {% if bridge-tools %}    CODE MODE: TOOLS ARE FUNCTIONS INSIDE EVAL, AND THIS IS THE WAY TO WORK.
+    Functions that return values: (sh "make" "test") → stdout, one program and
+    its arguments, a non-zero exit throws with (ex-data e) → {:exit :out :err};
+    (sh* ...) → {:exit :out :err}; (cat f) (head f n) (tail f n) → text;
+    (ls d) (glob "src/**/*.clj") → paths; (grep #"re" path?) → ["path:line:text"];
+    (stat p) (exists? p); (spit f s) (edit f old new), checked like write_file;
+    (mkdir d) (mv a b) (cp a b) (rm f); (curl url opts) → {:status :body};
+    (json s) (json-str x). The tools too, returning their result text:
     {% for t in bridge-tools %}`tool/{{t}}`{% if not forloop.last %}, {% endif %}{% endfor %}.
-    Each takes the map of arguments the tool takes and returns its result text.
     When the next steps are several — write a file, build, run it, compare its
     output with a reference — do them in ONE eval script, not one call each:
     every separate call is a round trip, and the script can loop, filter and
     keep only what you need to see.
-      (let [_     (tool/write_file {:path "src/app/core.clj" :content src})
-            build (tool/shell {:command "./compile.sh 2>&1 | tail -3"})
-            same? (fn [args] (= (tool/shell {:command (str "/tmp/ref " args)})
-                                (tool/shell {:command (str "./app " args)})))]
-        {:build build :failing (remove same? ["-h" "-n 3 in.txt" "--bad"])})
-    Write files from a script with `tool/write_file` or `tool/edit_file`, not
-    `spit` or `sed`: those check the parens and refuse a change that breaks a
-    file. Try code in the REPL itself rather than starting a fresh `jolt -e`
+      (let [_     (spit "src/app/core.clj" src)
+            build (sh* "./compile.sh")
+            same? (fn [args] (= (apply sh* "/tmp/ref" args) (apply sh* "./app" args)))]
+        {:build (:exit build) :failing (remove same? [["-h"] ["-n" "3" "in.txt"] ["--bad"]])})
+    Write files from a script with `spit` or `edit`, not `sed` or `echo >`:
+    they check the parens and refuse a change that breaks a file. Try code in the REPL itself rather than starting a fresh `jolt -e`
     from the shell, which loses every definition each time. A call made from a script is
     checked exactly as the tool call would be, and a refusal or a failure throws
     where the call was made. A script with a bridge call may run up to two

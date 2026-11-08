@@ -34,8 +34,10 @@
   "The bridge as the image runs it. `call` queues a request and waits for
   its answer; `take-requests!` is what the harness evaluates to collect the
   queue; `deliver!` is what it evaluates to answer. An answer is
-  `{:value v}` or `{:error message}`; an error is thrown where the call was
-  made, so it fails the form that made it the way any failing call would.
+  `{:value v}` or `{:error message}`, either with the result as `:data` when
+  the tool has it; an error is thrown where the call was made, so it fails
+  the form that made it the way any failing call would, its ex-data carrying
+  that `:data`. `call` returns the text, `call-data` the data.
   A request carries the eval that made it (`*eval-id*`, bound by `wrap`).
   `config` is set at install: how long a call waits, and the sentence a call
   that waited that long fails with."
@@ -50,7 +52,7 @@
                             %
                             (assoc % :inference-environments (atom {})))))))
     (def ^:dynamic *eval-id* nil)
-    (defn call [op args]
+    (defn answer-of [op args]
       (let [{:keys [timeout-ms timeout-message]} @config
             id (str (random-uuid))
             p (promise)]
@@ -62,8 +64,11 @@
             (= ::timeout answer)
             (throw (ex-info timeout-message {:bridge/op op :bridge/timeout-ms timeout-ms}))
             (contains? answer :error)
-            (throw (ex-info (str (:error answer)) {:bridge/op op}))
-            :else (:value answer)))))
+            (throw (ex-info (str (:error answer)) (merge (:data answer) {:bridge/op op})))
+            :else answer))))
+    (defn call [op args] (:value (answer-of op args)))
+    (defn call-data [op args]
+      (let [a (answer-of op args)] (if (contains? a :data) (:data a) (:value a))))
     (defn take-requests! [eval-id]
       (let [mine? #(= eval-id (:eval %))
             taken (filterv mine? @requests)]
@@ -81,14 +86,20 @@
   []
   environments)
 
+(declare helper-ns)
+
 (defn install-source
   "Source that installs the bridge in an image with `config` (`:timeout-ms`
   and `:timeout-message`); `alias-ns` holding one function per tool in
   `tools`, each a one-map-argument call through the bridge; and, for each
   callable cell id in `cells`, a function of the same name in the id's
   namespace — `:lex/line-count` is `lex/line-count` (karamazov-xn0h.8).
-  Evaluated once per image, and again when the set changes."
-  [tools cells alias-ns config]
+  `helpers`, when given, is the source of a helper namespace with a
+  `refer-into!` (the code-mode helpers, karamazov-6p51.4): evaluated after the
+  bridge, whose calls it makes, then referred into `user` and each namespace in
+  `sessions`. Evaluated once per image, and again when any of it changes."
+  ([tools cells alias-ns config] (install-source tools cells alias-ns config nil nil))
+  ([tools cells alias-ns config helpers sessions]
   (str/join "\n"
             ;; With metadata: `*eval-id*` is ^:dynamic, which a plain
             ;; pr-str drops, and binding it then throws in the image.
@@ -106,7 +117,29 @@
                                    (list 'samizdat.bridge/call "cell"
                                          {:id id :args 'args}))]]
                       (pr-str f))
-                    [(pr-str '(in-ns 'user))])))
+                    (when (seq helpers)
+                      (concat [helpers]
+                              (for [n (cons 'user (sort-by str sessions))]
+                                (pr-str (list (symbol (helper-ns helpers) "refer-into!")
+                                              (list 'quote n))))))
+                    [(pr-str '(in-ns 'user))]))))
+
+(defn helper-ns
+  "The namespace the helper source `helpers` declares, as a string, or nil."
+  [helpers]
+  (let [form (try (read-string (str helpers)) (catch Throwable _ nil))]
+    (when (and (seq? form) (= 'ns (first form)) (symbol? (second form)))
+      (str (second form)))))
+
+(defn refer-source
+  "The form that refers helper namespace `helper-ns` into session namespace
+  `ns-sym` — when the image has it; a session made before the helpers were
+  installed gets them at install instead."
+  [helper-ns ns-sym]
+  (when helper-ns
+    (pr-str (list 'when (list 'find-ns (list 'quote (symbol helper-ns)))
+                  (list (list 'resolve (list 'quote (symbol helper-ns "refer-into!")))
+                        (list 'quote ns-sym))))))
 
 (defn take-source
   "The form the harness evaluates to collect the requests eval `eval-id`
@@ -139,8 +172,12 @@
 (defn answer
   "What `deliver!` hands back for a tool result `r` (`{:category :result}`):
   the result text when the call succeeded or was neutral, the text as an
-  error otherwise — a refusal or a failure fails the form that asked."
+  error otherwise — a refusal or a failure fails the form that asked — and
+  the tool's `:data` beside either when it has one."
   [r]
-  (if (#{:success :neutral} (:category r))
-    {:value (str (:result r))}
-    {:error (str (:result r))}))
+  (cond-> (if (#{:success :neutral} (:category r))
+            {:value (str (:result r))}
+            {:error (str (:result r))})
+    ;; The result as data when the tool has it (shell's exit and streams):
+    ;; `call-data` hands it to the script, and a failure's ex-data carries it.
+    (map? (:data r)) (assoc :data (:data r))))

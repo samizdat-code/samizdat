@@ -3642,9 +3642,16 @@
           ;; An eval with the bridge on may run a build through tool/shell, so its own
           ;; default deadline is this rather than the REPL's 10 s.
           :eval-timeout-ms 120000
-          :call-timeout-ms 60000 :poll-ms 50}
+          :call-timeout-ms 60000 :poll-ms 50
+          ;; The code-mode helpers (cat, grep, glob, sh, spit, ...), a userspace
+          ;; prompt role installed in the image with the bridge and referred into
+          ;; every eval session (karamazov-6p51.4). nil installs none.
+          :helpers "code-mode-helpers"
+          ;; The most of one stream a bridged shell call hands a script as data.
+          :data-chars 4000000}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-xn0h.7" "karamazov-xn0h.8" "karamazov-xn0h.9" "karamazov-92kq"]
+  :provenance ["karamazov-xn0h.7" "karamazov-xn0h.8" "karamazov-xn0h.9" "karamazov-92kq"
+               "karamazov-6p51.4"]
   :doc "TOOLS CALLABLE AS FUNCTIONS FROM INSIDE AN EVAL in the project image:
         (tool/grep {:pattern \"x\"}) returns the tool's result text to the
         form, which can bind, filter and combine it before anything reaches

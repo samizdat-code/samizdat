@@ -64,7 +64,8 @@
    "cells/team_solve.clj"]
 
  :prompts
-  {:acceptance-failed "prompts/acceptance-failed.md"
+  {:code-mode-helpers "prompts/code-mode-helpers.clj"
+   :acceptance-failed "prompts/acceptance-failed.md"
    :acceptance-undecided "prompts/acceptance-undecided.md"
    :complaint "prompts/complaint.md"
    :papercut-tool "prompts/papercut-tool.md"

@@ -54,6 +54,7 @@
             [samizdat.repl.image :as image]
             [samizdat.security.confine :as confine]
             [samizdat.security.sandbox :as sandbox]
+            [samizdat.userspace :as userspace]
             [samizdat.util :as util]))
 
 (defonce ^:private images
@@ -254,14 +255,18 @@
   tools; a caller with :bridge-required? may instead install only its declared
   :bridge-tools and handler for a private execution environment."
   [im ctx]
-  (let [{:keys [enabled? tools cells? call-timeout-ms poll-ms]} (bridge-policy)
+  (let [{:keys [enabled? tools cells? call-timeout-ms poll-ms helpers]} (bridge-policy)
         handler (:bridge ctx)]
     (when (and handler (or enabled? (:bridge-required? ctx)))
       (let [r (image/install-bridge! im (distinct (concat tools (:bridge-tools ctx)))
                                      (when cells? (map :id (callable/cells)))
                                      {:timeout-ms call-timeout-ms
                                       :timeout-message (prompt/render "bridge-timeout"
-                                                                      {:ms call-timeout-ms})})]
+                                                                      {:ms call-timeout-ms})}
+                                     ;; The code-mode helpers: a userspace role,
+                                     ;; so the project's own version (karamazov-6p51.4).
+                                     (when (and helpers (not (:bridge-required? ctx)))
+                                       (userspace/body :prompt helpers)))]
         (if (:ok r)
           {:on-request handler :poll-ms poll-ms :call-timeout-ms call-timeout-ms}
           (do (log/warn "eval bridge did not install:" (:error r)) nil))))))

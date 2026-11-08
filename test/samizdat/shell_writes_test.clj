@@ -99,7 +99,7 @@
                                               {:role :implementer :turns shells})
                                :max-turns 300 :code-mode? true})]
         (is (= :shell-roundtrips (:gate d)))
-        (is (re-find #"tool/shell" (:message d)))))))
+        (is (re-find #"\(sh\*? " (:message d)))))))
 
 (deftest an-eval-that-wraps-one-shell-command-is-still-a-round-trip
   ;; The lean smoke trial put 57 of its 78 evals around a single tool/shell call, and

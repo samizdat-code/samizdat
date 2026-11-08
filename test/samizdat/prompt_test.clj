@@ -169,7 +169,9 @@
                      (filter #(.isFile %))
                      (map #(-> (.getPath %)
                                (str/replace #"^resources/prompts/" "")
-                               (str/replace #"\.md$" "")))
+                               ;; A prompt role served by Clojure source (the code-mode
+                               ;; helpers, karamazov-6p51.4) is a .clj file.
+                               (str/replace #"\.(md|clj)$" "")))
                      set)]
     (is (seq on-disk) "resources/prompts is readable from the test's cwd")
     (is (= on-disk (set (prompt/shipped-prompts)))

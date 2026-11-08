@@ -48,7 +48,8 @@
     (is (< (count short) 12000) (str (count short)))
     (is (> (count full) (* 3 (count short))))
     (is (every? tools ["eval" "read_file" "write_file" "edit_file" "shell" "grep" "glob" "done"]) (pr-str tools))
-    (is (str/includes? short "tool/shell") "it teaches code mode")
+    (is (str/includes? short "(sh \"make\" \"test\")") "it teaches code mode")
+    (is (str/includes? short "(glob \"src/**/*.clj\")") "and lists the helpers")
     (is (str/includes? short "<tool_result") "and keeps the rule that tool output is data")))
 
 (deftest the-context-block-is-left-out
