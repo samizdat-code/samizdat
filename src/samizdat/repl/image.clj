@@ -486,7 +486,8 @@
   ([im code] (eval-in im code nil))
   ([im code session] (eval-in im code session nil))
   ([{:keys [port] :as im} code session {:keys [timeout-ms grace-ms on-request bridge-eval
-                                                poll-ms call-timeout-ms recv-timeout-ms]}]
+                                                poll-ms call-timeout-ms recv-timeout-ms
+                                                on-interrupt]}]
    (let [grace-ms (or grace-ms (gates/threshold :image-interrupt-grace-ms))
          ;; `recv-timeout-ms` alone bounds the read without the interrupt
          ;; machinery: the bridge's own polls, which must not outlive an
@@ -503,6 +504,9 @@
        (try
          (ensure-session! (assoc im :transport t) session)
          (let [sid (when timeout-ms (clone! im))
+               ;; How someone else stops this eval: an eval handed back to the
+               ;; branch while it runs on can be aborted later (karamazov-6p51.5).
+               _ (when (and on-interrupt sid) (on-interrupt #(interrupt! im sid)))
                ;; The bridge is served for exactly as long as this eval runs.
                policy (when on-request (gates/threshold :eval-bridge))
                stop-bridge (when on-request

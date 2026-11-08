@@ -128,11 +128,14 @@
               (swap! images assoc root im)
               im)))))
 
+(declare forget-detached!)
+
 (defn release!
   "Stop and forget the image for `root`. Called at run teardown, and whenever
   an eval times out — a runaway computation is only really stopped by killing
   the process it is running in."
   [root]
+  (forget-detached! root)
   (when-let [im (get @images root)]
     (swap! images dissoc root)
     (image/stop! im))
@@ -286,7 +289,9 @@
   nothing the model wanted (karamazov-xn0h.6). Checked before the first form
   runs, on every form that reads in the harness; one that only reads after
   an earlier form ran (`::alias/kw`) is not visible to it."
-  [im root sandboxed? code session timeout bridge]
+  ([im root sandboxed? code session timeout bridge]
+   (eval-project im root sandboxed? code session timeout bridge nil))
+  ([im root sandboxed? code session timeout bridge interrupt]
   (let [forms (try (repl/top-level-forms code) (catch Throwable _ nil))
         refused (when forms (repl/refusal (repl/readable-ahead forms) :project))
         where (some-> session str)]
@@ -312,6 +317,7 @@
                 eval-id (when bridge (str (random-uuid)))
                 r (image/eval-in im (cond->> (strict text) bridge (bridge/wrap eval-id))
                                  in (merge {:timeout-ms left}
+                                           (when interrupt {:on-interrupt #(reset! interrupt %)})
                                            (when bridge (assoc bridge :bridge-eval eval-id))))
                 outs (conj outs (str (:out r)))
                 at {:index (inc i) :count n :line line :completed i}]
@@ -326,7 +332,7 @@
               (= (inc i) n)
               (assoc r :out (str/join outs))
 
-              :else (recur (inc i) outs (or (ns-switch text) in)))))))))
+              :else (recur (inc i) outs (or (ns-switch text) in))))))))))
 
 (defn fork-session
   "A new eval session carrying `parent`'s defs, in whichever image holds them.
@@ -343,6 +349,80 @@
     (when-let [im (and parent (get @images root))]
       (image/fork-ns! im parent child))
     child))
+
+;; --- an eval that outlives the stall limit (karamazov-6p51.5) ------------------
+;;
+;; After xi's clj tool: an eval still running after gates.edn :eval-bridge
+;; :stall-after-ms comes back to the branch and goes on in the image, so a build
+;; or a test run longer than that is not lost to a deadline. The branch's next
+;; eval waits for it ({wait: true}), stops it ({abort: true}), or is told the
+;; session is busy; one that ends on its own hands its result to the next call.
+;; Its own deadline still holds, and the run's teardown stops the image under it.
+
+(defonce ^:private detached (atom {}))
+
+(defn- preview [code]
+  (let [s (str/join " " (str/split-lines (str/trim (str code))))
+        n (:preview-chars (bridge-policy))]
+    (if (and n (> (count s) n)) (str (subs s 0 n) "…") s)))
+
+(defn- seconds [ms] (long (/ ms 1000)))
+
+(defn- stalling
+  "Run `run` — a function of an atom it fills with the eval's interrupt — for
+  `ctx`'s session, handing it back as {:stalled ...} after `stall-ms` while it
+  goes on, and answering the session's wait, abort and busy cases."
+  [ctx k code stall-ms grace-ms run]
+  (let [entry (get @detached k)
+        now (System/currentTimeMillis)
+        running (when entry {:code (:preview entry) :seconds (seconds (- now (:started entry)))})
+        take! (fn [] (swap! detached dissoc k) @(:result entry))
+        earlier (fn [r] (if-let [e (:earlier r)] e r))]
+    (cond
+      (:abort? ctx)
+      (if-not entry
+        {:ok true :idle true}
+        (do (some-> @(:interrupt entry) (apply []))
+            (let [r (deref (:result entry) grace-ms ::still)]
+              (swap! detached dissoc k)
+              (if (= ::still r)
+                {:ok true :aborted running :stuck? true}
+                {:ok true :aborted running :finished r}))))
+
+      (:wait? ctx)
+      (if-not entry
+        {:ok true :idle true}
+        (let [r (deref (:result entry) stall-ms ::still)]
+          (if (= ::still r)
+            {:ok true :stalled (assoc running :seconds (seconds (- (System/currentTimeMillis)
+                                                                   (:started entry))))
+             :seconds (seconds stall-ms)}
+            (do (swap! detached dissoc k) (earlier (assoc r :waited running))))))
+
+      (and entry (not (realized? (:result entry))))
+      {:ok true :busy running}
+
+      :else
+      (let [unasked (when entry (assoc (take!) :unasked running))
+            interrupt (atom nil)
+            result (promise)
+            _ (future (deliver result (try (run interrupt)
+                                           (catch Throwable e
+                                             {:ok false :error-type "eval-error"
+                                              :error (or (ex-message e) (str e))}))))
+            r (deref result stall-ms ::still)]
+        (if (= ::still r)
+          (do (swap! detached assoc k {:result result :interrupt interrupt
+                                       :started now :preview (preview code)})
+              (cond-> {:ok true :stalled {:code (preview code) :seconds (seconds stall-ms)}
+                       :seconds (seconds stall-ms)}
+                unasked (assoc :earlier unasked)))
+          (cond-> r unasked (assoc :earlier unasked)))))))
+
+(defn- forget-detached!
+  "Drop the detached evals of `root`'s image, which is going."
+  [root]
+  (swap! detached (fn [m] (into {} (remove (fn [[[r _] _]] (= r root)) m)))))
 
 (defn eval-for
   "Evaluate `code` for `ctx`, in whichever image its role and the operator's
@@ -425,9 +505,17 @@
                                 (and cached (not (image/alive? cached))) :stopped)
                 _ (when (or restarted (:restart? ctx)) (release! root))]
             (if-let [im (image-for! root backend)]
-              (cond-> (eval-project im root (not= :none backend) code session timeout
-                                    (bridge-for im ctx))
-                restarted (assoc :restarted restarted))
+              (let [{:keys [stall-after-ms]} (bridge-policy)
+                    bridge (bridge-for im ctx)
+                    run (fn [interrupt]
+                          (eval-project im root (not= :none backend) code session timeout
+                                        bridge interrupt))]
+                (cond-> (if (or (:wait? ctx) (:abort? ctx)
+                                (and stall-after-ms bridge (> timeout stall-after-ms)))
+                          (stalling ctx [root session] code (or stall-after-ms timeout)
+                                    (gates/threshold :image-interrupt-grace-ms) run)
+                          (run nil))
+                  restarted (assoc :restarted restarted)))
               {:ok false :error-type "image-down"
                :error (prompt/render "image-down" {})})))))))
 

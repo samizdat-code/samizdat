@@ -126,6 +126,8 @@
               r)
             (bridge/answer (gated ctx op args))))))))
 
+(declare result-of)
+
 (defn- eval-vetted
   "Evaluate source that has already passed the syntax gate. `note` is the
   repair sentence when the harness closed a truncation, so the model is told
@@ -140,10 +142,38 @@
         ;; below is unchanged: route/eval-for answers in the same shape
         ;; repl/eval-code always did, so the redaction boundary, the syntax
         ;; gate and the timeout flag all still apply exactly as they did.
-        r (route/eval-for (assoc ctx :bridge (bridge-handler ctx) :restart? restart?) code session timeout)
+        flag (fn [k] (contains? #{"true" "yes" "1"} (str/lower-case (str (base/arg ctx k)))))
+        r (route/eval-for (assoc ctx :bridge (bridge-handler ctx) :restart? restart?
+                                 :wait? (flag :wait) :abort? (flag :abort))
+                          code session timeout)
         prefix (if-let [why (:restarted r)]
                  (str (str/trim (prompt/render "repl-restarted" {(name why) true})) "\n" prefix)
-                 prefix)]
+                 prefix)
+        ;; An eval handed back while it runs on, and what became of it
+        ;; (karamazov-6p51.5): said in one line, ahead of any result it carries.
+        said (fn [m] (str "[harness] " (str/trim (prompt/render "eval-detached" m)) "\n"))]
+    (cond
+      (or (:stalled r) (:busy r) (:idle r))
+      (base/ok branch (str prefix (said (select-keys r [:stalled :busy :idle :seconds]))))
+
+      (:aborted r)
+      (base/ok branch (str prefix (said {:aborted (:aborted r) :stuck (:stuck? r)})
+                           (some->> (:finished r) (result-of ctx "") :result)))
+
+      (:earlier r)
+      (let [e (:earlier r)]
+        (update (result-of ctx prefix (dissoc r :earlier)) :result
+                #(str (said {:unasked (:unasked e)}) (:result (result-of ctx "" e)) "\n\n" %)))
+
+      (:waited r)
+      (result-of ctx (str prefix (said {:waited (:waited r)})) r)
+
+      :else (result-of ctx prefix r))))
+
+(defn- result-of
+  "The tool result for eval result `r`, after `prefix`."
+  [{:keys [branch] :as ctx} prefix r]
+  (do
     (if (:ok r)
       (base/ok branch (scrubbed (str prefix "=> " (:value r)
                                      (when (seq (:out r)) (str "\n" (:out r))))))
@@ -191,8 +221,16 @@
   ;; committing it to a file. :neutral — evaluating establishes nothing on its
   ;; own; a define-and-test is exploration, and progress is the file it leads
   ;; to. Defs persist across evals within a run (the session is per-run).
-  (if-let [m (base/missing ctx :code)]
-    (base/malformed branch m)
+  (cond
+    ;; Waiting on or stopping the eval this session handed back takes no code
+    ;; (karamazov-6p51.5).
+    (some #(contains? #{"true" "yes" "1"} (str/lower-case (str (base/arg ctx %)))) [:wait :abort])
+    (eval-vetted ctx "" nil)
+
+    (base/missing ctx :code)
+    (base/malformed branch (base/missing ctx :code))
+
+    :else
     ;; THE SAME GATE THE FILE TOOLS USE. An eval form is wholly authored in
     ;; this call, so nothing pre-existing can be re-parented and a dropped
     ;; closer is repaired exactly as it would be in a write_file — which is

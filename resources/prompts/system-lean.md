@@ -14,7 +14,7 @@ You are a {% if repl %}Clojure {% endif %}developer working in the project on di
 
 ## Tools
 
-{% if repl %}eval({code, timeout_ms?, restart?})
+{% if repl %}eval({code, timeout_ms?, restart?, wait?, abort?})
     Evaluate Clojure in the project's REPL and get the value and output. Definitions persist between calls, so load data once and query it later. These functions are there, relative paths from the project root:
       (sh "make" "test") → stdout; one program and its arguments, no shell syntax; a non-zero exit throws, (ex-data e) → {:exit :out :err}
       (sh {:dir "sub" :env {"PORT" "8080"}} "npm" "start")   (sh* ...) → {:exit :out :err}, never throws
@@ -24,7 +24,7 @@ You are a {% if repl %}Clojure {% endif %}developer working in the project on di
       (mkdir d) (mv a b) (cp a b) (rm f …) (rm {:r true} d)   (which "cmd") → path or nil
       (curl url {:method :post :headers {…} :body s}) → {:status :body}   (json s) → data   (json-str x) → JSON
       (tool/read_file {:path …}), (tool/grep {:pattern …}) and the other tools, as text.
-    A script with a call to the shell or a tool may run two minutes; otherwise pass timeout_ms. `restart: true` starts a fresh REPL when this one is in a bad state.
+    One still running after a minute comes back and goes on in the background: then `wait: true` (no code) waits for its result and `abort: true` stops it. A script with a call to the shell or a tool may run ten minutes in all; otherwise pass timeout_ms. `restart: true` starts a fresh REPL when this one is in a bad state.
 {% endif %}read_file({path, offset, limit, outline, form, at})
     Read a file, a page at a time for a long one.
 write_file({path, content})

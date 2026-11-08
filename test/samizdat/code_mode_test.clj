@@ -11,7 +11,9 @@
             [jolt.process :as process]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.loop :as aloop]
+            [samizdat.agent.tools :as tools]
             [samizdat.agent.tools.shell :as shell]
+            [samizdat.agent.state :as state]
             [samizdat.bridge :as bridge]
             [samizdat.prompt :as prompt]
             [samizdat.security.policy :as policy]
@@ -108,3 +110,62 @@
     (is (= big (slurp (str root "/.samizdat/results/turn-7-shell.txt"))))
     (is (not (str/includes? (#'aloop/truncate big 7 nil nil) "results/turn-")) "no file without a root")
     (is (= "short" (#'aloop/truncate "short" 7 nil spill)) "and nothing written for a result that fits")))
+
+(deftest a-long-eval-is-handed-back-and-goes-on
+  (let [stalling #'route/stalling
+        k ["/tmp/stall-root" (gensym "s")]
+        slow (fn [ms v] (fn [_] (Thread/sleep ms) {:ok true :value v}))]
+    (testing "a quick eval answers as before"
+      (is (= {:ok true :value "1"} (stalling {} k "(+ 1)" 200 100 (slow 0 "1")))))
+    (testing "a slow one comes back, the session is busy, and wait gets its result"
+      (let [r (stalling {} k "(build)" 50 100 (slow 400 "built"))]
+        (is (= "(build)" (get-in r [:stalled :code])))
+        (is (= "(build)" (get-in (stalling {} k "(other)" 50 100 (slow 0 "x")) [:busy :code]))
+            "a new eval is not run while it runs")
+        (let [w (stalling {:wait? true} k "" 2000 100 nil)]
+          (is (= "built" (:value w)))
+          (is (= "(build)" (get-in w [:waited :code]))))
+        (is (:idle (stalling {:wait? true} k "" 50 100 nil)) "nothing left running")))
+    (testing "abort interrupts it"
+      (let [stop (promise)
+            run (fn [interrupt]
+                  (reset! interrupt #(deliver stop :stopped))
+                  {:ok false :error (str "interrupted: " (deref stop 5000 :never))})]
+        (is (:stalled (stalling {} k "(loop [])" 50 100 run)))
+        (let [a (stalling {:abort? true} k "" 50 1000 nil)]
+          (is (= "(loop [])" (get-in a [:aborted :code])))
+          (is (= "interrupted: :stopped" (get-in a [:finished :error]))))))
+    (testing "one that ends on its own hands its result to the next call"
+      (is (:stalled (stalling {} k "(slow)" 30 100 (slow 120 "late"))))
+      (Thread/sleep 300)
+      (let [r (stalling {} k "(next)" 200 100 (slow 0 "now"))]
+        (is (= "now" (:value r)))
+        (is (= "late" (get-in r [:earlier :value])))
+        (is (= "(slow)" (get-in r [:earlier :unasked :code])))))))
+
+(deftest the-detached-states-read-as-one-line
+  (doseq [m [{:stalled {:code "(build)" :seconds 60} :seconds 60}
+             {:busy {:code "(build)" :seconds 75}}
+             {:idle true}
+             {:aborted {:code "(build)" :seconds 80} :stuck true}
+             {:unasked {:code "(build)" :seconds 70}}
+             {:waited {:code "(build)" :seconds 90}}]]
+    (let [line (str/trim (prompt/render "eval-detached" m))]
+      (is (seq line) (pr-str m))
+      (is (not (str/includes? line "\n")) line))))
+
+(deftest the-eval-tool-says-what-became-of-a-handed-back-eval
+  (let [branch (state/new-branch {:id "B1" :problem "p"})
+        run (fn [args answer]
+              (with-redefs [route/eval-for (fn [ctx & _] (answer ctx))]
+                (:result (tools/run-tool {:branch branch :tool-name "eval" :args args}))))]
+    (is (str/includes? (run {:code "(build)"} (fn [_] {:ok true :stalled {:code "(build)" :seconds 60} :seconds 60}))
+                       "Still running after 60s"))
+    (is (str/includes? (run {:wait true} (fn [ctx] (if (:wait? ctx)
+                                                     {:ok true :value "42" :waited {:code "(build)" :seconds 90}}
+                                                     {:ok true :value "wrong"})))
+                       "finished after 90s:\n=> 42")
+        "wait takes no code")
+    (is (str/includes? (run {:code "(+ 1 1)"} (fn [_] {:ok true :value "2"
+                                                       :earlier {:ok true :value "built" :unasked {:code "(build)"}}}))
+                       "(`(build)`) finished:\n=> built\n\n=> 2"))))

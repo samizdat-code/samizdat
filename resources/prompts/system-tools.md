@@ -46,7 +46,7 @@ plan({files, tests?, goal?, rfc?, checklist?})
     problem is, and you may call plan again the moment you learn it is
     somewhere else. You cannot finish with a declared file unwritten, so the
     list is a promise rather than a wish.
-eval({code, timeout_ms?, restart?})
+eval({code, timeout_ms?, restart?, wait?, abort?})
     Evaluate Clojure in the {% if harness-image %}live harness image{% else %}project's own image{% endif %} and see the value and any
     printed output. This is how to work: try a form, inspect what it returns,
     and iterate BEFORE writing it to a file. Definitions persist across your
@@ -95,8 +95,10 @@ eval({code, timeout_ms?, restart?})
     they check the parens and refuse a change that breaks a file. Try code in the REPL itself rather than starting a fresh `jolt -e`
     from the shell, which loses every definition each time. A call made from a script is
     checked exactly as the tool call would be, and a refusal or a failure throws
-    where the call was made. A script with a bridge call may run up to two
-    minutes without a timeout_ms. Only the eval's final value comes back to you,
+    where the call was made. A script with a bridge call may run up to ten
+    minutes without a timeout_ms; one still running after a minute comes back
+    and goes on in the background, and `wait: true` (no code) waits for its
+    result, `abort: true` stops it. Only the eval's final value comes back to you,
     so return the part you need.
 {% endif %}propose_cell({name, body, rationale})
     Offer a helper worth keeping beyond this run as a callable cell: a

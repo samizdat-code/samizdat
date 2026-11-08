@@ -89,6 +89,9 @@
       (finally (fs/delete-tree d)))))
 
 (deftest scripts-are-told-to-write-through-the-tools
-  (is (str/includes? (samizdat.prompt/prompt "system-lean") "tool/write_file"))
-  (is (re-find #"not\s+`?spit" (samizdat.prompt/prompt "system-lean")))
-  (is (re-find #"not\s+`?spit" (samizdat.prompt/prompt "system-tools"))))
+  ;; In eval, `spit` and `edit` are the code-mode helpers that write through
+  ;; write_file and edit_file (karamazov-6p51.4); sed and echo are what is not.
+  (doseq [p ["system-lean" "system-tools"]]
+    (let [text (samizdat.prompt/prompt p)]
+      (is (re-find #"`spit`.{0,40}`edit`" text) p)
+      (is (re-find #"not[^.]{0,30}`sed`" text) p))))

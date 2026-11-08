@@ -66,6 +66,7 @@
  :prompts
   {:code-mode-helpers "prompts/code-mode-helpers.clj"
    :helper-hint "prompts/helper-hint.md"
+   :eval-detached "prompts/eval-detached.md"
    :acceptance-failed "prompts/acceptance-failed.md"
    :acceptance-undecided "prompts/acceptance-undecided.md"
    :complaint "prompts/complaint.md"
