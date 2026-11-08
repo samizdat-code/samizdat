@@ -1,11 +1,13 @@
 """Harbor agent: samizdat inside the task container, driven over its HTTP API.
 
-  PYTHONPATH=evals/terminal-bench harbor run -d terminal-bench/terminal-bench-2-1 \
+  DOCKER_DEFAULT_PLATFORM=linux/amd64 PYTHONPATH=evals/terminal-bench harbor run -d terminal-bench/terminal-bench-2-1 \
     --agent-import-path samizdat_agent:SamizdatAgent --ak arm=team-solve
 
 The task's instruction goes in as written. Task images have no samizdat, so the
 bundle from build_bundle.sh is unpacked at /opt/samizdat, and the project files it
-adds to the task directory are removed before the verifier runs.
+adds to the task directory are removed before the verifier runs. The bundle is
+x86_64, so on an arm64 host the platform must be forced: a multi-arch task image
+would otherwise be pulled for arm64.
 """
 import asyncio
 import json
@@ -64,6 +66,12 @@ class SamizdatAgent(BaseInstalledAgent):
         return rev.read_text().strip()[:12] if rev.exists() else None
 
     async def install(self, environment: BaseEnvironment) -> None:
+        # jolt ships no aarch64 Linux build. A multi-arch task image pulled natively on
+        # an arm64 host would leave samizdat unable to start, scored as a silent no-start.
+        arch = (await self._sh(environment, "uname -m")).stdout.strip()
+        if arch != "x86_64":
+            raise RuntimeError(f"task container is {arch}, the bundle is x86_64 only: "
+                               "run harbor with DOCKER_DEFAULT_PLATFORM=linux/amd64")
         await self.exec_as_root(
             environment,
             # Only what is missing, one package at a time, carrying on past one that will
