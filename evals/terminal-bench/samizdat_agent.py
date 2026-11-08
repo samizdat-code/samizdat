@@ -30,6 +30,8 @@ PORT = 3985
 RUN_MARGIN = 75
 STOP_MARGIN = 45
 TERMINAL = {"completed", "failed", "exhausted", "aborted", "abandoned", "cancelled", "parked"}
+# Sourced by every non-interactive bash the agent starts; inherited by its children.
+OOM_CHILD = "echo 500 > /proc/self/oom_score_adj 2>/dev/null\n"
 # Whether the server process exists, without procps: a minimal image has no pgrep.
 ALIVE = "grep -qs 'samizdat[.]core' /proc/[0-9]*/cmdline"
 LIBS = "ca-certificates curl git libsqlite3-0 zlib1g"
@@ -86,6 +88,7 @@ class SamizdatAgent(BaseInstalledAgent):
         await self.exec_as_root(
             environment,
             command="tar -xzf /tmp/samizdat-bundle.tgz -C / && rm -f /tmp/samizdat-bundle.tgz "
+                    f"&& printf %s {shlex.quote(OOM_CHILD)} > /opt/samizdat/oom-child.sh "
                     "&& chmod -R a+rX /opt/samizdat",
         )
 
@@ -193,8 +196,14 @@ class SamizdatAgent(BaseInstalledAgent):
                 "&& git -c user.email=eval@example.invalid -c user.name=eval commit -qm task --allow-empty"))
         else:
             await self._sh(environment, f"cd {root} && printf '.samizdat/\\n' >> \"$(git rev-parse --git-path info/exclude)\"")
+        # Memory. samizdat holds ~0.8 GB before the task does anything, and a task gets
+        # as little as 2 GB, so: compile AOT misses in process rather than in a ~240 MB
+        # background worker each (one for the server, one for the project image), and
+        # mark every agent command (the shell tool runs bash -c) as the OOM killer's
+        # first choice. Lowering the server's score needs CAP_SYS_RESOURCE, which a task
+        # container lacks; raising a child's needs nothing.
         serve = (
-            "cd /opt/samizdat/repo && "
+            "cd /opt/samizdat/repo && JOLT_AOT_ASYNC=0 BASH_ENV=/opt/samizdat/oom-child.sh "
             f"HARNESS_ROOT={root} HARNESS_PORT={PORT} HARNESS_NREPL_PORT={PORT + 4000} "
             + (f"HARNESS_REASONING_EFFORT={self.harness_effort} " if self.harness_effort else "") +
             "JOLT_GITLIBS_DIR=/opt/samizdat/gitlibs PATH=/opt/samizdat/jolt:$PATH "
@@ -231,6 +240,9 @@ class SamizdatAgent(BaseInstalledAgent):
                         # score what is on disk now rather than idling to the limit.
                         meta["server_gone_at"] = round(time.monotonic() - began)
                         meta["status"] = "server-gone"
+                        mem = await self._sh(environment, "grep -h oom_kill /sys/fs/cgroup/memory.events; "
+                                                          "cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.max")
+                        meta["memory"] = (mem.stdout or "").split()
                         break
                     status = ((got or {}).get("run") or {}).get("status")
                     if status in TERMINAL:
