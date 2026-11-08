@@ -1038,7 +1038,7 @@
   [branch stamps file-tool?]
   (let [old (or (:tree-stamps branch) {})
         changed (vec (keep (fn [[p s]] (when (not= s (get old p)) p)) stamps))]
-    (cond-> (assoc branch :tree-stamps stamps)
+    (cond-> (assoc branch :tree-stamps stamps :last-tree-changes changed)
       (seq changed) (as-> b (reduce note-write b changed))
       (and (seq changed) (not file-tool?) (seq (:turns branch)))
       (update :turns (fn [ts] (conj (pop (vec ts)) (assoc (peek (vec ts)) :wrote true)))))))

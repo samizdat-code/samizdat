@@ -38,6 +38,7 @@
             [clojure.string :as str]
             [clojure.tools.logging :as log]
             [samizdat.agent.code-metrics :as code-metrics]
+            [samizdat.agent.tools.files :as files-tools]
             [samizdat.cancel :as cancel]
             [samizdat.repl.route :as route]
             [samizdat.agent.arbiter :as arbiter]
@@ -1060,6 +1061,20 @@
             (if-let [j (str/index-of code "(tool/" i)] (recur (inc j) (inc n)) n))]
     (and (= 1 n) (str/starts-with? code "(tool/"))))
 
+(defn tree-load-reports
+  "Load reports for the Clojure files among `paths` that a script or shell command
+  changed: the same feedback a file tool's write gets, so an edit made with spit in an
+  eval cannot leave a broken namespace unnoticed. At most :max-files of them."
+  [ctx paths]
+  (let [n (:max-files (gates/threshold :load-on-write))]
+    (some->> paths
+             ;; One that does not read is named with its line, as the file tools would,
+             ;; and is not loaded, since it cannot be.
+             (keep #(or (files-tools/read-report ctx %) (files-tools/load-report ctx %)))
+             (take n)
+             seq
+             (str/join "\n"))))
+
 (defn- note-tree-writes
   "After a call that could write files, what it changed on disk: a shell heredoc writes a
   file as surely as write_file does, and both models write most files that way."
@@ -1209,6 +1224,12 @@
                                           (get-in ctx [:config :run :verify-cmd]))}
                                storm-policy)
                    (note-tree-writes ctx tool (some? refusal)))
+        ;; A script or shell command that changed Clojure files gets them loaded, as a
+        ;; file tool's write does.
+        result (if-let [r (when (contains? (gates/tool-vocab :tree-writers) tool)
+                            (tree-load-reports (assoc ctx :branch branch) (:last-tree-changes branch)))]
+                 (update result :result str "\n" r)
+                 result)
         ;; 29 of gen-20's 57 failures were four identical (tool, message)
         ;; pairs, and the harness answered the fifth exactly as it answered
         ;; the first. Say something different instead.

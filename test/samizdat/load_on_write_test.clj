@@ -8,7 +8,10 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
             [jolt.fs :as fs]
+            [samizdat.agent.loop :as aloop]
+            [samizdat.agent.state :as state]
             [samizdat.agent.tools :as tools]
+            [samizdat.prompt]
             [samizdat.repl.route :as route]))
 
 (defn- root []
@@ -46,3 +49,46 @@
             (write ctx "src/shop/other.clj" "(ns shop.other)\n")
             (is (empty? @evals)))))
       (finally (fs/delete-tree d)))))
+
+(deftest a-file-a-script-wrote-is-loaded-too
+  ;; lean1's third figlet edited main.clj with spit inside eval, left it unbalanced, and
+  ;; shipped a build that failed: only file-tool writes were loaded, and its own build
+  ;; check piped compile.sh through tail, which hid the exit code.
+  (let [d (root) evals (atom [])
+        ctx {:root d :branch {:id "B1"} :config {}}]
+    (try
+      (spit (str d "/src/shop/core.clj") "(ns shop.core)\n(defn f [] nope)\n")
+      (with-redefs [route/image-of (fn [_] :project)
+                    route/eval-for (fn [_ code & _] (swap! evals conj code)
+                                     {:ok false :error "Unable to resolve symbol: nope"})]
+        (let [r (aloop/tree-load-reports ctx ["src/shop/core.clj" "README.md"])]
+          (is (= ["(require 'shop.core :reload)"] @evals) "the Clojure file, and only it")
+          (is (str/includes? r "shop.core"))
+          (is (str/includes? r "Unable to resolve symbol: nope"))))
+      (testing "the files a turn changed are kept on the branch for this"
+        (let [b (-> (state/new-branch {:id "B1" :problem "p"})
+                    (state/add-turn {:turn 1 :tool "eval"})
+                    (state/note-tree-writes {"src/a.clj" [1 2]} false))]
+          (is (= ["src/a.clj"] (:last-tree-changes b)))
+          (is (empty? (:last-tree-changes (state/note-tree-writes b {"src/a.clj" [1 2]} false)))
+              "and cleared when the next turn changed nothing")))
+      (finally (fs/delete-tree d)))))
+
+(deftest a-script-write-that-does-not-read-is-named-with-its-line
+  ;; spit writes a string, so the paren check every file tool runs never saw it.
+  (let [d (root) evals (atom [])
+        ctx {:root d :branch {:id "B1"} :config {}}]
+    (try
+      (spit (str d "/src/shop/core.clj") "(ns shop.core)\n(defn f [] (+ 1 2)))\n(defn g [] 1)\n")
+      (with-redefs [route/image-of (fn [_] :project)
+                    route/eval-for (fn [_ code & _] (swap! evals conj code) {:ok true :value "nil"})]
+        (let [r (aloop/tree-load-reports ctx ["src/shop/core.clj"])]
+          (is (str/includes? r "src/shop/core.clj"))
+          (is (str/includes? r "line 2") "where, as the file tools say it")
+          (is (empty? @evals) "and it is not loaded, since it cannot be")))
+      (finally (fs/delete-tree d)))))
+
+(deftest scripts-are-told-to-write-through-the-tools
+  (is (str/includes? (samizdat.prompt/prompt "system-lean") "tool/write_file"))
+  (is (re-find #"not\s+`?spit" (samizdat.prompt/prompt "system-lean")))
+  (is (re-find #"not\s+`?spit" (samizdat.prompt/prompt "system-tools"))))

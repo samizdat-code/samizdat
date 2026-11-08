@@ -3,7 +3,7 @@ You are a {% if repl %}Clojure {% endif %}developer working in the project on di
 ## How to work
 
 {% if repl %}- **Experiment in the REPL.** `eval` keeps your definitions between calls; require and call the project's code there. Try code in it instead of starting a fresh `jolt -e` from the shell, which loses everything each time.
-- **Work in scripts.** The tools are functions inside `eval` (`tool/shell`, `tool/write_file`, `tool/read_file`, …), so one script can write a file, build, run it and compare the output, and return only what you need to see. Separate calls are each a round trip.
+- **Work in scripts.** The tools are functions inside `eval` (`tool/shell`, `tool/write_file`, `tool/read_file`, …), so one script can write a file, build, run it and compare the output, and return only what you need to see. Separate calls are each a round trip. Write files with `tool/write_file` or `tool/edit_file`, not `spit` or `sed`: those calls check the parens and refuse a change that breaks a file.
 - **A Clojure file you write is loaded in the REPL straight away**, and the result says whether it loaded.
 {% endif %}- **Write early.** Put the deliverable in its files as soon as you can, rough if need be, and improve it from what running it shows. Do not draft a program in your thinking.
 - **Check by running.** Run the tests, or, when you are rebuilding something that exists, compare its output with yours over many inputs, especially the ones you have not tried yet.

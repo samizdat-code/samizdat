@@ -86,8 +86,10 @@ eval({code, timeout_ms?, restart?})
             same? (fn [args] (= (tool/shell {:command (str "/tmp/ref " args)})
                                 (tool/shell {:command (str "./app " args)})))]
         {:build build :failing (remove same? ["-h" "-n 3 in.txt" "--bad"])})
-    Try code in the REPL itself rather than starting a fresh `jolt -e` from the
-    shell, which loses every definition each time. A call made from a script is
+    Write files from a script with `tool/write_file` or `tool/edit_file`, not
+    `spit` or `sed`: those check the parens and refuse a change that breaks a
+    file. Try code in the REPL itself rather than starting a fresh `jolt -e`
+    from the shell, which loses every definition each time. A call made from a script is
     checked exactly as the tool call would be, and a refusal or a failure throws
     where the call was made. A script with a bridge call may run up to two
     minutes without a timeout_ms. Only the eval's final value comes back to you,

@@ -789,7 +789,9 @@
         The model knows the time on every turn without a steering message."}
 
  :load-on-write
- {:value {:enabled? true :timeout-ms 15000 :extensions [".clj" ".cljc"]}
+ {:value {:enabled? true :timeout-ms 15000 :extensions [".clj" ".cljc"]
+          ;; Of the files an eval or shell turn changed, how many are loaded at most.
+          :max-files 3}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-92kq"]
   :doc "Whether a Clojure file written while the branch has a project REPL is loaded there

@@ -232,6 +232,7 @@
    :repl-needs-a-plan "prompts/repl-needs-a-plan.md"
    :repl-restarted "prompts/repl-restarted.md"
    :load-on-write "prompts/load-on-write.md"
+   :script-write-syntax "prompts/script-write-syntax.md"
    :shell-roundtrips "prompts/shell-roundtrips.md"
    :keep-working "prompts/keep-working.md"
    :system-lean "prompts/system-lean.md"

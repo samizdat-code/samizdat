@@ -24,6 +24,7 @@
   helpers and the run-tool multimethod."
   (:require [clojure.string :as str]
             [samizdat.agent.files :as files]
+            [samizdat.agent.source :as source]
             [samizdat.agent.tools.base :as base]
             [samizdat.sdiff.address :as address]
             [samizdat.sdiff.core :as sdiff]
@@ -41,28 +42,44 @@
           ends (keep #(str/index-of tail %) [" " "\n" ")" "\t" (str (char 13))])]
       (not-empty (subs tail 0 (if (seq ends) (apply min ends) (count tail)))))))
 
+(defn read-report
+  "Whether the Clojure file at `path` reads, as the file tools would say it, or nil when it
+  does. For a file a script or a shell command wrote, which no file tool checked."
+  [{:keys [root]} path]
+  (let [{:keys [extensions]} (gates/threshold :load-on-write)
+        path (str path)]
+    (when (some #(str/ends-with? path %) extensions)
+      (when-let [source (try (slurp (str root "/" path)) (catch Throwable _ nil))]
+        (let [{:keys [problem note]} (source/vet source {:whole? false :clojure? true})]
+          (when problem
+            (str/trim (prompt/render "script-write-syntax" {:path path :syntax (str/trim (str note))}))))))))
+
+(defn load-report
+  "Load the Clojure file at `path` in the branch's project REPL and say whether it loaded,
+  or nil when there is no project REPL, it is not Clojure, or it declares no namespace.
+  gates.edn :load-on-write."
+  [{:keys [root branch] :as ctx} path]
+  (let [{:keys [enabled? timeout-ms extensions]} (gates/threshold :load-on-write)
+        path (str path)]
+    (when (and enabled?
+               (some #(str/ends-with? path %) extensions)
+               (= :project (route/image-of ctx)))
+      (when-let [ns-name (some-> (try (slurp (str root "/" path)) (catch Throwable _ nil))
+                                 declared-ns)]
+        (let [r (try (route/eval-for ctx (str "(require '" ns-name " :reload)")
+                                     (:repl-session branch) timeout-ms)
+                     (catch Throwable e {:ok false :error (or (ex-message e) (str e))}))]
+          (str/trim (prompt/render "load-on-write"
+                                   {:ns ns-name :loaded (:ok r) :error (:error r)})))))))
+
 (defn- with-load-check
   "A Clojure file written while the branch has a project REPL is loaded there, and the
   write's result says whether it loaded: a model learns a file it wrote is broken without
-  having to remember to reload it (memdoor's build-after-edit, done the Clojure way).
-  gates.edn :load-on-write."
-  [{:keys [category] :as result} {:keys [root branch] :as ctx}]
-  (let [{:keys [enabled? timeout-ms extensions]} (gates/threshold :load-on-write)
-        path (str (get-in ctx [:args :path]))]
-    (if-not (and enabled? (= :success category)
-                 (some #(str/ends-with? path %) extensions)
-                 (= :project (route/image-of ctx)))
-      result
-      (let [source (try (slurp (str root "/" path)) (catch Throwable _ nil))
-            ns-name (some-> source declared-ns)]
-        (if-not ns-name
-          result
-          (let [r (try (route/eval-for ctx (str "(require '" ns-name " :reload)")
-                                       (:repl-session branch) timeout-ms)
-                       (catch Throwable e {:ok false :error (or (ex-message e) (str e))}))]
-            (update result :result str "\n"
-                    (str/trim (prompt/render "load-on-write"
-                                             {:ns ns-name :loaded (:ok r) :error (:error r)})))))))))
+  having to remember to reload it (memdoor's build-after-edit, done the Clojure way)."
+  [{:keys [category] :as result} ctx]
+  (if-let [report (when (= :success category) (load-report ctx (get-in ctx [:args :path])))]
+    (update result :result str "\n" report)
+    result))
 
 (defn- with-userspace-check
   "A successful write to a file that serves a role of the project's workflow
