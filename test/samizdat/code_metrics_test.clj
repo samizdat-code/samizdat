@@ -196,3 +196,44 @@
         (is (some? u) "a change far bigger than any commit before it")
         (is (= ["b.clj"] (:files u)))
         (is (pos? (:delta u)))))))
+
+;; --- unusual files (jolt-metrics 0.3.2) ------------------------------------------
+
+(defn- ordinary-file [i]
+  (str "(ns app.part" i ")\n"
+       (apply str (for [j (range 30)]
+                    (str "(defn handle-request" j " [request response]"
+                         " (assoc response :status (get request :status) :body (str request)))\n")))))
+
+(defn- odd-file []
+  (apply str (for [w (range 300)]
+               (str "quixotic" w " zephyr" (mod w 7) " xylophone" (mod w 11) " "))))
+
+(deftest a-file-unlike-the-project-is-named
+  (let [sources (merge (into {} (for [i (range 15)] [(str "src/p" i ".clj") (ordinary-file i)]))
+                       {"src/odd.clj" (odd-file)})]
+    (is (= ["src/odd.clj"] (map :path (cm/unusual-files-in sources ["src/odd.clj" "src/p1.clj"]))))
+    (is (empty? (cm/unusual-files-in sources ["src/p1.clj"])) "only changed files count")
+    (is (empty? (cm/unusual-files-in (select-keys sources ["src/p1.clj" "src/odd.clj"]) ["src/odd.clj"]))
+        "too few files to tell")))
+
+(deftest an-unusual-file-is-read-from-a-real-tree
+  (let [root (str (fs/create-temp-dir))
+        git (fn [& args] (apply sh/sh "git" "-C" root args))
+        policy (gates/threshold :code-metrics)]
+    (git "init" "-q")
+    (fs/create-dirs (str root "/src"))
+    (doseq [i (range 15)] (spit (str root "/src/p" i ".py") (ordinary-file i)))
+    (git "add" "-A")
+    (git "-c" "user.email=t@t" "-c" "user.name=t" "commit" "-qm" "base")
+    (let [base (clojure.string/trim (:out (git "rev-parse" "HEAD")))]
+      (is (nil? (cm/unusual-file-change root base policy)))
+      (spit (str root "/src/odd.py") (odd-file))
+      (is (= ["src/odd.py"] (map :path (cm/unusual-file-change root base policy)))
+          "a Python file too: the check counts words"))))
+
+(deftest the-review-names-whichever-signal-fired
+  (let [r (fn [m] (samizdat.prompt/render "unusual-change" m))]
+    (is (str/includes? (r {:odd true :odd-files "`src/odd.py` (4.2)"}) "These files you changed read unlike"))
+    (is (not (str/includes? (r {:odd true :odd-files "x"}) "standard deviations from its last")))
+    (is (str/includes? (r {:change true :z "3.4" :added true :commits 40 :files "`a.clj`"}) "adds far more"))))

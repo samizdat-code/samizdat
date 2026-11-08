@@ -627,10 +627,15 @@
         ;; AN UNUSUAL CHANGE (jolt-metrics' metrics.entropy): the run's change
         ;; moved the code's information content far more than the project's
         ;; commits do. Read on a first done only, and not for a verdict.
-        unusual (when (and (not advisory?) (:root ctx) (:git-baseline ctx)
-                           (zero? (state/done-streak branch)))
+        review? (and (not advisory?) (:root ctx) (:git-baseline ctx)
+                     (zero? (state/done-streak branch)))
+        unusual (when review?
                   (code-metrics/unusual-change (:root ctx) (:git-baseline ctx)
                                                (gates/threshold :code-metrics)))
+        ;; And a file it changed whose words stand out from the project's others.
+        odd-files (when review?
+                    (code-metrics/unusual-file-change (:root ctx) (:git-baseline ctx)
+                                                      (gates/threshold :code-metrics)))
         block (ship-gate-block
                 {:answer answer :problem problem
                  :evidence evidence
@@ -647,13 +652,17 @@
                  :keep-working (prompt/prompt "keep-working")
                  :unchecked-write? (unchecked-write? branch)
                  :check-before-done (prompt/prompt "check-before-done")
-                 :unusual-change (some? unusual)
-                 :review-unusual (when unusual
+                 :unusual-change (boolean (or unusual (seq odd-files)))
+                 :review-unusual (when (or unusual (seq odd-files))
                                    (prompt/render "unusual-change"
-                                                  {:z (format "%.1f" (abs (double (:z unusual))))
-                                                   :added (pos? (:delta unusual))
+                                                  {:change (some? unusual)
+                                                   :z (some-> unusual :z double abs (->> (format "%.1f")))
+                                                   :added (some-> unusual :delta pos?)
                                                    :commits (:commits unusual)
-                                                   :files (str/join ", " (map #(str "`" % "`") (take 5 (:files unusual))))}))
+                                                   :files (str/join ", " (map #(str "`" % "`") (take 5 (:files unusual))))
+                                                   :odd (seq odd-files)
+                                                   :odd-files (str/join ", " (for [{:keys [path z]} (take 5 odd-files)]
+                                                                              (format "`%s` (%.1f)" path (double z))))}))
                  :unexplained-tests (exam/unexplained touched-tests explained (or prior-explained #{}))})
         ;; The test rung — what makes the loop test-driven rather than one-shot.
         ;; `done` is not terminal until the unit's tests actually pass: run the

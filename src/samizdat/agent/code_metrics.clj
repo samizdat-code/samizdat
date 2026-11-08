@@ -83,13 +83,29 @@
 ;; run's whole change is scored against the project's history as one more
 ;; commit would be.
 
+(defn- entropy-source?
+  "Whether `path` is source the entropy checks read: they count words, so any
+  language, by gates.edn :code-metrics :entropy-extensions."
+  [{:keys [entropy-extensions] :as policy} path]
+  (if entropy-extensions
+    (some #(str/ends-with? (str path) %) entropy-extensions)
+    (source? policy path)))
+
+(defn- read-texts
+  "{path text} for the files among `paths` under `root`, skipping any that will not read."
+  [root paths]
+  (into {} (keep (fn [p] (when-let [abs (files/resolve-under-root root p)]
+                           (let [f (java.io.File. ^String abs)]
+                             (when (.isFile f) (try [p (slurp f)] (catch Throwable _ nil)))))))
+        paths))
+
 (defn change-entropy
   "How much the change from `before` to `after`, {path text} maps, moved the
   entropy of the source files in them. Pure."
   [policy before after]
   (reduce + 0.0
           (for [path (distinct (concat (keys before) (keys after)))
-                :when (source? policy path)]
+                :when (entropy-source? policy path)]
             (- (if-let [t (get after path)] (entropy/source-entropy t) 0.0)
                (if-let [t (get before path)] (entropy/source-entropy t) 0.0)))))
 
@@ -111,7 +127,7 @@
   (let [k [root baseline]]
     (if (contains? @histories k)
       (get @histories k)
-      (let [h (mgit/history root (:entropy-commits policy 500) #(source? policy %))]
+      (let [h (mgit/history root (:entropy-commits policy 500) #(entropy-source? policy %))]
         (swap! histories assoc k h)
         h))))
 
@@ -120,11 +136,43 @@
   touched, or nil when it is not unusual or that cannot be told. Never throws."
   [root baseline {:keys [max-files] :as policy}]
   (try
-    (when-let [paths (seq (take max-files (filter #(source? policy %)
+    (when-let [paths (seq (take max-files (filter #(entropy-source? policy %)
                                                   (gitdiff/changed-files root baseline))))]
       (when-let [u (unusual (history-of root baseline policy)
                             (change-entropy policy
                                             (into {} (map (juxt identity #(gitdiff/file-at root baseline %))) paths)
-                                            (files/read-sources root paths)))]
+                                            (read-texts root paths)))]
         (assoc u :files (vec paths))))
+    (catch Throwable _ nil)))
+
+;; --- an unusual file (jolt-metrics 0.3.2) -------------------------------------
+;;
+;; A file whose words are far more surprising, given the project's other files,
+;; than theirs are given the rest: written in another style, another language's
+;; idiom, generated, or pasted in.
+
+(defn unusual-files-in
+  "The paths among `changed` whose vocabulary is unusual for the project, as
+  [{:path :z}] most surprising first; `sources` is the project's {path text}.
+  Pure."
+  [sources changed]
+  (let [ps (vec (keys sources))
+        scored (mapv (fn [p s] {:path p :surprisal s})
+                     ps (entropy/surprisals (mapv #(entropy/word-counts (get sources %)) ps)))
+        changed (set changed)]
+    (vec (for [f (entropy/unusual-files scored)
+               :when (contains? changed (:path f))]
+           (select-keys f [:path :z])))))
+
+(defn unusual-file-change
+  "`unusual-files-in` for the files `root` changed since `baseline`, against the
+  project's source files, or nil when none stands out or it cannot tell. Never
+  throws."
+  [root baseline {:keys [max-files entropy-files] :as policy}]
+  (try
+    (when-let [changed (seq (take max-files (filter #(entropy-source? policy %)
+                                                    (gitdiff/changed-files root baseline))))]
+      (let [all (take (or entropy-files 2000)
+                      (filter #(entropy-source? policy %) (gitdiff/project-files root)))]
+        (not-empty (unusual-files-in (read-texts root all) changed))))
     (catch Throwable _ nil)))

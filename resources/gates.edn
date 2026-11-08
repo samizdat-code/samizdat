@@ -847,7 +847,12 @@
  {:value {:severities #{:critical} :extensions [".clj" ".cljc"] :max-files 20 :max-shown 5
           ;; How many of the project's commits the :unusual-change ship rung scores a
           ;; run's change against (jolt-metrics' --commits).
-          :entropy-commits 500}
+          :entropy-commits 500
+          ;; What the entropy checks read: they count words, so any language.
+          :entropy-extensions [".clj" ".cljc" ".cljs" ".py" ".js" ".ts" ".jsx" ".tsx" ".c" ".h"
+                               ".cc" ".cpp" ".hpp" ".go" ".rs" ".java" ".rb" ".sh"]
+          ;; The most of the project's files the unusual-file check reads.
+          :entropy-files 2000}
   :kind :policy :capability-tunable? true
   :provenance ["jolt-metrics"]
   :doc "What :metrics-worse counts, read from jolt-metrics' refactoring queue on each turn
@@ -4418,7 +4423,9 @@
     {:name :unusual-change
      ;; jolt-metrics' metrics.entropy (Torres et al. 2025): the run's change moves the
      ;; code's information content more than three standard deviations from the
-     ;; project's commits. Review the diff once; a second done in a row finishes.
+     ;; project's commits, or a file it changed reads unlike the project's others
+     ;; (surprisal, jolt-metrics 0.3.2). Review the diff once; a second done in a row
+     ;; finishes.
      :when (and unusual-change (not verdict?) (zero? done-streak))
      :message-form review-unusual}
     {:name :answer-exists

@@ -89,8 +89,8 @@
         ;; gate. Reads source without evaluating it, and has no dependencies of its own.
         io.github.jlt-commons/jolt-metrics
         {:git/url "https://github.com/jlt-commons/jolt-metrics"
-         :git/tag "v0.3.1"
-         :git/sha "284cbd6ec353293c1273337e2c18b34cd7e1c5e0"}
+         :git/tag "v0.3.2"
+         :git/sha "5f36452d3b998f3ccb3b078c0433098d5312fe8a"}
 
         io.github.jlt-commons/augur
         {:git/url "https://github.com/jlt-commons/augur"
