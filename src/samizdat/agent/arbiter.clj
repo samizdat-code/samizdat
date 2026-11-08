@@ -115,7 +115,13 @@
   [decision]
   (when decision
     (if-let [t (:tool decision)]
-      (str "```tool-call\n{\"name\": \"" t "\"")
+      (str "```tool-call\n{\"name\": \"" t "\""
+           ;; Opened as far as the argument the tool cannot do without
+           ;; (gates.edn :prefill-args): a bare name let a forced done close at
+           ;; once, with no answer, be refused, and be forced again until the
+           ;; clock ran out — 39 times on tb21-code's torch-pipeline-parallelism.
+           (when-let [arg (get (gates/threshold :prefill-args) t)]
+             (str ", \"args\": {\"" arg "\": \"")))
       "```tool-call\n")))
 
 (def ^:private forceable

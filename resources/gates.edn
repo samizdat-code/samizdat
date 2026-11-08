@@ -810,6 +810,27 @@
         result completes so the cached prefix does not move (agenc-core run-deadline.ts).
         The model knows the time on every turn without a steering message."}
 
+ :prefill-args
+ {:value {"done" "answer" "give_up" "reason"}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-6p51"]
+  :doc "The argument a gate's prefill opens when it forces a tool that needs one. Prefilled
+        with the bare name, DeepSeek closed `done` in two tokens with no answer; the
+        answer-exists rung refused it, the clock gate forced it again, and the branch spent
+        its last minute on 39 empty dones (tb21-code torch-pipeline-parallelism,
+        karamazov-6p51)."}
+
+ :tree-writes
+ {:value {:ignore ["**/__pycache__/**" "**/*.pyc" "**/.pytest_cache/**" "**/*.o" "**/*.class"
+                   "**/.mypy_cache/**" "**/.ruff_cache/**" "**/node_modules/**" "**/.cache/**"
+                   ".samizdat/**" "**/*.log"]}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-6p51"]
+  :doc "Files a shell or eval turn changes that do not make it a write: output a run leaves
+        behind. On tb21-code (karamazov-6p51) torch-pipeline-parallelism's checks each
+        imported the module, Python wrote __pycache__, the check counted as a write, and
+        the :check-after-last-write rung refused done on a branch that had just checked."}
+
  :load-on-write
  {:value {:enabled? true :timeout-ms 15000 :extensions [".clj" ".cljc"]
           ;; Of the files an eval or shell turn changed, how many are loaded at most.

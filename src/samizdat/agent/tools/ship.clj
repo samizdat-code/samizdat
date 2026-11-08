@@ -363,12 +363,18 @@
   [branch]
   (let [ts (vec (:turns branch))
         writes (gates/tool-vocab :file-write)
-        last-write (last (keep-indexed (fn [i t] (when (or (contains? writes (str (:tool t))) (:wrote t)) i)) ts))]
+        ;; A script that wrote and ran a program that succeeded checked its own write,
+        ;; so it is not the write a later check has to follow.
+        ran? (fn [t] (and (:ran? t) (= "success" (name (or (:category t) :none)))))
+        last-write (last (keep-indexed (fn [i t] (when (or (contains? writes (str (:tool t)))
+                                                           (and (:wrote t) (not (ran? t))))
+                                                   i))
+                                       ts))]
     (boolean
      (and last-write
           (not-any? (fn [t] (and (contains? #{"eval" "shell" "run_check"} (str (:tool t)))
                                  (= "success" (name (or (:category t) :none)))
-                                 (not (:wrote t))))
+                                 (or (not (:wrote t)) (ran? t))))
                     (subvec ts (inc last-write)))))))
 
 (defn- compile-rung-form

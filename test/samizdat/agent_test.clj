@@ -240,8 +240,9 @@
           d (arbiter/decide {:branch b :max-turns 40})]
       (is (= :last-call (:gate d)) "the forced ship beats the soft wind-down")
       (is (some #{:wind-down} (:passed-over d)))
-      (is (= "```tool-call\n{\"name\": \"done\"" (arbiter/prefill-for d))
-          "it prefills a done call, so the model cannot explore its last turns away")))
+      (is (= "```tool-call\n{\"name\": \"done\", \"args\": {\"answer\": \"" (arbiter/prefill-for d))
+          "it prefills a done call open at its answer, so the model cannot explore its last
+           turns away, nor close it with nothing to say")))
   (testing "silent before the window — wind-down still handles the earlier stretch"
     (let [b (branch-with :turns (vec (repeat 34 {})))]  ; 34/40 — past 0.85, not last-2
       (is (not-any? #{:last-call}

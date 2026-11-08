@@ -41,6 +41,7 @@
             [samizdat.agent.tools.files :as files-tools]
             [samizdat.cancel :as cancel]
             [samizdat.repl.route :as route]
+            [samizdat.security.exposure :as exposure]
             [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.files :as files]
             [samizdat.agent.context-rules :as context-rules]
@@ -1106,7 +1107,11 @@
             (not (or file-tool? (contains? (gates/tool-vocab :tree-writers) tool))))
       branch
       (if-let [stamps (gitdiff/file-stamps (:root ctx) (:git-baseline ctx))]
-        (state/note-tree-writes branch stamps file-tool?)
+        ;; Output a run leaves behind (a bytecode cache, an object file) is not a
+        ;; write: counted as one, every check that imported a module undid itself.
+        (let [ignore (:ignore (gates/threshold :tree-writes))
+              stamps (into {} (remove (fn [[p _]] (some #(exposure/glob-matches? % p) ignore))) stamps)]
+          (state/note-tree-writes branch stamps file-tool?))
         branch))))
 
 (defn- note-storm
@@ -1227,6 +1232,9 @@
                                       (gates/threshold :timeout-failure-weight))))
                    (state/add-turn {:turn turn :tool tool
                                     :category (:category result)
+                                    ;; An eval that ran a program through the bridge
+                                    ;; checked something, whatever else it wrote.
+                                    :ran? (:ran? result)
                                     :single-call? (when (= "eval" tool) (single-call-eval? (:args parsed)))
                                     :args (when (= "tool_search" tool) (:args parsed))
                                     ;; Kept for failures AND malformed calls,

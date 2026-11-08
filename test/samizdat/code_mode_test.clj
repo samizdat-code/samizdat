@@ -13,6 +13,8 @@
             [samizdat.agent.loop :as aloop]
             [samizdat.agent.tools :as tools]
             [samizdat.agent.tools.shell :as shell]
+            [samizdat.agent.tools.ship :as ship]
+            [samizdat.security.exposure]
             [samizdat.agent.state :as state]
             [samizdat.bridge :as bridge]
             [samizdat.prompt :as prompt]
@@ -179,3 +181,17 @@
     (is (str/includes? (run {:code "(+ 1 1)"} (fn [_] {:ok true :value "2"
                                                        :earlier {:ok true :value "built" :unasked {:code "(build)"}}}))
                        "(`(build)`) finished:\n=> built\n\n=> 2"))))
+
+(deftest a-check-that-leaves-output-or-wrote-then-ran-is-still-a-check
+  ;; tb21-code torch-pipeline-parallelism: done refused after checks that ran.
+  (let [w {:tool "write_file" :category :success}
+        ok? #(not (ship/unchecked-write? {:turns %}))]
+    (is (not (ok? [w])) "a write with nothing after it")
+    (is (ok? [w {:tool "eval" :category :success}]) "a run after it")
+    (is (not (ok? [w {:tool "eval" :category :success :wrote true}])) "an eval that only wrote")
+    (is (ok? [w {:tool "eval" :category :success :wrote true :ran? true}]) "one that wrote and ran"))
+  (let [ignore (:ignore (gates/threshold :tree-writes))
+        ignored? (fn [p] (some #(samizdat.security.exposure/glob-matches? % p) ignore))]
+    (is (ignored? "__pycache__/pipeline_parallel.cpython-312.pyc"))
+    (is (ignored? "src/pkg/__pycache__/x.pyc"))
+    (is (not (ignored? "pipeline_parallel.py")))))

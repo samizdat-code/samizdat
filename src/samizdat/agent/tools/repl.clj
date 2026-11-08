@@ -124,7 +124,10 @@
                                             :chars (count (pr-str (or (:value r) (:error r))))}})
                      (catch Throwable _ nil)))
               r)
-            (bridge/answer (gated ctx op args))))))))
+            (let [r (gated ctx op args)]
+              (when (and (= "shell" op) (= :success (:category r)))
+                (some-> (:ran ctx) (reset! true)))
+              (bridge/answer r))))))))
 
 (declare result-of)
 
@@ -143,7 +146,8 @@
         ;; repl/eval-code always did, so the redaction boundary, the syntax
         ;; gate and the timeout flag all still apply exactly as they did.
         flag (fn [k] (contains? #{"true" "yes" "1"} (str/lower-case (str (base/arg ctx k)))))
-        r (route/eval-for (assoc ctx :bridge (bridge-handler ctx) :restart? restart?
+        ran (atom false)
+        r (route/eval-for (assoc ctx :bridge (bridge-handler (assoc ctx :ran ran)) :restart? restart?
                                  :wait? (flag :wait) :abort? (flag :abort))
                           code session timeout)
         prefix (if-let [why (:restarted r)]
@@ -152,7 +156,10 @@
         ;; An eval handed back while it runs on, and what became of it
         ;; (karamazov-6p51.5): said in one line, ahead of any result it carries.
         said (fn [m] (str "[harness] " (str/trim (prompt/render "eval-detached" m)) "\n"))]
-    (cond
+    ;; `:ran?`: the script ran a program that succeeded, so the eval is a check
+    ;; even when it also wrote (ship/unchecked-write?).
+    (cond->
+     (cond
       (or (:stalled r) (:busy r) (:idle r))
       (base/ok branch (str prefix (said (select-keys r [:stalled :busy :idle :seconds]))))
 
@@ -168,7 +175,8 @@
       (:waited r)
       (result-of ctx (str prefix (said {:waited (:waited r)})) r)
 
-      :else (result-of ctx prefix r))))
+      :else (result-of ctx prefix r))
+     @ran (assoc :ran? true))))
 
 (defn- result-of
   "The tool result for eval result `r`, after `prefix`."
