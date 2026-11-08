@@ -25,11 +25,18 @@
             [clojure.test :refer [deftest is testing]]
             [jolt.ffi :as ffi]
             [ring-chez.adapter :as adapter]
-            [ring-chez.socket :as socket]))
+            [jolt.socket.native :as socket]))
 
 ;; connect(2) is the one call the server never makes; its siblings
-;; (socket/send/recv/close/setsockopt) are public vars on ring-chez.socket.
+;; (c-send, c-recv, c-close, c-setsockopt) are public vars on jolt.socket.native,
+;; where ring-chez-adapter 0.9 moved them from ring-chez.socket.
 (ffi/defcfn t-connect "connect" [:int :pointer :int] :int)
+
+(defn- rv
+  "A raw call's return value: jolt.socket.native's calls that capture errno answer
+  [value errno]."
+  [x]
+  (if (vector? x) (first x) x))
 
 (def ^:private af-inet 2)
 (def ^:private sock-stream 1)
@@ -57,7 +64,7 @@
   "Open a client socket to the loopback adapter, guarded by a 5s receive
   timeout so a server that never answers cannot wedge the suite."
   [port]
-  (let [fd (socket/c-socket af-inet sock-stream 0)]
+  (let [fd (rv (socket/c-socket af-inet sock-stream 0))]
     (when (neg? fd) (throw (ex-info "client socket() failed" {})))
     (let [sa (sockaddr port)]
       (when (neg? (t-connect fd sa 16))
@@ -84,7 +91,7 @@
   [fd p start len]
   (loop [off start, left len]
     (when (pos? left)
-      (let [sent (socket/c-send fd (+ p off) left 0)]
+      (let [sent (rv (socket/c-send fd (+ p off) left 0))]
         (when (pos? sent) (recur (+ off sent) (- left sent)))))))
 
 (defn- send-string [fd s]
@@ -100,7 +107,7 @@
   (let [buf (ffi/alloc bufsize)]
     (try
       (loop [acc ""]
-        (let [n (socket/c-recv fd buf bufsize 0)]
+        (let [n (rv (socket/c-recv fd buf bufsize 0))]
           (cond
             (zero? n) {:text acc :closed? true}
             (neg? n) {:text acc :closed? false}

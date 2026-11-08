@@ -24,7 +24,7 @@
             [jolt.process :as p]
             [ring-chez.http]
             [ring-chez.adapter :as adapter]
-            [ring-chez.socket :as socket]
+            [jolt.socket.native :as socket]
             ;; the java.time.* host shim, before data.json
             [jolt.time]
             [clojure.data.json :as json]
@@ -237,7 +237,7 @@
       ;; different reasons and the first version could not tell them apart:
       ;; it passed on macOS and failed on Linux CI with nothing to say about
       ;; whether the flag had been set at all.
-      (is (socket/cloexec? (:socket server))
+      (is (socket/close-on-exec? (:socket server))
           "the listen fd is not marked FD_CLOEXEC — the mechanism itself failed")
       (adapter/stop-server server)
       (let [again (try {:ok true :server (adapter/run-server handler {:port port})}

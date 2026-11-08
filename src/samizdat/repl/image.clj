@@ -87,7 +87,7 @@
   (RFC-013). A bare `jolt nrepl-server` answers the interrupt op with
   unknown-op. base-test holds this equal to deps.edn's pin, so the two cannot
   drift."
-  "aad8baef0dfe56d288792017841f37321d8160b1")
+  "8ada4beeb100a391045ec2d93eb566b476fb46f7")
 
 (def nrepl-sdeps
   "The -Sdeps map the image is started with: nrepl, its middleware, and the
@@ -95,7 +95,7 @@
   (pr-str {:deps {'jolt-lang/nrepl {:git/url "https://github.com/jolt-lang/nrepl"
                                     :git/sha nrepl-sha}
                   'yogthos/sci {:git/url "https://github.com/yogthos/sci.git"
-                                :git/sha "1295142fc29f206dd2747963548ba038077d9205"}}
+                                :git/sha "0784dfcbe81a9469413f6aea7e6c1b9eb12a3cec"}}
            :nrepl/middleware ['nrepl.middleware/default-middleware]}))
 
 (defn spawn-argv
