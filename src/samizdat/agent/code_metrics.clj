@@ -127,7 +127,7 @@
   (let [k [root baseline]]
     (if (contains? @histories k)
       (get @histories k)
-      (let [h (mgit/history root (:entropy-commits policy 500) #(entropy-source? policy %))]
+      (let [h (mgit/history root (:entropy-commits policy) #(entropy-source? policy %))]
         (swap! histories assoc k h)
         h))))
 
@@ -172,7 +172,7 @@
   (try
     (when-let [changed (seq (take max-files (filter #(entropy-source? policy %)
                                                     (gitdiff/changed-files root baseline))))]
-      (let [all (take (or entropy-files 2000)
-                      (filter #(entropy-source? policy %) (gitdiff/project-files root)))]
+      (let [all (cond->> (filter #(entropy-source? policy %) (gitdiff/project-files root))
+                  entropy-files (take entropy-files))]
         (not-empty (unusual-files-in (read-texts root all) changed))))
     (catch Throwable _ nil)))
