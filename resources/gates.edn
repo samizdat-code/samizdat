@@ -753,6 +753,14 @@
         :never names the calls that end a turn or reshape the harness; they are named back
         to the model, not run."}
 
+ :default-style
+ {:value :lean :kind :policy :capability-tunable? true
+  :provenance ["karamazov-92kq"]
+  :doc "The :styles entry a run uses when its config names none; :full names the full loop.
+        Lean since lean1 (DeepSeek, three attempts on csview, figlet and yj): 66.4% mean
+        against 61.7%, median 61.1% against 60.1%, with a 4K-character prompt against 55K.
+        It wrote 28% more output per trial, which the per-family scope limits address."}
+
  :styles
  {:value
   {:lean

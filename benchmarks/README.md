@@ -166,6 +166,40 @@ The harness changed between these runs and each task has only five trials, so th
 shows the spread, not a winner. Neither arm is ahead overall. Single attempts cannot
 measure a change smaller than this spread.
 
+### Pi on DeepSeek, and the lean loop (dsp1, lean1)
+
+`dsp1` ran Pi and samizdat's loop on DeepSeek flash under the fixed grader and was stopped
+after 14 of 18 trials, once it was clear what it would show. Pi scored 0 on all three csview
+trials and both figlet trials, each time with no `compile.sh`: it either hung on a command
+its bash tool never timed out, or wrote the program and ran out of time before the build
+file. On yj, where it delivered, Pi led (69.7% and 67.6% against 58.3% and 54.5%). Its
+programs there covered more: samizdat left HCL as a stub, its TOML hung on any table, and it
+ran about half as many comparisons against the original on those formats.
+
+Reading Pi, deepseek-harness, memdoor, mini-SWE-agent (ProgramBench's own) and agenc-core
+showed a shared lean design that samizdat differed from on almost every point: a 1-3K
+prompt against samizdat's 55K, every call in a reply run against one, about 50 KB of tool
+output kept with its end against the first 10,000 characters, little steering, and a plain
+finish. `lean1` measured a lean style, which keeps samizdat's clock gates, its refusal of
+late rewrites that break a file, and REPL work with code mode, against the full loop, on
+DeepSeek, three attempts per task:
+
+| Task | full loop | lean |
+|---|---|---|
+| csview | 94.3, 95.4, 81.6 (mean 90.4) | 94.5, 96.8, 83.3 (mean 91.5) |
+| figlet | 48.1, 64.2, 0.0 (mean 37.4) | 68.5, 46.5, 53.9 (mean 56.3) |
+| yj | 52.7, 59.3, 60.1 (mean 57.4) | 46.4, 46.3, 61.1 (mean 51.3) |
+| Mean, median | 61.7, 60.1 | 66.4, 61.1 |
+| Output tokens per trial | 90,599 | 116,259 |
+| Cost, 9 trials | $1.79 | $2.10 |
+
+The full loop's figlet 0 was a build broken by an edit made with `spit` inside an eval,
+which no check saw; without it the two are level. Files that scripts and shell commands
+change are now checked and loaded like file-tool writes. Lean is now the default
+(gates.edn `:default-style`; `:run {:style :full}` opts out). Its extra output is what
+agenc-core measured for short prompts on DeepSeek, so it now carries short scope limits
+chosen per model family. 454 of its 659 evals called tools, 86 of them more than one.
+
 These runs do not compare samizdat with Pi. That needs Pi and samizdat on one provider
 with the fixed grader, and several attempts.
 

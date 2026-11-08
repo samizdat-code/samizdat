@@ -29,6 +29,7 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [samizdat.layers :as layers]
+            [samizdat.lexicon :as lexicon]
             [samizdat.peripherals :as peripherals]
             [samizdat.profiles :as profiles]))
 
@@ -777,6 +778,9 @@
                   ;; Read with a default of true at the use site already; named
                   ;; here so it is visible and switchable.
                   :require-test? (not= "0" (or (env "HARNESS_REQUIRE_TEST") "1"))
+                  ;; Which gates.edn :styles entry drives the loop: gates.edn
+                  ;; :default-style unless a config layer names one; :full is the full loop.
+                  :style (some-> (try (lexicon/policy :default-style) (catch Throwable _ nil)) keyword)
                   ;; The OPERATOR's definition of done (karamazov-a6mj.2): a
                   ;; vector of {:name "..." :check "<shell cmd>"} (pass = exit
                   ;; 0 in the project root) or {:name "..." :judge "<one

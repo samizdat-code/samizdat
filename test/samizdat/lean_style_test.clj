@@ -77,3 +77,10 @@
     (is (nil? (block {:time-used (- wind-down 0.3) :done-streak 1})) "a second done finishes")
     (is (nil? (block {:time-used (+ wind-down 0.01)})) "not in the last stretch")
     (is (nil? (block {})) "and never without a clock")))
+
+(deftest lean-is-the-default-and-a-project-can-opt-out
+  ;; lean1 (DeepSeek, 9 trials an arm): lean 66.4% mean against 61.7% for the full loop,
+  ;; at a 4K-character prompt against 55K.
+  (is (= :lean (get-in (config/load-config {}) [:run :style])))
+  (is (= :full (get-in (config/load-config {:run {:style :full}}) [:run :style])))
+  (is (nil? (gates/style {:run {:style :full}})) ":full names the full loop"))
