@@ -753,6 +753,26 @@
         :never names the calls that end a turn or reshape the harness; they are named back
         to the model, not run."}
 
+ :styles
+ {:value
+  {:lean
+   {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
+    :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
+             :time-nothing-written :time-whole-running :wind-down :plan-wind-down
+             :human-directive :shell-roundtrips :metrics-worse}
+    :context-block? false
+    :system-prompt "system-lean"
+    :lenient-done? true}}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-92kq"]
+  :doc "Ways a run can be driven, chosen by config.edn :run :style; no style is the full
+        loop. :lean is what Pi, deepseek-harness, memdoor and mini-SWE-agent (ProgramBench's
+        own) do: a short prompt, the core tools, little steering, a plain done. It keeps
+        what samizdat showed to be worth having: the clock gates and the time-left rung,
+        refusing late breaking rewrites, and REPL work with code mode. :phase-rules and
+        :gates are what stays on; :system-prompt names the frame; :lenient-done? holds done
+        to the rungs an advisory branch gets."}
+
  :load-on-write
  {:value {:enabled? true :timeout-ms 15000 :extensions [".clj" ".cljc"]}
   :kind :policy :capability-tunable? true
@@ -4279,7 +4299,15 @@
   ;; the run's own figures, so only the rungs marked :advisory? true bind it;
   ;; `advisory?` is in scope for a rung's forms.
   {:value
-   [{:name :answer-exists
+   [{:name :time-left
+     ;; A run with a clock is sent back once when it calls done before winding down:
+     ;; samizdat stopped 2 to 9 minutes early on yj with HCL a stub and TOML hanging on
+     ;; a table, while Pi used its whole limit testing. A second done in a row finishes,
+     ;; and a branch that delivers a verdict is never sent back.
+     :advisory? true
+     :when (and time-used wind-down (not verdict?) (< time-used wind-down) (zero? done-streak))
+     :message-form keep-working}
+    {:name :answer-exists
      ;; The one rung an advisory branch (reviewer, supervisor) is held to:
      ;; its verdict is its product, and run 9ead0638's supervisor called done
      ;; with {} and was told "Answer accepted." (karamazov-qtj5).

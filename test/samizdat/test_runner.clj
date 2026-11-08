@@ -263,6 +263,7 @@
             [samizdat.shell-writes-test]
             [samizdat.repl-restart-test]
             [samizdat.load-on-write-test]
+            [samizdat.lean-style-test]
             [samizdat.memory-admission-test]
             [samizdat.memory-source-test]
             [samizdat.memory-revise-test]
@@ -356,6 +357,7 @@
     samizdat.shell-writes-test
     samizdat.repl-restart-test
     samizdat.load-on-write-test
+    samizdat.lean-style-test
     samizdat.memory-admission-test
     samizdat.memory-source-test
     samizdat.memory-revise-test

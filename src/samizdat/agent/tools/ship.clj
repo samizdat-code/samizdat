@@ -380,7 +380,16 @@
                   ~'done-streak       (get ~'ctx :done-streak 0)
                   ;; Pre-existing tests changed or deleted with no reason
                   ;; given (karamazov-fgsb); empty when none.
-                  ~'unexplained-tests (get ~'ctx :unexplained-tests)]
+                  ~'unexplained-tests (get ~'ctx :unexplained-tests)
+                  ;; The share of the run's time limit gone, nil without one, and the
+                  ;; share at which it winds down.
+                  ~'time-used         (get ~'ctx :time-used)
+                  ;; A branch whose done delivers a verdict (reviewer, supervisor,
+                  ;; worker), as against one held to the advisory rungs by its style.
+                  ~'verdict?          (get ~'ctx :verdict? false)
+                  ;; What the time-left rung says, from prompts/keep-working.md.
+                  ~'keep-working      (get ~'ctx :keep-working)
+                  ~'wind-down         (get ~'ctx :wind-down)]
               ~form)))
 
 (def ship-gates
@@ -515,7 +524,9 @@
         ;; caller read an exhaustion fallback instead of the verdict
         ;; (karamazov-t86 — observed on every supervisor branch of three
         ;; consecutive live runs). run-role marks the branch.
-        advisory? (boolean (:advisory? branch))
+        ;; The lean style finishes on the answer, as an advisory branch does.
+        advisory? (boolean (or (:advisory? branch)
+                               (:lenient-done? (gates/style (:config ctx)))))
         confirmed (state/confirmed-artifacts branch)
         ;; Plus what the branch itself measured — its eval and shell output
         ;; off the journal. Computed here and banked nowhere: it is evidence
@@ -594,6 +605,11 @@
                  :unaccounted-checklist (checklist/unaccounted items accounted)
                  :checklist-items items
                  :done-streak (state/done-streak branch)
+                 :time-used (gates/time-used (get-in ctx [:config :run :time-limit-seconds])
+                                             (:started-ms ctx) (System/currentTimeMillis))
+                 :wind-down (:wind-down (gates/threshold :time-budget))
+                 :verdict? (boolean (:advisory? branch))
+                 :keep-working (prompt/prompt "keep-working")
                  :unexplained-tests (exam/unexplained touched-tests explained (or prior-explained #{}))})
         ;; The test rung — what makes the loop test-driven rather than one-shot.
         ;; `done` is not terminal until the unit's tests actually pass: run the

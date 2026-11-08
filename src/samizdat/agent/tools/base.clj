@@ -283,12 +283,15 @@
    ;; shadows clojure.core/when for the whole body, and the shadowing is
    ;; silent until the form it swallows is evaluated.
    (some (fn [{:keys [tools message-file] :as rule}]
-           (let [condition (:when rule)]
+           (let [condition (:when rule)
+                 ;; A style names the rules it keeps; without one, all apply.
+                 kept (:phase-rules (gates/style (:config ctx)))]
              (clojure.core/when
               ;; :all opts a rule in for every tool, so a rule whose scoping
               ;; lives in its own policy (the storm guard's exempt vocabulary)
               ;; does not need a second tool list here to drift out of date.
-              (and (or (= :all tools) (contains? (set tools) tool-name))
+              (and (or (nil? kept) (contains? kept (:rule rule)))
+                   (or (= :all tools) (contains? (set tools) tool-name))
                    (when-fn-holds? condition ctx))
               (refusal branch
                        (prompt/render message-file

@@ -182,6 +182,8 @@
         ;; A role may name its own frame in roles.edn :frame, for a fresh-context
         ;; worker that should not read the implementer's whole working method.
         (prompt/render-str (or (some-> (:frame (roles/spec role)) prompt/prompt)
+                               ;; The run's style may name a frame of its own (lean).
+                               (some-> (gates/style (config/file-config root)) :system-prompt prompt/prompt)
                                (prompt/layer :system)
                                "")
                            (merge ctx (render-segments ctx)))
@@ -411,6 +413,12 @@
                       names)]
       (when (seq texts)
         (prompt/render "modes-block" {:modes (mapv (fn [t] {:text t}) texts)})))))
+
+(defn context-block?
+  "Whether a run sends the per-turn context block: ledger, memories, failures and the
+  like. The lean style does not, as no lean harness does."
+  [config]
+  (not (false? (:context-block? (gates/style config)))))
 
 (defn- context-block
   "What the harness adds to the branch's view before its next turn: the
@@ -1459,6 +1467,7 @@
             now (System/currentTimeMillis)
             gate-ctx {:branch branch
                       :max-turns max-turns
+                      :style-gates (:gates (gates/style (:config ctx)))
                       ;; Whether the branch can script its tool calls in a project REPL,
                       ;; which :shell-roundtrips steers it to.
                       :code-mode? (and (:enabled? (route/bridge-policy))
@@ -1482,12 +1491,14 @@
                                            (:gate decision))
             rule-context (context-rules/boundary ctx branch parsed result turn)
             {ctx-block :block branch :branch}
-            (context-block conn run-id branch
+            (if-not (context-block? (:config ctx))
+              {:block nil :branch branch}
+              (context-block conn run-id branch
                            (get-in parsed [:args :claim])
                            (get-in ctx [:config :run :share-artifacts?])
                            (get-in ctx [:config :run :modes])
                            (roles/may-use? (or (:role ctx) (:role branch) :implementor) "task")
-                           (:texts rule-context))
+                           (:texts rule-context)))
             branch (assoc branch :context-rule-facts (:facts rule-context))
             ;; What the block cost, durably: one note per turn per branch,
             ;; sizes by part (karamazov-o4wm.6). The branch keeps the same

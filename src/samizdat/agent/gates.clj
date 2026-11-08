@@ -381,6 +381,14 @@
   (when (and limit-seconds started-ms)
     (max 0 (long (- limit-seconds (/ (- now-ms started-ms) 1000))))))
 
+(defn style
+  "The style a run's config chooses, as gates.edn :styles has it, or nil for the full loop.
+  A style says which phase rules and gates apply, whether the per-turn context block is
+  sent, which system prompt frame is used and whether done asks only for an answer."
+  [config]
+  (when-let [k (get-in config [:run :style])]
+    (get (threshold :styles) (keyword (name k)))))
+
 (defn run-time-left
   "Whole seconds a run has left by the clock, or nil when it has no limit."
   [{:keys [config started-ms]}]

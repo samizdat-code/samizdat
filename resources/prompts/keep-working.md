@@ -1,0 +1,1 @@
+`done` refused for now: there is still time on the clock, and it is the best chance to find what does not work yet. Try the cases you have not tried — other flags, edge cases, errors, the parts you left unfinished — against the tests or the reference, and fix what turns up. Call `done` again to finish anyway.

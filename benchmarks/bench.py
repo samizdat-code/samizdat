@@ -27,10 +27,14 @@ RATES = (0.3e-6, 0.006e-6, 1.2e-6)
 NOISE = 0.05  # score gap below this says nothing: the same task moved far more than this between pilots
 HANG_SECS = 300  # a bash call open this long at the end of a trial, with nothing after it
 SAMIZDAT = ["--agent-import-path", "samizdat_agent:SamizdatAgent", "--ak", "eval_mode=project"]
+# The arms samizdat runs, as against Pi and Hermes.
+SAMIZDAT_ARMS = ("samizdat", "samizdat-memory", "samizdat-lean", "team-solve")
+
 ARMS = {
     "pi": ["-a", "pi", "-m", MODEL, "--ak", "reasoning_effort=high", "--ak", "version=1.5.0"],
     "samizdat": SAMIZDAT + ["--ak", "arm=loop"],
     "samizdat-memory": SAMIZDAT + ["--ak", "arm=loop"],
+    "samizdat-lean": SAMIZDAT + ["--ak", "arm=loop", "--ak", "style=lean"],
     "team-solve": SAMIZDAT + ["--ak", "arm=team-solve"],
     "hermes": ["--agent-import-path", "hermes_effort:HermesEffort", "-m", MODEL],
 }
@@ -87,10 +91,10 @@ def balance():
 
 
 def harbor_cmd(name, arm, args):
-    extra = PROVIDERS[args.provider] if arm in ("samizdat", "samizdat-memory", "team-solve") else []
-    if arm in ("samizdat", "samizdat-memory", "team-solve"):
+    extra = PROVIDERS[args.provider] if arm in SAMIZDAT_ARMS else []
+    if arm in SAMIZDAT_ARMS:
         extra = extra + ["--ak", f"harness_effort={args.effort or DEFAULT_EFFORT[args.provider]}"]
-    if args.window and arm in ("samizdat", "samizdat-memory", "team-solve"):
+    if args.window and arm in SAMIZDAT_ARMS:
         extra = extra + ["--ak", f"context_window={args.window}"]
     if arm == "samizdat-memory":
         extra = extra + ["--ak", f"seed_job={JOBS / args.seed_job}"]
@@ -168,7 +172,7 @@ def run(args):
     version = subprocess.run(["harbor", "--version"], env=env, capture_output=True, text=True).stdout.strip()
     if version != HARBOR:
         print(f"warning: harbor {version}, results so far are from {HARBOR}", file=sys.stderr)
-    if {"samizdat", "samizdat-memory", "team-solve"} & set(arms):
+    if set(SAMIZDAT_ARMS) & set(arms):
         built = (RIG / "samizdat-bundle.rev").read_text().strip()
         if built != tree_rev()[0]:
             print(f"warning: bundle is {built[:12]}, not this tree: bench.py bundle", file=sys.stderr)

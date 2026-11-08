@@ -50,6 +50,8 @@
   not only what it chose."
   [ctx]
   (->> (gates/gates)
+       ;; A style names the gates it keeps (:style-gates); without one, all may speak.
+       (filter (fn [g] (or (nil? (:style-gates ctx)) (contains? (:style-gates ctx) (:gate g)))))
        (filter (fn [g] (and ((:when g) ctx)
                             (not (gates/budget-exceeded? g (:branch ctx))))))
        (sort-by :priority)))

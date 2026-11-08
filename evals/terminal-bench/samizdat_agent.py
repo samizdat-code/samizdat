@@ -35,9 +35,12 @@ LIBS = ("ca-certificates curl git libsqlite3-0 zlib1g "
 class SamizdatAgent(BaseInstalledAgent):
     def __init__(self, *args, arm="team-solve", provider="deepseek-flash", model_id="deepseek-flash",
                  key_env="DEEPSEEK_API_KEY", provider_type="deepseek", max_turns=300,
-                 eval_mode="off", harness_effort=None, seed_job=None, context_window=None, **kwargs):
+                 eval_mode="off", harness_effort=None, seed_job=None, context_window=None, style=None,
+                 **kwargs):
         super().__init__(*args, **kwargs)
         self.arm = arm
+        # A gates.edn :styles key, such as lean; none is the full loop.
+        self.style = style
         self.provider = provider
         self.model_id = model_id
         self.key_env = key_env
@@ -142,7 +145,8 @@ class SamizdatAgent(BaseInstalledAgent):
             " :eval {:sandbox :none :mode :%s}}\n"
             % (self.provider, self.provider_type, json.dumps(self.model_id), self.key_env,
                f" :context-window {int(self.context_window)}" if self.context_window else "",
-               self.provider, self.arm, run_limit, self.eval_mode)
+               self.provider, self.arm,
+               run_limit + (f" :style :{self.style}" if self.style else ""), self.eval_mode)
         )
         git = await self._sh(environment, f"cd {root} && git rev-parse --is-inside-work-tree 2>/dev/null")
         git_was_ours = git.return_code != 0
