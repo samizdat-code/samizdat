@@ -2171,8 +2171,8 @@
   ;; predicate/message closures fired on the computed evidence. Adding a rung
   ;; is a data edit; the evidence computation stays in src.
   (let [rungs (gates/threshold :ship-gates)]
-    (is (= 9 (count rungs)))
-    (is (= [:time-left :check-after-last-write :answer-exists :checklist :exam-ratchet :figure-coverage :engages-problem :asks-the-reader :completeness]
+    (is (= 10 (count rungs)))
+    (is (= [:time-left :check-after-last-write :unusual-change :answer-exists :checklist :exam-ratchet :figure-coverage :engages-problem :asks-the-reader :completeness]
            (mapv :name rungs))))
   ;; Asserts the SKELETON, not the sentence: two live runs did the work,
   ;; passed their tests, closed their task, then spent every remaining turn

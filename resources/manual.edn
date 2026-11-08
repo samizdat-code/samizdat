@@ -148,6 +148,10 @@
     :summary "Where each branch is in its workflow, journaled as :progress notes by every compiled manifest. Entering a node the manifest lists under `:progress [...]` at its top is a stage move (per-turn nodes do not belong there; a node the graph lacks is refused at compile), and a change in any branch field gates.edn :progress :branch-keys watches (phase, task, goal, status) is a field move. journal/progress reads them back per branch — the supervisor's view of a run, instead of its steps."}
    {:name samizdat.agent.code-metrics/of-tree
     :summary "What a run has made worse since its baseline, measured with jolt-metrics: critical complexity, nesting and size findings on files it changed, ignoring what was already there. Read by the :metrics-worse gate; tuned in gates.edn :code-metrics."}
+   {:name samizdat.agent.code-metrics/unusual-change
+    :summary "Whether a run's change moves the code's information content (the Shannon entropy of its words, jolt-metrics' metrics.entropy) more than three standard deviations from the project's last :entropy-commits commits. Read at done by the :unusual-change ship rung, which asks once for a review of the diff; nil with too little history to tell."}
+   {:name samizdat.code/sh
+    :summary "Code mode, in every project-image eval session (resources/prompts/code-mode-helpers.clj, a userspace prompt role): sh and sh* return a program's output as data, cat/head/tail/ls/glob/grep/stat read in the image, spit/edit/mkdir/mv/cp/rm write through the gated tools, curl and json for HTTP and JSON, and process/start, output, wait, list, stop, poll-until and poll-url for background processes that go with the image. An eval past gates.edn :eval-bridge :stall-after-ms comes back and goes on; eval {wait: true} or {abort: true} answers it."}
    {:name samizdat.memory/admit
     :summary "What text may become a memory, by who wrote it: secrets redacted, confidence capped, and injection or unbacked rule-shaped text parked. Policy in gates.edn :memory :admission. `remember!` applies it; `samizdat.store.knowledge/quarantine` lists what was parked."}
    {:name samizdat.store.knowledge/consolidate!

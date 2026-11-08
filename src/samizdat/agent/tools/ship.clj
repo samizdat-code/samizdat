@@ -9,6 +9,7 @@
             [clojure.walk :as walk]
             [samizdat.agent.acceptance :as acceptance]
             [samizdat.agent.checklist :as checklist]
+            [samizdat.agent.code-metrics :as code-metrics]
             [samizdat.agent.exam :as exam]
             [samizdat.agent.files :as files]
             [samizdat.agent.gitdiff :as gitdiff]
@@ -406,6 +407,10 @@
                   ;; Something was written and nothing ran after it, and what to say.
                   ~'unchecked-write?  (get ~'ctx :unchecked-write? false)
                   ~'check-before-done (get ~'ctx :check-before-done)
+                  ;; The change is unusual against the project's history, and what
+                  ;; to say (jolt-metrics' metrics.entropy).
+                  ~'unusual-change    (get ~'ctx :unusual-change false)
+                  ~'review-unusual    (get ~'ctx :review-unusual)
                   ~'wind-down         (get ~'ctx :wind-down)]
               ~form)))
 
@@ -613,6 +618,13 @@
                           (into #{} (comp (mapcat :entries)
                                           (map (juxt :path :test :after-hash)))
                                 (journal/notes (:conn ctx) (:run-id ctx) :tests-explained)))
+        ;; AN UNUSUAL CHANGE (jolt-metrics' metrics.entropy): the run's change
+        ;; moved the code's information content far more than the project's
+        ;; commits do. Read on a first done only, and not for a verdict.
+        unusual (when (and (not advisory?) (:root ctx) (:git-baseline ctx)
+                           (zero? (state/done-streak branch)))
+                  (code-metrics/unusual-change (:root ctx) (:git-baseline ctx)
+                                               (gates/threshold :code-metrics)))
         block (ship-gate-block
                 {:answer answer :problem problem
                  :evidence evidence
@@ -629,6 +641,13 @@
                  :keep-working (prompt/prompt "keep-working")
                  :unchecked-write? (unchecked-write? branch)
                  :check-before-done (prompt/prompt "check-before-done")
+                 :unusual-change (some? unusual)
+                 :review-unusual (when unusual
+                                   (prompt/render "unusual-change"
+                                                  {:z (format "%.1f" (abs (double (:z unusual))))
+                                                   :added (pos? (:delta unusual))
+                                                   :commits (:commits unusual)
+                                                   :files (str/join ", " (map #(str "`" % "`") (take 5 (:files unusual))))}))
                  :unexplained-tests (exam/unexplained touched-tests explained (or prior-explained #{}))})
         ;; The test rung — what makes the loop test-driven rather than one-shot.
         ;; `done` is not terminal until the unit's tests actually pass: run the

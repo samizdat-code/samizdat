@@ -9,6 +9,8 @@
   noticing must never be able to fail the write it is noticing."
   (:require [clojure.string :as str]
             [metrics.core :as metrics]
+            [metrics.entropy :as entropy]
+            [metrics.git :as mgit]
             [samizdat.agent.files :as files]
             [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.prompt :as prompt]))
@@ -71,4 +73,58 @@
         (findings policy
                   (into {} (map (juxt identity #(gitdiff/file-at root baseline %))) paths)
                   (files/read-sources root paths))))
+    (catch Throwable _ nil)))
+
+;; --- an unusual change (jolt-metrics' metrics.entropy) -----------------------
+;;
+;; Torres, Baltes, Treude and Wagner (2025): a change that moves the code's
+;; information content — the Shannon entropy of its words — far more than the
+;; project's commits before it did, either way, is worth a second look. The
+;; run's whole change is scored against the project's history as one more
+;; commit would be.
+
+(defn change-entropy
+  "How much the change from `before` to `after`, {path text} maps, moved the
+  entropy of the source files in them. Pure."
+  [policy before after]
+  (reduce + 0.0
+          (for [path (distinct (concat (keys before) (keys after)))
+                :when (source? policy path)]
+            (- (if-let [t (get after path)] (entropy/source-entropy t) 0.0)
+               (if-let [t (get before path)] (entropy/source-entropy t) 0.0)))))
+
+(defn unusual
+  "{:z :delta :commits} when `delta` is unusual against the entropy changes of
+  the `history` commits, nil when it is not or there is too little history to
+  tell (metrics.entropy/min-history). Pure."
+  [history delta]
+  (let [z (last (entropy/z-scores (conj (mapv :delta history) delta)))]
+    (when (entropy/unusual? z)
+      {:z z :delta delta :commits (count history)})))
+
+(defonce ^:private histories (atom {}))
+
+(defn- history-of
+  "The project's commit history of entropy changes up to `baseline`, read once
+  per root and baseline: it does not move while a run works on top of it."
+  [root baseline policy]
+  (let [k [root baseline]]
+    (if (contains? @histories k)
+      (get @histories k)
+      (let [h (mgit/history root (:entropy-commits policy 500) #(source? policy %))]
+        (swap! histories assoc k h)
+        h))))
+
+(defn unusual-change
+  "`unusual` for the change in `root` since `baseline`, with the :files it
+  touched, or nil when it is not unusual or that cannot be told. Never throws."
+  [root baseline {:keys [max-files] :as policy}]
+  (try
+    (when-let [paths (seq (take max-files (filter #(source? policy %)
+                                                  (gitdiff/changed-files root baseline))))]
+      (when-let [u (unusual (history-of root baseline policy)
+                            (change-entropy policy
+                                            (into {} (map (juxt identity #(gitdiff/file-at root baseline %))) paths)
+                                            (files/read-sources root paths)))]
+        (assoc u :files (vec paths))))
     (catch Throwable _ nil)))

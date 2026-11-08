@@ -823,7 +823,10 @@
         find out what a reload would have told them."}
 
  :code-metrics
- {:value {:severities #{:critical} :extensions [".clj" ".cljc"] :max-files 20 :max-shown 5}
+ {:value {:severities #{:critical} :extensions [".clj" ".cljc"] :max-files 20 :max-shown 5
+          ;; How many of the project's commits the :unusual-change ship rung scores a
+          ;; run's change against (jolt-metrics' --commits).
+          :entropy-commits 500}
   :kind :policy :capability-tunable? true
   :provenance ["jolt-metrics"]
   :doc "What :metrics-worse counts, read from jolt-metrics' refactoring queue on each turn
@@ -4391,6 +4394,12 @@
      :advisory? true
      :when (and unchecked-write? (not verdict?) (zero? done-streak))
      :message-form check-before-done}
+    {:name :unusual-change
+     ;; jolt-metrics' metrics.entropy (Torres et al. 2025): the run's change moves the
+     ;; code's information content more than three standard deviations from the
+     ;; project's commits. Review the diff once; a second done in a row finishes.
+     :when (and unusual-change (not verdict?) (zero? done-streak))
+     :message-form review-unusual}
     {:name :answer-exists
      ;; The one rung an advisory branch (reviewer, supervisor) is held to:
      ;; its verdict is its product, and run 9ead0638's supervisor called done

@@ -14,6 +14,7 @@
             [samizdat.agent.gates :as gates]
             [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.agent.state :as state]
+            [samizdat.agent.tools.ship :as ship]
             [samizdat.llm.client :as llm]
             [samizdat.store.db :as db]
             [samizdat.agent.select :as select]
@@ -147,3 +148,51 @@
     (let [msg (:message (first (db/fetch conn ["SELECT message FROM gate_firings WHERE gate = 'metrics-worse'"])))]
       (is (str/includes? (str msg) "cyclomatic") (pr-str msg)))
     (is (some #(str/includes? % "cyclomatic") @said) "and the model heard it")))
+
+;; --- unusual changes (metrics.entropy) ----------------------------------------
+
+(deftest an-unusual-change-stands-out-from-the-history
+  (let [history (mapv (fn [d] {:delta d}) (take 40 (cycle [0.1 -0.2 0.15 -0.05 0.2])))]
+    (is (nil? (cm/unusual history 0.1)) "an ordinary change")
+    (let [u (cm/unusual history 25.0)]
+      (is (> (:z u) 3))
+      (is (= 40 (:commits u))))
+    (is (some? (cm/unusual history -25.0)) "a removal counts too")
+    (is (nil? (cm/unusual (take 5 history) 25.0)) "too little history to tell")))
+
+(deftest the-change-entropy-is-over-source-files
+  (let [policy {:extensions [".clj"]}
+        a "(defn alpha [beta] (gamma beta delta))"]
+    (is (zero? (cm/change-entropy policy {"a.clj" a} {"a.clj" a})))
+    (is (pos? (cm/change-entropy policy {} {"a.clj" a})) "a new file adds")
+    (is (neg? (cm/change-entropy policy {"a.clj" a} {})) "a deleted one removes")
+    (is (zero? (cm/change-entropy policy {} {"notes.md" a})) "only source counts")))
+
+(deftest an-unusual-change-sends-done-back-once
+  (let [block (fn [m] (ship/ship-gate-block
+                       (merge {:answer "Built it and ran the tests." :problem "p" :evidence []
+                               :uncovered-numbers [] :can-write? true :done-streak 0}
+                              m)))]
+    (is (str/includes? (str (block {:unusual-change true :review-unusual "review your diff"}))
+                       "review your diff"))
+    (is (nil? (block {:unusual-change true :review-unusual "review your diff" :done-streak 1}))
+        "a second done finishes")
+    (is (nil? (block {:unusual-change true :review-unusual "x" :verdict? true})) "not a verdict")))
+
+(deftest an-unusual-change-is-read-from-a-real-history
+  (let [root (str (fs/create-temp-dir))
+        git (fn [& args] (apply sh/sh "git" "-C" root args))
+        policy (assoc (gates/threshold :code-metrics) :entropy-commits 500)]
+    (git "init" "-q")
+    (doseq [i (range 15)]
+      (spit (str root "/a.clj") (str "(ns a)\n" (apply str (for [j (range (inc i))] (str "(defn f" j " [x] (inc x))\n")))))
+      (git "add" "-A")
+      (git "-c" "user.email=t@t" "-c" "user.name=t" "commit" "-qm" (str "c" i)))
+    (let [base (clojure.string/trim (:out (git "rev-parse" "HEAD")))]
+      (is (nil? (cm/unusual-change root base policy)) "no change, nothing unusual")
+      (spit (str root "/b.clj")
+            (str "(ns b)\n" (apply str (for [w (range 400)] (str "(def word" w "thing" (char (+ 97 (mod w 26))) "zeta" w " \"" w "\")\n")))))
+      (let [u (cm/unusual-change root base policy)]
+        (is (some? u) "a change far bigger than any commit before it")
+        (is (= ["b.clj"] (:files u)))
+        (is (pos? (:delta u)))))))
