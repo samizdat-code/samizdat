@@ -191,7 +191,11 @@
                 ;; without forking the other 490 (karamazov-1g6b.3) — the
                 ;; first extract; the sections are the rest (system-segments).
                 :split-decision (prompt/prompt "split-decision")
-                :limits (scope-limits (gates/style (config/file-config root)))}]
+                :limits (scope-limits (gates/style (config/file-config root)))
+                ;; A style may leave the shell out of the tools it describes, so
+                ;; programs run through eval's `sh` (karamazov-6p51.7). The tool
+                ;; stays callable: `sh` reaches it through the bridge.
+                :no-shell (boolean (:no-shell? (gates/style (config/file-config root))))}]
        ((if presentation? roles/presentation-catalogue roles/scope-catalogue)
         ;; A role may name its own frame in roles.edn :frame, for a fresh-context
         ;; worker that should not read the implementer's whole working method.

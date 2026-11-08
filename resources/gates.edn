@@ -777,9 +777,23 @@
     ;; The project's file names in the first message: 75 of 110 DeepSeek trials in
     ;; agenc-core spent their first call listing files.
     :workspace-files {:max-files 300}
+    :lenient-done? true}
+   ;; Lean without a shell tool beside eval: programs run through `sh` in a
+   ;; script (karamazov-6p51.7, after xi, which drops bash while clj is on).
+   ;; An arm to measure, not a default: Terminal-Bench tasks are shell-heavy.
+   :lean-repl
+   {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
+    :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
+             :time-nothing-written :time-whole-running :wind-down :plan-wind-down
+             :human-directive :metrics-worse}
+    :context-block? false
+    :system-prompt "system-lean"
+    :no-shell? true
+    :scope-limits {:deepseek "lean-limits-deepseek" :glm "lean-limits-glm" :default "lean-limits"}
+    :workspace-files {:max-files 300}
     :lenient-done? true}}
   :kind :policy :capability-tunable? true
-  :provenance ["karamazov-92kq"]
+  :provenance ["karamazov-92kq" "karamazov-6p51.7"]
   :doc "Ways a run can be driven, chosen by config.edn :run :style; no style is the full
         loop. :lean is what Pi, deepseek-harness, memdoor and mini-SWE-agent (ProgramBench's
         own) do: a short prompt, the core tools, little steering, a plain done. It keeps

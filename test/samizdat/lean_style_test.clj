@@ -85,3 +85,12 @@
   (is (= :lean (get-in (config/load-config {}) [:run :style])))
   (is (= :full (get-in (config/load-config {:run {:style :full}}) [:run :style])))
   (is (nil? (gates/style {:run {:style :full}})) ":full names the full loop"))
+
+(deftest the-repl-style-has-no-shell-tool-beside-eval
+  ;; karamazov-6p51.7: programs run through eval's `sh`.
+  (let [p (with-redefs [config/file-config (fn [& _] {:run {:style :lean-repl}})]
+            (aloop/system-prompt-for :implementer))
+        tools (set (map :name (toolspec/signatures p)))]
+    (is (contains? tools "eval"))
+    (is (not (contains? tools "shell")) (pr-str tools))
+    (is (str/includes? p "(sh \"make\" \"test\")"))))
