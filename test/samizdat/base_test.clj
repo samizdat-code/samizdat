@@ -1110,7 +1110,7 @@
     :storm-enabled :storm-error-digest-chars :storm-min-cycles
     :storm-strikes-to-force :storm-threshold :storm-timeout-floor
     :storm-verify-exempt :storm-window-size :supervisor-digest :thinking-budget
-    :timeout-failure-weight :tool-clip :tool-retry :turn-deadline-ms
+    :timeout-failure-weight :tool-retry :turn-deadline-ms
     :verify-timeout-ms :verify-unknown :wind-down-fraction})
 
 (def steers-that-predate-provenance

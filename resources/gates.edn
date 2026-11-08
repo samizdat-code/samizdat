@@ -2066,7 +2066,11 @@
 
  :tool-clip
  {:value
-  {:message "\n… [{{shown}} of {{total}} chars shown, from the start and the end — the middle was clipped. Ask for the part you still need (a narrower command, a `read_file` with an `offset`, or a filter{% if turn %}, or `read_digest {turns: [{{turn}}], question}` to ask about the whole of this result{% endif %}), not the same call again.]"
+  {:message "\n… [{{shown}} of {{total}} chars shown, from the start and the end — the middle was clipped. {% if file %}The whole result is in `{{file}}`: search it from `eval` with `(grep #\"re\" \"{{file}}\")` or read part of it, rather than running this again. {% endif %}Ask for the part you still need (a narrower command, a `read_file` with an `offset`, or a filter{% if turn %}, or `read_digest {turns: [{{turn}}], question}` to ask about the whole of this result{% endif %}), not the same call again.]"
+   ;; The most of a clipped result written to .samizdat/results/ for a script
+   ;; to read (karamazov-6p51.3, after xi, which saves a long result to a file
+   ;; and names it).
+   :spill-chars 16000000
    ;; What a clipped result keeps on its turn row for read_digest {turns}
    ;; (karamazov-05z0.15): the whole result up to this, so one huge output
    ;; cannot fill the journal.
@@ -2084,7 +2088,12 @@
         do (how much it got, how much exists) and says plainly that repeating
         the call is not the move. `read_file` does better than this and pages
         properly; this is the floor for every other tool, where the harness
-        cannot know what a narrower request would look like."}
+        cannot know what a narrower request would look like.
+
+        AND THE WHOLE RESULT GOES TO A FILE (karamazov-6p51.3), named in the
+        line, so a script in eval can grep it instead of the call running again
+        (xi saves a result over 30k chars the same way)."
+  :provenance ["karamazov-6p51.3"]}
 
  :approval-classifier
  {:value {:timeout-ms 10000 :reach 1 :rationale-chars 800
@@ -3633,6 +3642,19 @@
 
         A docstring's first line is cut at :vocabulary :doc-chars, the same
         cut the opening uses, so one var reads the same in both."}
+
+ :helper-hints
+ {:value {"cat" "(cat f)" "head" "(head f n)" "tail" "(tail f n)" "ls" "(ls d)"
+          "grep" "(grep #\"re\" path)" "rg" "(grep #\"re\" path)" "find" "(glob \"**/*.ext\")"
+          "wc" "(count (clojure.string/split-lines (cat f)))" "stat" "(stat p)"
+          "curl" "(curl url)" "jq" "(json s)" "mkdir" "(mkdir d)" "which" "(which \"cmd\")"}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-6p51.2"]
+  :doc "A SHELL CALL THAT RUNS A PROGRAM A CODE-MODE HELPER REPLACES gets a one-line
+        hint naming the helper (karamazov-6p51.2), after xi's clj tool, which appends
+        'prefer the builtin helpers' to such a result. Steering at the moment of the
+        habit, where :shell-roundtrips counts calls and speaks later. Program head ->
+        the helper call to show; only when code mode is on. An empty map turns it off."}
 
  :eval-bridge
  {:value {:enabled? true

@@ -1,0 +1,1 @@
+[harness] hint: in `eval` {% for h in hints %}`{{h.program}}` is {{h.helper}}{% if not forloop.last %}, {% endif %}{% endfor %}, returning a value a script can filter and count instead of printing it all here.

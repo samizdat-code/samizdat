@@ -9,7 +9,12 @@
             [clojure.test :refer [deftest testing is]]
             [jolt.fs :as fs]
             [jolt.process :as process]
+            [samizdat.agent.gates :as gates]
+            [samizdat.agent.loop :as aloop]
+            [samizdat.agent.tools.shell :as shell]
             [samizdat.bridge :as bridge]
+            [samizdat.prompt :as prompt]
+            [samizdat.security.policy :as policy]
             [samizdat.repl.image :as image]
             [samizdat.repl.route :as route]
             [samizdat.userspace :as userspace]))
@@ -81,3 +86,25 @@
             (is (= "[1 2 3]" (:value (ev "(into [] cat [[1 2] [3]])")))))
           (is (= #{"shell" "write_file"} (set @calls)) "programs and writes took the bridge")))
       (finally (when im (image/stop! im))))))
+
+(deftest a-shell-call-that-a-helper-replaces-is-hinted
+  (let [table (gates/threshold :helper-hints)]
+    (is (= [{:program "cat" :helper "`(cat f)`"}] (shell/helper-hints table "cat src/a.clj")))
+    (is (= ["cat" "grep"] (map :program (shell/helper-hints table "cat a.txt | grep -n foo"))))
+    (is (= [] (shell/helper-hints table "make test")) "a program no helper replaces")
+    (is (= ["ls" "wc"] (policy/command-heads "ls -la && wc -l x"))))
+  (let [line (prompt/render "helper-hint" {:hints [{:program "cat" :helper "`(cat f)`"}
+                                                   {:program "grep" :helper "`(grep #\"re\" path)`"}]})]
+    (is (str/includes? line "`cat` is `(cat f)`, `grep` is"))
+    (is (str/starts-with? line "[harness] hint:"))))
+
+(deftest a-clipped-result-is-kept-whole-in-a-file
+  (let [root (str (fs/create-temp-dir))
+        big (apply str (repeat 200000 "x"))
+        spill (#'aloop/spill-to {:root root} 7 "shell")
+        out (#'aloop/truncate big 7 nil spill)]
+    (is (< (count out) (count big)))
+    (is (str/includes? out "`.samizdat/results/turn-7-shell.txt`"))
+    (is (= big (slurp (str root "/.samizdat/results/turn-7-shell.txt"))))
+    (is (not (str/includes? (#'aloop/truncate big 7 nil nil) "results/turn-")) "no file without a root")
+    (is (= "short" (#'aloop/truncate "short" 7 nil spill)) "and nothing written for a result that fits")))

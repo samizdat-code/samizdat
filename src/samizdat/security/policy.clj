@@ -1123,6 +1123,15 @@
       []
       (vec (mapcat #(segment-reads (exec-prefix-stripped %)) segments)))))
 
+(defn command-heads
+  "The program each statement of a shell command runs, in order, wrapper
+  prefixes stripped; empty for a string that does not split."
+  [command]
+  (let [{:keys [segments malformed]} (shell-split (str/trim (str command)))]
+    (if malformed
+      []
+      (vec (distinct (keep #(not-empty (command-head %)) segments))))))
+
 (defn whole-file-read?
   "Whether the command prints one whole file and nothing cuts it: a lone
   `cat FILE`. The shell twin of files/large-untargeted-read?'s question."

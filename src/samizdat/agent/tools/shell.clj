@@ -24,9 +24,41 @@
   samizdat.agent.tools.base for the shared result helpers and the run-tool
   multimethod."
   (:require [samizdat.agent.files :as files]
+            [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
+            [samizdat.prompt :as prompt]
+            [samizdat.repl.route :as route]
             [samizdat.security.confine :as confine]
             [samizdat.security.policy :as policy]))
+
+(defn helper-hints
+  "The code-mode helpers that replace programs `command` runs, as
+  [{:program :helper}], from the `table` of program -> helper call
+  (gates.edn :helper-hints, karamazov-6p51.2)."
+  [table command]
+  (vec (for [h (policy/command-heads command)
+             :let [helper (get table h)]
+             :when helper]
+         {:program h :helper (str "`" helper "`")})))
+
+(defn- code-mode?
+  "Whether this branch's evals run in the project image with the helpers in it."
+  [ctx]
+  (and (:enabled? (route/bridge-policy))
+       (:helpers (route/bridge-policy))
+       (= :project (try (route/image-of ctx) (catch Throwable _ nil)))))
+
+(defn- with-hint
+  "`r` with a line naming the helpers its command could have been, when there
+  are any and code mode is on."
+  [r ctx]
+  (let [hints (when (and (string? (:result r))
+                         (= :allow (get-in r [:policy :effect]))
+                         (code-mode? ctx))
+                (helper-hints (gates/threshold :helper-hints) (base/arg ctx :command)))]
+    (if (seq hints)
+      (update r :result str "\n" (prompt/render "helper-hint" {:hints hints}))
+      r)))
 
 (defmethod base/run-tool "shell" [{:keys [branch] :as ctx}]
   ;; Every command faces the permission engine, runs under a scrubbed
@@ -49,7 +81,7 @@
                                              (files/ctx-reference-roots ctx)
                                              (confine/build-caches home)
                                              (confine/harness-caches home))))]
-      (assoc r :branch branch
+      (assoc (with-hint r ctx) :branch branch
              ;; A policy refusal is journalled as declined, like a phase
              ;; refusal, so the record can tell it from a command that ran
              ;; and failed.

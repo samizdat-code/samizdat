@@ -302,7 +302,8 @@
   whole result is kept on that turn's row for read_digest {turns} (karamazov-05z0.15)."
   ([s] (truncate s nil nil))
   ([s turn] (truncate s turn nil))
-  ([s turn window]
+  ([s turn window] (truncate s turn window nil))
+  ([s turn window spill]
    (let [s (str s)
          {:keys [tool-result-chars tool-result-window-share tool-result-floor
                  tool-result-head-share chars-per-token]} (gates/threshold :context-budget)
@@ -316,10 +317,27 @@
              tail (- cap head)]
          (str (subs s 0 head)
               (prompt/render-str (:message (gates/threshold :tool-clip))
-                                 {:shown cap :total (count s) :turn turn})
+                                 {:shown cap :total (count s) :turn turn
+                                  ;; The whole result in a file a script can read
+                                  ;; (karamazov-6p51.3), when the caller keeps one.
+                                  :file (when spill (try (spill s) (catch Throwable _ nil)))})
               "\n"
               (subs s (- (count s) tail))))
        s))))
+
+(defn- spill-to
+  "A function writing a clipped result whole to the project's
+  .samizdat/results/turn-<turn>.txt and returning that path, relative to the
+  root, so a script can grep it (karamazov-6p51.3) — or nil without a root."
+  [ctx turn tool]
+  (when-let [root (:root ctx)]
+    (fn [s]
+      (let [rel (str ".samizdat/results/turn-" turn "-" tool ".txt")
+            f (io/file root rel)
+            max-chars (:spill-chars (gates/threshold :tool-clip))]
+        (io/make-parents f)
+        (spit f (if (and max-chars (> (count s) max-chars)) (subs s 0 max-chars) s))
+        rel))))
 
 (defn- unclipped
   "What a clipped result was before the clip, up to gates.edn :tool-clip
@@ -1512,7 +1530,7 @@
       ;; a message that does not say which tool produced it gets the generic
       ;; preview instead, which is the one shape that carries nothing.
       (state/add-message branch "user"
-                         (message/frame-result tool (str (truncate (:result result) turn (result-window ctx))
+                         (message/frame-result tool (str (truncate (:result result) turn (result-window ctx) (spill-to ctx turn tool))
                                                              (some->> (time-stamp ctx) (str "\n"))))
                          {:turn turn :tool tool})
       ;; Coverage answers whether the safe-state rung's fallback is honest:
@@ -1594,7 +1612,7 @@
             ;; then the harness's own blocks (karamazov-o4wm.3): what the
             ;; model can trust about who is speaking is the frame, not the
             ;; `---` rule — a file can carry one of those.
-            body (str (message/frame-result tool (str (truncate (:result result) turn (result-window ctx))
+            body (str (message/frame-result tool (str (truncate (:result result) turn (result-window ctx) (spill-to ctx turn tool))
                                                              (some->> (time-stamp ctx) (str "\n"))))
                       ;; Say which of the reply's other calls did not run.
                       (when-let [dropped (seq (or (:still-dropped result) (:dropped parsed)))]
