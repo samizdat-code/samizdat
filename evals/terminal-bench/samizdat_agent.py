@@ -28,8 +28,12 @@ PORT = 3985
 RUN_MARGIN = 75
 STOP_MARGIN = 45
 TERMINAL = {"completed", "failed", "exhausted", "aborted", "abandoned", "cancelled", "parked"}
-LIBS = ("ca-certificates curl git libsqlite3-0 zlib1g "
-        "$(apt-cache show libssl3t64 >/dev/null 2>&1 && echo libssl3t64 || echo libssl3)")
+LIBS = "ca-certificates curl git libsqlite3-0 zlib1g"
+# The system's OpenSSL 3 when the image has one; an image too old for it (Debian 11)
+# uses the copy the bundle carries in /opt/samizdat/lib.
+SSL = ("for p in libssl3t64 libssl3; do apt-cache show $p >/dev/null 2>&1 "
+       "&& DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $p >/dev/null && break; done; true")
+SSL_PATH = ('$(ldconfig -p 2>/dev/null | grep -q "libssl.so.3 " || echo "LD_LIBRARY_PATH=/opt/samizdat/lib")')
 
 
 class SamizdatAgent(BaseInstalledAgent):
@@ -62,7 +66,7 @@ class SamizdatAgent(BaseInstalledAgent):
     async def install(self, environment: BaseEnvironment) -> None:
         await self.exec_as_root(
             environment,
-            command=f"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {LIBS} >/dev/null",
+            command=f"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {LIBS} >/dev/null && {{ {SSL}; }}",
         )
         await environment.upload_file(HERE / "samizdat-bundle.tgz", "/tmp/samizdat-bundle.tgz")
         await self.exec_as_root(
@@ -167,7 +171,7 @@ class SamizdatAgent(BaseInstalledAgent):
             f"HARNESS_ROOT={root} HARNESS_PORT={PORT} HARNESS_NREPL_PORT={PORT + 4000} "
             + (f"HARNESS_REASONING_EFFORT={self.harness_effort} " if self.harness_effort else "") +
             "JOLT_GITLIBS_DIR=/opt/samizdat/gitlibs PATH=/opt/samizdat/jolt:$PATH "
-            f"nohup jolt -m samizdat.core > /tmp/samizdat-serve.log 2>&1 &"
+            f"env {SSL_PATH} nohup jolt -m samizdat.core > /tmp/samizdat-serve.log 2>&1 &"
         )
         await self._sh(environment, serve, env={self.key_env: key})
         for _ in range(90):
