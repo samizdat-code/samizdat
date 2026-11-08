@@ -29,11 +29,11 @@ RUN_MARGIN = 75
 STOP_MARGIN = 45
 TERMINAL = {"completed", "failed", "exhausted", "aborted", "abandoned", "cancelled", "parked"}
 LIBS = "ca-certificates curl git libsqlite3-0 zlib1g"
-# The system's OpenSSL 3 when the image has one; an image too old for it (Debian 11)
-# uses the copy the bundle carries in /opt/samizdat/lib.
+# OpenSSL 3 when the image has a package for it. An image too old for one (Debian 11)
+# keeps its OpenSSL 1.1, which jolt's TLS also works with, so a missing package is no
+# reason to fail the install.
 SSL = ("for p in libssl3t64 libssl3; do apt-cache show $p >/dev/null 2>&1 "
        "&& DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $p >/dev/null && break; done; true")
-SSL_PATH = ('$(ldconfig -p 2>/dev/null | grep -q "libssl.so.3 " || echo "LD_LIBRARY_PATH=/opt/samizdat/lib")')
 
 
 class SamizdatAgent(BaseInstalledAgent):
@@ -66,7 +66,11 @@ class SamizdatAgent(BaseInstalledAgent):
     async def install(self, environment: BaseEnvironment) -> None:
         await self.exec_as_root(
             environment,
-            command=f"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq {LIBS} >/dev/null && {{ {SSL}; }}",
+            # Only what is missing, one package at a time, carrying on past one that will
+            # not install: an old image's archive can 404 on a package (Debian 11's git).
+            command=(f"apt-get update -qq; for p in {LIBS}; do dpkg -s $p >/dev/null 2>&1 || "
+                     f"DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $p >/dev/null 2>&1 || "
+                     f"echo \"could not install $p\" >&2; done; {SSL}"),
         )
         await environment.upload_file(HERE / "samizdat-bundle.tgz", "/tmp/samizdat-bundle.tgz")
         await self.exec_as_root(
@@ -80,10 +84,23 @@ class SamizdatAgent(BaseInstalledAgent):
 
     async def _api(self, environment, token, method, path, body=None):
         data = f"-d {shlex.quote(json.dumps(body))}" if body is not None else ""
+        timeout = 30 if method == 'GET' else 300
+        curl = (f"curl -sf -m {timeout} -X {method} -H 'Authorization: Bearer {token}' "
+                f"-H 'Content-Type: application/json' {data} http://127.0.0.1:{PORT}{path}")
+        # An image whose archive cannot install curl (Debian 11's 404s) asks through
+        # the bundled jolt instead, failing the same way curl -f does.
+        form = ("(require '[jolt.http-client :as h])"
+                f"(let [r (h/request {{:method :{method.lower()} :url \"http://127.0.0.1:{PORT}{path}\""
+                f" :headers {{\"Authorization\" \"Bearer {token}\"}} :content-type :json"
+                f" :socket-timeout {timeout * 1000} :throw-exceptions false"
+                + (" :body (System/getenv \"SZ_BODY\")" if body is not None else "") +
+                "})] (if (< (:status r) 400) (print (:body r)) (System/exit 22)))")
+        jolt = ("cd /opt/samizdat/repo && JOLT_GITLIBS_DIR=/opt/samizdat/gitlibs "
+                f"/opt/samizdat/jolt/jolt -e {shlex.quote(form)}")
         r = await self._sh(
             environment,
-            f"curl -sf -m {30 if method == 'GET' else 300} -X {method} -H 'Authorization: Bearer {token}' "
-            f"-H 'Content-Type: application/json' {data} http://127.0.0.1:{PORT}{path}",
+            f"if command -v curl >/dev/null; then {curl}; else {jolt}; fi",
+            env={"SZ_BODY": json.dumps(body)} if body is not None else None,
         )
         if r.return_code != 0:
             return None
@@ -171,11 +188,13 @@ class SamizdatAgent(BaseInstalledAgent):
             f"HARNESS_ROOT={root} HARNESS_PORT={PORT} HARNESS_NREPL_PORT={PORT + 4000} "
             + (f"HARNESS_REASONING_EFFORT={self.harness_effort} " if self.harness_effort else "") +
             "JOLT_GITLIBS_DIR=/opt/samizdat/gitlibs PATH=/opt/samizdat/jolt:$PATH "
-            f"env {SSL_PATH} nohup jolt -m samizdat.core > /tmp/samizdat-serve.log 2>&1 &"
+            f"nohup jolt -m samizdat.core > /tmp/samizdat-serve.log 2>&1 &"
         )
         await self._sh(environment, serve, env={self.key_env: key})
         for _ in range(90):
-            if (await self._sh(environment, f"curl -sf -m 2 http://127.0.0.1:{PORT}/health")).return_code == 0:
+            # curl when the image has it, else a bare TCP connect: an image may lack curl.
+            if (await self._sh(environment, f"curl -sf -m 2 http://127.0.0.1:{PORT}/health || "
+                                            f"bash -c 'exec 3<>/dev/tcp/127.0.0.1/{PORT}'")).return_code == 0:
                 break
             await asyncio.sleep(2)
         token = (await self._sh(environment, f'cat "$HOME/.config/samizdat/http/{PORT}.token"')).stdout.strip()
