@@ -356,6 +356,20 @@
 ;; locals, fns resolve in this namespace at compile, and the VALUES arrive
 ;; at fire time. Adding a rung is a data edit.
 
+(defn unchecked-write?
+  "Whether the branch wrote something and ran nothing that succeeded after its last write:
+  a done on that is a claim no check backs (agenc-core's completion gate)."
+  [branch]
+  (let [ts (vec (:turns branch))
+        writes (gates/tool-vocab :file-write)
+        last-write (last (keep-indexed (fn [i t] (when (or (contains? writes (str (:tool t))) (:wrote t)) i)) ts))]
+    (boolean
+     (and last-write
+          (not-any? (fn [t] (and (contains? #{"eval" "shell" "run_check"} (str (:tool t)))
+                                 (= "success" (name (or (:category t) :none)))
+                                 (not (:wrote t))))
+                    (subvec ts (inc last-write)))))))
+
 (defn- compile-rung-form
   "In SCI, in the :ship home (samizdat.sandbox.sci): `str/…`, `checklist/…`,
   `exam/…` and this namespace's `engages-problem?`, `asks-the-reader?` and
@@ -389,6 +403,9 @@
                   ~'verdict?          (get ~'ctx :verdict? false)
                   ;; What the time-left rung says, from prompts/keep-working.md.
                   ~'keep-working      (get ~'ctx :keep-working)
+                  ;; Something was written and nothing ran after it, and what to say.
+                  ~'unchecked-write?  (get ~'ctx :unchecked-write? false)
+                  ~'check-before-done (get ~'ctx :check-before-done)
                   ~'wind-down         (get ~'ctx :wind-down)]
               ~form)))
 
@@ -610,6 +627,8 @@
                  :wind-down (:wind-down (gates/threshold :time-budget))
                  :verdict? (boolean (:advisory? branch))
                  :keep-working (prompt/prompt "keep-working")
+                 :unchecked-write? (unchecked-write? branch)
+                 :check-before-done (prompt/prompt "check-before-done")
                  :unexplained-tests (exam/unexplained touched-tests explained (or prior-explained #{}))})
         ;; The test rung — what makes the loop test-driven rather than one-shot.
         ;; `done` is not terminal until the unit's tests actually pass: run the

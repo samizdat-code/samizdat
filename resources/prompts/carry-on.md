@@ -1,0 +1,1 @@
+[harness] Your last reply {% if truncated %}hit the token limit before it made a tool call{% else %}made no tool call{% if empty %} and was empty{% endif %}{% endif %}. Continue the unfinished work: make the next tool call now{% if truncated %}, with less reasoning before it{% endif %}.

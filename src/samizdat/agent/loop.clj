@@ -111,6 +111,18 @@
         (map (fn [[k nm]] [(keyword k) (chomp (prompt/render nm ctx))]))
         system-segments))
 
+(defn- scope-limits
+  "The lean style's scope limits for the bound model family, rendered, or nil."
+  [style]
+  (when-let [m (:scope-limits style)]
+    (let [{:keys [provider model]} (userspace/model-context)
+          names (map #(str/lower-case (name (or % ""))) [provider model])
+          k (some (fn [k] (when (and (not= :default k)
+                                     (some #(str/starts-with? % (name k)) names))
+                            k))
+                  (keys m))]
+      (some-> (get m (or k :default)) prompt/prompt str/trim))))
+
 (defn system-prompt-for
   "The system prompt as ROLE sees it: the tool catalogue filtered to that
   role's surface, with optional core-plus-deferred presentation. The false
@@ -177,7 +189,8 @@
                 ;; file can replace the 8 lines that were measured to matter
                 ;; without forking the other 490 (karamazov-1g6b.3) — the
                 ;; first extract; the sections are the rest (system-segments).
-                :split-decision (prompt/prompt "split-decision")}]
+                :split-decision (prompt/prompt "split-decision")
+                :limits (scope-limits (gates/style (config/file-config root)))}]
        ((if presentation? roles/presentation-catalogue roles/scope-catalogue)
         ;; A role may name its own frame in roles.edn :frame, for a fresh-context
         ;; worker that should not read the implementer's whole working method.
@@ -260,6 +273,18 @@
                   (or (not require-relevance?)
                       (state/advances-thesis? branch (:claim artifact)))))))
 
+(defn time-stamp
+  "The seconds left on a timed run, for the end of a tool result, or nil."
+  [ctx]
+  (when (:enabled? (gates/threshold :time-stamp))
+    (when-let [left (gates/run-time-left ctx)]
+      (str/trim (prompt/render "time-left-stamp" {:seconds left})))))
+
+(defn truncated-reply-message
+  "What a reply that ran out of room before any tool call is told."
+  []
+  (str/trim (prompt/render "carry-on" {:truncated true})))
+
 (defn- result-window
   "The model's window in tokens, which a tool result's budget scales with."
   [ctx]
@@ -304,6 +329,16 @@
       (let [keep (or (:keep-chars (gates/threshold :tool-clip)) 0)]
         (when (pos? keep) (subs s 0 (min keep (count s))))))))
 
+(defn- workspace-files
+  "The project's file names for the first message, when the run's style asks for them."
+  []
+  (let [root (userspace/project-root)]
+    (when-let [{:keys [max-files]} (:workspace-files (gates/style (config/file-config root)))]
+      (when-let [fs (seq (try (gitdiff/project-files root) (catch Throwable _ nil)))]
+        (str/join "\n" (concat (take max-files fs)
+                               (when (> (count fs) max-files)
+                                 [(str "… and " (- (count fs) max-files) " more")])))))))
+
 (defn initial-messages
   "The branch's opening messages. A workflow may hand a `prompt-suffix` — extra
   system guidance appended for that workflow — which is how a manifest injects
@@ -325,7 +360,8 @@
     ;; The opening user turn is prose the model reads and a project may want
     ;; worded differently — prompts/problem.md, not a `str` here.
     {:role "user" :content (prompt/render "problem" {:problem problem
-                                                     :orient (not-empty (str orient))})}]))
+                                                     :orient (not-empty (str orient))
+                                                     :files (workspace-files)})}]))
 
 (defn- shared-tree
   "The other branches' work on this run's tree, for the context block.
@@ -751,6 +787,10 @@
      ;; fits, and the model continues none the wiser, which is how compaction
      ;; always works.
      (state/squeeze-context branch)
+     ;; An empty reply asked for a final answer had DeepSeek describe its unfinished
+     ;; work and stop (agenc-core); it is asked to carry on instead.
+     (= :empty-reply reason)
+     (state/add-message branch "user" (str/trim (prompt/render "carry-on" {:empty true})) {:turn turn})
      :else
      (state/add-message branch "user"
                         (str "[harness] The provider call failed: " error
@@ -870,8 +910,7 @@
               (prompt/render "no-call-periodic"
                              {:repeats (or (:periodic-repeats signals) 0)})
               (:truncated signals)
-              (str "[harness] Your response hit the token limit before you"
-                   " emitted a tool call. Think less and call a tool.")
+              (truncated-reply-message)
               ;; THE LADDER (karamazov-068 item c). The complaint alone went
               ;; 0-for-42 on run 89f6487a, which is the project's own rule
               ;; about suggestion-only gates arriving again. No gate can
@@ -1012,6 +1051,15 @@
           branch
           (transition-effects {:result result :artifact artifact})))
 
+(defn single-call-eval?
+  "Whether an eval's code is nothing but one bridged tool call: a round trip dressed as a
+  script, which code mode exists to replace."
+  [args]
+  (let [code (str/trim (str (:code args)))
+        n (loop [i 0 n 0]
+            (if-let [j (str/index-of code "(tool/" i)] (recur (inc j) (inc n)) n))]
+    (and (= 1 n) (str/starts-with? code "(tool/"))))
+
 (defn- note-tree-writes
   "After a call that could write files, what it changed on disk: a shell heredoc writes a
   file as surely as write_file does, and both models write most files that way."
@@ -1142,6 +1190,7 @@
                                       (gates/threshold :timeout-failure-weight))))
                    (state/add-turn {:turn turn :tool tool
                                     :category (:category result)
+                                    :single-call? (when (= "eval" tool) (single-call-eval? (:args parsed)))
                                     :args (when (= "tool_search" tool) (:args parsed))
                                     ;; Kept for failures AND malformed calls,
                                     ;; only so repeating-failure? can see a
@@ -1442,7 +1491,8 @@
       ;; a message that does not say which tool produced it gets the generic
       ;; preview instead, which is the one shape that carries nothing.
       (state/add-message branch "user"
-                         (message/frame-result tool (truncate (:result result) turn (result-window ctx)))
+                         (message/frame-result tool (str (truncate (:result result) turn (result-window ctx))
+                                                             (some->> (time-stamp ctx) (str "\n"))))
                          {:turn turn :tool tool})
       ;; Coverage answers whether the safe-state rung's fallback is honest:
       ;; the green cursor still points into a turn log the journal can
@@ -1523,7 +1573,8 @@
             ;; then the harness's own blocks (karamazov-o4wm.3): what the
             ;; model can trust about who is speaking is the frame, not the
             ;; `---` rule — a file can carry one of those.
-            body (str (message/frame-result tool (truncate (:result result) turn (result-window ctx)))
+            body (str (message/frame-result tool (str (truncate (:result result) turn (result-window ctx))
+                                                             (some->> (time-stamp ctx) (str "\n"))))
                       ;; Say which of the reply's other calls did not run.
                       (when-let [dropped (seq (or (:still-dropped result) (:dropped parsed)))]
                         (str "\n\n" (prompt/render "calls-dropped"

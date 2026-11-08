@@ -100,3 +100,17 @@
                                :max-turns 300 :code-mode? true})]
         (is (= :shell-roundtrips (:gate d)))
         (is (re-find #"tool/shell" (:message d)))))))
+
+(deftest an-eval-that-wraps-one-shell-command-is-still-a-round-trip
+  ;; The lean smoke trial put 57 of its 78 evals around a single tool/shell call, and
+  ;; none called two tools: the same round trips, which the gate could not see.
+  (is (aloop/single-call-eval? {:code "(tool/shell {:command \"ls\"})"}))
+  (is (not (aloop/single-call-eval? {:code "(let [a (tool/shell {:command \"ls\"}) b (tool/read_file {:path \"x\"})] [a b])"})))
+  (is (not (aloop/single-call-eval? {:code "(+ 1 2)"})) "plain REPL work is not a round trip")
+  (let [n (gates/threshold :shell-roundtrips)
+        turns (vec (repeat n {:tool "eval" :single-call? true}))]
+    (is (contains? (set (map :gate (arbiter/eligible
+                                    {:branch (merge (state/new-branch {:id "B1" :problem "p"})
+                                                    {:role :implementor :turns turns})
+                                     :max-turns 300 :code-mode? true})))
+                   :shell-roundtrips))))

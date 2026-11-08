@@ -762,6 +762,13 @@
              :human-directive :shell-roundtrips :metrics-worse}
     :context-block? false
     :system-prompt "system-lean"
+    ;; Scope, check and report limits, by model family: the first key the provider or
+    ;; model name starts with, else :default. agenc-core found DeepSeek Flash wrote 83%
+    ;; more output without them over 22 tasks.
+    :scope-limits {:deepseek "lean-limits-deepseek" :glm "lean-limits-glm" :default "lean-limits"}
+    ;; The project's file names in the first message: 75 of 110 DeepSeek trials in
+    ;; agenc-core spent their first call listing files.
+    :workspace-files {:max-files 300}
     :lenient-done? true}}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-92kq"]
@@ -772,6 +779,14 @@
         refusing late breaking rewrites, and REPL work with code mode. :phase-rules and
         :gates are what stays on; :system-prompt names the frame; :lenient-done? holds done
         to the rungs an advisory branch gets."}
+
+ :time-stamp
+ {:value {:enabled? true}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-92kq"]
+  :doc "Whether a timed run's tool results end with the seconds left, fixed when each
+        result completes so the cached prefix does not move (agenc-core run-deadline.ts).
+        The model knows the time on every turn without a steering message."}
 
  :load-on-write
  {:value {:enabled? true :timeout-ms 15000 :extensions [".clj" ".cljc"]}
@@ -795,8 +810,8 @@
  :shell-roundtrips
  {:value 3 :kind :threshold :capability-tunable? true
   :provenance ["karamazov-92kq"]
-  :doc "Shell calls in a row, with no eval between them, before :shell-roundtrips suggests
-        one script instead."}
+  :doc "Round trips in a row before :shell-roundtrips suggests one script instead: shell
+        calls, and evals that only wrap one tool call (57 of 78 evals in the first lean trial)."}
 
  :max-code-mode-steers
  {:value 3 :kind :re-fire-guard :capability-tunable? false
@@ -4307,6 +4322,13 @@
      :advisory? true
      :when (and time-used wind-down (not verdict?) (< time-used wind-down) (zero? done-streak))
      :message-form keep-working}
+    {:name :check-after-last-write
+     ;; agenc-core accepts a headless answer only when a check succeeded after the last
+     ;; change, as its remaining Terminal-Bench failures were done claims the transcript
+     ;; did not back. Once: a second done in a row finishes.
+     :advisory? true
+     :when (and unchecked-write? (not verdict?) (zero? done-streak))
+     :message-form check-before-done}
     {:name :answer-exists
      ;; The one rung an advisory branch (reviewer, supervisor) is held to:
      ;; its verdict is its product, and run 9ead0638's supervisor called done
@@ -5425,7 +5447,7 @@
                 (:code-mode? ctx)
                 (roles/may-use? (:role branch) "eval")
                 (= n (count recent))
-                (every? (fn [t] (= "shell" (:tool t))) recent)
+                (every? (fn [t] (or (= "shell" (:tool t)) (:single-call? t))) recent)
                 (< (count (filter (fn [f] (and (= :shell-roundtrips (:gate f)) (not (:settled f))))
                                   (:gate-history branch)))
                    (threshold :max-code-mode-steers))))
