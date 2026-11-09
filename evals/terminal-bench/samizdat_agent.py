@@ -210,15 +210,27 @@ class SamizdatAgent(BaseInstalledAgent):
             f"nohup jolt -m samizdat.core > /tmp/samizdat-serve.log 2>&1 &"
         )
         await self._sh(environment, serve, env={self.key_env: key})
+        token_file = f'"$HOME/.config/samizdat/http/{PORT}.token"'
         for _ in range(90):
             # curl when the image has it, else a bare TCP connect: an image may lack curl.
-            if (await self._sh(environment, f"curl -sf -m 2 http://127.0.0.1:{PORT}/health || "
-                                            f"bash -c 'exec 3<>/dev/tcp/127.0.0.1/{PORT}'")).return_code == 0:
+            # Only one or the other: a listening port answers TCP before /health answers
+            # 200, and taking that as ready lost the run start (winning-avg-corewars).
+            probe = (f"if command -v curl >/dev/null; then curl -sf -m 2 http://127.0.0.1:{PORT}/health; "
+                     f"else bash -c 'exec 3<>/dev/tcp/127.0.0.1/{PORT}'; fi")
+            if (await self._sh(environment, f"{probe} >/dev/null && test -s {token_file}")).return_code == 0:
                 break
             await asyncio.sleep(2)
-        token = (await self._sh(environment, f'cat "$HOME/.config/samizdat/http/{PORT}.token"')).stdout.strip()
-        started = await self._api(environment, token, "POST", "/v1/runs",
-                                  {"problem": instruction, "beam_width": 1, "max_turns": self.max_turns})
+        token = (await self._sh(environment, f"cat {token_file}")).stdout.strip()
+        started = None
+        for _ in range(5):
+            asked = time.monotonic()
+            started = await self._api(environment, token, "POST", "/v1/runs",
+                                      {"problem": instruction, "beam_width": 1, "max_turns": self.max_turns})
+            # A refusal that comes back at once made no run, so asking again cannot
+            # start a second one; a slow failure might have, so it is not retried.
+            if started or time.monotonic() - asked > 20:
+                break
+            await asyncio.sleep(5)
         run_id = (started or {}).get("run_id")
         meta = {"arm": self.arm, "provider": self.provider, "run_id": run_id, "status": "no-start", "time_limit": limit}
         try:
