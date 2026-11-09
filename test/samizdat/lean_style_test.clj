@@ -94,3 +94,15 @@
     (is (contains? tools "eval"))
     (is (not (contains? tools "shell")) (pr-str tools))
     (is (str/includes? p "(sh \"make\" \"test\")"))))
+
+(deftest the-supervisor-is-framed-as-the-supervisor-in-any-style
+  ;; Under :lean the supervisor took the style's frame, system-lean, and opened
+  ;; every pass as "a developer ... make the change the request asks for" with a
+  ;; suffix arguing it back out of the work: 32 TB 2.1 passes, 0 workflow changes.
+  (let [sup (with-redefs [config/file-config (fn [& _] lean)] (aloop/system-prompt-for :supervisor))
+        imp (with-redefs [config/file-config (fn [& _] lean)] (aloop/system-prompt-for :implementer))]
+    (is (str/includes? sup "You are the supervisor"))
+    (is (not (str/includes? sup "Make the change the request asks for")))
+    (is (str/includes? imp "Make the change the request asks for") "the implementer keeps the lean frame")
+    (is (str/includes? (aloop/system-prompt-for :supervisor) "You are the supervisor")
+        "and the full loop frames it the same way")))

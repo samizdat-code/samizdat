@@ -92,6 +92,12 @@
            "fetch_turn" "fetch_artifact" "recall" "remember" "forget" "retire" "outcome"
            "experiment" "verdict" "papercut" "battery" "message" "eval" "shell" "websearch" "done" "give_up"}
   :prompt "roles/supervisor"
+  ;; Its own frame, so a run's style cannot replace it with the implementer's
+  ;; (karamazov-oi16.4): under :lean the supervisor took system-lean, which
+  ;; opens "a developer ... make the change the request asks for" and lists the
+  ;; implementer's habits, against a 27 KB suffix arguing it back out of the
+  ;; work — 32 TB 2.1 passes, 0 workflow changes.
+  :frame "supervisor-frame"
   :sees #{:run-health :gate-health :failures}}
 
  :reviewer
