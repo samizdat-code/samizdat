@@ -28,6 +28,7 @@
   samizdat.core requires this; manual-test holds it to the manual."
   (:require [mycelium.patch]
             [samizdat.agent.acceptance]
+            [samizdat.agent.actions]
             [samizdat.agent.checklist]
             [samizdat.agent.exam]
             [samizdat.agent.gitdiff]

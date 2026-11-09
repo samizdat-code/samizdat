@@ -1123,14 +1123,62 @@
       []
       (vec (mapcat #(segment-reads (exec-prefix-stripped %)) segments)))))
 
+(defn- without-heredocs
+  "`command` with each heredoc's body removed, so the lines a program reads on
+  stdin are not taken for statements: `python3 - <<'EOF'` then a script used
+  to report `import` and `EOF` as programs."
+  [command]
+  (loop [lines (str/split-lines (str command)) out [] end nil]
+    (if-let [l (first lines)]
+      (cond
+        end (recur (rest lines) out (when-not (= end (str/trim l)) end))
+        :else (recur (rest lines) (conj out l)
+                     (some-> (re-find #"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?" l) second)))
+      (str/join "\n" out))))
+
 (defn command-heads
   "The program each statement of a shell command runs, in order, wrapper
   prefixes stripped; empty for a string that does not split."
   [command]
-  (let [{:keys [segments malformed]} (shell-split (str/trim (str command)))]
+  (let [{:keys [segments malformed]} (shell-split (str/trim (without-heredocs command)))]
     (if malformed
       []
       (vec (distinct (keep #(not-empty (command-head %)) segments))))))
+
+(defn- action-arg
+  "What a program runs, as an action key shows it: a file path by its name,
+  a directory without its trailing slash."
+  [w]
+  (let [w (str/replace w #"/+$" "")
+        base (last (str/split w #"/"))]
+    (if (and (str/includes? w "/") (str/includes? (str base) ".")) base w)))
+
+(defn command-keys
+  "What each statement of a shell command runs, as the key a run's record of
+  actions knows it by (karamazov-oi16.1): the program and the first thing it
+  is given that is not a flag — `pip install`, `python3 solve.py`, `pytest
+  tests` — or the program alone. `-` (a script on stdin) counts as what it
+  runs. A shell's `-c` script is the statements inside it."
+  [command]
+  (let [{:keys [segments malformed]} (shell-split (str/trim (without-heredocs command)))]
+    (if malformed
+      []
+      (vec
+       (mapcat
+        (fn [seg]
+          ;; `timeout 60 cmd` leaves its duration ahead of the command.
+          (let [[head & args] (drop-while #(re-matches #"\d+(\.\d+)?[a-z]?" %)
+                                          (words (exec-prefix-stripped seg)))
+                prog (last (str/split (str head) #"/"))
+                script (when (contains? #{"sh" "bash" "zsh" "dash"} prog)
+                         (second (drop-while #(not= "-c" %) args)))]
+            (cond
+              (str/blank? prog) []
+              script (command-keys script)
+              :else (let [arg (first (remove #(and (flag? %) (not= "-" %))
+                                             (remove #(str/starts-with? % "<") args)))]
+                      [(if arg (str prog " " (action-arg arg)) prog)]))))
+        segments)))))
 
 (defn whole-file-read?
   "Whether the command prints one whole file and nothing cuts it: a lone

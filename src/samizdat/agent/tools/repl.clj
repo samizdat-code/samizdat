@@ -74,7 +74,7 @@
   streak."
   [{:keys [branch conn run-id turn] :as ctx} op args]
   (let [allowed (set (:tools (route/bridge-policy)))
-        call (assoc ctx :tool-name op :args (if (map? args) args {}))
+        call (assoc ctx :tool-name op :args (if (map? args) args {}) :via "eval")
         r (if-not (contains? allowed op)
             {:category :mechanics
              :result (prompt/render "bridge-refused" {:op op :tools (sort allowed)})}

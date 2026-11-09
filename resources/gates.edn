@@ -820,6 +820,18 @@
         its last minute on 39 empty dones (tb21-code torch-pipeline-parallelism,
         karamazov-6p51)."}
 
+ :actions
+ {:value {:command-chars 400 :min-failures 2}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-oi16"]
+  :doc "The run's record of what each action led to (karamazov-oi16): the shell tool
+        journals every command it runs, a turn's own and an eval script's bridged `sh`,
+        as an :action note, and samizdat.agent.actions scores them per action key.
+        :command-chars is how much of a command a note keeps; :min-failures is how often
+        an action has to fail, never having worked, before it counts as failing. On TB
+        2.1 nothing a run learned about its project reached the implementer during the
+        run; this is the record that can."}
+
  :tree-writes
  {:value {:ignore ["**/__pycache__/**" "**/*.pyc" "**/.pytest_cache/**" "**/*.o" "**/*.class"
                    "**/.mypy_cache/**" "**/.ruff_cache/**" "**/node_modules/**" "**/.cache/**"

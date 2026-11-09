@@ -23,13 +23,15 @@
   the scrubbed environment, and output redaction. See
   samizdat.agent.tools.base for the shared result helpers and the run-tool
   multimethod."
-  (:require [samizdat.agent.files :as files]
+  (:require [samizdat.agent.actions :as actions]
+            [samizdat.agent.files :as files]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
             [samizdat.prompt :as prompt]
             [samizdat.repl.route :as route]
             [samizdat.security.confine :as confine]
-            [samizdat.security.policy :as policy]))
+            [samizdat.security.policy :as policy]
+            [samizdat.store.journal :as journal]))
 
 (defn helper-hints
   "The code-mode helpers that replace programs `command` runs, as
@@ -76,13 +78,28 @@
     ;; caches, where a dependency's source is (karamazov-3vu1.3) — the
     ;; harness's own among them, readable though not writable (karamazov-1gbh).
     (let [home (System/getenv "HOME")
+          began (System/currentTimeMillis)
           r (policy/run-shell (assoc ctx :read-roots
                                      (concat [(or (:root ctx) ".")]
                                              (files/ctx-reference-roots ctx)
                                              (confine/build-caches home)
-                                             (confine/harness-caches home))))]
+                                             (confine/harness-caches home))))
+          refused? (contains? #{:deny :ask} (get-in r [:policy :effect]))]
+      ;; What the command led to, for the run's record of actions
+      ;; (karamazov-oi16): a turn's own call and an eval's bridged `sh` alike.
+      (when-let [{:keys [conn run-id turn]} (when (and (:conn ctx) (:run-id ctx)) ctx)]
+        (try (journal/note! conn run-id :action
+                            {:branch-id (:id branch) :turn turn
+                             ;; Repeated in the data, which is what journal/notes reads.
+                             :data (assoc (actions/note {:command (base/arg ctx :command)
+                                                         :via (:via ctx)
+                                                         :ms (- (System/currentTimeMillis) began)
+                                                         :command-chars (:command-chars (gates/threshold :actions))}
+                                                        (assoc r :policy-refusal? refused?))
+                                          :branch-id (:id branch) :turn turn)})
+             (catch Throwable _ nil)))
       (assoc (with-hint r ctx) :branch branch
              ;; A policy refusal is journalled as declined, like a phase
              ;; refusal, so the record can tell it from a command that ran
              ;; and failed.
-             :policy-refusal? (contains? #{:deny :ask} (get-in r [:policy :effect]))))))
+             :policy-refusal? refused?))))

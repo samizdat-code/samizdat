@@ -185,6 +185,7 @@
             [samizdat.vocabulary-test]
             [samizdat.bridge-test]
             [samizdat.code-mode-test]
+            [samizdat.actions-test]
             [samizdat.callable-test]
             [samizdat.propose-test]
             [samizdat.retire-test]
@@ -515,6 +516,7 @@
     samizdat.vocabulary-test
     samizdat.bridge-test
     samizdat.code-mode-test
+    samizdat.actions-test
     samizdat.callable-test
     samizdat.propose-test
     samizdat.retire-test
