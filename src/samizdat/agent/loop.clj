@@ -37,6 +37,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
+            [samizdat.agent.actions :as actions]
             [samizdat.agent.code-metrics :as code-metrics]
             [samizdat.agent.tools.files :as files-tools]
             [samizdat.cancel :as cancel]
@@ -1583,6 +1584,13 @@
                       :done-block (:done-block result)
                       :directive (or (:pending-directive branch)
                                      (:directive ctx))
+                      ;; What keeps failing in this run and what worked instead, for
+                      ;; :repeat-failing-action (karamazov-oi16). Read only on a turn
+                      ;; that ran something.
+                      :failing-actions (when (and conn run-id (contains? #{"shell" "eval"} (str tool)))
+                                         (actions/steer (actions/scores (journal/notes conn run-id :action)
+                                                                        (:id branch))
+                                                        (gates/threshold :actions)))
                       :safe-state-coverage coverage}
             decision (arbiter/decide gate-ctx)
             ;; Every measured gate's value this check, fired or not, so its

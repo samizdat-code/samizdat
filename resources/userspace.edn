@@ -238,6 +238,7 @@
    :load-on-write "prompts/load-on-write.md"
    :script-write-syntax "prompts/script-write-syntax.md"
    :shell-roundtrips "prompts/shell-roundtrips.md"
+   :failing-action "prompts/failing-action.md"
    :keep-working "prompts/keep-working.md"
    :system-lean "prompts/system-lean.md"
    :check-before-done "prompts/check-before-done.md"

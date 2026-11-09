@@ -12,7 +12,8 @@
 
   Mechanism only. What counts as failing often enough to steer on, and what is
   done about it, are the callers' decisions under gates.edn :actions."
-  (:require [samizdat.security.policy :as policy]))
+  (:require [clojure.string]
+            [samizdat.security.policy :as policy]))
 
 (defn note
   "The `:action` note for a shell run of `command`, from its tool result `r`.
@@ -73,3 +74,19 @@
   "The actions that have worked, most recently used first."
   [scores]
   (->> (vals scores) (filter #(pos? (:ok %))) (sort-by #(- (or (:last-turn %) 0)))))
+
+(defn- parts [k] (let [[p & r] (clojure.string/split (str k) #" " 2)] [p (first r)]))
+
+(defn steer
+  "What to tell a branch about the actions that keep failing: each as `{:key
+  :failed :exit :instead}`, where :instead is the commands that worked for an
+  action running the same thing by another program, or the same program on
+  something else — `python3 solve.py` for a failing `python solve.py`."
+  [scores policy]
+  (let [ok (working scores)]
+    (vec (for [{k :key :keys [failed timeouts last-exit]} (failing scores policy)]
+           (let [[prog arg] (parts k)
+                 alike (fn [w] (let [[p a] (parts (:key w))]
+                                 (and (not= k (:key w)) (or (and arg (= arg a)) (= prog p)))))]
+             {:key k :failed (+ failed timeouts) :exit last-exit
+              :instead (vec (distinct (map :worked (filter alike ok))))})))))

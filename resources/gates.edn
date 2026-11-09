@@ -767,7 +767,7 @@
    {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
              :time-nothing-written :time-whole-running :wind-down :plan-wind-down
-             :human-directive :shell-roundtrips :metrics-worse}
+             :human-directive :shell-roundtrips :metrics-worse :repeat-failing-action}
     :context-block? false
     :system-prompt "system-lean"
     ;; Scope, check and report limits, by model family: the first key the provider or
@@ -785,7 +785,7 @@
    {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
              :time-nothing-written :time-whole-running :wind-down :plan-wind-down
-             :human-directive :metrics-worse}
+             :human-directive :metrics-worse :repeat-failing-action}
     :context-block? false
     :system-prompt "system-lean"
     :no-shell? true
@@ -882,6 +882,11 @@
  {:value 3 :kind :re-fire-guard :capability-tunable? false
   :provenance ["karamazov-92kq"]
   :doc "How often :shell-roundtrips may speak on one branch."}
+
+ :max-action-steers
+ {:value 3 :kind :re-fire-guard :capability-tunable? false
+  :provenance ["karamazov-oi16"]
+  :doc "How often :repeat-failing-action may speak on one branch (karamazov-oi16)."}
 
  :max-metric-steers
  {:value 3 :kind :re-fire-guard :capability-tunable? false
@@ -4741,6 +4746,7 @@
    :last-call        #{"done" "give_up"}
    :time-whole-running #{"shell" "write_file" "edit_file" "patch" "done" "give_up"}
    :shell-roundtrips #{"eval" "done" "give_up"}
+   :repeat-failing-action #{"write_file" "edit_file" "patch" "eval" "done" "give_up"}
    :metrics-worse    #{"write_file" "edit_file" "patch" "done" "give_up"}
    :time-nothing-written #{"write_file" "edit_file" "patch" "done" "give_up"}
    :time-wind-down   #{"write_file" "edit_file" "patch" "done" "give_up"}
@@ -5569,6 +5575,24 @@
    :message-file "shell-roundtrips"
    :prediction "the branch does its next steps in one eval script"
    :window 2}
+
+  {:gate :repeat-failing-action
+   :provenance ["karamazov-oi16"]
+   :priority 10.485
+   :doc "A command has failed, the same way, at least :actions :min-failures times and never
+         worked in this run (karamazov-oi16): name it, and what worked here instead, from the
+         run's record of actions (samizdat.agent.actions). Once for each action that comes to
+         fail, up to :max-action-steers. What a run learns about its project by trying —
+         which program exists, which install works — reached the implementer only through
+         its own memory of the transcript."
+   :when (let [said (count (filter (fn [f] (= :repeat-failing-action (:gate f)))
+                                   (:gate-history branch)))]
+           (and (state/active? branch)
+                (> (count (:failing-actions ctx)) said)
+                (< said (threshold :max-action-steers))))
+   :message-form (sp/render-str (prompt "failing-action") {:actions (:failing-actions ctx)})
+   :prediction "the branch changes what it runs instead of repeating a command that fails"
+   :window 3}
 
   {:gate :metrics-worse
    :provenance ["jolt-metrics"]

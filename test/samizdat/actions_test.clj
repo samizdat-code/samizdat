@@ -7,6 +7,9 @@
   (:require [clojure.test :refer [deftest testing is]]
             [jolt.fs :as fs]
             [samizdat.agent.actions :as actions]
+            [samizdat.agent.arbiter :as arbiter]
+            [samizdat.agent.gates :as gates]
+            [clojure.string :as str]
             [samizdat.agent.state :as state]
             [samizdat.agent.tools]
             [samizdat.agent.tools.base :as tools-base]
@@ -89,3 +92,39 @@
              (update-vals (actions/scores ns) (juxt :ok :failed)))
           "the refusal ran nothing and scores nowhere")
       (is (= "B1" (:branch-id (first ns)))))))
+
+(deftest a-failing-action-comes-with-what-worked-instead
+  (let [s (actions/scores (conj notes {:branch-id "B1" :turn 12 :command "pip3 install numpy" :exit 0}))
+        [a] (actions/steer s {:min-failures 2})]
+    (is (= "python solve.py" (:key a)))
+    (is (= 3 (:failed a)))
+    (is (= 127 (:exit a)))
+    (is (= ["python3 solve.py"] (:instead a))
+        "what it runs, by another program, worked")))
+
+(defn- gate-at [failing & {:as extra}]
+  (arbiter/decide (merge {:branch (merge (state/new-branch {:id "B1" :problem "p"})
+                                         {:role :implementer :turns [{:tool "shell"}]}
+                                         (:branch extra))
+                          :max-turns 300
+                          :style-gates (:gates (gates/style {:run {:style :lean}}))
+                          :failing-actions failing}
+                         (dissoc extra :branch))))
+
+(deftest a-command-that-keeps-failing-is-steered-off
+  (let [failing [{:key "python solve.py" :failed 3 :exit 127 :instead ["python3 solve.py"]}]
+        d (gate-at failing)]
+    (is (= :repeat-failing-action (:gate d)) "on in the lean style")
+    (is (str/includes? (:message d) "`python solve.py`"))
+    (is (str/includes? (:message d) "`python3 solve.py`"))
+    (testing "once for each action that comes to fail, and within the cap"
+      (is (not= :repeat-failing-action
+                (:gate (gate-at failing :branch {:gate-history [{:gate :repeat-failing-action :turn 1}]}))))
+      (is (= :repeat-failing-action
+             (:gate (gate-at (conj failing {:key "make" :failed 2 :exit 2})
+                             :branch {:gate-history [{:gate :repeat-failing-action :turn 1}]}))))
+      (is (not= :repeat-failing-action
+                (:gate (gate-at (vec (for [i (range 9)] {:key (str "x" i) :failed 2 :exit 1}))
+                                :branch {:gate-history (vec (repeat (gates/threshold :max-action-steers)
+                                                                    {:gate :repeat-failing-action :turn 1}))})))))
+    (is (not= :repeat-failing-action (:gate (gate-at []))) "and nothing to say without one")))
