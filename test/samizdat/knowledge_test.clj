@@ -4,6 +4,7 @@
             [clojure.string :as str]
             [samizdat.memory :as memory]
             [samizdat.store.db :as db]
+            [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]
             ;; The tool namespaces register their defmethods on load, and this
@@ -811,3 +812,36 @@
          is already a rule, one sighting is an afternoon, and a refuted
          episode is not a rule in waiting")
     (is (= 3 (:corroborations (first (knowledge/graduation-candidates c)))))))
+
+(deftest a-run-remembers-what-its-supervisor-steers-did
+  ;; karamazov-oi16.10. A steer and what came of it died with the run, so a
+  ;; supervisor could not learn from its own past actions the way it learns
+  ;; from a reverted experiment.
+  (let [c @conn
+        rid (runs/start-run! c {:problem "p"})]
+    (runs/open-branch! c rid {:branch-id "B1"})
+    (let [d1 (interventions/submit! c rid {:branch-id "B1" :kind "message" :issued-by "supervisor"
+                                           :payload {:text "run pytest before done" :expect "pytest"}})
+          _ (interventions/submit! c rid {:branch-id "B1" :kind "message" :issued-by "watch"
+                                          :payload "reflex words"})
+          d3 (interventions/submit! c rid {:branch-id "B1" :kind "message" :issued-by "supervisor"
+                                           :payload {:text "stop rebuilding"}})]
+      (interventions/resolve! c rid d1 :applied nil 10)
+      (journal/settle-gate! c (journal/record-gate! c rid {:branch-id "B1" :turn 10 :gate :human-directive
+                                                           :priority 0 :message "m" :prediction "p" :window 1})
+                            :met 11)
+      (interventions/resolve! c rid d3 :applied nil 20)
+      (journal/settle-gate! c (journal/record-gate! c rid {:branch-id "B1" :turn 20 :gate :human-directive
+                                                           :priority 0 :message "m" :prediction "p" :window 1})
+                            :unmet 25))
+    (let [written (knowledge/distil-steers! c {:run-id rid})
+          past (knowledge/past-steers c 10)]
+      (is (= 2 (count written)) "the supervisor's two, not the reflex's")
+      (is (some #(and (str/includes? (:content %) "run pytest before done")
+                      (str/includes? (:content %) "acted on")) past))
+      (is (some #(and (str/includes? (:content %) "stop rebuilding")
+                      (str/includes? (:content %) "not acted on")) past))
+      (testing "a second run's distillation adds its own, and keeps the first run's"
+        (let [r2 (runs/start-run! c {:problem "p2"})]
+          (knowledge/distil-steers! c {:run-id r2})
+          (is (= 2 (count (knowledge/past-steers c 10)))))))))

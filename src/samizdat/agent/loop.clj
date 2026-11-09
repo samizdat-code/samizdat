@@ -696,14 +696,21 @@
                           :data (assoc d :branch (:id branch))})))
       r)))
 
+(defn- action-text
+  "One turn's call as text — its tool and its arguments — which a directive's
+  settlement compares (karamazov-oi16.7)."
+  [parsed]
+  (when parsed (str (:name parsed) " " (pr-str (:args parsed)))))
+
 (defn- settle-predictions!
   "Close out any prediction whose window has passed or whose expectation the
   branch just met. Deterministic; no model in the path."
-  [conn branch turn tools-called before after]
+  [conn branch turn tools-called before after & [action-text]]
   (let [{kept true closed false}
         (group-by (fn [p]
                     (nil? (arbiter/settle p {:current-turn turn
                                              :tools-called tools-called
+                                             :action-text action-text
                                              :branch-before before
                                              :branch-after after})))
                   (:open-predictions after))]
@@ -711,6 +718,7 @@
       (journal/settle-gate! conn (:id p)
                             (arbiter/settle p {:current-turn turn
                                                :tools-called tools-called
+                                               :action-text action-text
                                                :branch-before before
                                                :branch-after after})
                             turn))
@@ -724,6 +732,7 @@
                                            #{:met :met-late}
                                            (arbiter/settle p {:current-turn turn
                                                               :tools-called tools-called
+                                                              :action-text action-text
                                                               :branch-before before
                                                               :branch-after after}))))
                                 (map :gate))
@@ -1443,7 +1452,11 @@
                  ;; :payload-text = the parsed human words; the raw column is
                  ;; a JSON blob the gate would render verbatim (blt.38).
                  (assoc (context-rules/apply-directive b d turn) :pending-directive
-                        (assoc d :payload-text (interventions/text-of d)))))
+                        (assoc d :payload-text (interventions/text-of d)
+                                 ;; What the issuer expects the branch to do
+                                 ;; next, which the steer is settled on
+                                 ;; (karamazov-oi16.7).
+                                 :expect (interventions/expect-of d)))))
 
            "extend"
            (if beam?
@@ -1514,7 +1527,8 @@
   the count being how many predictions this turn closed."
   [{:keys [conn]} before branch turn {:keys [parsed]}]
   (let [open (count (:open-predictions branch))
-        branch (settle-predictions! conn branch turn [(:name parsed)] before branch)]
+        branch (settle-predictions! conn branch turn [(:name parsed)] before branch
+                                    (action-text parsed))]
     {:branch branch
      :closed (- open (count (:open-predictions branch)))}))
 
@@ -1670,7 +1684,11 @@
                              :gate (:gate decision)
                              :prediction (:prediction decision)
                              :window (:window decision)
-                             :turn turn})
+                             :turn turn
+                             ;; What a directive asked for, and what the branch
+                             ;; was doing when it arrived (karamazov-oi16.7).
+                             :expect (:expect decision)
+                             :addressed (action-text parsed)})
            ;; Consumed by the NEXT call-model and cleared there, so a steer
            ;; forecloses prose on exactly the turn it steers and no later one.
            ;; These are the INTENT: a gate naming a forceable tool sets both a

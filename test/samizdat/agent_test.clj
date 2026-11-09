@@ -130,6 +130,43 @@
                        "**The harness's reflex has intervened"))
     (is (not (str/includes? (msg {:payload "ship it" :issued_by "supervisor"}) "human")))))
 
+(deftest a-receipt-is-not-an-order
+  ;; karamazov-oi16.6. Execution completion receipts and held-out verdicts go
+  ;; through the same queue, and the steer gate named every issuer it did not
+  ;; know "A human" and told the branch to obey it this turn, at priority 0 —
+  ;; pilot-10-loop fired that 2328 times, nearly every turn, over every
+  ;; machine gate including last-call.
+  (let [receipt {:payload-text "Completed executions: [\"e1\"]." :issued_by "execution"}
+        heldout {:payload-text "The held-out check passed." :issued_by "heldout"}]
+    (testing "a receipt alone is a notice, never a human's directive"
+      (doseq [d [receipt heldout]]
+        (let [dec (arbiter/decide {:branch (branch-with) :max-turns 40 :directive d})]
+          (is (= :directive-notice (:gate dec)) (str (:issued_by d)))
+          (is (str/includes? (:message dec) (:payload-text d)))
+          (is (not (str/includes? (str/lower-case (:message dec)) "human")))
+          (is (not (str/includes? (:message dec) "takes precedence"))))))
+    (testing "a receipt rides along with the steer that fires instead of displacing it"
+      (let [b (branch-with :turns (vec (repeat 39 {})))
+            dec (arbiter/decide {:branch b :max-turns 40 :directive receipt})]
+        (is (= :last-call (:gate dec)) "last-call still fires")
+        (is (str/includes? (:message dec) "Completed executions"))
+        (is (not-any? #{:directive-notice} (:passed-over dec)))))
+    (testing "the steering issuers still steer"
+      (doseq [who ["supervisor" "watch" "human" "repl" nil]]
+        (is (= :human-directive
+               (:gate (arbiter/decide {:branch (branch-with) :max-turns 40
+                                       :directive {:payload-text "x" :issued_by who}})))
+            (str who))))
+    (testing "a directive's expectation travels with the steer"
+      (is (= "pytest" (:expect (arbiter/decide {:branch (branch-with) :max-turns 40
+                                                :directive {:payload-text "run the tests"
+                                                            :issued_by "supervisor"
+                                                            :expect "pytest"}})))))
+    (testing "a REPL directive is a person's"
+      (is (str/includes? ((:message (gates/by-name :human-directive))
+                          {:directive {:payload-text "x" :issued_by "repl"}})
+                         "A human")))))
+
 (deftest a-role-that-cannot-write-is-not-told-to
   ;; progress-stalled, orienting and prologue-cap all say the same thing in
   ;; the end: write the next file, declare a plan, produce an artifact. To an
@@ -309,6 +346,29 @@
     ;; already in trouble.
     (doseq [[k v] (gates/config) :when (= :cost-ceiling (:kind v))]
       (is (false? (:capability-tunable? v)) (str k " is a cost ceiling")))))
+
+(deftest a-directive-is-settled-on-what-it-asked-for
+  ;; karamazov-oi16.7. `:human-directive true` settled every directive met on
+  ;; the next turn, whatever the branch did: 133 of 140 supervisor steers
+  ;; "met", none unmet, so neither role could learn whether a steer worked.
+  (let [b (branch-with)
+        settle (fn [p action & [current]]
+                 (arbiter/settle (merge {:gate :human-directive :turn 5 :window 1} p)
+                                 {:current-turn (or current 6) :tools-called [(first (str/split action #" "))]
+                                  :action-text action :branch-before b :branch-after b}))]
+    (testing "with an expectation: met when the branch does it"
+      (is (= :met (settle {:expect "pytest"} "shell {:command \"python -m pytest -x\"}")))
+      (is (= :met (settle {:expect "write_file"} "write_file {:path \"a.py\"}"))
+          "a tool name counts")
+      (is (nil? (settle {:expect "pytest"} "shell {:command \"ls\"}"))
+          "not yet, inside the window")
+      (is (= :unmet (settle {:expect "pytest"} "shell {:command \"ls\"}" 20))
+          "and unmet once the grace has run out"))
+    (testing "without one: met when the branch stops repeating what it was doing"
+      (is (= :met (settle {:addressed "shell {:command \"make\"}"} "shell {:command \"cat build.log\"}")))
+      (is (nil? (settle {:addressed "shell {:command \"make\"}"} "shell {:command \"make\"}"))
+          "the same call again is not acting on it")
+      (is (= :unmet (settle {:addressed "shell {:command \"make\"}"} "shell {:command \"make\"}" 20))))))
 
 (deftest every-gate-that-fires-can-actually-be-met
   ;; vf-9bo. settle dispatches on gate in a case whose fallthrough is false, so

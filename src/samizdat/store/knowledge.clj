@@ -41,6 +41,7 @@
             [samizdat.prompt :as prompt]
             [samizdat.security.flow :as flow]
             [samizdat.store.db :as db]
+            [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
             [samizdat.store.outcomes :as outcomes]))
 
@@ -897,6 +898,61 @@
                                :pattern-key key :confidence 0.8 :source source})
           :fact key :repeat? false})))))
 
+(defn- fill
+  "`{{k}}` substitution over a map, for the store's derived-memory wording:
+  the store sits below the prompt layer (see `fact`)."
+  [template m]
+  (reduce-kv (fn [t k v] (str/replace t (str "{{" (name k) "}}") (str v))) (str template) m))
+
+(defn- clip-to [s n]
+  (let [s (str/replace (str s) #"\s+" " ")]
+    (if (and n (> (count s) n)) (str (subs s 0 n) "…") s)))
+
+(defn distil-steers!
+  "Write each of this run's SUPERVISOR directives, with what came of it, into
+  long-term memory (karamazov-oi16.10): acted on, not acted on, refused and
+  why, or never delivered, and the branch's next move. A steer and its outcome
+  used to die with the run, so a supervisor could not learn from its own past
+  actions. Episodic and keyed per directive (`steer:<run>:<id>`), so a re-run
+  of the distillation corroborates instead of duplicating. Wording is gates.edn
+  :steer-facts."
+  [conn {:keys [run-id]}]
+  (let [p (lexicon/policy :steer-facts)
+        os (interventions/outcomes
+            (db/fetch conn ["SELECT * FROM interventions WHERE run_id = ? ORDER BY id" run-id])
+            (db/fetch conn ["SELECT branch_id, turn, gate, outcome FROM gate_firings WHERE run_id = ?" run-id])
+            (db/fetch conn ["SELECT branch_id, turn, tool_name, args FROM turns WHERE run_id = ?" run-id]))]
+    (vec
+     (for [o os
+           :let [k (str "steer:" run-id ":" (:id o))
+                 how (or (:outcome o) (:status o))
+                 content (fill (:line p)
+                               {:kind (:kind o)
+                                :branch (or (:branch o) "the run")
+                                :text (clip-to (:text o) (:text-chars p))
+                                :expect (if (:expect o) (fill (:expect p) {:expect (:expect o)}) "")
+                                :outcome (fill (get (:outcomes p) how how)
+                                               {:disposition (clip-to (:disposition o) (:text-chars p))})
+                                :next (if (:next o)
+                                        (fill (:next p) {:next (clip-to (:next o) (:next-chars p))})
+                                        "")})
+                 existing (by-pattern conn k)]]
+       (if existing
+         (do (corroborate! conn (:id existing) run-id)
+             {:id (:id existing) :steer (:id o) :repeat? true})
+         {:id (remember! conn {:content content :kind "episodic" :run-id run-id
+                               :pattern-key k
+                               :source {:branch (:branch o) :from (:turn o) :to (:turn o)}})
+          :steer (:id o) :repeat? false})))))
+
+(defn past-steers
+  "The newest `n` remembered supervisor steers (distil-steers!), for the next
+  run's supervisor to read what its earlier steers did."
+  [conn n]
+  (db/fetch conn ["SELECT id, content, run_id, created_at FROM knowledge
+                    WHERE pattern_key LIKE 'steer:%' AND current = 1
+                    ORDER BY created_at DESC, id DESC LIMIT ?" n]))
+
 (defn record-workflow-outcome!
   "Note that `workflow` drove a run on this project and whether it shipped.
 
@@ -1107,6 +1163,9 @@
         ;; was missing entirely: everything else here is the harness watching
         ;; itself.
         project (half :project [] #(distil-project! conn {:run-id run-id}))
+        ;; And what the supervisor's own steers came to, so the next run's
+        ;; supervisor can learn from them (karamazov-oi16.10).
+        steers (half :steers [] #(distil-steers! conn {:run-id run-id}))
         ;; What the model's notes leave behind, judged once the whole run is in.
         consolidated (half :consolidate nil #(consolidate! conn {:run-id run-id :ask ask}))
         ;; And curation, so the store does not become a ranking in which
@@ -1116,6 +1175,7 @@
         ;; about who is lowest.
         evicted (half :evict [] #(evict! conn))
         result {:findings (vec written) :verdicts (vec verdicts) :project (vec project)
+                :steers (vec steers)
                 :consolidated consolidated
                 :aged aged :decayed decayed :evicted (vec evicted)
                 :errors @errors}]
@@ -1127,6 +1187,7 @@
                                 (update :findings count)
                                 (update :verdicts count)
                                 (update :project count)
+                                (update :steers count)
                                 (update :evicted count))})
       (catch Throwable e
         (log/warn "journaling the distillation failed:" (ex-message e))))

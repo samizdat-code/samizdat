@@ -315,8 +315,13 @@
 
     ;; The supervisor's queued directives: read, and resolved once applied.
     samizdat.store.interventions
-    {:vars [payload pending resolve! text-of turns-asked workflow-kinds]
+    {:vars [history outcomes payload pending resolve! text-of turns-asked workflow-kinds]
      :effects #{:db}}
+
+    ;; The run's record of what each command led to, scored, and what to say
+    ;; about the ones that keep failing (karamazov-oi16.4). Pure over notes.
+    samizdat.agent.actions
+    {:vars [scores steer]}
 
     ;; The run journal: reads, and appending a note or a side call's usage.
     samizdat.store.journal
@@ -335,7 +340,7 @@
 
     ;; The project's lessons: read, and recording one.
     samizdat.store.knowledge
-    {:vars [graduation-candidates remember! standing]
+    {:vars [graduation-candidates past-steers remember! standing]
      :effects #{:db}}
 
     ;; Open papercuts, for the supervisor's brief (karamazov-05z0.5).

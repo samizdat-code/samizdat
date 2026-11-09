@@ -23,6 +23,7 @@
             [mycelium.core :as myc]
             [samizdat.session :as session]
             [samizdat.store.db :as db]
+            [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]
             [samizdat.userspace :as userspace]
@@ -1397,3 +1398,53 @@
       (is (nil? (ov/pass! {:conn :c :run-id "r"} state
                           (fn [_] (throw (InterruptedException.))))))
       (is (= 1 (:passes @state))))))
+
+(deftest a-command-that-keeps-failing-wakes-the-supervisor
+  ;; karamazov-oi16.4. The supervisor woke on turns since a write, which a
+  ;; branch retrying the same failing command while editing files never
+  ;; crosses; on TB its steers arrived after the run had ended. A command that
+  ;; has failed :failing-action-floor times and never worked is the stall.
+  (let [floors {:unmet-floor 2 :idle-floor 25}
+        since @(cells/cell-var 'cells.oversight 'since-last-look)]
+    (is (not (worth-a-look? {:failing-actions 0} floors)))
+    (is (worth-a-look? {:failing-actions 1} floors))
+    (testing "counted from the last look"
+      (is (= 2 (:failing-actions (since {:failing-actions 2} nil {:idle-floor 25}))))
+      (is (= 0 (:failing-actions (since {:failing-actions 2} {:failing-actions 2} {:idle-floor 25}))))
+      (is (= 1 (:failing-actions (since {:failing-actions 3} {:failing-actions 2} {:idle-floor 25})))))))
+
+(deftest the-supervisor-sees-what-became-of-its-directives
+  ;; karamazov-oi16.8. Its brief carried branch positions, failures and gate
+  ;; health, and nothing about its own steers: whether one landed, was
+  ;; refused, came too late, or was acted on.
+  (cells/load-cells!)
+  (let [outcomes interventions/outcomes
+        news @(cells/cell-var 'cells.oversight 'directive-news)
+        ivs [{:id 1 :branch_id "B1" :kind "message" :issued_by "supervisor" :status "applied"
+              :applied_at_turn 10 :payload "{\"text\":\"run pytest\",\"expect\":\"pytest\"}"}
+             {:id 2 :branch_id "B1" :kind "budget" :issued_by "supervisor" :status "rejected"
+              :disposition "refused: no workflow boundary" :payload "{\"text\":\"60\"}"}
+             {:id 3 :branch_id "B1" :kind "message" :issued_by "watch" :status "applied"
+              :applied_at_turn 4 :payload "x"}
+             {:id 4 :branch_id "B1" :kind "message" :issued_by "supervisor" :status "pending"
+              :payload "later"}]
+        firings [{:branch_id "B1" :turn 10 :gate "human-directive" :outcome "unmet"}]
+        turns [{:branch_id "B1" :turn 10 :tool_name "shell" :args "{\"command\":\"make\"}"}
+               {:branch_id "B1" :turn 11 :tool_name "shell" :args "{\"command\":\"make\"}"}]
+        os (outcomes ivs firings turns)]
+    (testing "only the supervisor's own"
+      (is (= [1 2 4] (mapv :id os))))
+    (testing "each says how it ended and what the branch did next"
+      (let [o (first os)]
+        (is (= "unmet" (:outcome o)))
+        (is (= "pytest" (:expect o)))
+        (is (= "run pytest" (:text o)))
+        (is (str/includes? (:next o) "make"))))
+    (testing "a refusal carries its reason"
+      (is (str/includes? (:disposition (second os)) "no workflow boundary")))
+    (testing "a pass is told only what changed since the last one"
+      (let [states (into {} (map (juxt :id :state)) os)]
+        (is (= [1 2 4] (mapv :id (news os nil))))
+        (is (empty? (news os states)))
+        (is (= [1] (mapv :id (news (assoc-in (vec os) [0 :state] "applied/met")
+                                   states))))))))

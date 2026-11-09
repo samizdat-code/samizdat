@@ -44,7 +44,11 @@ If the check cannot be satisfied, for example two samples contradict each other,
 - A real dead end: `stop`.
 
 {% endif %}{{digest}}
-{% if since %}
+{% if directives %}
+{{directives}}
+{% endif %}{% if failing %}
+{{failing}}
+{% endif %}{% if since %}
 {{since}}
 {% endif %}
 {% if again %}Same four choices as before: nothing is wrong (say so in a line and stop), steer
@@ -98,7 +102,11 @@ one turn; a fix to a prompt or a threshold helps this run from its next read and
 every run after it. A saved manifest or cell reaches a turn-at-a-time run at its
 next round, and team-solve's next worker.
 {% endif %}
-{% if learned %}
+{% if past-steers %}
+## What your steers did in earlier runs
+Outcomes of earlier supervisors' directives on this project. Prefer what was acted on; do not repeat one that was not.
+{% for m in past-steers %}- {{m.content}}
+{% endfor %}{% endif %}{% if learned %}
 ## What this project has learned
 {% for m in learned %}- {{m.id}} [{{m.kind}}] {{m.content}}
 {% endfor %}{% endif %}{% if candidates %}

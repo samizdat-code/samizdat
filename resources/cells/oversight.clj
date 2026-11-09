@@ -7,6 +7,7 @@
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [mycelium.cell :as cell]
+            [samizdat.agent.actions :as actions]
             [samizdat.agent.compaction :as cmp]
             [samizdat.agent.loop :as turn]
             [samizdat.agent.roles :as roles]
@@ -16,6 +17,7 @@
             [samizdat.prompt :as prompt]
             [samizdat.session :as session]
             [samizdat.store.journal :as journal]
+            [samizdat.store.interventions :as interventions]
             [samizdat.store.knowledge :as knowledge]
             [samizdat.store.papercuts :as papercuts]
             [samizdat.store.runs :as runs]
@@ -97,6 +99,12 @@
     last step of the work failing, and nothing else here reads it as distress:
     gates are met, files were written, nothing crashed (karamazov-i692).
 
+  - A COMMAND KEEPS FAILING. One the branch has run :failing-action-floor
+    times, never successfully (karamazov-oi16.4). The steering gate names it
+    first; this is the look when that did not move it. A branch that edits
+    files between retries never trips the idle floor, and on TB 2.1 that is
+    why the supervisor's steers arrived after the run had ended.
+
   - THE RUN IS NEARING ITS TURN CAP. Whether it deserves more turns, should
     ship what it has or should stop is a decision, and `extend`, `finish` and
     `stop` are how it is made. Once per cap.
@@ -119,9 +127,13 @@
   idle, no crash, cap far off, something DID ship, nothing refused. That is
   what the last trigger is for."
   [{:keys [unmet-gates idle-turns errors at-cap? nothing-shipped? refused
-           sent-back-green? offers workflow-signals silent? done-refused near-cap?]}
+           sent-back-green? offers workflow-signals silent? done-refused near-cap?
+           failing-actions]}
    {:keys [unmet-floor idle-floor done-refused-floor]}]
   (boolean (or (>= (or unmet-gates 0) unmet-floor)
+               ;; A command that keeps failing, never having worked, past what
+               ;; the :repeat-failing-action gate already said (oi16.4).
+               (pos? (or failing-actions 0))
                (>= (or idle-turns 0) idle-floor)
                (and done-refused-floor (>= (or done-refused 0) done-refused-floor))
                near-cap?
@@ -186,7 +198,8 @@
   - the cap: once per cap, so an `extend` can be asked about again.
   - offers are already once per run."
   [{:keys [unmet idle idle-by-branch errors refused round at-cap? nothing-shipped?
-           sent-back-green? offers workflow-signals silent? done-refused near-cap-at]}
+           sent-back-green? offers workflow-signals silent? done-refused near-cap-at
+           failing-actions]}
    prev {:keys [idle-floor]}]
   (let [new-round? (or (nil? prev) (not= round (:round prev)))
         ;; A note round-trips through JSON, so the branch ids come back as
@@ -194,6 +207,7 @@
         p-by (into {} (map (fn [[k v]] [(name k) v])) (:idle-by-branch prev))]
     {:unmet-gates (- (or unmet 0) (if prev (or (:unmet prev) 0) 0))
      :done-refused (- (or done-refused 0) (if prev (or (:done-refused prev) 0) 0))
+     :failing-actions (max 0 (- (or failing-actions 0) (if prev (or (:failing-actions prev) 0) 0)))
      :near-cap? (boolean (and near-cap-at (not= near-cap-at (:near-cap-at prev))))
      :idle-turns (if (seq idle-by-branch)
                    (reduce max 0 (map (fn [[b n]] (idle-news n (get p-by (name b)) idle-floor))
@@ -298,6 +312,8 @@
                       [:oversight/workflow-signals :any]
                       [:oversight/position :any]
                       [:oversight/silent-for-ms :any]
+                      [:oversight/directives :any]
+                      [:oversight/failing :any]
                       [:oversight/worth-a-look? :boolean]]
              :quiet  [:map [:oversight/worth-a-look? :boolean]]}]}
   (fn [{:keys [conn run-id]} data]
@@ -385,6 +401,17 @@
              errors (vec (concat (filter :error findings) crashes))
              refusals (vec (concat refused rejected))
              idle-floor (gates/threshold :oversight-idle-floor)
+             limits (gates/threshold :oversight-limits)
+             ;; WHAT BECAME OF THE SUPERVISOR'S OWN DIRECTIVES (oi16.8): landed
+             ;; or refused, acted on or not, and what the branch did next.
+             directives (interventions/outcomes (interventions/history conn run-id) firings turns)
+             ;; THE COMMANDS THAT KEEP FAILING, with what worked instead
+             ;; (oi16.4), over the watched branches' :action notes.
+             failing (vec (actions/steer
+                           (actions/scores (remove #(own? (str (:branch-id %)))
+                                                   (journal/notes conn run-id :action)))
+                           (assoc (gates/threshold :actions)
+                                  :min-failures (:failing-action-floor limits))))
              ;; What a pass that spends a call records, so the next gather
              ;; can tell new evidence from evidence already read.
              signals {:unmet unmet :idle since :idle-by-branch by-branch
@@ -397,6 +424,10 @@
                                        cap))
                       :errors (count errors) :refused (count refusals)
                       :workflow-signals (count workflow-signals)
+                      :failing-actions (count failing)
+                      ;; Each directive's status/outcome, so the next pass is
+                      ;; told only what changed.
+                      :directives (into {} (map (juxt (comp str :id) :state)) directives)
                       :round (count (journal/notes conn run-id :route))}]
          (assoc data
                 :oversight/turns watched
@@ -419,6 +450,8 @@
                 :oversight/workflow-signals workflow-signals
                 :oversight/position (journal/last-note conn run-id :workflow-position)
                 :oversight/silent-for-ms (:oversight/silent-for-ms data)
+                :oversight/directives directives
+                :oversight/failing failing
                 :oversight/worth-a-look?
                 (worth-a-look? (since-last-look
                                 (assoc signals
@@ -437,6 +470,16 @@
      (assoc data :oversight/worth-a-look? false))))
 
 ;; --- reason -----------------------------------------------------------------
+
+(defn directive-news
+  "The directives whose status/outcome changed since the last spent pass,
+  which recorded each one's :state under its signals' :directives
+  (karamazov-oi16.8). A pass is told what came of its steers once, when it
+  happens, not every look. `prev` round-trips through JSON, so its keys may
+  come back as keywords; compared by name."
+  [directives prev]
+  (let [seen (into {} (map (fn [[k v]] [(if (keyword? k) (name k) (str k)) v])) prev)]
+    (filterv #(not= (:state %) (get seen (str (:id %)))) directives)))
 
 (defn resume-branch
   "The carried branch, ready for another pass.
@@ -472,7 +515,7 @@
   The digest and the since-last-look block are not among them: the run's
   position is the news of every pass."
   [:learned :candidates :drift :offers :rejected :refused :retire :reviews
-   :inconclusive :prune :papercuts :removals :fallback :catalog])
+   :inconclusive :prune :papercuts :removals :fallback :catalog :failing :past-steers])
 
 (defn visible-sections
   "{section hash} for what the carried branch can still see: the sections
@@ -570,7 +613,9 @@
             [:oversight/idle-by-branch {:optional true} :any]
             [:oversight/workflow-signals {:optional true} :any]
             [:oversight/position {:optional true} :any]
-            [:oversight/silent-for-ms {:optional true} :any]]
+            [:oversight/silent-for-ms {:optional true} :any]
+            [:oversight/directives {:optional true} :any]
+            [:oversight/failing {:optional true} :any]]
    ;; :oversight/branch only on the path that ran — the fallback records a
    ;; verdict and an explanation, and there is no branch to carry.
    :output [:map [:oversight/verdict :keyword] [:oversight/answer :any]
@@ -635,6 +680,29 @@
              full (identity
                                  {:digest dig
                                   :since (not-empty (str live))
+                                  ;; WHAT CAME OF ITS OWN STEERS since the last
+                                  ;; look (karamazov-oi16.8): delivered or
+                                  ;; refused, acted on or not, the branch's
+                                  ;; next move.
+                                  :directives (when-let [ds (seq (directive-news
+                                                                  (:oversight/directives data)
+                                                                  (:directives (:signals (journal/last-note conn run-id :oversight)))))]
+                                                (prompt/render "directive-outcomes"
+                                                               {:directives
+                                                                (mapv #(-> %
+                                                                           (update :text clip (gates/threshold :oversight-note-chars))
+                                                                           (update :next clip (gates/threshold :oversight-note-chars))
+                                                                           (update :disposition clip (gates/threshold :oversight-note-chars)))
+                                                                      ds)}))
+                                  ;; The commands that keep failing and what
+                                  ;; worked instead (karamazov-oi16.4).
+                                  :failing (when-let [fs (seq (:oversight/failing data))]
+                                             (prompt/render "failing-commands"
+                                                            {:commands (vec (take (:failing-shown (gates/threshold :oversight-limits)) fs))}))
+                                  ;; What its steers did in EARLIER runs
+                                  ;; (karamazov-oi16.10).
+                                  :past-steers (seq (knowledge/past-steers
+                                                     conn (:recall (gates/threshold :steer-facts))))
                                   :learned (seq (knowledge/standing conn))
                                   ;; Episodes seen in enough distinct runs
                                   ;; to ask whether they are rules. The

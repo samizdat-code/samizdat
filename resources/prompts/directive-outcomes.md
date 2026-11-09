@@ -1,0 +1,4 @@
+## What became of your directives
+{% for d in directives %}- `{{d.kind}}` to {{d.branch|default:"the run"}}: "{{d.text}}"{% if d.expect %} (expecting `{{d.expect}}`){% endif %} — {% ifequal d.status "applied" %}delivered at turn {{d.turn}}; {% ifequal d.outcome "met" %}acted on{% else %}{% ifequal d.outcome "met-late" %}acted on, late{% else %}{% ifequal d.outcome "unmet" %}NOT acted on{% else %}not settled yet{% endifequal %}{% endifequal %}{% endifequal %}{% if d.next %}. Its next move: {{d.next}}{% endif %}{% else %}{% ifequal d.status "pending" %}not delivered yet{% else %}{{d.status}}: {{d.disposition}}{% endifequal %}{% endifequal %}
+{% endfor %}
+A steer that was not acted on says something about the steer: name a different concrete next move, set an `expect`, or change the loop instead of repeating it.

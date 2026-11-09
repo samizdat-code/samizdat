@@ -32,6 +32,7 @@
             [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
             [samizdat.store.interventions :as interventions]
+            [samizdat.store.runs :as runs]
             [samizdat.store.journal :as journal]))
 
 (defn- msg [ctx] (prompt/render "intervene-tool" ctx))
@@ -43,9 +44,26 @@
 
 (defn- payload-for
   "The directive's payload. `message` and `fork` carry prose the branch reads,
-  so their text is the payload itself; the rest are structural and take a map."
-  [kind text]
-  (if (contains? #{"message" "fork"} kind) (or text "") {:text text}))
+  so their text is the payload itself; the rest are structural and take a map.
+  An `expect` — what the branch should do next, which the steer is settled on
+  (karamazov-oi16.7) — makes it a map either way."
+  [kind text expect]
+  (cond
+    expect {:text (or text "") :expect expect}
+    (contains? #{"message" "fork"} kind) (or text "")
+    :else {:text text}))
+
+(defn- nobody-to-read
+  "For a steer addressed to no branch: the run's implementer branches when
+  every one of them has ended, else nil. Such a steer is drained by nobody and
+  expires at run end while its issuer believes it was sent (karamazov-oi16.9).
+  A run with no branch rows yet is not judged."
+  [conn run-id]
+  (when (and conn run-id)
+    (let [rows (remove #(= "supervisor" (str (:role %))) (runs/branches conn run-id))]
+      (when (and (seq rows)
+                 (not-any? #(contains? #{"active" "exhausted"} (str (:status %))) rows))
+        rows))))
 
 (defn- claim-conflicts
   "Where this directive's text contradicts what the run has already done.
@@ -65,6 +83,7 @@
 (defmethod base/run-tool "intervene" [{:keys [branch conn run-id] :as ctx}]
   (let [kind (some-> (base/arg ctx :kind) str str/trim not-empty)
         target (some-> (base/arg ctx :branch) str str/trim not-empty)
+        expect (some-> (base/arg ctx :expect) str str/trim not-empty)
         text (some-> (base/arg ctx :text) str not-empty)
         ;; WHAT IT RESTS ON (karamazov-0e2c.12): each reference must be in
         ;; the record, and they travel with the directive.
@@ -102,6 +121,12 @@
       ;; NAME (claims/denies-tool?), over a record showing that tool working in
       ;; this very run. Everything else passes, including every steering
       ;; directive, which is most of them.
+      (and (nil? target) (contains? interventions/branch-kinds kind)
+           (nobody-to-read conn run-id))
+      (base/refusal branch (msg {:nobody-to-read true :kind kind
+                                 :ended (mapv (fn [r] {:id (:id r) :status (str (:status r))})
+                                              (nobody-to-read conn run-id))}))
+
       (seq (claim-conflicts conn run-id text))
       (let [c (first (claim-conflicts conn run-id text))]
         (base/refusal branch (msg {:contradicted true
@@ -114,11 +139,12 @@
         (interventions/submit! conn run-id
                                {:branch-id target
                                 :kind kind
-                                :payload (payload-for kind text)
+                                :payload (payload-for kind text expect)
                                 :issued-by "supervisor"
                                 ;; What the supervisor had read goes with it.
                                 :flow (flow/carried ctx)})
-        (base/ok branch (msg {:submitted true :kind kind :target target :text text})
+        (base/ok branch (msg {:submitted true :kind kind :target target :text text
+                              :expect expect})
                  :progress? true)
         (catch Throwable e
           ;; The store refuses some directives on its own terms — culling the

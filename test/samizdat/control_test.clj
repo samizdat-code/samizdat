@@ -1115,6 +1115,45 @@
           (is (every? #(str/includes? (str (:result r)) %)
                       ["message" "review" "cull" "extend"])))))))
 
+(deftest intervene-carries-what-the-steer-expects
+  ;; karamazov-oi16.7: the steer is settled against what it asked for, so the
+  ;; supervisor can say what that is.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})]
+      (base/run-tool {:conn c :run-id rid :tool-name "intervene" :branch {:id "SUP"}
+                      :args {:kind "message" :branch "B1" :text "run the tests"
+                             :expect "pytest"}})
+      (let [[d] (interventions/pending c rid)]
+        (is (= "run the tests" (interventions/text-of d)))
+        (is (= "pytest" (interventions/expect-of d)))))))
+
+(deftest intervene-refuses-a-steer-nobody-will-read
+  ;; karamazov-oi16.9: 9 of 159 supervisor steers on TB were submitted after
+  ;; the branch's last turn, reported "submitted", and never read.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          call (fn [args] (base/run-tool {:conn c :run-id rid :tool-name "intervene"
+                                          :branch {:id "SUP"} :args args}))]
+      (runs/open-branch! c rid {:branch-id "B1"})
+      (runs/open-branch! c rid {:branch-id "SUP" :role :supervisor})
+      (testing "a live branch takes the steer"
+        (call {:kind "message" :branch "B1" :text "a"})
+        (is (= 1 (count (interventions/pending c rid)))))
+      (runs/close-branch! c rid "B1" :done nil)
+      (testing "a finished branch refuses it, and says why"
+        (let [r (call {:kind "message" :branch "B1" :text "b"})]
+          (is (not (:progress? r)))
+          (is (str/includes? (str (:result r)) "B1"))
+          (is (str/includes? (str (:result r)) "done")))
+        (is (= 1 (count (interventions/pending c rid)))))
+      (testing "so does an unaddressed one when no implementer is left running"
+        (let [r (call {:kind "message" :text "c"})]
+          (is (not (:progress? r))))
+        (is (= 1 (count (interventions/pending c rid)))))
+      (testing "extend still goes through: an ended run may be resumed"
+        (call {:kind "extend" :text "20"})
+        (is (= 2 (count (interventions/pending c rid))))))))
+
 (deftest intervene-is-not-on-the-implementor-surface
   ;; A branch that could cull its siblings or raise its own turn cap is not an
   ;; implementor any more. Steering is the supervisor's job precisely because

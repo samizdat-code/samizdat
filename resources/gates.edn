@@ -284,9 +284,10 @@
         index into it."}
 
  :oversight-limits
- {:value {:done-refused-floor 2 :near-cap-fraction 0.8 :cap-wait-ms 240000 :cap-poll-ms 2000}
+ {:value {:done-refused-floor 2 :near-cap-fraction 0.8 :cap-wait-ms 240000 :cap-poll-ms 2000
+         :failing-action-floor 3 :failing-shown 5}
   :kind :threshold :capability-tunable? true
-  :provenance ["karamazov-i692"]
+  :provenance ["karamazov-i692" "karamazov-oi16.4"]
   :doc "When the supervisor is asked to decide about a run's ending. Refused
         `done` calls by watched branches before it looks: on the hard corpus a
         worker with a verified program was refused three times with no look
@@ -295,7 +296,15 @@
         the branch is told to wrap up. A run can reach its cap inside the
         stream's spacing, so at the cap it also asks and waits :cap-wait-ms for
         `extend` or `finish` before ending exhausted. Silence ends it as it
-        always did, so a dead stream cannot hang a run."}
+        always did, so a dead stream cannot hang a run.
+
+        :failing-action-floor — failures of one command, never having worked,
+        that wake the supervisor (karamazov-oi16.4): set above :actions
+        :min-failures, so the :repeat-failing-action gate has the first word and
+        the supervisor is asked when that did not move it. A branch editing
+        files between retries never crosses the idle floor, and on TB 2.1 its
+        steers arrived after the run had ended. :failing-shown is how many of
+        those commands the brief lists."}
 
  :finish-directive
  {:value {:requires-check? true}
@@ -767,7 +776,7 @@
    {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
              :time-nothing-written :time-whole-running :wind-down :plan-wind-down
-             :human-directive :shell-roundtrips :metrics-worse :repeat-failing-action}
+             :human-directive :directive-notice :shell-roundtrips :metrics-worse :repeat-failing-action}
     :context-block? false
     :system-prompt "system-lean"
     ;; Scope, check and report limits, by model family: the first key the provider or
@@ -785,7 +794,7 @@
    {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
              :time-nothing-written :time-whole-running :wind-down :plan-wind-down
-             :human-directive :metrics-worse :repeat-failing-action}
+             :human-directive :directive-notice :metrics-worse :repeat-failing-action}
     :context-block? false
     :system-prompt "system-lean"
     :no-shell? true
@@ -2480,6 +2489,27 @@
         Not capability-tunable: a tier under observation should not be able to
         stop its own shapes being checked."}
 
+ :steer-facts
+ {:value
+  {:line "A supervisor `{{kind}}` to {{branch}} in an earlier run: \"{{text}}\"{{expect}} — {{outcome}}.{{next}}"
+   :expect " (expecting `{{expect}}`)"
+   :next " The branch's next move: {{next}}"
+   :outcomes {"met" "acted on" "met-late" "acted on, late" "unmet" "not acted on"
+              "open" "not settled before the run ended" "rejected" "refused: {{disposition}}"
+              "pending" "never delivered: the run ended first"}
+   :text-chars 240
+   :next-chars 160
+   :recall 12}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-oi16.10"]
+  :doc "THE WORDS A REMEMBERED STEER IS WRITTEN IN, and how many the next run's
+        supervisor is shown. At run end each of the supervisor's directives is
+        written to memory with what came of it (knowledge/distil-steers!), so a
+        later supervisor learns from its own past actions the way it learns
+        from a reverted experiment. :outcomes maps the steer's settlement, or
+        the directive's status when it was never applied, to the phrase used;
+        :recall is how many of the newest the oversight pass shows."}
+
  :project-facts
  {:value
   {:cmd-works   "In this project `{{cmd}}` works."
@@ -3042,6 +3072,17 @@
         The cap is what keeps a rambling judge from growing the events table
         without bound; it is not what makes the record useful, which is the
         outcome `jolt export --verdicts` labels each row with."}
+
+ :directive-notice-issuers
+ {:value #{"execution" "heldout"}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-oi16.6"]
+  :doc "Who writes to the directive queue to REPORT rather than to steer:
+        execution completion receipts and held-out verdicts. Their directives
+        reach the branch through :directive-notice, which rides along with
+        whatever steer fires, instead of :human-directive, which outranks
+        every gate and tells the branch to obey it this turn. An issuer not
+        listed here steers."}
 
  :prediction-grace-turns
  {:value 4
@@ -5161,32 +5202,56 @@
   ;; prompt/threshold/state — evaluated at fire time.
 
   {:gate :human-directive
-   :provenance ["RFC-012 F5" "dirge PR 717"]
+   :provenance ["RFC-012 F5" "dirge PR 717" "karamazov-oi16.6" "karamazov-oi16.7"]
    :priority 0
    :budget nil
+   :carries-directive true
    :doc "A directive from the queue reached the branch: a human's, the
          supervisor's, or the reflex's — the one write path into a run, and
          this gate is where it lands (RFC-012 F5). Outranks every machine
          gate, which is dirge PR 717's finding arriving as a design property
          rather than a bug fix. The message names the ISSUER: the gate
-         firing is the one ledger of what was said to a branch and by whom,
-         and it used to say `a human` whatever wrote the directive."
-   :when (some? directive)
+         firing is the one ledger of what was said to a branch and by whom.
+
+         Not the issuers in :directive-notice-issuers: a receipt is not an
+         order, and every issuer this gate did not know used to be announced
+         as a human and obeyed this turn — pilot-10-loop fired it 2328 times
+         on execution receipts, nearly every turn, over every machine gate
+         (karamazov-oi16.6). :carries-directive puts the directive's `expect`
+         on the firing, and settle judges the steer against it, or against
+         the action the branch was taking when it arrived (karamazov-oi16.7)."
+   :when (and (some? directive)
+              (not (contains? (threshold :directive-notice-issuers)
+                              (str (:issued_by directive)))))
    ;; :payload-text is attached by the drains — the payload column is a JSON
    ;; blob ({"text": "..."}), and rendering it raw framed `{"text":"[watch]
    ;; ..."}` as the human's words (blt.38). An unattributed directive is the
    ;; operator's: the REPL path predates issued_by.
-   :message-form (str "**"
-                      (case (str (:issued_by directive))
-                        "supervisor" "The supervisor"
-                        "watch"      "The harness's reflex"
-                        "A human")
-                      " has intervened in this run.**\n\n"
-                      (or (:payload-text directive) (:payload directive))
-                      "\n\nThis takes precedence over anything the harness has told"
-                      " you. Act on it on this turn.")
+   :message-form (sp/render-str (prompt "directive-steer")
+                                {:issuer (str (:issued_by directive))
+                                 :text (or (:payload-text directive) (:payload directive))
+                                 :expect (:expect directive)})
    :prediction "the branch acts on the directive on the next turn"
    :window 1}
+
+  {:gate :directive-notice
+   :provenance ["karamazov-oi16.6"]
+   :priority 0.5
+   :budget nil
+   :ride-along true
+   :doc "A report from the harness reached the branch through the directive
+         queue: a background execution finished, a held-out check decided.
+         Information, not an order, so it RIDES ALONG: appended to whatever
+         steer fires this turn, and the steer only when nothing else does.
+         Which issuers count is :directive-notice-issuers."
+   :when (and (some? directive)
+              (contains? (threshold :directive-notice-issuers)
+                         (str (:issued_by directive))))
+   :message-form (sp/render-str (prompt "directive-notice")
+                                {:issuer (str (:issued_by directive))
+                                 :text (or (:payload-text directive) (:payload directive))})
+   :prediction "none: a notice asks for nothing"
+   :window 0}
 
   {:gate :done-blocked
    :priority 1

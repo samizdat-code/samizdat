@@ -489,7 +489,7 @@ manifest({action, ...})
       revert {name, version, rationale}
                            Back to an older version, compiled and checked
                            like a save and stored as a new version.
-intervene({kind, branch?, text?, basis?})
+intervene({kind, branch?, text?, expect?, basis?})
     Steer a run that is happening right now. `kind` is one of message,
     review, cull, fork, retract, extend, pause, resume; `message` is the one
     you want almost always. It lands at the top of that branch's next turn,
@@ -498,7 +498,10 @@ intervene({kind, branch?, text?, basis?})
     that could tell it was stuck would have stopped already. Watch what it
     does with one directive before sending another. `basis`, as for
     `remember`, names the turns or artifacts the directive rests on; each
-    must exist, or nothing is sent.
+    must exist, or nothing is sent. `expect` is what the branch should do
+    next — a tool name, a command, a file ("pytest", "write_file",
+    "solve.py") — and the steer is judged acted on when its next turns do it;
+    your next look shows each steer's outcome and what the branch did next.
 experiment({name, change, hypothesis, kind?, target?, predicts?, until?})
     Bind a change you are making to what you expect it to do, so the next
     round can tell you whether it worked. Start one whenever you edit a cell,
