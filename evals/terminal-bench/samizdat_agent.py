@@ -29,6 +29,8 @@ PORT = 3985
 # time to download the journal and clean up.
 RUN_MARGIN = 75
 STOP_MARGIN = 45
+# How long to wait after a run ends for its teardown to distil (see _await_distilled).
+DISTIL_WAIT = 25
 TERMINAL = {"completed", "failed", "exhausted", "aborted", "abandoned", "cancelled", "parked"}
 # Sourced by every non-interactive bash the agent starts; inherited by its children.
 OOM_CHILD = "echo 500 > /proc/self/oom_score_adj 2>/dev/null\n"
@@ -264,10 +266,27 @@ class SamizdatAgent(BaseInstalledAgent):
                         break
                     if stop_at and time.monotonic() >= stop_at:
                         meta["status"] = "time-limit"
+                        # Ask the run to end so its teardown distils, rather than
+                        # killing it mid-turn with nothing remembered.
+                        await self._api(environment, token, "POST", f"/v1/runs/{run_id}/abort", {})
                         break
                     await asyncio.sleep(10)
+                if meta["status"] in TERMINAL or meta["status"] == "time-limit":
+                    meta["distilled"] = await self._await_distilled(environment, token, run_id)
         finally:
             await self._finish(environment, context, meta, git_was_ours)
+
+    async def _await_distilled(self, environment, token, run_id):
+        # A run reports its terminal status before its teardown writes what it
+        # learned; killing the server on the status lost that in 4 of 6 runs.
+        # Bounded well inside STOP_MARGIN, so the copy still happens.
+        deadline = time.monotonic() + DISTIL_WAIT
+        while time.monotonic() < deadline:
+            got = await self._api(environment, token, "GET", f"/v1/runs/{run_id}")
+            if (got or {}).get("distilled"):
+                return True
+            await asyncio.sleep(2)
+        return False
 
     async def _finish(self, environment, context, meta, git_was_ours):
         await self._sh(environment, "pkill -f samizdat.core; sleep 1; true")
