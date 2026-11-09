@@ -1540,6 +1540,13 @@
     (let [r (done! b 10)]
       (is (str/includes? (str (:result r)) "supervisor") "the done is held for the review")
       (is (= 1 (count (journal/notes conn rid :ship-review-requested))) "and the review is asked for")
+      (is (= "B1" (:branch (first (journal/notes conn rid :ship-review-requested))))
+          "naming the branch: tb21-unread filter-js spent four minutes of its review looking for it")
+      (is (str/includes? (prompt/render "ship-review" {:branch "B1" :problem "p" :answer "a" :evidence []})
+                         "\"branch\": \"B1\"")
+          "and the brief puts it in the intervene call it shows")
+      (is (str/includes? (prompt/render "oversight-pass" {:branches ["B1" "B2"]}) "`B1`, `B2`")
+          "and every pass names the branches it can steer")
       (let [told (filter #(= "ship-review" (:issued_by %)) (interventions/history conn rid))]
         (is (= ["SUP"] (mapv :branch_id told))
             "and a pass already running is told, at its next turn (tb21-review dna-assembly)")

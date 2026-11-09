@@ -52,6 +52,21 @@
              (mapv :ref (basis/unresolved ctx ["t9" "B2:t3" "a#999" "sz-ffffff" "k-ffffff" "the docs"]))))
       (is (every? :why (basis/unresolved ctx ["t9" "the docs"]))))))
 
+(deftest a-steer-may-cite-the-branch-it-steers-by-bare-turn
+  ;; tb21-unread filter-js: the supervisor's review of B1 cited `t45`, B1's
+  ;; done, and was refused as "no such turn" because a bare turn was read as
+  ;; the supervisor's own. The approval never landed. A directive's bare turn
+  ;; resolves on the caller's branch or on the branch it is addressed to.
+  (with-run [c rid]
+    (journal/record-turn! c rid {:branch-id "B1" :turn 45 :tool-name "done" :args {} :result "ok"
+                                 :category :success})
+    (journal/record-turn! c rid {:branch-id "SUP" :turn 4 :tool-name "shell" :args {} :result "ok"
+                                 :category :success})
+    (let [ctx {:conn c :run-id rid :branch {:id "SUP"}}]
+      (is (= ["t45"] (mapv :ref (basis/unresolved ctx ["t45" "t4"]))) "plain: the caller's own only")
+      (is (empty? (basis/unresolved (assoc ctx :addressed "B1") ["t45" "t4"])))
+      (is (= ["t46"] (mapv :ref (basis/unresolved (assoc ctx :addressed "B1") ["t46"])))))))
+
 (defn- run-tool [c rid name args]
   (tools/run-tool {:tool-name name :args args :conn c :run-id rid :turn 5
                    :branch (state/new-branch {:id "B1" :problem "p"})}))

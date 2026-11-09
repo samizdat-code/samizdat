@@ -88,7 +88,7 @@
         ;; WHAT IT RESTS ON (karamazov-0e2c.12): each reference must be in
         ;; the record, and they travel with the directive.
         cited (basis/refs (base/arg ctx :basis))
-        bad (when (seq cited) (seq (basis/unresolved ctx cited)))
+        bad (when (seq cited) (seq (basis/unresolved (assoc ctx :addressed target) cited)))
         text (if (and text (seq cited) (not bad))
                (str text " [basis: " (str/join ", " cited) "]")
                text)]

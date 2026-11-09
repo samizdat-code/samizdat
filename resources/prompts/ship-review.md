@@ -1,4 +1,4 @@
-## A branch wants to ship — review it now
+## {% if branch %}`{{branch}}`{% else %}A branch{% endif %} wants to ship — review it now
 Its `done` is held until this pass ends, and it has time left to act on what you find.
 
 The task:
@@ -14,7 +14,7 @@ A hidden grader will check the task's literal requirements. Go through them one 
 
 The branch's own checks are not the grader. A check of its own that is still failing is a finding, not polish: when the task's text says anything about what that check measures, it is a requirement unmet, whatever the branch calls it. Where the task names output the program must print, a value it must reach or a tolerance, find it in a result on the real deliverable before you count it as shown — "it runs end to end" is not the same claim.
 
-- If a requirement is unverified, or the evidence contradicts it: `intervene({"kind": "message", "branch": "<id>", "text": "...", "expect": "..."})` quoting the task's line, naming the check that would show it, with `expect` set to that check. One message, the most important gap first. Never tell the branch to stop working on something the task's text asks for.
+- If a requirement is unverified, or the evidence contradicts it: `intervene({"kind": "message", "branch": "{% if branch %}{{branch}}{% else %}<id>{% endif %}", "text": "...", "expect": "..."})` quoting the task's line, naming the check that would show it, with `expect` set to that check. One message, the most important gap first. Never tell the branch to stop working on something the task's text asks for.
 - If every requirement is shown: say so in a line and end the pass. Ending it releases the done.
 
 Do not do the branch's work for it. Polish the task never asks for is no reason to hold it; a constraint the task states is never polish.

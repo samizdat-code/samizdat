@@ -915,7 +915,7 @@
       (when-let [k (:note-once spec)]
         (journal/note! (:conn ctx) (:run-id ctx) (keyword (name k))
                        {:branch-id (:id branch) :turn (:turn ctx)
-                        :data {:answer (str answer) :rung (:name rung)}}))
+                        :data {:answer (str answer) :rung (:name rung) :branch (:id branch)}}))
       (when-let [{to :branch p :prompt by :issued-by} (:tell spec)]
         (try (interventions/submit! (:conn ctx) (:run-id ctx)
                                     {:branch-id to :kind "message" :issued-by by

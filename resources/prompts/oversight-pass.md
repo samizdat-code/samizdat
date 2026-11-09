@@ -65,7 +65,8 @@ time it looks is inventing them.
 
 **The run needs steering.** Something is being repeated, avoided, or misread
 by the branch. Use `intervene` to say so: `intervene({"kind": "message",
-"branch": "<id>", "text": "..."})`. Name the specific thing to do next, not the
+"branch": "{% if branches %}{{branches|first}}{% else %}<id>{% endif %}", "text": "..."})`{% if branches %}
+(the branches running now: {% for b in branches %}`{{b}}`{% if not forloop.last %}, {% endif %}{% endfor %}){% endif %}. Name the specific thing to do next, not the
 fact that it is stuck — a branch that could tell it was stuck would already
 have stopped. It lands at the top of its next turn.
 

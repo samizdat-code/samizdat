@@ -25,7 +25,8 @@
 
   Here a basis is a list of references into the run's own record:
 
-      t12        this branch's turn 12          B2:t7   branch B2's turn 7
+      t12        this branch's turn 12 (or, in a directive, the addressed
+                 branch's)                      B2:t7   branch B2's turn 7
       a#3 / p#3  an artifact of this run        s#2     a shared one
       sz-…       a task                         k-…     a memory
 
@@ -42,10 +43,13 @@
 (defn- check
   "Why reference `r` does not resolve for the branch `ctx` names, as a
   keyword, or nil when it does."
-  [{:keys [conn run-id branch]} r]
+  [{:keys [conn run-id branch addressed]} r]
   (let [r (str r)]
     (if-let [[_ bid n] (re-matches #"(?:([A-Za-z0-9._~-]+):)?t(\d+)" r)]
-      (when-not (journal/branch-turn conn run-id (or bid (:id branch)) (parse-long n))
+      ;; A bare turn is the caller's, or, for a directive, the addressed
+      ;; branch's: a steer rests on what that branch did.
+      (when-not (some #(journal/branch-turn conn run-id % (parse-long n))
+                      (if bid [bid] (distinct (remove nil? [(:id branch) addressed]))))
         :no-such-turn)
       (if-let [[_ space n] (re-matches #"([aps])#(\d+)" r)]
         (when-not (if (= "s" space)

@@ -721,6 +721,7 @@
                                                          p (gates/threshold :ship-review)]
                                                      (prompt/render "ship-review"
                                                                     {:problem (:problem (runs/get-run conn run-id))
+                                                                     :branch (:branch r)
                                                                      :answer (:answer r)
                                                                      :evidence (vec (take-last (:evidence-shown p)
                                                                                                (map (fn [a] {:command (clip (:command a) (gates/threshold :oversight-note-chars))
@@ -925,6 +926,13 @@
                                  (merge full (dissoc shown :instructions)
                                         {:again (nil? (:instructions shown))
                                          :position (:oversight/position data)
+                                         ;; The branches a steer can reach, by id: with
+                                         ;; none named, a review spent four minutes
+                                         ;; looking for one (tb21-unread filter-js).
+                                         :branches (seq (for [r (runs/branches conn run-id)
+                                                              :when (not= "supervisor" (some-> (:role r) name))
+                                                              :when (contains? #{"active" "exhausted"} (str (:status r)))]
+                                                          (str (:id r))))
                                          ;; Any refused done or nearby cap: how the
                                          ;; run ends is put to the supervisor.
                                          :ending (let [{:keys [done-refused near-cap-at]} (:oversight/signals data)]
