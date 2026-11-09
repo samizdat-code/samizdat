@@ -43,6 +43,8 @@ If the check cannot be satisfied, for example two samples contradict each other,
 - Moving nowhere for a reason the harness causes: fix the cause, below.
 - A real dead end: `stop`.
 
+{% endif %}{% if ship-review %}{{ship-review}}
+
 {% endif %}{{digest}}
 {% if directives %}
 {{directives}}

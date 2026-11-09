@@ -425,7 +425,13 @@
                   ;; to say (jolt-metrics' metrics.entropy).
                   ~'unusual-change    (get ~'ctx :unusual-change false)
                   ~'review-unusual    (get ~'ctx :review-unusual)
-                  ~'wind-down         (get ~'ctx :wind-down)]
+                  ~'wind-down         (get ~'ctx :wind-down)
+                  ;; A supervisor stream is watching this run, a ship review it
+                  ;; was asked for has not landed, and what to say meanwhile
+                  ;; (karamazov-oi16.11).
+                  ~'supervised?       (get ~'ctx :supervised? false)
+                  ~'review-pending?   (get ~'ctx :review-pending? false)
+                  ~'review-hold       (get ~'ctx :review-hold)]
               ~form)))
 
 (def ship-gates
@@ -650,6 +656,12 @@
         odd-files (when review?
                     (code-metrics/unusual-file-change (:root ctx) (:git-baseline ctx)
                                                       (gates/threshold :code-metrics)))
+        ;; Whether a supervisor is watching and a review it was asked for is
+        ;; still out (karamazov-oi16.11). Advisory branches deliver verdicts
+        ;; and are never held, so they skip the read.
+        review (when (and (not advisory?) (:conn ctx) (:run-id ctx))
+                 (journal/review-state (:conn ctx) (:run-id ctx) (:turn ctx)
+                                       (:max-wait-turns (gates/threshold :ship-review))))
         rung (ship-gate-rung
                 {:answer answer :problem problem
                  :refused (or (:ship-refused branch) {})
@@ -663,6 +675,9 @@
                  :time-used (gates/time-used (get-in ctx [:config :run :time-limit-seconds])
                                              (:started-ms ctx) (System/currentTimeMillis))
                  :wind-down (:wind-down (gates/threshold :time-budget))
+                 :supervised? (:supervised? review)
+                 :review-pending? (:pending? review)
+                 :review-hold (prompt/render "ship-review-hold" {:pending (:pending? review)})
                  :verdict? (boolean (:advisory? branch))
                  :keep-working (prompt/prompt "keep-working")
                  :unchecked-write? (unchecked-write? branch)
@@ -870,6 +885,14 @@
                      {:branch-id (:id branch) :turn (:turn ctx)
                       :data {:tokens (vec (take 20 borrowed))
                              :sources (vec (distinct (keep :branch_id elsewhere)))}}))
+    ;; A rung may name a note to journal the first time it refuses a branch —
+    ;; :supervisor-review asks the supervisor stream for its review that way.
+    (when-let [k (and rung (:conn ctx) (:run-id ctx)
+                      (not (get (:ship-refused branch) (:name rung)))
+                      (:note-once (some #(when (= (:name rung) (:name %)) %) (ship-gates))))]
+      (journal/note! (:conn ctx) (:run-id ctx) (keyword (name k))
+                     {:branch-id (:id branch) :turn (:turn ctx)
+                      :data {:answer (str answer) :rung (:name rung)}}))
     (if block
       ;; Which lexical rung refused, counted on the branch for `refused`. The later
       ;; blocks (verify, acceptance) apply only when no rung fired.

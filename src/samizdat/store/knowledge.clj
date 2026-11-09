@@ -945,6 +945,26 @@
                                :source {:branch (:branch o) :from (:turn o) :to (:turn o)}})
           :steer (:id o) :repeat? false})))))
 
+(defn distil-patterns!
+  "Write each failing-and-working pair a run found (agent.actions/patterns:
+  {:key :instead}) as a project fact — this command keeps failing here, that
+  one works instead (karamazov-oi16.12). Semantic and keyed on the failing
+  command, so a later run that finds the same corroborates it. Wording is
+  gates.edn :project-facts :cmd-instead."
+  [conn {:keys [run-id patterns]}]
+  (vec
+   (for [{k :key :keys [instead]} patterns
+         :when (and k (seq instead))
+         :let [pk (str "cmd-instead:" k)
+               existing (by-pattern conn pk)]]
+     (if existing
+       (do (corroborate! conn (:id existing) run-id)
+           {:id (:id existing) :fact pk :repeat? true})
+       {:id (remember! conn {:content (fill (get (lexicon/policy :project-facts) :cmd-instead)
+                                            {:cmd k :instead (str/join "`, `" instead)})
+                             :kind "semantic" :run-id run-id :pattern-key pk :confidence 0.8})
+        :fact pk :repeat? false}))))
+
 (defn past-steers
   "The newest `n` remembered supervisor steers (distil-steers!), for the next
   run's supervisor to read what its earlier steers did."
@@ -1135,7 +1155,7 @@
   What reads the note: the next run's opening block (loop/learned-block), so
   a branch can tell an empty head start from a lost one; and the run detail
   the front ends show."
-  [conn {:keys [run-id findings experiments ask]}]
+  [conn {:keys [run-id findings experiments ask patterns]}]
   (let [errors (atom [])
         ;; One half, guarded: the value on success, `absent` on a throw, and
         ;; the throw recorded under the half's name. `log/warn` as well,
@@ -1166,6 +1186,8 @@
         ;; And what the supervisor's own steers came to, so the next run's
         ;; supervisor can learn from them (karamazov-oi16.10).
         steers (half :steers [] #(distil-steers! conn {:run-id run-id}))
+        ;; And what to run instead of what kept failing (karamazov-oi16.12).
+        pats (half :patterns [] #(distil-patterns! conn {:run-id run-id :patterns patterns}))
         ;; What the model's notes leave behind, judged once the whole run is in.
         consolidated (half :consolidate nil #(consolidate! conn {:run-id run-id :ask ask}))
         ;; And curation, so the store does not become a ranking in which
@@ -1176,6 +1198,7 @@
         evicted (half :evict [] #(evict! conn))
         result {:findings (vec written) :verdicts (vec verdicts) :project (vec project)
                 :steers (vec steers)
+                :patterns (vec pats)
                 :consolidated consolidated
                 :aged aged :decayed decayed :evicted (vec evicted)
                 :errors @errors}]
@@ -1188,6 +1211,7 @@
                                 (update :verdicts count)
                                 (update :project count)
                                 (update :steers count)
+                                (update :patterns count)
                                 (update :evicted count))})
       (catch Throwable e
         (log/warn "journaling the distillation failed:" (ex-message e))))

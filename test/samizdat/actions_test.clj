@@ -102,6 +102,17 @@
     (is (= ["python3 solve.py"] (:instead a))
         "what it runs, by another program, worked")))
 
+(deftest a-run-leaves-its-failing-and-working-pairs-as-patterns
+  ;; karamazov-oi16.12: what a run learned by trying — this fails here, that
+  ;; works instead — is what the next run should start out knowing.
+  (let [ps (actions/patterns (conj notes {:branch-id "B1" :turn 12 :command "pip3 install numpy" :exit 0})
+                             {:min-failures 2})]
+    (is (= [["python solve.py" ["python3 solve.py"]]] (mapv (juxt :key :instead) ps))))
+  (is (empty? (actions/patterns [{:branch-id "B1" :turn 1 :command "make" :exit 2}
+                                 {:branch-id "B1" :turn 2 :command "make" :exit 2}]
+                                {:min-failures 2}))
+      "a failure with nothing that worked instead teaches nothing to act on"))
+
 (defn- gate-at [failing & {:as extra}]
   (arbiter/decide (merge {:branch (merge (state/new-branch {:id "B1" :problem "p"})
                                          {:role :implementer :turns [{:tool "shell"}]}

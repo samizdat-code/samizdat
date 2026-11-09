@@ -66,6 +66,7 @@
             [mycelium.core :as myc]
             [samizdat.agent.budget :as budget]
             [samizdat.agent.critic :as critic]
+            [samizdat.agent.actions :as actions]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.handoff :as handoff]
             [samizdat.agent.gitdiff :as gitdiff]
@@ -1147,6 +1148,10 @@
         (try
           (let [{:keys [findings verdicts]}
                 (knowledge/distil-session! conn {:run-id run-id
+                                           ;; This command kept failing, that one worked
+                                           ;; instead (karamazov-oi16.12).
+                                           :patterns (actions/patterns (journal/notes conn run-id :action)
+                                                                       (gates/threshold :actions))
                                                  :ask (reflect/consolidator ctx)
                                                  :findings (session/findings
                                                             ;; THIS RUN's window, not the

@@ -1103,6 +1103,25 @@
                             ORDER BY id"
                           run-id branch-id])))
 
+(defn review-state
+  "Whether a ship review is waiting on the supervisor (karamazov-oi16.11).
+  `:supervised?` is whether the supervisor stream has looked at this run at
+  all; `:pending?` is whether the newest :ship-review-requested note has no
+  spent pass (:oversight) after it and is fewer than `max-wait` turns before
+  `turn`, so a review that never comes stops holding a branch."
+  [conn run-id turn max-wait]
+  (let [r (db/fetch-one conn ["SELECT
+                                 MAX(CASE WHEN kind IN ('oversight', 'oversight-quiet') THEN 1 END) AS supervised,
+                                 MAX(CASE WHEN kind = 'ship-review-requested' THEN id END) AS req,
+                                 MAX(CASE WHEN kind = 'oversight' THEN id END) AS pass
+                               FROM events WHERE run_id = ?" run-id])
+        req-turn (when (:req r)
+                   (:turn (db/fetch-one conn ["SELECT turn FROM events WHERE id = ?" (:req r)])))]
+    {:supervised? (some? (:supervised r))
+     :pending? (boolean (and (:req r)
+                             (or (nil? (:pass r)) (< (:pass r) (:req r)))
+                             (< (- (or turn 0) (or req-turn 0)) (or max-wait 0))))}))
+
 (defn notes-since
   "Notes of any of `kinds` on this run created at or after `since` (an ISO
   instant), oldest first, each its parsed data with :kind beside it."

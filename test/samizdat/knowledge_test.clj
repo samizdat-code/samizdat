@@ -845,3 +845,19 @@
         (let [r2 (runs/start-run! c {:problem "p2"})]
           (knowledge/distil-steers! c {:run-id r2})
           (is (= 2 (count (knowledge/past-steers c 10)))))))))
+
+(deftest a-run-remembers-what-to-run-instead
+  ;; karamazov-oi16.12: a command that kept failing and the one that worked in
+  ;; its place, as a project fact both roles read on the next run.
+  (let [c @conn
+        r1 (runs/start-run! c {:problem "p"})
+        pats [{:key "python solve.py" :failed 3 :instead ["python3 solve.py"]}]
+        out (knowledge/distil-session! c {:run-id r1 :patterns pats})]
+    (is (= 1 (count (:patterns out))))
+    (let [m (knowledge/by-pattern c "cmd-instead:python solve.py")]
+      (is (str/includes? (:content m) "`python solve.py`"))
+      (is (str/includes? (:content m) "`python3 solve.py`"))
+      (is (= "semantic" (:kind m))))
+    (testing "a later run that finds the same corroborates it"
+      (let [r2 (runs/start-run! c {:problem "p"})]
+        (is (:repeat? (first (:patterns (knowledge/distil-session! c {:run-id r2 :patterns pats})))))))))

@@ -99,6 +99,11 @@
     last step of the work failing, and nothing else here reads it as distress:
     gates are met, files were written, nothing crashed (karamazov-i692).
 
+  - A BRANCH ASKS TO SHIP WITH TIME LEFT. Its `done` is held (ship rung
+    :supervisor-review) until a pass ends, so this look is the review: 20 of
+    23 failing TB 2.1 trials ended on an accepted done the supervisor never
+    saw (karamazov-oi16.11). No floor.
+
   - A COMMAND KEEPS FAILING. One the branch has run :failing-action-floor
     times, never successfully (karamazov-oi16.4). The steering gate names it
     first; this is the look when that did not move it. A branch that edits
@@ -128,9 +133,12 @@
   what the last trigger is for."
   [{:keys [unmet-gates idle-turns errors at-cap? nothing-shipped? refused
            sent-back-green? offers workflow-signals silent? done-refused near-cap?
-           failing-actions]}
+           failing-actions review-requested]}
    {:keys [unmet-floor idle-floor done-refused-floor]}]
   (boolean (or (>= (or unmet-gates 0) unmet-floor)
+               ;; A branch asked to ship with time left, and its done is held
+               ;; until this pass ends (karamazov-oi16.11).
+               (pos? (or review-requested 0))
                ;; A command that keeps failing, never having worked, past what
                ;; the :repeat-failing-action gate already said (oi16.4).
                (pos? (or failing-actions 0))
@@ -199,7 +207,7 @@
   - offers are already once per run."
   [{:keys [unmet idle idle-by-branch errors refused round at-cap? nothing-shipped?
            sent-back-green? offers workflow-signals silent? done-refused near-cap-at
-           failing-actions]}
+           failing-actions review-requested]}
    prev {:keys [idle-floor]}]
   (let [new-round? (or (nil? prev) (not= round (:round prev)))
         ;; A note round-trips through JSON, so the branch ids come back as
@@ -208,6 +216,7 @@
     {:unmet-gates (- (or unmet 0) (if prev (or (:unmet prev) 0) 0))
      :done-refused (- (or done-refused 0) (if prev (or (:done-refused prev) 0) 0))
      :failing-actions (max 0 (- (or failing-actions 0) (if prev (or (:failing-actions prev) 0) 0)))
+     :review-requested (max 0 (- (or review-requested 0) (if prev (or (:review-requested prev) 0) 0)))
      :near-cap? (boolean (and near-cap-at (not= near-cap-at (:near-cap-at prev))))
      :idle-turns (if (seq idle-by-branch)
                    (reduce max 0 (map (fn [[b n]] (idle-news n (get p-by (name b)) idle-floor))
@@ -314,6 +323,7 @@
                       [:oversight/silent-for-ms :any]
                       [:oversight/directives :any]
                       [:oversight/failing :any]
+                      [:oversight/reviews :any]
                       [:oversight/worth-a-look? :boolean]]
              :quiet  [:map [:oversight/worth-a-look? :boolean]]}]}
   (fn [{:keys [conn run-id]} data]
@@ -412,6 +422,9 @@
                                                    (journal/notes conn run-id :action)))
                            (assoc (gates/threshold :actions)
                                   :min-failures (:failing-action-floor limits))))
+             ;; SHIP REVIEWS ASKED FOR (oi16.11): a branch's done with time
+             ;; left, held until a pass ends.
+             reviews (vec (journal/notes conn run-id :ship-review-requested))
              ;; What a pass that spends a call records, so the next gather
              ;; can tell new evidence from evidence already read.
              signals {:unmet unmet :idle since :idle-by-branch by-branch
@@ -425,6 +438,7 @@
                       :errors (count errors) :refused (count refusals)
                       :workflow-signals (count workflow-signals)
                       :failing-actions (count failing)
+                      :review-requested (count reviews)
                       ;; Each directive's status/outcome, so the next pass is
                       ;; told only what changed.
                       :directives (into {} (map (juxt (comp str :id) :state)) directives)
@@ -452,6 +466,7 @@
                 :oversight/silent-for-ms (:oversight/silent-for-ms data)
                 :oversight/directives directives
                 :oversight/failing failing
+                :oversight/reviews reviews
                 :oversight/worth-a-look?
                 (worth-a-look? (since-last-look
                                 (assoc signals
@@ -615,7 +630,8 @@
             [:oversight/position {:optional true} :any]
             [:oversight/silent-for-ms {:optional true} :any]
             [:oversight/directives {:optional true} :any]
-            [:oversight/failing {:optional true} :any]]
+            [:oversight/failing {:optional true} :any]
+            [:oversight/reviews {:optional true} :any]]
    ;; :oversight/branch only on the path that ran — the fallback records a
    ;; verdict and an explanation, and there is no branch to carry.
    :output [:map [:oversight/verdict :keyword] [:oversight/answer :any]
@@ -694,6 +710,22 @@
                                                                            (update :next clip (gates/threshold :oversight-note-chars))
                                                                            (update :disposition clip (gates/threshold :oversight-note-chars)))
                                                                       ds)}))
+                                  ;; A DONE WAITING ON ITS REVIEW (oi16.11): the
+                                  ;; task, the answer, and what the run actually
+                                  ;; executed, newest last. Shown only when one
+                                  ;; arrived since the last look.
+                                  :ship-review (let [prev (or (:review-requested (:signals (journal/last-note conn run-id :oversight))) 0)
+                                                     rs (:oversight/reviews data)]
+                                                 (when (> (count rs) prev)
+                                                   (let [r (last rs)
+                                                         p (gates/threshold :ship-review)]
+                                                     (prompt/render "ship-review"
+                                                                    {:problem (:problem (runs/get-run conn run-id))
+                                                                     :answer (:answer r)
+                                                                     :evidence (vec (take-last (:evidence-shown p)
+                                                                                               (map (fn [a] {:command (clip (:command a) (gates/threshold :oversight-note-chars))
+                                                                                                             :exit (:exit a) :refused (:refused? a)})
+                                                                                                    (journal/notes conn run-id :action))))}))))
                                   ;; The commands that keep failing and what
                                   ;; worked instead (karamazov-oi16.4).
                                   :failing (when-let [fs (seq (:oversight/failing data))]

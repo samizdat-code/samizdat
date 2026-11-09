@@ -204,6 +204,27 @@
     (is (ignored? "src/pkg/__pycache__/x.pyc"))
     (is (not (ignored? "pipeline_parallel.py")))))
 
+;; karamazov-oi16.11. 20 of 23 failing TB trials ended on an accepted `done`,
+;; several with half their time left (protein-assembly at 38%), and the
+;; supervisor never looked: nothing about a confident wrong ship trips its
+;; counters. A done with time left now waits for its review.
+(deftest a-done-with-time-left-waits-for-the-supervisors-review
+  (let [ev {:answer "Wrote /app/x and ran it." :problem "p" :time-used 0.3 :wind-down 0.8
+            :keep-working "keep going" :review-hold "under review" :supervised? true}
+        rung (fn [e] (:name (ship/ship-gate-rung e)))]
+    (is (= :supervisor-review (rung ev)) "the first done asks for the review")
+    (is (= "under review" (ship/ship-gate-block ev)))
+    (is (= :supervisor-review (rung (assoc ev :refused {:supervisor-review 1} :review-pending? true)))
+        "and is held while the review is pending")
+    (is (= :time-left (rung (assoc ev :refused {:supervisor-review 1})))
+        "released once it lands; the time-left rung has its turn after it")
+    (is (= :time-left (rung (dissoc ev :supervised?))) "no supervisor, no hold")
+    (is (not= :supervisor-review (rung (assoc ev :time-used 0.9))) "no hold in the wind-down")
+    (is (not= :supervisor-review (rung (assoc ev :verdict? true))) "a verdict is never held")
+    (is (= :ship-review-requested
+           (:note-once (some #(when (= :supervisor-review (:name %)) %) (gates/threshold :ship-gates))))
+        "the rung names the note that asks for the review")))
+
 (deftest a-once-rung-sends-a-branch-back-once-not-once-per-streak
   ;; tb21-retry mteb-retrieve: time-left refused 8 dones with work between them,
   ;; each saying "Call `done` again to finish anyway".

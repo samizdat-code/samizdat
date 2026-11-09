@@ -90,3 +90,12 @@
                                  (and (not= k (:key w)) (or (and arg (= arg a)) (= prog p)))))]
              {:key k :failed (+ failed timeouts) :exit last-exit
               :instead (vec (distinct (map :worked (filter alike ok))))})))))
+
+(defn patterns
+  "What a run learned by trying, to keep for the next one (karamazov-oi16.12):
+  each action that kept failing, never having worked, beside what worked
+  instead — `steer`'s answer over `notes`, less the failures nothing replaced.
+  A failure alone is already a refusal-style fact; the pair is what a branch
+  can act on."
+  [notes policy]
+  (filterv (comp seq :instead) (steer (scores notes) policy)))

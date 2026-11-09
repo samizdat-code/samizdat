@@ -51,6 +51,7 @@
             [samizdat.manifests :as manifests]
             [samizdat.llm.registry :as registry]
             [samizdat.agent.live :as live]
+            [samizdat.agent.actions :as actions]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.agent.verify :as verify]
@@ -535,6 +536,10 @@
         ;; the common path measured everything and remembered none of it.
         (try
           (knowledge/distil-session! conn {:run-id run-id
+                                           ;; This command kept failing, that one worked
+                                           ;; instead (karamazov-oi16.12).
+                                           :patterns (actions/patterns (journal/notes conn run-id :action)
+                                                                       (gates/threshold :actions))
                                            :ask (reflect/consolidator {:conn conn :run-id run-id
                                                                        :llm-adapter llm-adapter
                                                                        :llm-config llm-config})

@@ -82,9 +82,13 @@
            (and boundary?
                 (>= (- now last-at) (or every-ms 0))))))
 
-(def ^:private urgent-kinds
-  "Journal events that ask for a look now rather than at the next boundary."
-  #{:workflow-signal :stage-error})
+(defn urgent-kinds
+  "Journal events that ask for a look now rather than at the next boundary:
+  gates.edn :oversight :urgent-kinds, as keywords. A done held for its ship
+  review is one (karamazov-oi16.11) — waiting out the spacing would outlast
+  the hold."
+  []
+  (into #{} (map keyword) (:urgent-kinds (gates/threshold :oversight))))
 
 (defn- own-event?
   "The stream's own activity. Its turns are not the run's boundary, and its notes
@@ -312,7 +316,7 @@
                        (swap! state assoc :last-event-at (now)))
                      ;; Held until a pass takes it: a signal can arrive while a
                      ;; pass is running, and this loop only sees it afterwards.
-                     (when (some #(contains? urgent-kinds (:kind %)) others)
+                     (when (some #(contains? (urgent-kinds) (keyword (name (:kind %)))) others)
                        (swap! state assoc :urgent? true))
                      ;; PHASE 1, every interval and unbudgeted (RFC-012). The
                      ;; reflex is rule-based and cheap — it reads what the

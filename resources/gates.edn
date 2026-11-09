@@ -1853,6 +1853,10 @@
           ;; it could fix it, twice (karamazov-i692). A pass with nothing to do
           ;; ends itself, so this bounds the ones that are doing something.
           :pass-max-turns 20
+          ;; Journal events that skip the spacing: a workflow asking for help,
+          ;; a stage that crashed, and a done held for its ship review
+          ;; (karamazov-oi16.11), whose hold would outlast a two-minute wait.
+          :urgent-kinds #{:workflow-signal :stage-error :ship-review-requested}
           ;; The read timeout for the supervisor's OWN model calls, in ms;
           ;; nil keeps the run's. Its brief is a run-health digest plus a
           ;; carried context, and on GLM-5.3 with thinking those calls ran
@@ -2514,6 +2518,7 @@
  {:value
   {:cmd-works   "In this project `{{cmd}}` works."
    :cmd-refused "In this project `{{cmd}}` is refused by the shell policy — do not spend a turn on it."
+   :cmd-instead "In this project `{{cmd}}` keeps failing; `{{instead}}` works instead."
    :workflow    "The `{{cmd}}` workflow has driven a run on this project."}
   :kind :policy :capability-tunable? false
   :doc "THE WORDS A DERIVED PROJECT MEMORY IS WRITTEN IN.
@@ -3072,6 +3077,16 @@
         The cap is what keeps a rambling judge from growing the events table
         without bound; it is not what makes the record useful, which is the
         outcome `jolt export --verdicts` labels each row with."}
+
+ :ship-review
+ {:value {:max-wait-turns 8 :evidence-shown 25}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-oi16.11"]
+  :doc "The supervisor's review of a done with time left (ship rung :supervisor-review).
+        :max-wait-turns is how long the branch's dones are held for a review that has
+        not landed, so a stream that never answers costs a few turns rather than the
+        run. :evidence-shown is how many of the run's last commands, with their exit
+        codes, the supervisor's brief lists beside the answer."}
 
  :directive-notice-issuers
  {:value #{"execution" "heldout"}
@@ -4463,7 +4478,19 @@
   ;; the run's own figures, so only the rungs marked :advisory? true bind it;
   ;; `advisory?` is in scope for a rung's forms.
   {:value
-   [{:name :time-left
+   [{:name :supervisor-review
+     ;; karamazov-oi16.11. 20 of 23 failing TB 2.1 trials ended on an accepted done,
+     ;; several with half their time left (protein-assembly at 38%), and the supervisor
+     ;; never looked: a confident wrong ship trips none of its counters. A done with
+     ;; time left asks for its review (:note-once journals :ship-review-requested, which
+     ;; wakes the stream) and is held until a pass has ended or :ship-review
+     ;; :max-wait-turns have gone. Only where a supervisor stream is running.
+     :advisory? true
+     :note-once :ship-review-requested
+     :when (and supervised? time-used wind-down (not verdict?) (< time-used wind-down)
+                (or (not (get refused :supervisor-review)) review-pending?))
+     :message-form review-hold}
+    {:name :time-left
      ;; A run with a clock is sent back once when it calls done before winding down:
      ;; samizdat stopped 2 to 9 minutes early on yj with HCL a stub and TOML hanging on
      ;; a table, while Pi used its whole limit testing. Once per branch: a second done

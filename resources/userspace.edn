@@ -243,6 +243,8 @@
    :directive-steer "prompts/directive-steer.md"
    :directive-notice "prompts/directive-notice.md"
    :directive-outcomes "prompts/directive-outcomes.md"
+   :ship-review "prompts/ship-review.md"
+   :ship-review-hold "prompts/ship-review-hold.md"
    :keep-working "prompts/keep-working.md"
    :system-lean "prompts/system-lean.md"
    :check-before-done "prompts/check-before-done.md"

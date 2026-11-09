@@ -1448,3 +1448,32 @@
         (is (empty? (news os states)))
         (is (= [1] (mapv :id (news (assoc-in (vec os) [0 :state] "applied/met")
                                    states))))))))
+
+(deftest a-branch-asking-to-ship-wakes-the-supervisor
+  ;; karamazov-oi16.11: the ship review is the supervisor's highest-leverage
+  ;; moment, and it is asked for by a :ship-review-requested note.
+  (let [floors {:unmet-floor 2 :idle-floor 25}
+        since @(cells/cell-var 'cells.oversight 'since-last-look)]
+    (is (worth-a-look? {:review-requested 1} floors))
+    (is (= 1 (:review-requested (since {:review-requested 1} nil {:idle-floor 25}))))
+    (is (= 0 (:review-requested (since {:review-requested 1} {:review-requested 1} {:idle-floor 25}))))))
+
+(deftest a-ship-review-is-pending-until-a-pass-lands
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        state (fn [turn] (journal/review-state conn rid turn 6))]
+    (is (not (:supervised? (state 1))) "no supervisor stream has run yet")
+    (journal/note! conn rid :oversight-quiet {:data {}})
+    (is (:supervised? (state 1)))
+    (is (not (:pending? (state 1))) "nothing asked for")
+    (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 10 :data {}})
+    (is (:pending? (state 12)))
+    (is (not (:pending? (state 16))) "a review that never comes stops holding after the wait")
+    (journal/note! conn rid :oversight {:data {:verdict "done"}})
+    (is (not (:pending? (state 12))) "and a pass that ended answers it")))
+
+(deftest a-ship-review-request-skips-the-spacing
+  ;; karamazov-oi16.11: the done is held only :ship-review :max-wait-turns, and
+  ;; the spacing between passes is two minutes.
+  (is (contains? (ov/urgent-kinds) :ship-review-requested))
+  (is (contains? (ov/urgent-kinds) :workflow-signal)))
