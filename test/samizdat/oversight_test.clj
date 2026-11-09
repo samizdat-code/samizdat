@@ -1460,22 +1460,38 @@
     (is (= 1 (:review-requested (since {:review-requested 1} nil {:idle-floor 25}))))
     (is (= 0 (:review-requested (since {:review-requested 1} {:review-requested 1} {:idle-floor 25}))))))
 
-(deftest a-ship-review-is-pending-until-a-pass-lands
+(deftest a-ship-review-is-pending-until-the-supervisor-answers
+  ;; tb21-review dna-assembly: the review was asked for mid-pass, the pass ran
+  ;; on for minutes and its answer was a directive, not the pass ending, so
+  ;; the hold ran out first. A supervisor directive after the request answers
+  ;; it, and the wait is wall-clock seconds, since a turn is 20 s or 50 s.
   (let [conn (db/open! ":memory:")
         rid (runs/start-run! conn {:problem "p"})
-        state (fn [turn] (journal/review-state conn rid turn 6))]
-    (is (not (:supervised? (state 1))) "no supervisor stream has run yet")
+        state (fn [wait] (journal/review-state conn rid wait))]
+    (is (not (:supervised? (state 600))) "no supervisor stream has run yet")
     (journal/note! conn rid :oversight-quiet {:data {}})
-    (is (:supervised? (state 1)))
-    (is (not (:pending? (state 1))) "nothing asked for")
+    (is (:supervised? (state 600)))
+    (is (not (:pending? (state 600))) "nothing asked for")
     (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 10 :data {}})
-    (is (:pending? (state 12)))
-    (is (not (:pending? (state 16))) "a review that never comes stops holding after the wait")
-    (journal/note! conn rid :oversight {:data {:verdict "done"}})
-    (is (not (:pending? (state 12))) "and a pass that ended answers it")))
+    (is (:pending? (state 600)))
+    (is (not (:pending? (state 0))) "a review that never comes stops holding after the wait")
+    (testing "a directive from someone else does not answer it"
+      (interventions/submit! conn rid {:kind "message" :issued-by "watch" :payload "x"})
+      (is (:pending? (state 600))))
+    (testing "the supervisor's directive does"
+      ;; Timestamps are milliseconds; keep the order unambiguous.
+      (Thread/sleep 5)
+      (interventions/submit! conn rid {:kind "message" :issued-by "supervisor" :payload "check the path"})
+      (is (not (:pending? (state 600)))))
+    (testing "as does a pass ending"
+      (Thread/sleep 5)
+      (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 20 :data {}})
+      (is (:pending? (state 600)))
+      (journal/note! conn rid :oversight {:data {:verdict "done"}})
+      (is (not (:pending? (state 600)))))))
 
 (deftest a-ship-review-request-skips-the-spacing
-  ;; karamazov-oi16.11: the done is held only :ship-review :max-wait-turns, and
+  ;; karamazov-oi16.11: the done is held only :ship-review :max-wait-seconds, and
   ;; the spacing between passes is two minutes.
   (is (contains? (ov/urgent-kinds) :ship-review-requested))
   (is (contains? (ov/urgent-kinds) :workflow-signal)))
@@ -1497,6 +1513,10 @@
     (let [r (done! b 10)]
       (is (str/includes? (str (:result r)) "supervisor") "the done is held for the review")
       (is (= 1 (count (journal/notes conn rid :ship-review-requested))) "and the review is asked for")
+      (let [told (filter #(= "ship-review" (:issued_by %)) (interventions/history conn rid))]
+        (is (= ["SUP"] (mapv :branch_id told))
+            "and a pass already running is told, at its next turn (tb21-review dna-assembly)")
+        (is (str/includes? (str (:payload (first told))) "out.txt") "with the answer it is reviewing"))
       (let [r2 (done! (:branch r) 12)]
         (is (str/includes? (str (:result r2)) "has not landed") "held while it is out")
         (is (= 1 (count (journal/notes conn rid :ship-review-requested))) "asked for once")))))

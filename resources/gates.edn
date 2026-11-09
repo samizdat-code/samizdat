@@ -3079,17 +3079,19 @@
         outcome `jolt export --verdicts` labels each row with."}
 
  :ship-review
- {:value {:max-wait-turns 8 :evidence-shown 25}
+ {:value {:max-wait-seconds 360 :evidence-shown 25}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-oi16.11"]
   :doc "The supervisor's review of a done with time left (ship rung :supervisor-review).
-        :max-wait-turns is how long the branch's dones are held for a review that has
-        not landed, so a stream that never answers costs a few turns rather than the
-        run. :evidence-shown is how many of the run's last commands, with their exit
+        :max-wait-seconds is how long the branch's dones are held for a review that has
+        not been answered (a pass ending, or a supervisor directive, after the
+        request), so a stream that never answers costs minutes rather than the run.
+        Seconds: a turn is 20 s on one task and 50 s on another, and the one review
+        measured (tb21-review dna-assembly) took five minutes. :evidence-shown is how many of the run's last commands, with their exit
         codes, the supervisor's brief lists beside the answer."}
 
  :directive-notice-issuers
- {:value #{"execution" "heldout"}
+ {:value #{"execution" "heldout" "ship-review"}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-oi16.6"]
   :doc "Who writes to the directive queue to REPORT rather than to steer:
@@ -4484,9 +4486,11 @@
      ;; never looked: a confident wrong ship trips none of its counters. A done with
      ;; time left asks for its review (:note-once journals :ship-review-requested, which
      ;; wakes the stream) and is held until a pass has ended or :ship-review
-     ;; :max-wait-turns have gone. Only where a supervisor stream is running.
+     ;; :max-wait-seconds have gone. Only where a supervisor stream is running.
      :advisory? true
      :note-once :ship-review-requested
+     ;; And the running supervisor pass is told at its next turn, as a notice.
+     :tell {:branch "SUP" :prompt "ship-review-notice" :issued-by "ship-review"}
      :when (and supervised? time-used wind-down (not verdict?) (< time-used wind-down)
                 (or (not (get refused :supervisor-review)) review-pending?))
      :message-form review-hold}

@@ -18,6 +18,7 @@
             ;; With jolt.time first, as base and journal load it.
             [jolt.time]
             [clojure.data.json :as json]
+            [clojure.tools.logging :as log]
             [samizdat.agent.state :as state]
             [samizdat.agent.stubs :as stubs]
             [samizdat.agent.roles :as roles]
@@ -25,6 +26,7 @@
             [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
             [samizdat.sandbox.sci :as sandbox]
+            [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
             [samizdat.store.tasks :as tasks]
             [samizdat.util :as util]
@@ -662,8 +664,8 @@
         ;; `advisory?`, which lean also sets for its implementer and which
         ;; kept the review from ever running there.
         review (when (and (not (:advisory? branch)) (:conn ctx) (:run-id ctx))
-                 (journal/review-state (:conn ctx) (:run-id ctx) (:turn ctx)
-                                       (:max-wait-turns (gates/threshold :ship-review))))
+                 (journal/review-state (:conn ctx) (:run-id ctx)
+                                       (:max-wait-seconds (gates/threshold :ship-review))))
         rung (ship-gate-rung
                 {:answer answer :problem problem
                  :refused (or (:ship-refused branch) {})
@@ -889,12 +891,24 @@
                              :sources (vec (distinct (keep :branch_id elsewhere)))}}))
     ;; A rung may name a note to journal the first time it refuses a branch —
     ;; :supervisor-review asks the supervisor stream for its review that way.
-    (when-let [k (and rung (:conn ctx) (:run-id ctx)
-                      (not (get (:ship-refused branch) (:name rung)))
-                      (:note-once (some #(when (= (:name rung) (:name %)) %) (ship-gates))))]
-      (journal/note! (:conn ctx) (:run-id ctx) (keyword (name k))
-                     {:branch-id (:id branch) :turn (:turn ctx)
-                      :data {:answer (str answer) :rung (:name rung)}}))
+    ;; And may name a branch to TELL, through the directive queue: a supervisor
+    ;; pass already running reads its brief only at the start, so a review
+    ;; asked for mid-pass reached nobody until the hold ran out (tb21-review
+    ;; dna-assembly). The notice lands at that branch's next turn.
+    (when-let [spec (and rung (:conn ctx) (:run-id ctx)
+                         (not (get (:ship-refused branch) (:name rung)))
+                         (some #(when (= (:name rung) (:name %)) %) (ship-gates)))]
+      (when-let [k (:note-once spec)]
+        (journal/note! (:conn ctx) (:run-id ctx) (keyword (name k))
+                       {:branch-id (:id branch) :turn (:turn ctx)
+                        :data {:answer (str answer) :rung (:name rung)}}))
+      (when-let [{to :branch p :prompt by :issued-by} (:tell spec)]
+        (try (interventions/submit! (:conn ctx) (:run-id ctx)
+                                    {:branch-id to :kind "message" :issued-by by
+                                     :payload (prompt/render p {:branch (:id branch) :turn (:turn ctx)
+                                                                :answer (str answer)})})
+             (catch Throwable e
+               (log/warn "ship: telling" to "failed:" (ex-message e))))))
     (if block
       ;; Which lexical rung refused, counted on the branch for `refused`. The later
       ;; blocks (verify, acceptance) apply only when no rung fired.

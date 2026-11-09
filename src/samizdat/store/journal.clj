@@ -1106,21 +1106,31 @@
 (defn review-state
   "Whether a ship review is waiting on the supervisor (karamazov-oi16.11).
   `:supervised?` is whether the supervisor stream has looked at this run at
-  all; `:pending?` is whether the newest :ship-review-requested note has no
-  spent pass (:oversight) after it and is fewer than `max-wait` turns before
-  `turn`, so a review that never comes stops holding a branch."
-  [conn run-id turn max-wait]
+  all. `:pending?` is whether the newest :ship-review-requested note is still
+  unanswered and younger than `max-wait-seconds`. Answered means a spent pass
+  (:oversight) ended after it, or the supervisor issued a directive after it:
+  in tb21-review the request arrived mid-pass and the answer was a directive
+  minutes before that pass ended. Seconds, not turns, because a turn is 20 s
+  on one task and 50 s on another."
+  [conn run-id max-wait-seconds]
   (let [r (db/fetch-one conn ["SELECT
                                  MAX(CASE WHEN kind IN ('oversight', 'oversight-quiet') THEN 1 END) AS supervised,
                                  MAX(CASE WHEN kind = 'ship-review-requested' THEN id END) AS req,
                                  MAX(CASE WHEN kind = 'oversight' THEN id END) AS pass
                                FROM events WHERE run_id = ?" run-id])
-        req-turn (when (:req r)
-                   (:turn (db/fetch-one conn ["SELECT turn FROM events WHERE id = ?" (:req r)])))]
+        req (when (:req r)
+              (db/fetch-one conn ["SELECT created_at,
+                                          (julianday('now') - julianday(created_at)) * 86400.0 AS age
+                                     FROM events WHERE id = ?" (:req r)]))
+        answered? (when req
+                    (or (and (:pass r) (> (:pass r) (:req r)))
+                        (some? (db/fetch-one conn ["SELECT 1 AS x FROM interventions
+                                                     WHERE run_id = ? AND issued_by = 'supervisor'
+                                                       AND created_at > ? LIMIT 1"
+                                                    run-id (:created_at req)]))))]
     {:supervised? (some? (:supervised r))
-     :pending? (boolean (and (:req r)
-                             (or (nil? (:pass r)) (< (:pass r) (:req r)))
-                             (< (- (or turn 0) (or req-turn 0)) (or max-wait 0))))}))
+     :pending? (boolean (and req (not answered?)
+                             (< (double (or (:age req) 0)) (double (or max-wait-seconds 0)))))}))
 
 (defn notes-since
   "Notes of any of `kinds` on this run created at or after `since` (an ISO
