@@ -363,18 +363,22 @@
   [branch]
   (let [ts (vec (:turns branch))
         writes (gates/tool-vocab :file-write)
-        ;; A script that wrote and ran a program that succeeded checked its own write,
-        ;; so it is not the write a later check has to follow.
-        ran? (fn [t] (and (:ran? t) (= "success" (name (or (:category t) :none)))))
+        category (fn [t] (name (or (:category t) :none)))
+        ;; A script that ran a program that succeeded is a check, and one that also
+        ;; wrote checked its own write, so it is not the write a later check has to
+        ;; follow. A successful eval is :neutral (base/ok), so that counts here:
+        ;; requiring :success refused every eval check (tb21-code protein-assembly).
+        ran? (fn [t] (and (:ran? t) (contains? #{"success" "neutral"} (category t))))
         last-write (last (keep-indexed (fn [i t] (when (or (contains? writes (str (:tool t)))
                                                            (and (:wrote t) (not (ran? t))))
                                                    i))
                                        ts))]
     (boolean
      (and last-write
-          (not-any? (fn [t] (and (contains? #{"eval" "shell" "run_check"} (str (:tool t)))
-                                 (= "success" (name (or (:category t) :none)))
-                                 (or (not (:wrote t)) (ran? t))))
+          (not-any? (fn [t] (or (ran? t)
+                                (and (contains? #{"eval" "shell" "run_check"} (str (:tool t)))
+                                     (= "success" (category t))
+                                     (not (:wrote t)))))
                     (subvec ts (inc last-write)))))))
 
 (defn- compile-rung-form

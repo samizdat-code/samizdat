@@ -189,7 +189,15 @@
     (is (not (ok? [w])) "a write with nothing after it")
     (is (ok? [w {:tool "eval" :category :success}]) "a run after it")
     (is (not (ok? [w {:tool "eval" :category :success :wrote true}])) "an eval that only wrote")
-    (is (ok? [w {:tool "eval" :category :success :wrote true :ran? true}]) "one that wrote and ran"))
+    (is (ok? [w {:tool "eval" :category :success :wrote true :ran? true}]) "one that wrote and ran")
+    ;; tb21-code protein-assembly / code-from-image: a successful eval is :neutral
+    ;; (base/ok), so an eval that ran the program never counted and done was
+    ;; refused 15 times.
+    (is (ok? [w {:tool "eval" :category :neutral :ran? true}]) "an eval that ran a program, as recorded")
+    (is (ok? [w {:tool "eval" :category :neutral :wrote true :ran? true}]) "one that also wrote, as recorded")
+    (is (not (ok? [w {:tool "eval" :category :neutral}])) "an eval that ran nothing is not a check")
+    (is (not (ok? [w {:tool "eval" :category :failure :ran? true}])) "nor one that failed")
+    (is (not (ok? [w {:tool "shell" :category :neutral}])) "a shell call held for approval ran nothing"))
   (let [ignore (:ignore (gates/threshold :tree-writes))
         ignored? (fn [p] (some #(samizdat.security.exposure/glob-matches? % p) ignore))]
     (is (ignored? "__pycache__/pipeline_parallel.cpython-312.pyc"))
