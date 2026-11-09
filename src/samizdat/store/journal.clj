@@ -1108,9 +1108,11 @@
   `:supervised?` is whether the supervisor stream has looked at this run at
   all. `:pending?` is whether the newest :ship-review-requested note is still
   unanswered and younger than `max-wait-seconds`. Answered means a spent pass
-  (:oversight) ended after it, or the supervisor issued a directive after it:
+  (:oversight) ended after it, or the supervisor issued a `review` after it:
   in tb21-review the request arrived mid-pass and the answer was a directive
-  minutes before that pass ended. Seconds, not turns, because a turn is 20 s
+  minutes before that pass ended. Only a review: a message is a steer
+  mid-review, and in tb21-unread make-mips one released the hold and the done
+  shipped a minute before the review itself. Seconds, not turns, because a turn is 20 s
   on one task and 50 s on another."
   [conn run-id max-wait-seconds]
   (let [r (db/fetch-one conn ["SELECT
@@ -1126,6 +1128,7 @@
                     (or (and (:pass r) (> (:pass r) (:req r)))
                         (some? (db/fetch-one conn ["SELECT 1 AS x FROM interventions
                                                      WHERE run_id = ? AND issued_by = 'supervisor'
+                                                       AND kind = 'review'
                                                        AND created_at > ? LIMIT 1"
                                                     run-id (:created_at req)]))))]
     {:supervised? (some? (:supervised r))

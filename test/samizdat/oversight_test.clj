@@ -1478,10 +1478,16 @@
     (testing "a directive from someone else does not answer it"
       (interventions/submit! conn rid {:kind "message" :issued-by "watch" :payload "x"})
       (is (:pending? (state 600))))
-    (testing "the supervisor's directive does"
-      ;; Timestamps are milliseconds; keep the order unambiguous.
+    (testing "nor does a supervisor's message: it steers mid-review"
+      ;; tb21-unread make-mips: a mid-review steer released the hold, the
+      ;; done shipped, and the review itself landed after the run ended.
       (Thread/sleep 5)
       (interventions/submit! conn rid {:kind "message" :issued-by "supervisor" :payload "check the path"})
+      (is (:pending? (state 600))))
+    (testing "the supervisor's review does"
+      ;; Timestamps are milliseconds; keep the order unambiguous.
+      (Thread/sleep 5)
+      (interventions/submit! conn rid {:kind "review" :issued-by "supervisor" :payload "approved"})
       (is (not (:pending? (state 600)))))
     (testing "as does a pass ending"
       (Thread/sleep 5)
