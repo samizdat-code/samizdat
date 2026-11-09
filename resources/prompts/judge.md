@@ -22,6 +22,14 @@ Rules:
 - Review the DIFF for bugs, not style: a wrong result, a broken edge case, a
   resource leak, a security hole. Tag each finding with a severity:
   [critical], [high], [medium], or [low].
+- **Then, what would a grader check that the evidence shows was never run?**
+  The work is usually graded by tests the agent cannot see. Read the
+  requirement as their author would: the exact command it says will be run and
+  what that prints, every behaviour it mentions in passing, stated limits and
+  thresholds, the exact names, paths and formats of what it asks for. A check
+  like that which the EVIDENCE shows was not run, or was run only in a looser
+  form, is a concrete gap: block on it and name the check so it can be run.
+  Do not invent requirements the text does not state.
 - A run that ends by asking the user a question is a correct stop, not
   incompleteness.
 - When unsure, PASS or ABSTAIN. A false block wastes a whole turn.
