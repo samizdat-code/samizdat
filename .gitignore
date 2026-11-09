@@ -66,6 +66,7 @@ evals/team-solve/heal/*/hidden/
 
 # Written by evals/team-solve/run.sh.
 evals/team-solve/results.jsonl
-evals/terminal-bench/samizdat-bundle.*
+evals/terminal-bench/samizdat-bundle*.tgz
+evals/terminal-bench/samizdat-bundle*.rev
 evals/terminal-bench/jobs/
 evals/terminal-bench/__pycache__/

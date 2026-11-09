@@ -46,7 +46,7 @@ class SamizdatAgent(BaseInstalledAgent):
     def __init__(self, *args, arm="team-solve", provider="deepseek-flash", model_id="deepseek-flash",
                  key_env="DEEPSEEK_API_KEY", provider_type="deepseek", max_turns=300,
                  eval_mode="off", harness_effort=None, seed_job=None, context_window=None, style=None,
-                 **kwargs):
+                 bundle="samizdat-bundle", **kwargs):
         super().__init__(*args, **kwargs)
         self.arm = arm
         # A gates.edn :styles key, such as lean; none is the full loop.
@@ -60,13 +60,15 @@ class SamizdatAgent(BaseInstalledAgent):
         self.harness_effort = harness_effort
         self.seed_job = seed_job
         self.context_window = context_window
+        # Which build_bundle.sh output to upload: <bundle>.tgz beside this file.
+        self.bundle = bundle
 
     @staticmethod
     def name() -> str:
         return "samizdat"
 
     def version(self):
-        rev = HERE / "samizdat-bundle.rev"
+        rev = HERE / f"{self.bundle}.rev"
         return rev.read_text().strip()[:12] if rev.exists() else None
 
     async def install(self, environment: BaseEnvironment) -> None:
@@ -84,7 +86,7 @@ class SamizdatAgent(BaseInstalledAgent):
                      f"DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $p >/dev/null 2>&1 || "
                      f"echo \"could not install $p\" >&2; done; {SSL}"),
         )
-        await environment.upload_file(HERE / "samizdat-bundle.tgz", "/tmp/samizdat-bundle.tgz")
+        await environment.upload_file(HERE / f"{self.bundle}.tgz", "/tmp/samizdat-bundle.tgz")
         await self.exec_as_root(
             environment,
             command="tar -xzf /tmp/samizdat-bundle.tgz -C / && rm -f /tmp/samizdat-bundle.tgz "
