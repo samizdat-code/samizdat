@@ -43,5 +43,6 @@ and it is not this directive.
 
 What you tried to send: {{text}}
 {% endif %}
-{% if nobody-to-read %}Not sent: no implementer branch is still running to read a `{{kind}}`{% for e in ended %}{% if forloop.first %} ({% else %}, {% endif %}`{{e.id}}` ended {{e.status}}{% if forloop.last %}){% endif %}{% endfor %}. The run is finishing; what you saw belongs in `remember`, or a change to the loop, so the next run starts from it.
+{% if unknown-branch %}Not sent: this run has no branch `{{unknown-branch}}`. Its implementer branches: {% for b in branches %}`{{b.id}}` ({{b.status}}){% if not forloop.last %}, {% endif %}{% endfor %}. Address the `{{kind}}` to one of those.
+{% endif %}{% if nobody-to-read %}Not sent: no implementer branch is still running to read a `{{kind}}`{% for e in ended %}{% if forloop.first %} ({% else %}, {% endif %}`{{e.id}}` ended {{e.status}}{% if forloop.last %}){% endif %}{% endfor %}. The run is finishing; what you saw belongs in `remember`, or a change to the loop, so the next run starts from it.
 {% endif %}

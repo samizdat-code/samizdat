@@ -761,6 +761,14 @@
                                  WHERE run_id = ? AND branch_id LIKE 'seed:%'
                                  ORDER BY id" run-id]))}))
 
+(defn run-turn
+  "Whether any branch of the run has a turn numbered `turn`: the first such
+  row, or nil. For a reader that watches the whole run, the supervisor, whose
+  bare `t12` may be any branch's."
+  [conn run-id turn]
+  (db/fetch-one conn ["SELECT * FROM turns WHERE run_id = ? AND turn = ?
+                       ORDER BY id LIMIT 1" run-id turn]))
+
 (defn branch-turn
   "One turn of one branch, whole.
 

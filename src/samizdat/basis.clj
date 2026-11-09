@@ -48,8 +48,12 @@
     (if-let [[_ bid n] (re-matches #"(?:([A-Za-z0-9._~-]+):)?t(\d+)" r)]
       ;; A bare turn is the caller's, or, for a directive, the addressed
       ;; branch's: a steer rests on what that branch did.
-      (when-not (some #(journal/branch-turn conn run-id % (parse-long n))
-                      (if bid [bid] (distinct (remove nil? [(:id branch) addressed]))))
+      ;; The supervisor watches the whole run, so its bare turn may be any
+      ;; branch's (its `remember` cites the implementer's turns).
+      (when-not (if (and (nil? bid) (= "supervisor" (some-> (:role branch) name)))
+                  (journal/run-turn conn run-id (parse-long n))
+                  (some #(journal/branch-turn conn run-id % (parse-long n))
+                        (if bid [bid] (distinct (remove nil? [(:id branch) addressed])))))
         :no-such-turn)
       (if-let [[_ space n] (re-matches #"([aps])#(\d+)" r)]
         (when-not (if (= "s" space)

@@ -1127,6 +1127,18 @@
         (is (= "run the tests" (interventions/text-of d)))
         (is (= "pytest" (interventions/expect-of d)))))))
 
+(deftest intervene-refuses-a-branch-the-run-does-not-have
+  ;; tb21-paced dna-assembly: the supervisor steered `DESIGN`, a name the run
+  ;; never had; it was queued, reported sent, and never reached B1.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          _ (runs/open-branch! c rid {:branch-id "B1"})
+          r (base/run-tool {:conn c :run-id rid :tool-name "intervene" :branch {:id "SUP"}
+                            :args {:kind "message" :branch "DESIGN" :text "re-verify the primers"}})]
+      (is (empty? (interventions/pending c rid)) "nothing queued")
+      (is (str/includes? (str (:result r)) "DESIGN"))
+      (is (str/includes? (str (:result r)) "`B1`") "and it names the branch it can steer"))))
+
 (deftest intervene-refuses-a-steer-nobody-will-read
   ;; karamazov-oi16.9: 9 of 159 supervisor steers on TB were submitted after
   ;; the branch's last turn, reported "submitted", and never read.

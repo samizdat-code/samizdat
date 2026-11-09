@@ -65,7 +65,12 @@
     (let [ctx {:conn c :run-id rid :branch {:id "SUP"}}]
       (is (= ["t45"] (mapv :ref (basis/unresolved ctx ["t45" "t4"]))) "plain: the caller's own only")
       (is (empty? (basis/unresolved (assoc ctx :addressed "B1") ["t45" "t4"])))
-      (is (= ["t46"] (mapv :ref (basis/unresolved (assoc ctx :addressed "B1") ["t46"])))))))
+      (is (= ["t46"] (mapv :ref (basis/unresolved (assoc ctx :addressed "B1") ["t46"]))))
+      (testing "and the supervisor's memory may cite the run it watched"
+        ;; tb21-paced mteb: its `remember` citing B1's t24 was refused.
+        (let [sup (assoc ctx :branch {:id "SUP" :role :supervisor})]
+          (is (empty? (basis/unresolved sup ["t45" "t4"])))
+          (is (= ["t46"] (mapv :ref (basis/unresolved sup ["t46"])))))))))
 
 (defn- run-tool [c rid name args]
   (tools/run-tool {:tool-name name :args args :conn c :run-id rid :turn 5

@@ -65,6 +65,17 @@
                  (not-any? #(contains? #{"active" "exhausted"} (str (:status %))) rows))
         rows))))
 
+(defn- unknown-branch
+  "For a steer addressed to a branch this run has no row for: the run's
+  implementer branches, else nil. tb21-paced dna-assembly steered `DESIGN`,
+  a name the run never had; it was queued, reported sent, and never read.
+  A run with no branch rows yet is not judged."
+  [conn run-id target]
+  (when (and conn run-id target)
+    (let [rows (runs/branches conn run-id)]
+      (when (and (seq rows) (not-any? #(= target (str (:id %))) rows))
+        (remove #(= "supervisor" (str (some-> (:role %) name))) rows)))))
+
 (defn- claim-conflicts
   "Where this directive's text contradicts what the run has already done.
 
@@ -121,6 +132,11 @@
       ;; NAME (claims/denies-tool?), over a record showing that tool working in
       ;; this very run. Everything else passes, including every steering
       ;; directive, which is most of them.
+      (unknown-branch conn run-id target)
+      (base/malformed branch (msg {:unknown-branch target :kind kind
+                                   :branches (mapv (fn [r] {:id (str (:id r)) :status (str (:status r))})
+                                                   (unknown-branch conn run-id target))}))
+
       (and (nil? target) (contains? interventions/branch-kinds kind)
            (nobody-to-read conn run-id))
       (base/refusal branch (msg {:nobody-to-read true :kind kind
