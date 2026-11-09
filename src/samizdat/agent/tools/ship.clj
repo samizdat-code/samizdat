@@ -403,6 +403,10 @@
                   ~'checklist-items   (get ~'ctx :checklist-items)
                   ;; `done` calls refused in an unbroken row before this one.
                   ~'done-streak       (get ~'ctx :done-streak 0)
+                  ;; How many times each rung, by name, has already refused this
+                  ;; branch: a rung that sends a branch back once reads this, as a
+                  ;; streak resets whenever work comes between two dones.
+                  ~'refused           (get ~'ctx :refused {})
                   ;; Pre-existing tests changed or deleted with no reason
                   ;; given (karamazov-fgsb); empty when none.
                   ~'unexplained-tests (get ~'ctx :unexplained-tests)
@@ -441,6 +445,16 @@
                               (:message rung))))
           (gates/threshold :ship-gates))))
 
+(defn ship-gate-rung
+  "The first lexical ship rung that fires on this evidence, as `{:name :message}`,
+  or nil."
+  [evidence]
+  (some (fn [rung]
+          (when ((:when rung) evidence)
+            (let [m (:message rung)]
+              {:name (:name rung) :message (if (fn? m) (m evidence) m)})))
+        (cond->> (ship-gates) (:advisory? evidence) (filter :advisory?))))
+
 (defn ship-gate-block
   "The first lexical ship rung that fires on this evidence, or nil. Pure —
   `done` computes the evidence and calls this.
@@ -450,11 +464,7 @@
   figures, so the evidence rungs do not fit it, but some — that there is an
   answer at all — do, and which is a gates.edn decision."
   [evidence]
-  (some (fn [rung]
-          (when ((:when rung) evidence)
-            (let [m (:message rung)]
-              (if (fn? m) (m evidence) m))))
-        (cond->> (ship-gates) (:advisory? evidence) (filter :advisory?))))
+  (:message (ship-gate-rung evidence)))
 
 ;; --- the give_up rungs ------------------------------------------------------
 
@@ -640,8 +650,9 @@
         odd-files (when review?
                     (code-metrics/unusual-file-change (:root ctx) (:git-baseline ctx)
                                                       (gates/threshold :code-metrics)))
-        block (ship-gate-block
+        rung (ship-gate-rung
                 {:answer answer :problem problem
+                 :refused (or (:ship-refused branch) {})
                  :evidence evidence
                  :uncovered-numbers uncovered-numbers
                  :can-write? (roles/may-use? (:role branch) "write_file")
@@ -668,6 +679,7 @@
                                                    :odd-files (str/join ", " (for [{:keys [path z]} (take 5 odd-files)]
                                                                               (format "`%s` (%.1f)" path (double z))))}))
                  :unexplained-tests (exam/unexplained touched-tests explained (or prior-explained #{}))})
+        block (:message rung)
         ;; The test rung — what makes the loop test-driven rather than one-shot.
         ;; `done` is not terminal until the unit's tests actually pass: run the
         ;; unit's tests, and a red / hollow / untested result is fed back so the
@@ -859,7 +871,10 @@
                       :data {:tokens (vec (take 20 borrowed))
                              :sources (vec (distinct (keep :branch_id elsewhere)))}}))
     (if block
-      (base/fail branch (str "`done` refused.\n\n" block) :done-block block)
+      ;; Which lexical rung refused, counted on the branch for `refused`. The later
+      ;; blocks (verify, acceptance) apply only when no rung fired.
+      (base/fail (cond-> branch rung (update-in [:ship-refused (:name rung)] (fnil inc 0)))
+                 (str "`done` refused.\n\n" block) :done-block block)
       (cond->
        {:branch (assoc branch :final-answer answer :status :done)
         :category :success

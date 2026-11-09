@@ -203,3 +203,20 @@
     (is (ignored? "__pycache__/pipeline_parallel.cpython-312.pyc"))
     (is (ignored? "src/pkg/__pycache__/x.pyc"))
     (is (not (ignored? "pipeline_parallel.py")))))
+
+(deftest a-once-rung-sends-a-branch-back-once-not-once-per-streak
+  ;; tb21-retry mteb-retrieve: time-left refused 8 dones with work between them,
+  ;; each saying "Call `done` again to finish anyway".
+  (let [ev {:answer "Wrote /app/result.txt and ran it." :problem "p"
+            :time-used 0.2 :wind-down 0.8 :keep-working "keep going"
+            :check-before-done "check it" :review-unusual "review it"}]
+    (is (= "keep going" (ship/ship-gate-block ev)) "the first done is sent back")
+    (is (nil? (ship/ship-gate-block (assoc ev :refused {:time-left 1})))
+        "a later one is not, though work came between")
+    (is (= "check it" (ship/ship-gate-block (assoc ev :refused {:time-left 1} :unchecked-write? true)))
+        "another rung still gets its one turn")
+    (is (nil? (ship/ship-gate-block (assoc ev :refused {:time-left 1 :check-after-last-write 1}
+                                           :unchecked-write? true))))
+    (is (nil? (ship/ship-gate-block (assoc ev :refused {:time-left 1 :unusual-change 1}
+                                           :unusual-change true))))
+    (is (= :time-left (:name (ship/ship-gate-rung ev))) "and which rung refused is named")))

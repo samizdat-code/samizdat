@@ -4408,17 +4408,20 @@
    [{:name :time-left
      ;; A run with a clock is sent back once when it calls done before winding down:
      ;; samizdat stopped 2 to 9 minutes early on yj with HCL a stub and TOML hanging on
-     ;; a table, while Pi used its whole limit testing. A second done in a row finishes,
-     ;; and a branch that delivers a verdict is never sent back.
+     ;; a table, while Pi used its whole limit testing. Once per branch: a second done
+     ;; finishes even with work between (`refused`; per streak it refused mteb-retrieve
+     ;; 8 times), and a branch that delivers a verdict is never sent back.
      :advisory? true
-     :when (and time-used wind-down (not verdict?) (< time-used wind-down) (zero? done-streak))
+     :when (and time-used wind-down (not verdict?) (< time-used wind-down) (zero? done-streak)
+               (not (get refused :time-left)))
      :message-form keep-working}
     {:name :check-after-last-write
      ;; agenc-core accepts a headless answer only when a check succeeded after the last
      ;; change, as its remaining Terminal-Bench failures were done claims the transcript
      ;; did not back. Once: a second done in a row finishes.
      :advisory? true
-     :when (and unchecked-write? (not verdict?) (zero? done-streak))
+     :when (and unchecked-write? (not verdict?) (zero? done-streak)
+                (not (get refused :check-after-last-write)))
      :message-form check-before-done}
     {:name :unusual-change
      ;; jolt-metrics' metrics.entropy (Torres et al. 2025): the run's change moves the
@@ -4426,7 +4429,8 @@
      ;; project's commits, or a file it changed reads unlike the project's others
      ;; (surprisal, jolt-metrics 0.3.2). Review the diff once; a second done in a row
      ;; finishes.
-     :when (and unusual-change (not verdict?) (zero? done-streak))
+     :when (and unusual-change (not verdict?) (zero? done-streak)
+                (not (get refused :unusual-change)))
      :message-form review-unusual}
     {:name :answer-exists
      ;; The one rung an advisory branch (reviewer, supervisor) is held to:
