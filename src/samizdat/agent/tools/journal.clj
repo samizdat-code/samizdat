@@ -12,6 +12,7 @@
             [samizdat.security.flow :as flow]
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
+            [samizdat.store.runs :as runs]
             [samizdat.llm.message :as message]))
 
 ;; --- the journal, readable --------------------------------------------------
@@ -121,10 +122,23 @@
             ;; turn); the DEFAULT stays own-branch, so sibling isolation — what
             ;; crosses between peers is the settled-state block — still holds
             ;; unless a branch asks for a specific other turn by name.
-            bid (or (some-> (base/arg ctx :branch) str str/trim not-empty)
-                    (:id branch))
+            named (some-> (base/arg ctx :branch) str str/trim not-empty)
+            bid (or named (:id branch))
             t (when (and conn run-id n)
-                (journal/branch-turn conn run-id bid n))]
+                (journal/branch-turn conn run-id bid n))
+            ;; The supervisor has no siblings to be isolated from: it watches
+            ;; the run, and a bare turn it names is the implementer's. When
+            ;; its own branch lacks it and exactly one other branch has it,
+            ;; that one (tb21-unread raman-fitting spent a review turn on it).
+            [bid t] (or (when (and (nil? t) (nil? named) conn run-id n
+                                   (= "supervisor" (some-> (:role branch) name)))
+                          (let [hits (keep (fn [r]
+                                             (when-let [t (journal/branch-turn conn run-id (str (:id r)) n)]
+                                               [(str (:id r)) t]))
+                                           (remove #(= (str (:id %)) (str (:id branch)))
+                                                   (runs/branches conn run-id)))]
+                            (when (= 1 (count hits)) (first hits))))
+                        [bid t])]
         (if-not t
           ;; :mechanics for the same reason as fetch_artifact's miss. The words
           ;; are prompts/fetch-turn-miss.md — the prose ratchet's rule.

@@ -839,7 +839,13 @@
       (testing "the default stays own-branch"
         (let [r (tools/run-tool {:branch sup :conn c :run-id rid
                                  :tool-name "fetch_turn" :args {:turn 3}})]
-          (is (= :mechanics (:category r)) "S0 has no turn 3 of its own"))))))
+          (is (= :mechanics (:category r)) "S0 has no turn 3 of its own")))
+      (testing "but the supervisor watches the run: its bare turn falls back to the one branch that has it"
+        ;; tb21-unread raman-fitting: the review spent a turn on `t62`, B1's done.
+        (let [r (tools/run-tool {:branch (assoc sup :role :supervisor) :conn c :run-id rid
+                                 :tool-name "fetch_turn" :args {:turn 3}})]
+          (is (= :neutral (:category r)))
+          (is (str/includes? (str (:result r)) "[T0]")))))))
 
 (deftest fetch-turn-searches-literal-text-without-opening-the-firehose
   (with-db [c]

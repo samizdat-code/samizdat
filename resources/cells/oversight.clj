@@ -722,6 +722,7 @@
                                                      (prompt/render "ship-review"
                                                                     {:problem (:problem (runs/get-run conn run-id))
                                                                      :branch (:branch r)
+                                                                     :wait (:max-wait-seconds p)
                                                                      :answer (:answer r)
                                                                      :evidence (vec (take-last (:evidence-shown p)
                                                                                                (map (fn [a] {:command (clip (:command a) (gates/threshold :oversight-note-chars))

@@ -1547,6 +1547,12 @@
           "and the brief puts it in the intervene call it shows")
       (is (str/includes? (prompt/render "oversight-pass" {:branches ["B1" "B2"]}) "`B1`, `B2`")
           "and every pass names the branches it can steer")
+      (is (str/includes? (prompt/render "ship-review" {:branch "B1" :wait 360 :problem "p" :answer "a" :evidence []})
+                         "360 seconds")
+          "and the review says when the hold lapses (tb21-unread raman: twelve turns, no answer sent)")
+      (is (str/includes? (str (:payload (first (filter #(= "ship-review" (:issued_by %)) (interventions/history conn rid)))))
+                         "seconds")
+          "as does the notice to a pass already running")
       (let [told (filter #(= "ship-review" (:issued_by %)) (interventions/history conn rid))]
         (is (= ["SUP"] (mapv :branch_id told))
             "and a pass already running is told, at its next turn (tb21-review dna-assembly)")

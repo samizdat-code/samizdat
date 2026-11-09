@@ -920,6 +920,7 @@
         (try (interventions/submit! (:conn ctx) (:run-id ctx)
                                     {:branch-id to :kind "message" :issued-by by
                                      :payload (prompt/render p {:branch (:id branch) :turn (:turn ctx)
+                                                                :wait (:max-wait-seconds (gates/threshold :ship-review))
                                                                 :answer (str answer)})})
              (catch Throwable e
                (log/warn "ship: telling" to "failed:" (ex-message e))))))
