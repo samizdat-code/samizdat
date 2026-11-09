@@ -1496,6 +1496,33 @@
   (is (contains? (ov/urgent-kinds) :ship-review-requested))
   (is (contains? (ov/urgent-kinds) :workflow-signal)))
 
+(deftest a-done-waits-for-a-directive-the-branch-has-not-read
+  ;; tb21-review protein-assembly: the supervisor approved, then found the
+  ;; provenance claim unsupported and sent a correction; the branch's done
+  ;; landed five seconds later, before a boundary delivered it, and shipped the
+  ;; wrong answer. A queued directive holds the done until the branch reads it.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "write /app/out.txt"})
+        done! (fn [b turn]
+                (tools/run-tool {:branch b :tool-name "done" :turn turn :conn conn :run-id rid
+                                 :started-ms (System/currentTimeMillis)
+                                 :config {:run {:style :lean}}
+                                 :args {:answer "Wrote /app/out.txt and checked it."}}))
+        b (state/new-branch {:id "B1" :problem "write /app/out.txt"})
+        id (interventions/submit! conn rid {:branch-id "B1" :kind "message" :issued-by "supervisor"
+                                            :payload {:text "the lookup returned nil"}})
+        r (done! b 10)]
+    (is (str/includes? (str (:result r)) "refused") "held while the directive waits")
+    (is (str/includes? (str (:result r)) "supervisor") "and says who is waiting")
+    (interventions/resolve! conn rid id :applied "delivered" 11)
+    (is (str/includes? (str (:result (done! (:branch r) 12))) "accepted")
+        "once delivered, the done goes through")
+    (testing "a directive to another branch does not hold this one"
+      (let [b2 (state/new-branch {:id "B2" :problem "write /app/out.txt"})]
+        (interventions/submit! conn rid {:branch-id "SUP" :kind "message" :issued-by "ship-review"
+                                         :payload {:text "review"}})
+        (is (str/includes? (str (:result (done! b2 13))) "accepted"))))))
+
 (deftest a-lean-done-with-time-left-is-held-for-review
   ;; tb21-review, first three trials: no review was ever asked for. Under :lean
   ;; the implementer is held to the advisory rungs (:lenient-done?), and the

@@ -433,7 +433,11 @@
                   ;; (karamazov-oi16.11).
                   ~'supervised?       (get ~'ctx :supervised? false)
                   ~'review-pending?   (get ~'ctx :review-pending? false)
-                  ~'review-hold       (get ~'ctx :review-hold)]
+                  ~'review-hold       (get ~'ctx :review-hold)
+                  ;; A directive to this branch is queued and no boundary has
+                  ;; delivered it yet, and what to say.
+                  ~'unread-directive? (get ~'ctx :unread-directive? false)
+                  ~'unread-hold       (get ~'ctx :unread-hold)]
               ~form)))
 
 (def ship-gates
@@ -666,6 +670,12 @@
         review (when (and (not (:advisory? branch)) (:conn ctx) (:run-id ctx))
                  (journal/review-state (:conn ctx) (:run-id ctx)
                                        (:max-wait-seconds (gates/threshold :ship-review))))
+        ;; Directives queued for this branch that no boundary has delivered:
+        ;; a done ahead of them ships without the branch having read them.
+        unread (when (and (:conn ctx) (:run-id ctx) (:id branch))
+                 (let [kinds (set (:unread-kinds (gates/threshold :ship-review)))]
+                   (filter #(contains? kinds (:kind %))
+                           (interventions/pending (:conn ctx) (:run-id ctx) (:id branch)))))
         rung (ship-gate-rung
                 {:answer answer :problem problem
                  :refused (or (:ship-refused branch) {})
@@ -682,6 +692,10 @@
                  :supervised? (:supervised? review)
                  :review-pending? (:pending? review)
                  :review-hold (prompt/render "ship-review-hold" {:pending (:pending? review)})
+                 :unread-directive? (boolean (seq unread))
+                 :unread-hold (when (seq unread)
+                                (prompt/render "unread-directive-hold"
+                                               {:issuers (str/join ", " (distinct (map :issued_by unread)))}))
                  :verdict? (boolean (:advisory? branch))
                  :keep-working (prompt/prompt "keep-working")
                  :unchecked-write? (unchecked-write? branch)

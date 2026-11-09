@@ -34,6 +34,13 @@ DISTIL_WAIT = 25
 TERMINAL = {"completed", "failed", "exhausted", "aborted", "abandoned", "cancelled", "parked"}
 # Sourced by every non-interactive bash the agent starts; inherited by its children.
 OOM_CHILD = "echo 500 > /proc/self/oom_score_adj 2>/dev/null\n"
+# Not every agent process starts under bash: eval's sh* and process/start, and the
+# project image, exec directly, so BASH_ENV never marks them, and a Stan compile
+# under eval got the server OOM-killed instead (rstan-to-pystan). This marks every
+# process but the server, every two seconds.
+OOM_SWEEP = ("while :; do for p in /proc/[0-9]*; do read a < $p/oom_score_adj 2>/dev/null || continue; "
+             "[ \"$a\" = 0 ] || continue; grep -qs 'samizdat[.]core' $p/cmdline && continue; "
+             "echo 500 > $p/oom_score_adj 2>/dev/null; done; sleep 2; done\n")
 # Whether the server process exists, without procps: a minimal image has no pgrep.
 ALIVE = "grep -qs 'samizdat[.]core' /proc/[0-9]*/cmdline"
 LIBS = "ca-certificates curl git libsqlite3-0 zlib1g"
@@ -93,6 +100,7 @@ class SamizdatAgent(BaseInstalledAgent):
             environment,
             command="tar -xzf /tmp/samizdat-bundle.tgz -C / && rm -f /tmp/samizdat-bundle.tgz "
                     f"&& printf %s {shlex.quote(OOM_CHILD)} > /opt/samizdat/oom-child.sh "
+                    f"&& printf %s {shlex.quote(OOM_SWEEP)} > /opt/samizdat/oom-sweep.sh "
                     "&& chmod -R a+rX /opt/samizdat",
         )
 
@@ -214,6 +222,7 @@ class SamizdatAgent(BaseInstalledAgent):
             f"nohup jolt -m samizdat.core > /tmp/samizdat-serve.log 2>&1 &"
         )
         await self._sh(environment, serve, env={self.key_env: key})
+        await self._sh(environment, "nohup sh /opt/samizdat/oom-sweep.sh >/dev/null 2>&1 &")
         token_file = f'"$HOME/.config/samizdat/http/{PORT}.token"'
         for _ in range(90):
             # curl when the image has it, else a bare TCP connect: an image may lack curl.

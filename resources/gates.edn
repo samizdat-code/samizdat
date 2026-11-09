@@ -3079,7 +3079,7 @@
         outcome `jolt export --verdicts` labels each row with."}
 
  :ship-review
- {:value {:max-wait-seconds 360 :evidence-shown 25}
+ {:value {:max-wait-seconds 360 :evidence-shown 25 :unread-kinds #{"message" "review"}}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-oi16.11"]
   :doc "The supervisor's review of a done with time left (ship rung :supervisor-review).
@@ -4480,7 +4480,16 @@
   ;; the run's own figures, so only the rungs marked :advisory? true bind it;
   ;; `advisory?` is in scope for a rung's forms.
   {:value
-   [{:name :supervisor-review
+   [{:name :unread-directive
+     ;; tb21-review protein-assembly: the supervisor approved, then found the
+     ;; provenance claim unsupported and queued a correction; the branch's done
+     ;; landed five seconds later, before a boundary delivered it, and shipped
+     ;; the wrong answer. A directive of a :ship-review :unread-kinds kind still
+     ;; queued for this branch holds its done until a boundary delivers it.
+     :advisory? true
+     :when (and unread-directive? (not verdict?))
+     :message-form unread-hold}
+    {:name :supervisor-review
      ;; karamazov-oi16.11. 20 of 23 failing TB 2.1 trials ended on an accepted done,
      ;; several with half their time left (protein-assembly at 38%), and the supervisor
      ;; never looked: a confident wrong ship trips none of its counters. A done with
