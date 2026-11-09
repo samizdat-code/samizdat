@@ -16,6 +16,8 @@
             [clojure.test :refer [deftest testing is]]
             [ebb.core :as ebb]
             [samizdat.agent.gates :as gates]
+            [samizdat.agent.state :as state]
+            [samizdat.agent.tools :as tools]
             [samizdat.cells :as cells]
             [samizdat.events :as events]
             [samizdat.prompt :as prompt]
@@ -1477,3 +1479,24 @@
   ;; the spacing between passes is two minutes.
   (is (contains? (ov/urgent-kinds) :ship-review-requested))
   (is (contains? (ov/urgent-kinds) :workflow-signal)))
+
+(deftest a-lean-done-with-time-left-is-held-for-review
+  ;; tb21-review, first three trials: no review was ever asked for. Under :lean
+  ;; the implementer is held to the advisory rungs (:lenient-done?), and the
+  ;; review read was skipped for any advisory branch, so it never ran where it
+  ;; was meant to. Through the real done tool, lean style, a supervised run.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "write /app/out.txt"})
+        done! (fn [b turn]
+                (tools/run-tool {:branch b :tool-name "done" :turn turn :conn conn :run-id rid
+                                 :started-ms (System/currentTimeMillis)
+                                 :config {:run {:style :lean :time-limit-seconds 3600}}
+                                 :args {:answer "Wrote /app/out.txt and checked it."}}))
+        b (state/new-branch {:id "B1" :problem "write /app/out.txt"})]
+    (journal/note! conn rid :oversight-quiet {:data {}})
+    (let [r (done! b 10)]
+      (is (str/includes? (str (:result r)) "supervisor") "the done is held for the review")
+      (is (= 1 (count (journal/notes conn rid :ship-review-requested))) "and the review is asked for")
+      (let [r2 (done! (:branch r) 12)]
+        (is (str/includes? (str (:result r2)) "has not landed") "held while it is out")
+        (is (= 1 (count (journal/notes conn rid :ship-review-requested))) "asked for once")))))

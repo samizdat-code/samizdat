@@ -657,9 +657,11 @@
                     (code-metrics/unusual-file-change (:root ctx) (:git-baseline ctx)
                                                       (gates/threshold :code-metrics)))
         ;; Whether a supervisor is watching and a review it was asked for is
-        ;; still out (karamazov-oi16.11). Advisory branches deliver verdicts
-        ;; and are never held, so they skip the read.
-        review (when (and (not advisory?) (:conn ctx) (:run-id ctx))
+        ;; still out (karamazov-oi16.11). A branch that delivers a verdict is
+        ;; never held, so it skips the read — keyed on the BRANCH, not on
+        ;; `advisory?`, which lean also sets for its implementer and which
+        ;; kept the review from ever running there.
+        review (when (and (not (:advisory? branch)) (:conn ctx) (:run-id ctx))
                  (journal/review-state (:conn ctx) (:run-id ctx) (:turn ctx)
                                        (:max-wait-turns (gates/threshold :ship-review))))
         rung (ship-gate-rung
