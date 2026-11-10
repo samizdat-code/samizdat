@@ -33,7 +33,9 @@ missing test runner.
 If the check cannot be satisfied, for example two samples contradict each other, use
 `stop` and name the contradiction, because a person has to fix that.
 
-{% endifequal %}{% endif %}{% if checkin %}## A check-in: nobody has looked for {{checkin}} minutes
+{% endifequal %}{% endif %}{% if clock %}**Clock:** the run has used {{clock.used}} of {{clock.limit}} minutes; {{clock.left}} remain. Judge urgency by this and nothing else: with most of it left, the branch has time to do it properly.
+
+{% endif %}{% if checkin %}## A check-in: nobody has looked for {{checkin}} minutes
 No counter woke you; the clock did. Judge whether the work is converging on the task: is the deliverable measurably closer than it was (a test count, an accuracy, a diff that shrinks), or is the branch writing scratch script after scratch script while the number stays where it was? If it is converging, say so in a line and stop. If it is churning, name the different approach you would take and why, as one `message` with an `expect`.
 
 {% endif %}{% if ending %}## How this run ends is your call

@@ -1472,6 +1472,10 @@
     (testing "it is due when the interval has passed since the last spent pass"
       (is (:checkin? (since {:minutes-since-look 21} nil floors)))
       (is (not (:checkin? (since {:minutes-since-look 19} nil floors)))))
+    (testing "every pass shows the run's clock (ctb-r2 kv-live-surgery: ENDGAME at 30 of 120 minutes)"
+      (let [t (prompt/render "oversight-pass" {:clock {:used 30 :limit 120 :left 90}})]
+        (is (str/includes? t "30 of 120 minutes"))
+        (is (str/includes? t "90"))))
     (testing "and the pass is told why it was woken"
       (is (str/includes? (prompt/render "oversight-pass" {:checkin 21}) "converging")))
     (testing "and off when the policy has no interval"

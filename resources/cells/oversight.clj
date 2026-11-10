@@ -993,6 +993,14 @@
                                                     (:oversight/workflow-signals data)))
                                          :silent-minutes (some-> (:oversight/silent-for-ms data)
                                                                  (quot 60000))
+                                         ;; The run's clock on every pass: without it the
+                                         ;; supervisor guessed, and wrote ENDGAME 30 minutes
+                                         ;; into a 120-minute run (ctb-r2 kv-live-surgery).
+                                         :clock (when-let [limit (get-in ctx [:config :run :time-limit-seconds])]
+                                                  (when-let [left (gates/run-time-left ctx)]
+                                                    {:limit (quot (long limit) 60)
+                                                     :left (quot left 60)
+                                                     :used (quot (- (long limit) left) 60)}))
                                          ;; A check-in: nothing woke it but the clock.
                                          :checkin (let [m (:minutes-since-look (:oversight/signals data))
                                                         c (:checkin-minutes (gates/threshold :oversight-limits))]
