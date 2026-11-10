@@ -246,9 +246,13 @@
         reframing."}
 
  :progress-stall-threshold
- {:value 4 :kind :threshold :capability-tunable? false
+ {:value 8 :kind :threshold :capability-tunable? false
   :doc "Turns with no progress event before the stall nudge fires. Arms only
-        after the first progress event; see prologue-cap for the other case."}
+        after the first progress event; see prologue-cap for the other case.
+        A write is progress. 8, not 4: with :progress-stalled on under lean
+        (2026-11-10), ctb-r8 bun-sourcemap-leak was told it was busy and not
+        advancing four times, each after an edit and four eval runs checking
+        it, a write-then-test cycle that is the work, not a stall."}
 
  :prologue-cap
  {:value 8 :kind :threshold :capability-tunable? false

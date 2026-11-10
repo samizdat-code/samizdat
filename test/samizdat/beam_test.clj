@@ -882,8 +882,8 @@
   ;; calls and 0 :stuck/:progress-stalled firings over 74 trials, against 284
   ;; and 31 over 40 full-style trials. A real lean `loop` run on a scripted
   ;; model: two failing commands must fire :stuck with the split advice; the
-  ;; branch then splits with `task` and switches; four idle turns after that
-  ;; must fire :progress-stalled.
+  ;; branch then splits with `task`; :progress-stall-threshold idle turns
+  ;; after that must fire :progress-stalled.
   (let [c (db/open! ":memory:")
         root (str "/tmp/samizdat-split-" (System/nanoTime))
         _ (.mkdirs (java.io.File. root))
@@ -902,6 +902,10 @@
                    7 (call "read_file" {:path "notes.txt"})
                    8 (call "read_file" {:path "notes.txt"})
                    9 (call "read_file" {:path "notes.txt"})
+                   10 (call "read_file" {:path "notes.txt"})
+                   11 (call "read_file" {:path "notes.txt"})
+                   12 (call "read_file" {:path "notes.txt"})
+                   13 (call "read_file" {:path "notes.txt"})
                    (call "give_up" {:reason "enough"})))
         calls (atom 0)
         sent (atom [])]
@@ -917,7 +921,7 @@
                 (beam/run! {:conn c
                             :config {:run {:loop "loop" :root root :beam-width 1 :style :lean}}
                             :root root :llm-adapter :a :llm-config {:max-tokens 16384}
-                            :problem "Do the job." :max-turns 14}))
+                            :problem "Do the job." :max-turns 20}))
             fired (set (map (comp keyword :gate) (journal/gate-firings c (:run-id r))))]
         (is (contains? fired :stuck) (str "stuck fired under lean: " fired))
         (is (some #(str/includes? % "task({\"action\": \"create\"") @sent)
