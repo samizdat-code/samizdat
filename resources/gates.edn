@@ -772,8 +772,10 @@
           ;; A done with time left is sent back again, up to :keep-going-max times in
           ;; all, while less than :keep-going-share of the clock is gone (ship rung
           ;; :time-left). ctb-r1 wal-recovery-ordering shipped at 20 minutes of 120 and
-          ;; failed two hidden edge cases.
-          :keep-going-share 0.5 :keep-going-max 3}
+          ;; failed two hidden edge cases. Ten, not three: ctb-r2 session-window-debug
+          ;; spent three refusals in seven minutes and still shipped at 16 of 120;
+          ;; the share is the bound that matters.
+          :keep-going-share 0.5 :keep-going-max 10}
   :kind :policy :capability-tunable? false
   :provenance ["karamazov-0wvc"]
   :doc "whole-running-again was 0.55 until GLM's fix4: the check at 0.33 lands as the first
