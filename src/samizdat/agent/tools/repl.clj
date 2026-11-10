@@ -127,6 +127,11 @@
             (let [r (gated ctx op args)]
               (when (and (= "shell" op) (= :success (:category r)))
                 (some-> (:ran ctx) (reset! true)))
+              ;; A write the script made is the turn's progress, as the same
+              ;; write by the file tool would be (ctb-r10 bun-sourcemap-leak:
+              ;; :progress-stalled fired on a branch editing inside eval).
+              (when (:progress? r)
+                (some-> (:wrote ctx) (reset! true)))
               (bridge/answer r))))))))
 
 (declare result-of)
@@ -147,7 +152,8 @@
         ;; gate and the timeout flag all still apply exactly as they did.
         flag (fn [k] (contains? #{"true" "yes" "1"} (str/lower-case (str (base/arg ctx k)))))
         ran (atom false)
-        r (route/eval-for (assoc ctx :bridge (bridge-handler (assoc ctx :ran ran)) :restart? restart?
+        wrote (atom false)
+        r (route/eval-for (assoc ctx :bridge (bridge-handler (assoc ctx :ran ran :wrote wrote)) :restart? restart?
                                  :wait? (flag :wait) :abort? (flag :abort))
                           code session timeout)
         prefix (if-let [why (:restarted r)]
@@ -176,7 +182,8 @@
       (result-of ctx (str prefix (said {:waited (:waited r)})) r)
 
       :else (result-of ctx prefix r))
-     @ran (assoc :ran? true))))
+     @ran (assoc :ran? true)
+     @wrote (assoc :progress? true))))
 
 (defn- result-of
   "The tool result for eval result `r`, after `prefix`."
