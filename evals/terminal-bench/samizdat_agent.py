@@ -55,7 +55,7 @@ class SamizdatAgent(BaseInstalledAgent):
     def __init__(self, *args, arm="team-solve", provider="deepseek-flash", model_id="deepseek-flash",
                  key_env="DEEPSEEK_API_KEY", provider_type="deepseek", max_turns=300,
                  eval_mode="off", harness_effort=None, seed_job=None, context_window=None, style=None,
-                 bundle="samizdat-bundle", **kwargs):
+                 bundle="samizdat-bundle", ctb_toolkit=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.arm = arm
         # A gates.edn :styles key, such as lean; none is the full loop.
@@ -71,6 +71,9 @@ class SamizdatAgent(BaseInstalledAgent):
         self.context_window = context_window
         # Which build_bundle.sh output to upload: <bundle>.tgz beside this file.
         self.bundle = bundle
+        # curated-terminal-benchmark gives every agent its pinned Python toolkit at the
+        # end of PATH and a note saying so; ctb.toolkit (its src on PYTHONPATH) has both.
+        self.ctb_toolkit = str(ctb_toolkit).lower() in ("1", "true", "yes")
 
     @staticmethod
     def name() -> str:
@@ -103,6 +106,9 @@ class SamizdatAgent(BaseInstalledAgent):
                     f"&& printf %s {shlex.quote(OOM_SWEEP)} > /opt/samizdat/oom-sweep.sh "
                     "&& chmod -R a+rX /opt/samizdat",
         )
+        if self.ctb_toolkit:
+            from ctb import toolkit
+            await toolkit.install(self, environment)
 
     async def _sh(self, environment, command, env=None, timeout=None):
         return await environment.exec(command=command, env=env, timeout_sec=timeout)
@@ -141,12 +147,16 @@ class SamizdatAgent(BaseInstalledAgent):
         whose ref names the task's directory in Harbor's cache. Harbor writes that
         config after building the agent: call this from run(), not the constructor."""
         try:
-            task = json.loads((Path(logs_dir).parent / "config.json").read_text())["task"]
+            config = json.loads((Path(logs_dir).parent / "config.json").read_text())
+            task = config["task"]
             if task.get("path"):  # a task on disk rather than from a registry
                 found = Path(task["path"]) / "task.toml"
             else:
                 found = next(Path(cache).rglob(f"{task['ref'].split(':')[-1]}/task.toml"))
-            return float(tomllib.loads(found.read_text())["agent"]["timeout_sec"])
+            # Harbor scales the declared limit by the job's multiplier (curated-terminal-
+            # benchmark runs at 0.25 of an 8 h task); the run must be told the scaled one.
+            scale = config.get("agent_timeout_multiplier") or config.get("timeout_multiplier") or 1.0
+            return float(tomllib.loads(found.read_text())["agent"]["timeout_sec"]) * float(scale)
         except Exception:
             return None
 
@@ -171,6 +181,9 @@ class SamizdatAgent(BaseInstalledAgent):
 
     @with_prompt_template
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
+        if self.ctb_toolkit:
+            from ctb import toolkit
+            instruction = toolkit.shared_instruction(instruction)
         key = os.environ[self.key_env]
         began = time.monotonic()
         # Harbor kills the agent at the task's limit and that scores as a failure.
@@ -218,7 +231,8 @@ class SamizdatAgent(BaseInstalledAgent):
             "cd /opt/samizdat/repo && JOLT_AOT_ASYNC=0 BASH_ENV=/opt/samizdat/oom-child.sh "
             f"HARNESS_ROOT={root} HARNESS_PORT={PORT} HARNESS_NREPL_PORT={PORT + 4000} "
             + (f"HARNESS_REASONING_EFFORT={self.harness_effort} " if self.harness_effort else "") +
-            "JOLT_GITLIBS_DIR=/opt/samizdat/gitlibs PATH=/opt/samizdat/jolt:$PATH "
+            "JOLT_GITLIBS_DIR=/opt/samizdat/gitlibs PATH=/opt/samizdat/jolt:$PATH"
+            + (":/installed-agent/ctb-python/bin" if self.ctb_toolkit else "") + " "
             f"nohup jolt -m samizdat.core > /tmp/samizdat-serve.log 2>&1 &"
         )
         await self._sh(environment, serve, env={self.key_env: key})
