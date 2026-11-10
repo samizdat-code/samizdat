@@ -17,6 +17,7 @@
             [ebb.core :as ebb]
             [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.gates :as gates]
+            [samizdat.agent.roles :as roles]
             [samizdat.agent.state :as state]
             [samizdat.agent.tools :as tools]
             [samizdat.cells :as cells]
@@ -1567,6 +1568,34 @@
       (journal/note! conn rid :oversight-quiet {:data {}})
       (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 1 :data {}})
       (is (<= 590 (:left-seconds (journal/review-state conn rid 600)) 600)))))
+
+(deftest a-blind-tester-checks-the-deliverable-from-the-task-alone
+  ;; karamazov-galq. ctb-r1..r4: most failures were hidden edge cases the
+  ;; supervisor approved after reading the code, sharing the implementer's
+  ;; blind spots. A tester that sees only the task writes the grader's tests.
+  (testing "its role can run and write tests, and cannot steer or read the run"
+    (is (roles/may-use? :tester "shell"))
+    (is (roles/may-use? :tester "write_file"))
+    (is (not (roles/may-use? :tester "intervene")))
+    (is (not (roles/may-use? :tester "fetch_turn")))
+    (is (not (roles/may-use? :tester "introspect"))))
+  (let [due? @(cells/cell-var 'cells.oversight 'tester-due?)
+        p {:enabled? true :min-clock-seconds 3600}]
+    (testing "it runs at the first review on a long clock, once"
+      (is (due? {:review-new? true :limit 7200 :ran? false} p))
+      (is (not (due? {:review-new? true :limit 900 :ran? false} p)) "not on a short clock")
+      (is (not (due? {:review-new? true :limit 7200 :ran? true} p)) "once per run")
+      (is (not (due? {:review-new? false :limit 7200 :ran? false} p)) "only when asked to ship")
+      (is (not (due? {:review-new? true :limit 7200 :ran? false} (assoc p :enabled? false))))))
+  (testing "its failures reach the supervisor's brief"
+    (let [t (prompt/render "blind-tests" {:ran 12 :failing ["python3 t.py::srcdoc — expected no <script>, got one"]})]
+      (is (str/includes? t "12"))
+      (is (str/includes? t "srcdoc"))))
+  (testing "a long clock holds the done long enough for it"
+    (let [{:keys [max-wait-seconds max-wait-long-seconds]} (gates/threshold :ship-review)]
+      (is (= max-wait-long-seconds (gates/review-max-wait {:run {:time-limit-seconds 7200}})))
+      (is (= max-wait-seconds (gates/review-max-wait {:run {:time-limit-seconds 900}})))
+      (is (= max-wait-seconds (gates/review-max-wait {}))))))
 
 (deftest a-ship-review-request-skips-the-spacing
   ;; karamazov-oi16.11: the done is held only :ship-review :max-wait-seconds, and

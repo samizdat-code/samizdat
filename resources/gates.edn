@@ -283,6 +283,19 @@
         pass. The full reasoning lives in its branch's messages; this is the
         index into it."}
 
+ :tester
+ {:value {:enabled? true :min-clock-seconds 3600 :max-turns 30}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-galq"]
+  :doc "The blind tester (karamazov-galq): at the first ship review of a run
+        whose clock is at least :min-clock-seconds, the supervisor's pass first
+        runs a fresh :tester branch for up to :max-turns turns. It sees the
+        task statement and nothing of the run, writes the tests a hidden grader
+        would, runs them against the deliverable black-box, and its failures go
+        into the supervisor's brief (prompts/blind-tests.md). ctb-r1..r4: the
+        failures were hidden edge cases a supervisor approved after reading the
+        code; a reviewer who never saw it does not share its blind spots."}
+
  :test-progress
  {:value
   {;; First entry whose :detect matches the output wins; :passed and :failed are
@@ -3128,7 +3141,10 @@
         outcome `jolt export --verdicts` labels each row with."}
 
  :ship-review
- {:value {:max-wait-seconds 360 :evidence-shown 25 :unread-kinds #{"message" "review"}}
+ {:value {:max-wait-seconds 360 :evidence-shown 25 :unread-kinds #{"message" "review"}
+          ;; On a clock of :long-clock-seconds or more the review runs a blind
+          ;; tester first (:tester), so the done is held long enough for both.
+          :long-clock-seconds 3600 :max-wait-long-seconds 1500}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-oi16.11"]
   :doc "The supervisor's review of a done with time left (ship rung :supervisor-review).

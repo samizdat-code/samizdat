@@ -100,6 +100,18 @@
   :frame "supervisor-frame"
   :sees #{:run-health :gate-health :failures}}
 
+ :tester
+ {:doc "Writes the tests a hidden grader would write, from the task statement
+        alone, and runs them against the deliverable. It never reads the
+        implementation, the run's turns or its notes: its value is that it does
+        not share the implementer's blind spots (karamazov-galq)."
+  :tools #{"shell" "eval" "write_file" "edit_file" "read_file" "glob" "done" "give_up"}
+  :prompt "roles/tester"
+  :output [:map
+           [:ran :int]
+           [:failing [:vector :string]]]
+  :sees #{:requirement}}
+
  :reviewer
  {:doc "Reads the work against what was asked and returns PASS or REVISE. It
         does not fix what it finds — a reviewer that edits has stopped

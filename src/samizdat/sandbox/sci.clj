@@ -144,7 +144,7 @@
 
     ;; Reads of the policy tables. Pure lookups.
     samizdat.agent.gates
-    {:vars [run-time-left threshold tool-vocab]}
+    {:vars [review-max-wait run-time-left threshold tool-vocab]}
 
     ;; Which tools a role may call, read from the role table. Pure lookup; the
     ;; supervisor's gather asks it which branches can write (karamazov-rz7t.1).

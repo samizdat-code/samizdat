@@ -1597,7 +1597,7 @@
                       :review-left-seconds (when (and conn run-id (= :supervisor (:role branch)))
                                              (:left-seconds (journal/review-state
                                                              conn run-id
-                                                             (:max-wait-seconds (gates/threshold :ship-review)))))
+                                                             (gates/review-max-wait (:config ctx)))))
                       ;; How wide the beam already is, so the reproduction
                       ;; rung knows whether the run can afford offspring.
                       :branch-count (or (:branch-count ctx) 1)

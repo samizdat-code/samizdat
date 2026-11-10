@@ -674,7 +674,7 @@
         ;; kept the review from ever running there.
         review (when (and (not (:advisory? branch)) (:conn ctx) (:run-id ctx))
                  (journal/review-state (:conn ctx) (:run-id ctx)
-                                       (:max-wait-seconds (gates/threshold :ship-review))))
+                                       (gates/review-max-wait (:config ctx))))
         ;; Directives queued for this branch that no boundary has delivered:
         ;; a done ahead of them ships without the branch having read them.
         unread (when (and (:conn ctx) (:run-id ctx) (:id branch))
@@ -928,7 +928,7 @@
         (try (interventions/submit! (:conn ctx) (:run-id ctx)
                                     {:branch-id to :kind "message" :issued-by by
                                      :payload (prompt/render p {:branch (:id branch) :turn (:turn ctx)
-                                                                :wait (:max-wait-seconds (gates/threshold :ship-review))
+                                                                :wait (gates/review-max-wait (:config ctx))
                                                                 :answer (str answer)})})
              (catch Throwable e
                (log/warn "ship: telling" to "failed:" (ex-message e))))))

@@ -389,6 +389,18 @@
   (when-let [k (get-in config [:run :style])]
     (get (threshold :styles) (keyword (name k)))))
 
+(defn review-max-wait
+  "Seconds a ship review holds a done: gates.edn :ship-review :max-wait-seconds,
+  or :max-wait-long-seconds on a run whose limit is at least
+  :long-clock-seconds, where the review runs a blind tester first
+  (karamazov-galq) and the short hold would lapse under it."
+  [config]
+  (let [{:keys [max-wait-seconds max-wait-long-seconds long-clock-seconds]} (threshold :ship-review)
+        limit (get-in config [:run :time-limit-seconds])]
+    (if (and limit long-clock-seconds max-wait-long-seconds (>= limit long-clock-seconds))
+      max-wait-long-seconds
+      max-wait-seconds)))
+
 (defn run-time-left
   "Whole seconds a run has left by the clock, or nil when it has no limit."
   [{:keys [config started-ms]}]

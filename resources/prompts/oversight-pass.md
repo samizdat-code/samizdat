@@ -53,6 +53,8 @@ No counter woke you; the clock did. Judge whether the work is converging on the 
 {% endif %}{{digest}}
 {% if directives %}
 {{directives}}
+{% endif %}{% if blind-tests %}
+{{blind-tests}}
 {% endif %}{% if plateau %}
 {{plateau}}
 {% endif %}{% if failing %}

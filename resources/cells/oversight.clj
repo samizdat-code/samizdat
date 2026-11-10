@@ -378,7 +378,7 @@
              ;; The supervisor's own turns are not the run it watches: left
              ;; in, they were a branch of the digest and their failures were
              ;; its exemplars (karamazov-rz7t.3).
-             own? (fn [b] (= "supervisor" (some-> (get role-of b) name)))
+             own? (fn [b] (contains? #{"supervisor" "tester"} (some-> (get role-of b) name)))
              watched (into [] (remove #(own? (str (:branch_id %)))) turns)
              ;; THE TESTS STOPPED IMPROVING (owner, 2026-11-09): per branch,
              ;; the trailing streak of test runs reporting the same counts with
@@ -627,6 +627,43 @@
         (assoc :messages ms)
         (update :brief-shown #(select-keys (assoc % id hashes) live)))))
 
+(defn tester-due?
+  "Whether this pass should first run the blind tester (karamazov-galq): a
+  ship review newly asked for, on a run whose clock is at least gates.edn
+  :tester :min-clock-seconds, the tester enabled, and not yet run this run."
+  [{:keys [review-new? limit ran?]} {:keys [enabled? min-clock-seconds]}]
+  (boolean (and enabled? review-new? (not ran?) limit min-clock-seconds
+                (>= limit min-clock-seconds))))
+
+(defn- run-tester!
+  "Run the blind tester on a fresh `TST` branch: role :tester, whose problem is
+  the task statement and nothing of the run, for gates.edn :tester :max-turns.
+  Journals and returns {:ran :failing :answer}; the branch is closed after, so
+  no steer or count mistakes it for a worker."
+  [ctx conn run-id]
+  (let [p (gates/threshold :tester)
+        bid "TST"
+        suffix (wf/prompt-text "roles/tester")
+        prob (prompt/render "tester-task" {:problem (:problem (runs/get-run conn run-id))
+                                           :turns (:max-turns p)})
+        _ (runs/open-branch! conn run-id {:branch-id bid :problem prob :role :tester
+                                          :prompt-suffix suffix})
+        b (assoc (state/new-branch {:id bid :problem prob
+                                    :messages (turn/initial-messages prob suffix :tester)})
+                 :advisory? true :role :tester)
+        out (try (myc/run-compiled (wf/compiled-manifest "tester")
+                                   (assoc (wf/role-ctx ctx :tester) :max-turns (:max-turns p))
+                                   {:branch b :turn 1})
+                 (catch Throwable e {:error (ex-message e)}))
+        res (get-in out [:branch :final-result])
+        report {:ran (or (:ran res) 0)
+                :failing (vec (map str (:failing res)))
+                :answer (some-> (get-in out [:branch :final-answer]) str)
+                :error (:error out)}]
+    (runs/close-branch! conn run-id bid "done" "blind tester finished")
+    (journal/note! conn run-id :tester-report {:branch-id bid :data report})
+    report))
+
 (cell/defcell :oversight/reason
   {:doc "One turn of the supervisor ROLE, in the stream's OWN branch.
 
@@ -680,6 +717,15 @@
     (safely :reason
      (fn []
        (let [round (:oversight/round data)
+             ;; THE BLIND TESTER (karamazov-galq), before anything is shown: at
+             ;; the first review of a long-clock run, a branch that never saw
+             ;; the code tests the deliverable from the task alone.
+             tester (when (tester-due? {:review-new? (> (count (:oversight/reviews data))
+                                                        (or (:review-requested (:signals (journal/last-note conn run-id :oversight))) 0))
+                                        :limit (get-in ctx [:config :run :time-limit-seconds])
+                                        :ran? (some? (journal/last-note conn run-id :tester-report))}
+                                       (gates/threshold :tester))
+                      (run-tester! ctx conn run-id))
              ;; The mark the supervisor's deltas are measured from, stamped
              ;; BEFORE it is shown anything, so `since` covers the interval
              ;; from its last look to now — the interval its last change was
@@ -762,7 +808,7 @@
                                                      (prompt/render "ship-review"
                                                                     {:problem (:problem (runs/get-run conn run-id))
                                                                      :branch (:branch r)
-                                                                     :wait (:max-wait-seconds p)
+                                                                     :wait (gates/review-max-wait (:config ctx))
                                                                      :answer (:answer r)
                                                                      :evidence (vec (take-last (:evidence-shown p)
                                                                                                (map (fn [a] {:command (clip (:command a) (gates/threshold :oversight-note-chars))
@@ -770,6 +816,8 @@
                                                                                                     (journal/notes conn run-id :action))))}))))
                                   ;; The commands that keep failing and what
                                   ;; worked instead (karamazov-oi16.4).
+                                  ;; What the blind tester found, this pass.
+                                  :blind-tests (when tester (prompt/render "blind-tests" tester))
                                   ;; The tests stopped improving (owner, 2026-11-09).
                                   :plateau (let [p (:oversight/plateau data)]
                                              (when-let [f (:plateau-runs (gates/threshold :test-progress))]
@@ -976,7 +1024,7 @@
                                          ;; none named, a review spent four minutes
                                          ;; looking for one (tb21-unread filter-js).
                                          :branches (seq (for [r (runs/branches conn run-id)
-                                                              :when (not= "supervisor" (some-> (:role r) name))
+                                                              :when (not (contains? #{"supervisor" "tester"} (some-> (:role r) name)))
                                                               :when (contains? #{"active" "exhausted"} (str (:status r)))]
                                                           (str (:id r))))
                                          ;; Any refused done or nearby cap: how the
