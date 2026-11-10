@@ -77,10 +77,13 @@
   "A tool argument as a list of references: a vector, or one string of them
   separated by commas or whitespace."
   [v]
+  ;; A list may arrive JSON-encoded as one string ("[\"t3\", \"t4\"]"), so
+  ;; brackets and quotes around a reference are punctuation, not part of it.
   (vec (remove #(= "" %)
-               (cond (sequential? v) (map str v)
-                     (some? v) (clojure.string/split (str v) #"[\s,]+")
-                     :else []))))
+               (map #(clojure.string/replace % #"^[\[\"']+|[\]\"']+$" "")
+                    (cond (sequential? v) (map str v)
+                          (some? v) (clojure.string/split (str v) #"[\s,]+")
+                          :else [])))))
 
 (defn refusal
   "The refusal text for `bad` (from `unresolved`)."
