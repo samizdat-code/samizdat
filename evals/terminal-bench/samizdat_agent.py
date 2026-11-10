@@ -25,6 +25,10 @@ from harbor.models.agent.context import AgentContext
 
 HERE = Path(__file__).resolve().parent
 PORT = 3985
+# A task whose clock is at least this long gets room for long reasoning calls.
+LONG_CLOCK_S = 3600
+LONG_RESPONSE_MS = 1_500_000
+LONG_TURN_MS = 1_800_000
 # Seconds before the task limit: the run's own limit, and the hard stop that leaves
 # time to download the journal and clean up.
 RUN_MARGIN = 75
@@ -230,6 +234,13 @@ class SamizdatAgent(BaseInstalledAgent):
         serve = (
             "cd /opt/samizdat/repo && JOLT_AOT_ASYNC=0 BASH_ENV=/opt/samizdat/oom-child.sh "
             f"HARNESS_ROOT={root} HARNESS_PORT={PORT} HARNESS_NREPL_PORT={PORT + 4000} "
+            # A long clock at max reasoning effort makes a single model call run past the
+            # default 10-minute response cap on a slow provider, and the retry then hits the
+            # 15-minute turn deadline: ctb-r2 photonic-waveguide-routing forfeited its whole
+            # second turn this way. The stream's idle watchdog still catches a real stall in
+            # two minutes, so on an hour or more the caps make room for the thinking.
+            + (f"HARNESS_MAX_RESPONSE_MS={LONG_RESPONSE_MS} HARNESS_TURN_DEADLINE_MS={LONG_TURN_MS} "
+               if limit and limit >= LONG_CLOCK_S else "")
             + (f"HARNESS_REASONING_EFFORT={self.harness_effort} " if self.harness_effort else "") +
             "JOLT_GITLIBS_DIR=/opt/samizdat/gitlibs PATH=/opt/samizdat/jolt:$PATH"
             + (":/installed-agent/ctb-python/bin" if self.ctb_toolkit else "") + " "
