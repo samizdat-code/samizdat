@@ -83,7 +83,10 @@
   ;; ctb-r1 wal-recovery-ordering shipped at 20 minutes of 120, its own and the
   ;; supervisor's checks green, and failed two hidden edge cases. Time the score
   ;; does not reward saving is time for the cases a hidden grader runs.
-  (let [{:keys [wind-down keep-going-share keep-going-max]} (gates/threshold :time-budget)
+  ;; The mechanism, at a cap of its own: gates.edn sets the cap to 1 (off) after
+  ;; ctb-r1..r3 showed the extra time hurting.
+  (let [{:keys [wind-down keep-going-share]} (gates/threshold :time-budget)
+        keep-going-max 3
         block (fn [m] (#'ship/ship-gate-block (merge {:answer "done" :problem "p" :evidence []
                                                       :uncovered-numbers [] :advisory? true :done-streak 0
                                                       :wind-down wind-down :keep-working "keep going"
