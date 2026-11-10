@@ -321,11 +321,11 @@
     ;; The run's record of what each command led to, scored, and what to say
     ;; about the ones that keep failing (karamazov-oi16.4). Pure over notes.
     samizdat.agent.actions
-    {:vars [scores steer]}
+    {:vars [scores steer test-counts test-plateau]}
 
     ;; The run journal: reads, and appending a note or a side call's usage.
     samizdat.store.journal
-    {:vars [branch-turns gate-firings gate-tally last-note last-turn note! notes notes-since
+    {:vars [branch-turns gate-firings gate-tally last-note last-turn minutes-since note! notes notes-since
             progress record-side-call! retirement-candidates run-usage turns]
      :effects #{:db}}
 

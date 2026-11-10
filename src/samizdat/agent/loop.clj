@@ -1592,6 +1592,12 @@
                       ;; :time-last-call. nil without a limit.
                       :time-used (gates/time-used limit (:started-ms ctx) now)
                       :time-left-seconds (gates/time-left-seconds limit (:started-ms ctx) now)
+                      ;; Seconds until a pending ship review's hold lapses, on the
+                      ;; supervisor's own turns, for :review-deadline.
+                      :review-left-seconds (when (and conn run-id (= :supervisor (:role branch)))
+                                             (:left-seconds (journal/review-state
+                                                             conn run-id
+                                                             (:max-wait-seconds (gates/threshold :ship-review)))))
                       ;; How wide the beam already is, so the reproduction
                       ;; rung knows whether the run can afford offspring.
                       :branch-count (or (:branch-count ctx) 1)

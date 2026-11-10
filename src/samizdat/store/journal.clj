@@ -1139,9 +1139,23 @@
                                                        AND kind = 'review'
                                                        AND created_at > ? LIMIT 1"
                                                     run-id (:created_at req)]))))]
-    {:supervised? (some? (:supervised r))
-     :pending? (boolean (and req (not answered?)
-                             (< (double (or (:age req) 0)) (double (or max-wait-seconds 0)))))}))
+    (let [pending? (boolean (and req (not answered?)
+                                 (< (double (or (:age req) 0)) (double (or max-wait-seconds 0)))))]
+      (cond-> {:supervised? (some? (:supervised r)) :pending? pending?}
+        ;; How long the hold has left, for the supervisor's own deadline gate.
+        pending? (assoc :left-seconds (long (- (double max-wait-seconds) (double (or (:age req) 0)))))))))
+
+(defn minutes-since
+  "Minutes since the newest note of `kind` on this run, or since the run's
+  first note when there is none, as a double; nil for a run with no notes.
+  For the supervisor's check-in: a run that churns without tripping any
+  counter still gets a look after a while (ctb-r1 interleaved-vigenere)."
+  [conn run-id kind]
+  (some-> (db/fetch-one conn ["SELECT (julianday('now') - julianday(COALESCE(
+                                 (SELECT MAX(created_at) FROM events WHERE run_id = ? AND kind = ?),
+                                 (SELECT MIN(created_at) FROM events WHERE run_id = ?)))) * 1440.0 AS m"
+                               run-id (name kind) run-id])
+          :m double))
 
 (defn notes-since
   "Notes of any of `kinds` on this run created at or after `since` (an ISO

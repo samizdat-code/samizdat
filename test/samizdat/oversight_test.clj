@@ -15,6 +15,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
             [ebb.core :as ebb]
+            [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.state :as state]
             [samizdat.agent.tools :as tools]
@@ -1460,6 +1461,44 @@
     (is (= 1 (:review-requested (since {:review-requested 1} nil {:idle-floor 25}))))
     (is (= 0 (:review-requested (since {:review-requested 1} {:review-requested 1} {:idle-floor 25}))))))
 
+(deftest a-long-run-gets-a-look-after-the-check-in-interval
+  ;; ctb-r1 interleaved-vigenere: an hour and 164 turns into a two-hour task,
+  ;; on its 63rd analysis script at 16% accuracy, and the supervisor had not
+  ;; looked once: every file write reset idle, every command succeeded, and
+  ;; nothing else fires on a run that churns without progress.
+  (let [since @(cells/cell-var 'cells.oversight 'since-last-look)
+        floors {:unmet-floor 2 :idle-floor 25 :checkin-minutes 20}]
+    (is (worth-a-look? {:checkin? true} floors))
+    (testing "it is due when the interval has passed since the last spent pass"
+      (is (:checkin? (since {:minutes-since-look 21} nil floors)))
+      (is (not (:checkin? (since {:minutes-since-look 19} nil floors)))))
+    (testing "and the pass is told why it was woken"
+      (is (str/includes? (prompt/render "oversight-pass" {:checkin 21}) "converging")))
+    (testing "and off when the policy has no interval"
+      (is (not (:checkin? (since {:minutes-since-look 500} nil (dissoc floors :checkin-minutes))))))))
+
+(deftest tests-that-stop-improving-wake-the-supervisor
+  ;; The owner's heuristic (2026-11-09): a branch running its tests again and
+  ;; again with the pass count not moving is stuck, however busy it looks.
+  (let [since @(cells/cell-var 'cells.oversight 'since-last-look)
+        floors {:unmet-floor 2 :idle-floor 25 :plateau-runs 4}]
+    (is (worth-a-look? {:test-plateau 4} floors))
+    (is (not (worth-a-look? {:test-plateau 3} floors)))
+    (testing "a plateau the last pass saw wakes the next only after as many runs more"
+      (is (= 4 (:test-plateau (since {:test-plateau 4} nil floors))))
+      (is (= 1 (:test-plateau (since {:test-plateau 5} {:test-plateau 4} floors))))
+      (is (= 4 (:test-plateau (since {:test-plateau 8} {:test-plateau 4} floors)))))
+    (testing "the brief says what the runs reported"
+      (is (str/includes? (prompt/render "test-plateau" {:runs 4 :passed 5 :failed 2}) "5 passed")))))
+
+(deftest minutes-since-a-pass-counts-from-the-run-when-there-is-none
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})]
+    (journal/note! conn rid :run-started {:data {}})
+    (is (< (journal/minutes-since conn rid :oversight) 1) "from the run's first note")
+    (journal/note! conn rid :oversight {:data {}})
+    (is (< (journal/minutes-since conn rid :oversight) 1))))
+
 (deftest a-ship-review-is-pending-until-the-supervisor-answers
   ;; tb21-review dna-assembly: the review was asked for mid-pass, the pass ran
   ;; on for minutes and its answer was a directive, not the pass ending, so
@@ -1495,6 +1534,32 @@
       (is (:pending? (state 600)))
       (journal/note! conn rid :oversight {:data {:verdict "done"}})
       (is (not (:pending? (state 600)))))))
+
+(deftest a-pending-review-presses-the-supervisor-on-every-turn
+  ;; ctb-r1 interleaved-vigenere: the supervisor spent its twelve review turns
+  ;; doing the cryptanalysis itself, found the key's offsets and never sent
+  ;; anything; the hold lapsed and a 19%-correct cracker shipped. raman-fitting
+  ;; before it, the same. The prose said "send each gap as soon as you can name
+  ;; it"; a gate says it on every turn, with the seconds left.
+  (let [sup (merge (state/new-branch {:id "SUP" :problem "p"}) {:role :supervisor :turns [{:tool "shell"}]})
+        decide #(arbiter/decide (merge {:branch sup :max-turns 300
+                                        :style-gates (:gates (gates/style {:run {:style :lean}}))}
+                                       %))]
+    (let [d (decide {:review-left-seconds 200})]
+      (is (= :review-deadline (:gate d)) "fires on the supervisor while a review is out")
+      (is (str/includes? (:message d) "200")))
+    (is (not= :review-deadline (:gate (decide {}))) "and not without one")
+    (is (not= :review-deadline
+              (:gate (arbiter/decide {:branch (assoc sup :role :implementer) :max-turns 300
+                                      :style-gates (:gates (gates/style {:run {:style :lean}}))
+                                      :review-left-seconds 200})))
+        "nor on the implementer"))
+  (testing "review-state says how long the hold has left"
+    (let [conn (db/open! ":memory:")
+          rid (runs/start-run! conn {:problem "p"})]
+      (journal/note! conn rid :oversight-quiet {:data {}})
+      (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 1 :data {}})
+      (is (<= 590 (:left-seconds (journal/review-state conn rid 600)) 600)))))
 
 (deftest a-ship-review-request-skips-the-spacing
   ;; karamazov-oi16.11: the done is held only :ship-review :max-wait-seconds, and

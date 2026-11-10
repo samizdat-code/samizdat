@@ -283,9 +283,41 @@
         pass. The full reasoning lives in its branch's messages; this is the
         index into it."}
 
+ :test-progress
+ {:value
+  {;; First entry whose :detect matches the output wins; :passed and :failed are
+   ;; the LAST match of each in it, every group summed, 0 when absent.
+   :patterns
+   [{:runner "bun" :detect "Ran \\d+ tests? across"
+     :passed "(?m)^\\s*(\\d+) pass\\b" :failed "(?m)^\\s*(\\d+) fail\\b"}
+    {:runner "clojure.test" :detect "(?m)^Ran \\d+ tests"
+     :passed "(\\d+) assertions passed" :failed "(\\d+) failures, (\\d+) errors"}
+    {:runner "cargo" :detect "(?m)^test result: "
+     :passed "(\\d+) passed;" :failed "(\\d+) failed;"}
+    {:runner "jest" :detect "(?m)^\\s*Tests:\\s+.*\\d+ total"
+     :passed "(\\d+) passed" :failed "(\\d+) failed"}
+    {:runner "mocha" :detect "(?m)^\\s*\\d+ passing\\b"
+     :passed "(?m)^\\s*(\\d+) passing\\b" :failed "(?m)^\\s*(\\d+) failing\\b"}
+    {:runner "node" :detect "(?m)^# tests \\d+"
+     :passed "(?m)^# pass (\\d+)" :failed "(?m)^# fail (\\d+)"}
+    {:runner "pytest" :detect "\\b\\d+ (passed|failed)\\b.*\\bin [\\d.]+s"
+     :passed "(\\d+) passed" :failed "(\\d+) failed"}]
+   ;; Test runs in a row reporting the same counts, with failures, that wake the
+   ;; supervisor; again after as many more.
+   :plateau-runs 4}
+  :kind :policy :capability-tunable? true
+  :provenance ["owner 2026-11-09"]
+  :doc "Reading progress off the test runs a branch makes. A branch that keeps
+        running the tests while the pass count stays where it was is stuck,
+        however busy it looks: it writes files (so idle never trips) and its
+        commands succeed (so nothing counts as failing). The owner's heuristic
+        (2026-11-09), after ctb-r1 interleaved-vigenere churned an hour
+        unsupervised. :patterns read each runner's summary; a project on
+        another runner adds its own."}
+
  :oversight-limits
  {:value {:done-refused-floor 2 :near-cap-fraction 0.8 :cap-wait-ms 240000 :cap-poll-ms 2000
-         :failing-action-floor 3 :failing-shown 5}
+         :failing-action-floor 3 :failing-shown 5 :checkin-minutes 20}
   :kind :threshold :capability-tunable? true
   :provenance ["karamazov-i692" "karamazov-oi16.4"]
   :doc "When the supervisor is asked to decide about a run's ending. Refused
@@ -297,6 +329,11 @@
         stream's spacing, so at the cap it also asks and waits :cap-wait-ms for
         `extend` or `finish` before ending exhausted. Silence ends it as it
         always did, so a dead stream cannot hang a run.
+
+        :checkin-minutes — wall clock with no spent pass after which the
+        supervisor looks anyway; nil turns it off. ctb-r1 interleaved-vigenere
+        churned an hour on analysis scripts at 16% accuracy and nothing woke
+        it: files kept being written and commands kept succeeding.
 
         :failing-action-floor — failures of one command, never having worked,
         that wake the supervisor (karamazov-oi16.4): set above :actions
@@ -776,7 +813,8 @@
    {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
              :time-nothing-written :time-whole-running :wind-down :plan-wind-down
-             :human-directive :directive-notice :shell-roundtrips :metrics-worse :repeat-failing-action}
+             :human-directive :directive-notice :shell-roundtrips :metrics-worse :repeat-failing-action
+             :review-deadline}
     :context-block? false
     :system-prompt "system-lean"
     ;; Scope, check and report limits, by model family: the first key the provider or
@@ -794,7 +832,8 @@
    {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
              :time-nothing-written :time-whole-running :wind-down :plan-wind-down
-             :human-directive :directive-notice :metrics-worse :repeat-failing-action}
+             :human-directive :directive-notice :metrics-worse :repeat-failing-action
+             :review-deadline}
     :context-block? false
     :system-prompt "system-lean"
     :no-shell? true
@@ -4799,6 +4838,8 @@
                     "forget" "retire"}
   :settle-called
   {:orienting        #{"plan" "write_file" "edit_file" "patch"}
+   ;; The supervisor sent what it found, or ended the pass to approve.
+   :review-deadline  #{"intervene" "done"}
    :check-green      #{"done" "give_up" "write_file" "edit_file" "patch" "run_check"}
    :no-edits         #{"write_file" "edit_file" "patch" "done" "give_up"}
    ;; A WRITE, not another test run. The steer asked the branch to form a
@@ -4997,6 +5038,21 @@
                 an account of what was tried, or a genuinely different
                 approach"
    :window 2}
+
+  {:gate :review-deadline
+   :provenance ["ctb-r1 interleaved-vigenere 2026-11-10"]
+   :priority 0.6
+   :doc "A ship review is pending: on each of the supervisor's turns, the
+         seconds before the held done ships whatever it has found. In ctb-r1
+         interleaved-vigenere the supervisor spent its twelve review turns doing
+         the cryptanalysis itself, found the key's offsets, and sent nothing;
+         the hold lapsed and a 19%-correct cracker shipped (raman-fitting the
+         same). The review prose already asked for each gap as soon as it can
+         be named; this says it every turn, with the clock."
+   :when (and (= :supervisor (:role branch)) (:review-left-seconds ctx))
+   :message-form (sp/render-str (prompt "review-deadline") {:left (:review-left-seconds ctx)})
+   :prediction "the supervisor sends what it has found"
+   :window 1}
 
   {:gate :time-last-call
    :provenance ["karamazov-0wvc"]

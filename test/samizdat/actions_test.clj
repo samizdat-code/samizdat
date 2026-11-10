@@ -139,3 +139,29 @@
                                 :branch {:gate-history (vec (repeat (gates/threshold :max-action-steers)
                                                                     {:gate :repeat-failing-action :turn 1}))})))))
     (is (not= :repeat-failing-action (:gate (gate-at []))) "and nothing to say without one")))
+
+(deftest a-test-run-reports-what-passed-and-failed
+  ;; The summary line of each common runner, from gates.edn :test-progress.
+  (let [pats (:patterns (gates/threshold :test-progress))
+        c #(actions/test-counts % pats)]
+    (is (= {:passed 5 :failed 1} (c "....F.\n=========== 1 failed, 5 passed in 0.31s ===========")) "pytest")
+    (is (= {:passed 12 :failed 0} (c "12 passed in 2.10s")) "pytest -q")
+    (is (= {:passed 293 :failed 3} (c "Ran 81 tests. 293 assertions passed, 2 failures, 1 errors.")) "jolt")
+    (is (= {:passed 0 :failed 2} (c "Ran 5 tests containing 10 assertions.\n2 failures, 0 errors.")) "clojure.test")
+    (is (= {:passed 7 :failed 2} (c "test result: FAILED. 7 passed; 2 failed; 0 ignored")) "cargo")
+    (is (= {:passed 9 :failed 3} (c "Tests:       3 failed, 9 passed, 12 total")) "jest")
+    (is (= {:passed 4 :failed 1} (c "  4 passing (12ms)\n  1 failing\n")) "mocha")
+    (is (= {:passed 6 :failed 2} (c "# tests 8\n# pass 6\n# fail 2\n")) "node --test")
+    (is (= {:passed 3 :failed 1} (c " 3 pass\n 1 fail\nRan 4 tests across 1 files. [20ms]")) "bun")
+    (is (nil? (c "Wrote 3 files.")) "not a test run")))
+
+(deftest a-plateau-is-the-same-failing-count-run-after-run
+  ;; The user's heuristic: tests run again and again with the pass count not
+  ;; moving is a run that is stuck, however busy it looks.
+  (let [p actions/test-plateau]
+    (is (= {:runs 3 :passed 5 :failed 2}
+           (p [{:passed 1 :failed 6} {:passed 5 :failed 2} {:passed 5 :failed 2} {:passed 5 :failed 2}])))
+    (is (= {:runs 1 :passed 6 :failed 1} (p [{:passed 5 :failed 2} {:passed 6 :failed 1}]))
+        "a count that moved starts a new streak")
+    (is (nil? (p [{:passed 9 :failed 0} {:passed 9 :failed 0} {:passed 9 :failed 0}])) "all green is done, not stuck")
+    (is (nil? (p [])))))

@@ -99,3 +99,32 @@
   can act on."
   [notes policy]
   (filterv (comp seq :instead) (steer (scores notes) policy)))
+
+(defn test-counts
+  "What a test run's `output` says passed and failed, as {:passed :failed},
+  or nil when no pattern's :detect matches it. `patterns` is gates.edn
+  :test-progress :patterns: the first whose :detect matches wins, and each
+  count is the last match of its regex, every group summed, 0 when absent."
+  [output patterns]
+  (let [out (str output)
+        last-sum (fn [re]
+                   (if-let [m (last (re-seq (re-pattern re) out))]
+                     (reduce + 0 (keep #(some-> % parse-long) (if (string? m) [] (rest m))))
+                     0))]
+    (some (fn [{:keys [detect passed failed]}]
+            (when (re-find (re-pattern detect) out)
+              {:passed (last-sum passed) :failed (last-sum failed)}))
+          patterns)))
+
+(defn test-plateau
+  "The trailing streak of identical test counts in `counts` (oldest first) as
+  {:runs :passed :failed}, or nil when there are none or the last run had no
+  failures: a green run is finished, not stuck."
+  [counts]
+  (when-let [l (last counts)]
+    (when (pos? (or (:failed l) 0))
+      (assoc (select-keys l [:passed :failed])
+             :runs (count (take-while #(= (select-keys % [:passed :failed])
+                                          (select-keys l [:passed :failed]))
+                                      (reverse counts)))))))
+

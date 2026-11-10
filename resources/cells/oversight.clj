@@ -110,6 +110,19 @@
     files between retries never trips the idle floor, and on TB 2.1 that is
     why the supervisor's steers arrived after the run had ended.
 
+  - THE TESTS STOPPED IMPROVING. :test-progress :plateau-runs test runs in a
+    row reporting the same passed and failed counts, with failures (the
+    owner's heuristic, 2026-11-09). Busy is not progress: the branch writes
+    and its commands succeed, and only the counts say it is going nowhere.
+
+  - NOBODY HAS LOOKED IN A WHILE. :oversight-limits :checkin-minutes of wall
+    clock since the last spent pass (or the run's start). The exception to
+    'time has passed', for one shape no counter sees: a run that writes a
+    file every few turns and whose commands all succeed, while the work goes
+    nowhere. ctb-r1 interleaved-vigenere spent an hour and 164 turns on its
+    63rd analysis script at 16% accuracy and the supervisor never looked.
+    nil turns it off.
+
   - THE RUN IS NEARING ITS TURN CAP. Whether it deserves more turns, should
     ship what it has or should stop is a decision, and `extend`, `finish` and
     `stop` are how it is made. Once per cap.
@@ -133,9 +146,13 @@
   what the last trigger is for."
   [{:keys [unmet-gates idle-turns errors at-cap? nothing-shipped? refused
            sent-back-green? offers workflow-signals silent? done-refused near-cap?
-           failing-actions review-requested]}
-   {:keys [unmet-floor idle-floor done-refused-floor]}]
+           failing-actions review-requested checkin? test-plateau]}
+   {:keys [unmet-floor idle-floor done-refused-floor plateau-runs]}]
   (boolean (or (>= (or unmet-gates 0) unmet-floor)
+               ;; The tests keep reporting the same failures.
+               (and plateau-runs (>= (or test-plateau 0) plateau-runs))
+               ;; A long run nobody has looked at for :checkin-minutes.
+               checkin?
                ;; A branch asked to ship with time left, and its done is held
                ;; until this pass ends (karamazov-oi16.11).
                (pos? (or review-requested 0))
@@ -207,8 +224,8 @@
   - offers are already once per run."
   [{:keys [unmet idle idle-by-branch errors refused round at-cap? nothing-shipped?
            sent-back-green? offers workflow-signals silent? done-refused near-cap-at
-           failing-actions review-requested]}
-   prev {:keys [idle-floor]}]
+           failing-actions review-requested minutes-since-look test-plateau]}
+   prev {:keys [idle-floor checkin-minutes plateau-runs]}]
   (let [new-round? (or (nil? prev) (not= round (:round prev)))
         ;; A note round-trips through JSON, so the branch ids come back as
         ;; keywords; compare them by name.
@@ -229,6 +246,11 @@
      :sent-back-green? (and sent-back-green? new-round?)
      :workflow-signals (seq (drop (if prev (or (:workflow-signals prev) 0) 0) workflow-signals))
      :silent? silent?
+     :test-plateau (if plateau-runs
+                     (idle-news (or test-plateau 0) (when prev (or (:test-plateau prev) 0)) plateau-runs)
+                     0)
+     :checkin? (boolean (and checkin-minutes minutes-since-look
+                             (>= minutes-since-look checkin-minutes)))
      :offers offers}))
 
 (defn sent-back-green?
@@ -358,6 +380,17 @@
              ;; its exemplars (karamazov-rz7t.3).
              own? (fn [b] (= "supervisor" (some-> (get role-of b) name)))
              watched (into [] (remove #(own? (str (:branch_id %)))) turns)
+             ;; THE TESTS STOPPED IMPROVING (owner, 2026-11-09): per branch,
+             ;; the trailing streak of test runs reporting the same counts with
+             ;; failures; the longest one is the signal.
+             tp (gates/threshold :test-progress)
+             plateau (->> (group-by :branch_id watched)
+                          (keep (fn [[b ts]]
+                                  (some-> (actions/test-plateau
+                                           (vec (keep #(actions/test-counts (:result %) (:patterns tp)) ts)))
+                                          (assoc :branch (str b)))))
+                          (sort-by :runs >)
+                          first)
              since (reduce max 0 (vals by-branch))
              findings (session/findings (session/run-window run-id))
              ;; THE ROUND, off the journal. The feature loop's stage used to
@@ -439,6 +472,9 @@
                       :workflow-signals (count workflow-signals)
                       :failing-actions (count failing)
                       :review-requested (count reviews)
+                      :test-plateau (or (:runs plateau) 0)
+                      ;; Wall clock since the last spent pass, for the check-in.
+                      :minutes-since-look (journal/minutes-since conn run-id :oversight)
                       ;; Each directive's status/outcome, so the next pass is
                       ;; told only what changed.
                       :directives (into {} (map (juxt (comp str :id) :state)) directives)
@@ -467,6 +503,7 @@
                 :oversight/directives directives
                 :oversight/failing failing
                 :oversight/reviews reviews
+                :oversight/plateau plateau
                 :oversight/worth-a-look?
                 (worth-a-look? (since-last-look
                                 (assoc signals
@@ -478,10 +515,13 @@
                                        :silent? (some? (:oversight/silent-for-ms data))
                                        :offers offers)
                                 (:signals (journal/last-note conn run-id :oversight))
-                                {:idle-floor idle-floor})
+                                {:idle-floor idle-floor
+                                 :checkin-minutes (:checkin-minutes limits)
+                                 :plateau-runs (:plateau-runs tp)})
                                {:unmet-floor (gates/threshold :oversight-unmet-floor)
                                 :idle-floor idle-floor
-                                :done-refused-floor (:done-refused-floor (gates/threshold :oversight-limits))}))))
+                                :done-refused-floor (:done-refused-floor (gates/threshold :oversight-limits))
+                                :plateau-runs (:plateau-runs tp)}))))
      (assoc data :oversight/worth-a-look? false))))
 
 ;; --- reason -----------------------------------------------------------------
@@ -530,7 +570,7 @@
   The digest and the since-last-look block are not among them: the run's
   position is the news of every pass."
   [:learned :candidates :drift :offers :rejected :refused :retire :reviews
-   :inconclusive :prune :papercuts :removals :fallback :catalog :failing :past-steers])
+   :inconclusive :prune :papercuts :removals :fallback :catalog :failing :plateau :past-steers])
 
 (defn visible-sections
   "{section hash} for what the carried branch can still see: the sections
@@ -730,6 +770,11 @@
                                                                                                     (journal/notes conn run-id :action))))}))))
                                   ;; The commands that keep failing and what
                                   ;; worked instead (karamazov-oi16.4).
+                                  ;; The tests stopped improving (owner, 2026-11-09).
+                                  :plateau (let [p (:oversight/plateau data)]
+                                             (when-let [f (:plateau-runs (gates/threshold :test-progress))]
+                                               (when (and p (>= (:runs p) f))
+                                                 (prompt/render "test-plateau" p))))
                                   :failing (when-let [fs (seq (:oversight/failing data))]
                                              (prompt/render "failing-commands"
                                                             {:commands (vec (take (:failing-shown (gates/threshold :oversight-limits)) fs))}))
@@ -947,7 +992,11 @@
                                                         0)
                                                     (:oversight/workflow-signals data)))
                                          :silent-minutes (some-> (:oversight/silent-for-ms data)
-                                                                 (quot 60000))}))
+                                                                 (quot 60000))
+                                         ;; A check-in: nothing woke it but the clock.
+                                         :checkin (let [m (:minutes-since-look (:oversight/signals data))
+                                                        c (:checkin-minutes (gates/threshold :oversight-limits))]
+                                                    (when (and m c (>= m c)) (long m)))}))
              brief-id (inc (reduce max 0 (keys (:brief-shown carry))))
              ;; ONE branch for the run, carried by the stream. Opened once;
              ;; re-opening an existing id is a no-op that returns the row.
