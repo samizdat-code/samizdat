@@ -5064,7 +5064,12 @@
          same). The review prose already asked for each gap as soon as it can
          be named; this says it every turn, with the clock."
    :when (and (= :supervisor (:role branch)) (:review-left-seconds ctx))
-   :message-form (sp/render-str (prompt "review-deadline") {:left (:review-left-seconds ctx)})
+   :message-form (sp/render-str (prompt "review-deadline")
+                                {:left (:review-left-seconds ctx)
+                                 ;; The run's own clock, so the review's is not read as it:
+                                 ;; ctb-r2 interleaved-vigenere told the branch it was out
+                                 ;; of time with 80 minutes left.
+                                 :run-minutes (some-> (:time-left-seconds ctx) (quot 60))})
    :prediction "the supervisor sends what it has found"
    :window 1}
 

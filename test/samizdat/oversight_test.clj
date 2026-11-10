@@ -1548,6 +1548,9 @@
     (let [d (decide {:review-left-seconds 200})]
       (is (= :review-deadline (:gate d)) "fires on the supervisor while a review is out")
       (is (str/includes? (:message d) "200")))
+    (let [d (decide {:review-left-seconds 200 :time-left-seconds 4800})]
+      (is (str/includes? (:message d) "80 minutes")
+          "and says the run's own clock, so the review's is not read as it (ctb-r2 interleaved-vigenere)"))
     (is (not= :review-deadline (:gate (decide {}))) "and not without one")
     (is (not= :review-deadline
               (:gate (arbiter/decide {:branch (assoc sup :role :implementer) :max-turns 300
