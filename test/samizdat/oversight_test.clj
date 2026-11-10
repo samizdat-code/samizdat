@@ -1569,6 +1569,35 @@
       (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 1 :data {}})
       (is (<= 590 (:left-seconds (journal/review-state conn rid 600)) 600)))))
 
+(deftest where-the-tester-runs-a-review-waits-for-its-report
+  ;; ctb-r5 bun-sourcemap-leak: a pass that began before the request ended
+  ;; after it, which read as the answer; the hold lifted, the done shipped,
+  ;; and the tester the next pass started was cancelled at run end.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        state (fn [] (journal/review-state conn rid 600 {:tester? true}))]
+    (journal/note! conn rid :oversight-quiet {:data {}})
+    (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 10 :data {}})
+    (Thread/sleep 5)
+    (journal/note! conn rid :oversight {:data {}})
+    (is (:pending? (state)) "a pass ending is not the answer while the tester has not reported")
+    (is (not (:pending? (journal/review-state conn rid 600))) "without the tester it is, as before")
+    (Thread/sleep 5)
+    (journal/note! conn rid :tester-report {:data {:ran 3 :failing []}})
+    (is (:pending? (state)) "the report alone is not the answer either")
+    (Thread/sleep 5)
+    (journal/note! conn rid :oversight {:data {}})
+    (is (not (:pending? (state))) "the pass that read the report is")
+    (testing "a later review, the tester having run already, is answered as before"
+      (Thread/sleep 5)
+      (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 20 :data {}})
+      (Thread/sleep 5)
+      (journal/note! conn rid :oversight {:data {}})
+      (is (not (:pending? (state)))))
+    (testing "whether the tester applies, from the run's clock"
+      (is (gates/tester-applies? {:run {:time-limit-seconds 7200}}))
+      (is (not (gates/tester-applies? {:run {:time-limit-seconds 900}}))))))
+
 (deftest a-blind-tester-checks-the-deliverable-from-the-task-alone
   ;; karamazov-galq. ctb-r1..r4: most failures were hidden edge cases the
   ;; supervisor approved after reading the code, sharing the implementer's

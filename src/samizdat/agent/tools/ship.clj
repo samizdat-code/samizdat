@@ -674,7 +674,8 @@
         ;; kept the review from ever running there.
         review (when (and (not (:advisory? branch)) (:conn ctx) (:run-id ctx))
                  (journal/review-state (:conn ctx) (:run-id ctx)
-                                       (gates/review-max-wait (:config ctx))))
+                                       (gates/review-max-wait (:config ctx))
+                                       {:tester? (gates/tester-applies? (:config ctx))}))
         ;; Directives queued for this branch that no boundary has delivered:
         ;; a done ahead of them ships without the branch having read them.
         unread (when (and (:conn ctx) (:run-id ctx) (:id branch))

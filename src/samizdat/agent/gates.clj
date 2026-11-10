@@ -401,6 +401,14 @@
       max-wait-long-seconds
       max-wait-seconds)))
 
+(defn tester-applies?
+  "Whether the blind tester runs on this run (gates.edn :tester): enabled, and
+  the run's clock at least :min-clock-seconds."
+  [config]
+  (let [{:keys [enabled? min-clock-seconds]} (threshold :tester)
+        limit (get-in config [:run :time-limit-seconds])]
+    (boolean (and enabled? limit min-clock-seconds (>= limit min-clock-seconds)))))
+
 (defn run-time-left
   "Whole seconds a run has left by the clock, or nil when it has no limit."
   [{:keys [config started-ms]}]
