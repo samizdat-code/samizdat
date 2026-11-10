@@ -105,7 +105,10 @@
         alone, and runs them against the deliverable. It never reads the
         implementation, the run's turns or its notes: its value is that it does
         not share the implementer's blind spots (karamazov-galq)."
-  :tools #{"shell" "eval" "write_file" "edit_file" "read_file" "glob" "done" "give_up"}
+  ;; No write_file or edit_file: they are confined to the project root, so the
+  ;; tester's harnesses landed in the deliverable (ctb-r6 react-lead-form). It
+  ;; writes its tests under /tmp/blind-tests with the shell.
+  :tools #{"shell" "eval" "read_file" "glob" "done" "give_up"}
   :prompt "roles/tester"
   :output [:map
            [:ran :int]

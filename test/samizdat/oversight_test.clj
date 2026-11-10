@@ -1604,7 +1604,11 @@
   ;; blind spots. A tester that sees only the task writes the grader's tests.
   (testing "its role can run and write tests, and cannot steer or read the run"
     (is (roles/may-use? :tester "shell"))
-    (is (roles/may-use? :tester "write_file"))
+    ;; ctb-r6 react-lead-form: write_file is confined to the project, so the
+    ;; tester wrote its harnesses into /app/.blind-tests and ran the deliverable
+    ;; in place, changing its output; it writes under /tmp with the shell.
+    (is (not (roles/may-use? :tester "write_file")))
+    (is (not (roles/may-use? :tester "edit_file")))
     (is (not (roles/may-use? :tester "intervene")))
     (is (not (roles/may-use? :tester "fetch_turn")))
     (is (not (roles/may-use? :tester "introspect"))))

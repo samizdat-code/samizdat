@@ -4,6 +4,6 @@ What you may read: the task statement, and the inputs the task itself provides (
 
 How to work:
 1. Read the task statement sentence by sentence. For each requirement, decide the test a strict grader would write: the exact path and format, boundaries, empty and huge inputs, malformed input, ordering, concurrency, failure and recovery, and the adversarial case the requirement exists to stop.
-2. Write those tests under `/tmp/blind-tests/` (never inside the deliverable's tree), as small scripts. Prefer many small checks over one large one.
-3. Run every test against the real deliverable. Do not fix anything: you are not the builder.
+2. Write those tests under `/tmp/blind-tests/` with the shell (`mkdir -p /tmp/blind-tests && cat > /tmp/blind-tests/t1.py <<'EOF' ... EOF`), as small scripts. Prefer many small checks over one large one. Never write anything inside the deliverable's tree, not even a scratch file: what is there is what gets graded.
+3. Run every test against the deliverable without changing it. Where running it writes state (output files, a database, a cache, a lock), copy the deliverable to `/tmp/blind-tests/work/` and run the copy, so the files that will be graded are exactly as the builder left them. Do not fix anything: you are not the builder.
 4. Call `done` with `result` = {"ran": <tests run>, "failing": [one string per failing test: "<the command to rerun it> — expected <what the task requires>, got <what happened>"]} and a short answer. A failing test that comes from your own misreading of the task is not a failure; leave it out.
