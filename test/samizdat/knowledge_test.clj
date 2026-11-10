@@ -7,6 +7,8 @@
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]
+            [samizdat.agent.state]
+            [samizdat.agent.loop]
             ;; The tool namespaces register their defmethods on load, and this
             ;; test dispatches `forget` through the multimethod. Requiring only
             ;; `tools.base` left that registration to whichever other test
@@ -861,3 +863,39 @@
     (testing "a later run that finds the same corroborates it"
       (let [r2 (runs/start-run! c {:problem "p"})]
         (is (:repeat? (first (:patterns (knowledge/distil-session! c {:run-id r2 :patterns pats})))))))))
+
+(deftest a-memory-read-back-says-who-wrote-it-and-how-often-it-held
+  ;; The memory trap (2611.07554v1): self-written notes did more harm than raw
+  ;; transcripts, read as instructions rather than evidence.
+  (let [[m h] (knowledge/with-provenance [{:origin "inferred" :corroborations 1}
+                                          {:origin "harness" :corroborations 4}])]
+    (is (= "a model" (:written-by m)))
+    (is (:unverified m) "seen in one run")
+    (is (= "the harness" (:written-by h)))
+    (is (not (:unverified h)))))
+
+(deftest a-remembered-note-is-an-episode-unless-it-says-it-is-a-rule
+  ;; The memory trap: 69-94% of notes stated a standing rule. `remember` with
+  ;; no kind records what happened, not a rule.
+  (let [rid (runs/start-run! @conn {:problem "p"})
+        r (tools/run-tool {:branch (samizdat.agent.state/new-branch {:id "B1" :problem "p"})
+                           :tool-name "remember" :conn @conn :run-id rid
+                           :args {:content "the user said to skip confirmation for this cleanup"}})
+        id (second (re-find #"(k-[0-9a-f]+)" (str (:result r))))]
+    (is (= "episodic" (:kind (knowledge/get-by-id @conn id))))))
+
+(deftest what-the-last-run-left-is-labelled-by-who-wrote-it
+  ;; learned-since used to call every row "what the harness derived … not
+  ;; somebody's summary", model-written rules included (the memory trap).
+  (let [prev (runs/start-run! @conn {:problem "p"})
+        _ (Thread/sleep 5)
+        _ (knowledge/remember! @conn {:content "When a test disagrees, update the test."
+                                      :kind "procedural" :origin :inferred :run-id prev})
+        _ (runs/finish-run! @conn prev :completed nil)
+        _ (Thread/sleep 5)
+        now (runs/start-run! @conn {:problem "q"})
+        {:keys [text]} (#'samizdat.agent.loop/learned-block @conn now)]
+    (is (str/includes? text "update the test"))
+    (is (str/includes? text "a model") "a model's note is said to be one")
+    (is (not (str/includes? text "not somebody's summary")))))
+

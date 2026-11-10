@@ -190,3 +190,18 @@
             "not on a turn that was a done waiting on its review")
         (is (not= :progress-stalled (decide (assoc stalled :role :tester :turns [{:tool "eval"}])))
             "nor on the tester")))))
+
+(deftest a-write-inside-an-eval-is-progress
+  ;; ctb-r10 bun-sourcemap-leak: :progress-stalled fired six times on a branch
+  ;; editing release.ts with (edit ...) inside eval, which lean steers work
+  ;; into; only the file tools counted as progress.
+  (let [root (str (fs/create-temp-dir))
+        wrote (atom false)
+        handler (#'samizdat.agent.tools.repl/bridge-handler
+                 {:branch (assoc (state/new-branch {:id "B1" :problem "p"}) :task {:id "t1"})
+                  :root root :wrote wrote})]
+    (is (some? handler) "the bridge is on")
+    (handler {:op "read_file" :args {:path "nothing.txt"}})
+    (is (false? @wrote) "a read is not progress")
+    (handler {:op "write_file" :args {:path "a.txt" :content "x"}})
+    (is (true? @wrote) "a write through the bridge is")))

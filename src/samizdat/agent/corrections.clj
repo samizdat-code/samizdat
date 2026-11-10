@@ -83,7 +83,11 @@
   "The person's rules under the project's: a project rule of the same id
   wins."
   [person project]
-  (merge (:corrections person) (:corrections project)))
+  ;; A rule in the person's own file is theirs; a project rule is the
+  ;; person's only when it says so (:by), since the supervisor can save the
+  ;; project's table too (the memory trap, 2611.07554v1).
+  (merge (into {} (map (fn [[k v]] [k (assoc v :by "person")])) (:corrections person))
+         (:corrections project)))
 
 (defn problems
   "What is wrong with `body` as a corrections table, as data — nil when

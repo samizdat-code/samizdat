@@ -340,7 +340,7 @@
 
     ;; The project's lessons: read, and recording one.
     samizdat.store.knowledge
-    {:vars [graduation-candidates past-steers remember! standing]
+    {:vars [graduation-candidates past-steers remember! standing with-provenance]
      :effects #{:db}}
 
     ;; Open papercuts, for the supervisor's brief (karamazov-05z0.5).

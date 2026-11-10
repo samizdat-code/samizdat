@@ -426,8 +426,12 @@
       (when (or rows errors)
         {:text (prompt/render "learned-since"
                               {:run (str (:id prev))
+                               ;; Whose word each is (the memory trap, 2611.07554v1).
                                :memories (when rows
-                                           (str/join "\n" (map #(str "- " (:content %)) rows)))
+                                           (str/join "\n" (map #(str "- " (:content %) " (" (:kind %)
+                                                                     ", written by " (:written-by %)
+                                                                     (when (:unverified %) ", one run") ")")
+                                                                (knowledge/with-provenance rows))))
                                :errors (vec errors)})
          :ids (mapv :id rows)}))))
 
@@ -460,7 +464,9 @@
                  (corrections/rules {:corrections (corrections/combine person project)})
                  (corrections/facts branch p) p)]
       (when (seq shown)
-        (prompt/render "corrections-block" {:rules shown})))))
+        (prompt/render "corrections-block"
+                       {:person (filterv #(= "person" (:by %)) shown)
+                        :project (filterv #(not= "person" (:by %)) shown)})))))
 
 (defn modes-text
   "The words of the modes `names` the run was started with, as the context

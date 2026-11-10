@@ -180,3 +180,15 @@
                                    :examples (knowledge/revised c 3)})]
       (is (str/includes? p "jolt bin"))
       (is (not (str/includes? p "never revised"))))))
+
+(deftest a-reflected-rule-carries-the-task-it-was-learned-on
+  ;; The memory trap (2611.07554v1): a rule written from one task, kept with no
+  ;; scope, was later read as a standing rule; notes from stale-test repairs
+  ;; led agents to rewrite correct tests. A RULE or GOTCHA keeps its task.
+  (let [[w] (reflect/record! @conn {:run-id "r1" :task "Repair the stale version-string test"}
+                             {"RULES" ["When a test disagrees, update the test."]})
+        row (knowledge/get-by-id @conn (:id w))]
+    (is (str/includes? (:content row) "When a test disagrees, update the test."))
+    (is (str/includes? (:content row) "Repair the stale version-string test")
+        "the task it was learned on travels with it")))
+

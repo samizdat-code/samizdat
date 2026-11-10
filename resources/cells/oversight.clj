@@ -830,7 +830,7 @@
                                   ;; (karamazov-oi16.10).
                                   :past-steers (seq (knowledge/past-steers
                                                      conn (:recall (gates/threshold :steer-facts))))
-                                  :learned (seq (knowledge/standing conn))
+                                  :learned (seq (knowledge/with-provenance (knowledge/standing conn)))
                                   ;; Episodes seen in enough distinct runs
                                   ;; to ask whether they are rules. The
                                   ;; store surfaces; the supervisor judges

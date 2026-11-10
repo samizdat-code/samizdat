@@ -1217,6 +1217,21 @@
         (log/warn "journaling the distillation failed:" (ex-message e))))
     result))
 
+(defn with-provenance
+  "Each memory row with who wrote it and whether it still rests on one run,
+  for a reader: `:written-by` (a model, the harness, the person) and
+  `:unverified`. The memory trap (2611.07554v1): self-written notes did more
+  harm than raw transcripts, read as instructions rather than as evidence, so
+  what reads a memory back says whose word it is and how often it held."
+  [rows]
+  (for [r rows]
+    (assoc r
+           :written-by (case (str (:origin r))
+                         ("agent" "inferred") "a model"
+                         "user" "the person"
+                         "the harness")
+           :unverified (memory/provisional? r))))
+
 (defn learned-since
   "What was written to memory after `since`, most worth reading first.
 

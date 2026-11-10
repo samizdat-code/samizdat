@@ -80,7 +80,9 @@
 (defmethod base/run-tool "remember" [{:keys [branch conn] :as ctx}]
   (if-let [miss (base/missing ctx :content)]
     (base/malformed branch (str miss "\n\n" @usage))
-    (let [kind (or (base/arg ctx :kind) "procedural")
+    ;; Episodic unless it says it is a rule: the memory trap (2611.07554v1)
+    ;; found 69-94% of notes stating a standing rule from one occasion.
+    (let [kind (or (base/arg ctx :kind) "episodic")
           content (base/arg ctx :content)
           ;; WHAT IT RESTS ON (karamazov-0e2c.12): turns, artifacts, tasks
           ;; or memories it names, each of which must be in the record.

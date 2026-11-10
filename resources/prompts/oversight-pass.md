@@ -122,14 +122,16 @@ Outcomes of earlier supervisors' directives on this project. Prefer what was act
 {% for m in past-steers %}- {{m.content}}
 {% endfor %}{% endif %}{% if learned %}
 ## What this project has learned
-{% for m in learned %}- {{m.id}} [{{m.kind}}] {{m.content}}
+Evidence from earlier runs, each with who wrote it and how many runs it held in; a rule from one task holds only where this run is the same situation.
+{% for m in learned %}- {{m.id}} [{{m.kind}}, by {{m.written-by}}, {{m.corroborations|default:1}} run(s){% if m.unverified %}, unverified{% endif %}] {{m.content}}
 {% endfor %}{% endif %}{% if candidates %}
 ## Patterns this project keeps seeing
 Each of these is an episode confirmed by the number of distinct runs shown. An
 episode that recurs run after run is describing a standing property of the
 loop, not a bad afternoon. If you agree, `remember` it as a rule — kind
-`procedural`, with a `cause` naming the episode's id — so later runs read it
-as one; if it is noise, `retire` it with the reason. Left alone it stays an
+`procedural`, with a `cause` naming the episode's id — and write its scope into
+it: the kind of task and the conditions it held under, so a later run can tell
+whether its own situation is that one; if it is noise, `retire` it with the reason. Left alone it stays an
 episode and ranks as one.
 {% for m in candidates %}- {{m.id}} seen in {{m.corroborations}} runs: {{m.content}}
 {% endfor %}{% endif %}{% if papercuts %}

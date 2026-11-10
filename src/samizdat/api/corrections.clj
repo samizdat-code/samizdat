@@ -68,7 +68,8 @@
   :person (~/.config/samizdat/corrections.edn) or :project (the
   :corrections policy, a new version). {:status :saved|:refused :problem}."
   [{:keys [id] :as rule} scope]
-  (let [entry (select-keys rule [:instruction :when :priority])
+  ;; Saved through the person's own complaint, so theirs (:by).
+  (let [entry (assoc (select-keys rule [:instruction :when :priority]) :by "person")
         current (case scope
                   :person (person-body)
                   :project (try (userspace/edn-body :policy "corrections")

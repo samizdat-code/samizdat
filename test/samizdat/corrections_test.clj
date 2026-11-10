@@ -85,7 +85,9 @@
         (is (str/includes? text "output-contains") "names the predicates there are")))))
 
 (deftest a-rule-set-is-the-person-s-under-the-project-s
-  (is (= {"a" {:instruction "project" :when {}} "b" {:instruction "person" :when {}}}
+  ;; A rule from the person's own file is theirs by where it lives (the memory
+  ;; trap, 2611.07554v1: a rule's author is part of its scope).
+  (is (= {"a" {:instruction "project" :when {}} "b" {:instruction "person" :when {} :by "person"}}
          (corr/combine {:corrections {"a" {:instruction "person" :when {}}
                                       "b" {:instruction "person" :when {}}}}
                        {:corrections {"a" {:instruction "project" :when {}}}}))))
@@ -115,6 +117,24 @@
       (let [d (corr/draft! (constantly "I think you should be nicer")
                            {:complaint "c" :outputs outputs :render pr-str} policy)]
         (is (= :no-draft (:error d)))))))
+
+(deftest a-rule-nobody-says-the-person-wrote-is-not-shown-as-theirs
+  ;; The memory trap (2611.07554v1): the supervisor can save the project's
+  ;; corrections with `policy`, and every rule used to be shown under "Asked for
+  ;; by the person you work for", so an agent's one-run lesson read as a
+  ;; person's standing instruction. Only a rule the person wrote is shown so.
+  (with-redefs [samizdat.layers/resolve (constantly nil)
+                samizdat.userspace/edn-body
+                (fn [kind nm]
+                  (when (= [:policy "corrections"] [kind nm])
+                    {:corrections {"theirs" {:instruction "Keep replies short." :when {} :by "person"}
+                                   "learned" {:instruction "Update the test when it disagrees." :when {}}}}))]
+    (let [text (samizdat.agent.loop/corrections-text (branch :said ["hello"]))
+          [person project] (str/split text #"(?m)^## " 3)]
+      (is (re-find #"Asked for by the person[^#]*Keep replies short" text))
+      (is (not (re-find #"Asked for by the person[^#]*Update the test" text))
+          "the unauthored rule is not under the person's heading")
+      (is (str/includes? text "Update the test when it disagrees.") "it is still shown, as what it is"))))
 
 (deftest the-block-a-turn-carries-is-the-person-s-and-the-project-s-matches
   (let [dir (doto (java.io.File/createTempFile "corrections" "") (.delete) (.mkdirs))]
