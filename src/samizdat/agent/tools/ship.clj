@@ -420,6 +420,11 @@
                   ~'verdict?          (get ~'ctx :verdict? false)
                   ;; What the time-left rung says, from prompts/keep-working.md.
                   ~'keep-working      (get ~'ctx :keep-working)
+                  ;; Its later refusals' words, and the share of the clock and the
+                  ;; count they stop at (gates.edn :time-budget).
+                  ~'keep-working-again (get ~'ctx :keep-working-again)
+                  ~'keep-going-share  (get ~'ctx :keep-going-share)
+                  ~'keep-going-max    (get ~'ctx :keep-going-max)
                   ;; Something was written and nothing ran after it, and what to say.
                   ~'unchecked-write?  (get ~'ctx :unchecked-write? false)
                   ~'check-before-done (get ~'ctx :check-before-done)
@@ -698,6 +703,9 @@
                                                {:issuers (str/join ", " (distinct (map :issued_by unread)))}))
                  :verdict? (boolean (:advisory? branch))
                  :keep-working (prompt/prompt "keep-working")
+                 :keep-working-again (prompt/prompt "keep-working-again")
+                 :keep-going-share (:keep-going-share (gates/threshold :time-budget))
+                 :keep-going-max (:keep-going-max (gates/threshold :time-budget))
                  :unchecked-write? (unchecked-write? branch)
                  :check-before-done (prompt/prompt "check-before-done")
                  :unusual-change (boolean (or unusual (seq odd-files)))

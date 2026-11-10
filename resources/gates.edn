@@ -768,7 +768,12 @@
         and ships nothing."}
 
  :time-budget
- {:value {:first-write 0.15 :first-write-again 0.25 :whole-running 0.33 :whole-running-again 0.45 :wind-down 0.85 :last-call 0.93}
+ {:value {:first-write 0.15 :first-write-again 0.25 :whole-running 0.33 :whole-running-again 0.45 :wind-down 0.85 :last-call 0.93
+          ;; A done with time left is sent back again, up to :keep-going-max times in
+          ;; all, while less than :keep-going-share of the clock is gone (ship rung
+          ;; :time-left). ctb-r1 wal-recovery-ordering shipped at 20 minutes of 120 and
+          ;; failed two hidden edge cases.
+          :keep-going-share 0.5 :keep-going-max 3}
   :kind :policy :capability-tunable? false
   :provenance ["karamazov-0wvc"]
   :doc "whole-running-again was 0.55 until GLM's fix4: the check at 0.33 lands as the first
@@ -4549,9 +4554,18 @@
      ;; finishes even with work between (`refused`; per streak it refused mteb-retrieve
      ;; 8 times), and a branch that delivers a verdict is never sent back.
      :advisory? true
-     :when (and time-used wind-down (not verdict?) (< time-used wind-down) (zero? done-streak)
-               (not (get refused :time-left)))
-     :message-form keep-working}
+     ;; After the first, again while under :time-budget :keep-going-share of the
+     ;; clock, up to :keep-going-max in all, with the sharper keep-working-again
+     ;; (ctb-r1 wal-recovery-ordering shipped at 20 minutes of 120).
+     :when (and time-used wind-down (not verdict?) (zero? done-streak)
+               (let [n (or (get refused :time-left) 0)]
+                 (if (zero? n)
+                   (< time-used wind-down)
+                   (and keep-going-share keep-going-max
+                        (< n keep-going-max) (< time-used keep-going-share)))))
+     :message-form (if (pos? (or (get refused :time-left) 0))
+                     (or keep-working-again keep-working)
+                     keep-working)}
     {:name :check-after-last-write
      ;; agenc-core accepts a headless answer only when a check succeeded after the last
      ;; change, as its remaining Terminal-Bench failures were done claims the transcript

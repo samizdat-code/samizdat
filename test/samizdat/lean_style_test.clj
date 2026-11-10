@@ -79,6 +79,24 @@
     (is (nil? (block {:time-used (+ wind-down 0.01)})) "not in the last stretch")
     (is (nil? (block {})) "and never without a clock")))
 
+(deftest on-a-long-clock-done-is-sent-back-until-it-has-spent-its-share
+  ;; ctb-r1 wal-recovery-ordering shipped at 20 minutes of 120, its own and the
+  ;; supervisor's checks green, and failed two hidden edge cases. Time the score
+  ;; does not reward saving is time for the cases a hidden grader runs.
+  (let [{:keys [wind-down keep-going-share keep-going-max]} (gates/threshold :time-budget)
+        block (fn [m] (#'ship/ship-gate-block (merge {:answer "done" :problem "p" :evidence []
+                                                      :uncovered-numbers [] :advisory? true :done-streak 0
+                                                      :wind-down wind-down :keep-working "keep going"
+                                                      :keep-working-again "again"
+                                                      :keep-going-share keep-going-share
+                                                      :keep-going-max keep-going-max}
+                                                     m)))
+        early (/ keep-going-share 2)]
+    (is (= "again" (block {:time-used early :refused {:time-left 1}})) "sent back again, with the sharper ask")
+    (is (nil? (block {:time-used early :refused {:time-left keep-going-max}})) "up to the most it may be")
+    (is (nil? (block {:time-used (+ keep-going-share 0.01) :refused {:time-left 1}})) "and only before its share")
+    (is (nil? (block {:time-used early :refused {:time-left 1} :done-streak 1})) "and never twice in a row")))
+
 (deftest lean-is-the-default-and-a-project-can-opt-out
   ;; lean1 (DeepSeek, 9 trials an arm): lean 66.4% mean against 61.7% for the full loop,
   ;; at a 4K-character prompt against 55K.

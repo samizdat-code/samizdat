@@ -250,6 +250,7 @@
    :unread-directive-hold "prompts/unread-directive-hold.md"
    :ship-review-notice "prompts/ship-review-notice.md"
    :keep-working "prompts/keep-working.md"
+   :keep-working-again "prompts/keep-working-again.md"
    :system-lean "prompts/system-lean.md"
    :check-before-done "prompts/check-before-done.md"
    :lean-limits "prompts/lean-limits.md"
