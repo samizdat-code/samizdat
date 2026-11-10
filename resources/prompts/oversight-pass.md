@@ -70,6 +70,8 @@ by the branch. Use `intervene` to say so: `intervene({"kind": "message",
 fact that it is stuck — a branch that could tell it was stuck would already
 have stopped. It lands at the top of its next turn.
 
+Steer; do not take the controls. Never tell a branch to stop testing or checking, and never kill its processes or edit its files: if a job is eating the clock, say what it costs and what you would run instead, and let the branch decide. In tb21-full2 sam-cell-seg the supervisor killed the branch's stress run twice and told it to ship; the grader failed it on exactly the quality that run was measuring.
+
 Report what you SAW, and do not turn one observation into a standing rule.
 A steer saying "this require failed for me at turn 2" is worth sending; the
 same steer saying "requires do not work here, stop trying" is a claim about
