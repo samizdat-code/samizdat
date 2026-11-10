@@ -25,6 +25,8 @@
             [samizdat.llm.client :as llm]
             [samizdat.store.db :as db]
             [clojure.string :as str]
+            [clojure.data.json :as json]
+            [samizdat.store.tasks]
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
             [samizdat.agent.resume :as resume]
@@ -872,4 +874,56 @@
           (is (= limit calls) "each error cost one turn, and the branch outlasted all but the last")
           (is (str/includes? (str/join "\n" (map (comp str :content) last-sent)) "the-cause")
               "the branch is told what broke")))
+      (finally (db/close c)))))
+
+(deftest a-lean-run-that-stops-advancing-is-told-to-split-and-can
+  ;; The owner (2026-11-10): the split-when-stuck mechanic was never on under
+  ;; lean, which every Terminal-Bench and curated run since tb21 used: 0 `task`
+  ;; calls and 0 :stuck/:progress-stalled firings over 74 trials, against 284
+  ;; and 31 over 40 full-style trials. A real lean `loop` run on a scripted
+  ;; model: two failing commands must fire :stuck with the split advice; the
+  ;; branch then splits with `task` and switches; four idle turns after that
+  ;; must fire :progress-stalled.
+  (let [c (db/open! ":memory:")
+        root (str "/tmp/samizdat-split-" (System/nanoTime))
+        _ (.mkdirs (java.io.File. root))
+        _ (spit (str root "/notes.txt") "n")
+        call (fn [n args] {:content (str "```tool-call\n" (json/write-str {:name n :args args}) "\n```")
+                           :finish-reason "stop"})
+        parent (atom nil)
+        script (fn [i]
+                 (case i
+                   1 (call "shell" {:command "ls /no-such-dir-split-test"})
+                   2 (call "shell" {:command "ls /no-such-dir-split-test-2"})
+                   3 (call "task" {:action "create" :title "the whole job"})
+                   4 (call "task" {:action "create" :title "part one" :parentId @parent :backlog false})
+                   5 (call "read_file" {:path "notes.txt"})
+                   6 (call "read_file" {:path "notes.txt"})
+                   7 (call "read_file" {:path "notes.txt"})
+                   8 (call "read_file" {:path "notes.txt"})
+                   9 (call "read_file" {:path "notes.txt"})
+                   (call "give_up" {:reason "enough"})))
+        calls (atom 0)
+        sent (atom [])]
+    (try
+      (let [r (with-redefs [llm/chat (fn [_ _ messages & _]
+                                       (swap! sent conj (str/join "\n" (map (comp str :content) messages)))
+                                       (let [i (swap! calls inc)
+                                             reply (script i)]
+                                         ;; the parent's id, once created, for the child
+                                         (when (= i 4)
+                                           (reset! parent (some-> (re-find #"sz-[0-9a-f]+" (last @sent)) identity)))
+                                         reply))]
+                (beam/run! {:conn c
+                            :config {:run {:loop "loop" :root root :beam-width 1 :style :lean}}
+                            :root root :llm-adapter :a :llm-config {:max-tokens 16384}
+                            :problem "Do the job." :max-turns 14}))
+            fired (set (map (comp keyword :gate) (journal/gate-firings c (:run-id r))))]
+        (is (contains? fired :stuck) (str "stuck fired under lean: " fired))
+        (is (some #(str/includes? % "task({\"action\": \"create\"") @sent)
+            "the turn after it was told how to split, with the call it takes")
+        (is (some #(str/includes? % "task({action, ...})") @sent)
+            "and a lean branch is shown the task board among its tools")
+        (is (seq (samizdat.store.tasks/board c {:run-id (:run-id r)})) "the split made tasks")
+        (is (contains? fired :progress-stalled) (str "progress-stalled fired under lean: " fired)))
       (finally (db/close c)))))

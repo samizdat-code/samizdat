@@ -43,6 +43,8 @@ glob({pattern, paths?, offset?})
     Find files by name.
 run_check({})
     Run the project's configured check, when it has one.
+task({action, ...})
+    Split work you are stuck on into parts and take them one at a time: `{"action": "create", "title": ..., "body": ..., "parentId": ...}` for each part, `{"action": "switch", "id": ..., "reason": ...}` to work one, `{"action": "close", "id": ...}` once it works, then the next; `{"action": "list"}` shows the board.
 done({answer, checklist?, changed_tests?, result?})
     Finish: `answer` says what was done and how it was checked.
 give_up({reason})

@@ -837,7 +837,12 @@
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
              :time-nothing-written :time-whole-running :wind-down :plan-wind-down
              :human-directive :directive-notice :shell-roundtrips :metrics-worse :repeat-failing-action
-             :review-deadline}
+             :review-deadline
+             ;; Split-when-stuck (owner, 2026-11-10): left out of lean at its
+             ;; start, so 74 lean benchmark trials saw no :stuck or
+             ;; :progress-stalled firing and made no `task` call, against 31 and
+             ;; 284 over 40 full-style trials.
+             :stuck :progress-stalled}
     :context-block? false
     :system-prompt "system-lean"
     ;; Scope, check and report limits, by model family: the first key the provider or
@@ -856,7 +861,12 @@
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
              :time-nothing-written :time-whole-running :wind-down :plan-wind-down
              :human-directive :directive-notice :metrics-worse :repeat-failing-action
-             :review-deadline}
+             :review-deadline
+             ;; Split-when-stuck (owner, 2026-11-10): left out of lean at its
+             ;; start, so 74 lean benchmark trials saw no :stuck or
+             ;; :progress-stalled firing and made no `task` call, against 31 and
+             ;; 284 over 40 full-style trials.
+             :stuck :progress-stalled}
     :context-block? false
     :system-prompt "system-lean"
     :no-shell? true
