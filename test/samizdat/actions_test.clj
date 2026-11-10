@@ -165,3 +165,28 @@
         "a count that moved starts a new streak")
     (is (nil? (p [{:passed 9 :failed 0} {:passed 9 :failed 0} {:passed 9 :failed 0}])) "all green is done, not stuck")
     (is (nil? (p [])))))
+
+(deftest waiting-on-a-review-is-not-being-stuck
+  ;; ctb-r9 bun-sourcemap-leak: with :stuck and :progress-stalled on under lean,
+  ;; :stuck fired 13 times and :progress-stalled 6, telling the branch to split,
+  ;; while its done was held for the supervisor's review: each refused done
+  ;; counted as a failure and none as progress. And :stuck fired on the
+  ;; supervisor's own branch.
+  (let [decide (fn [b] (:gate (arbiter/decide {:branch (merge (state/new-branch {:id "B1" :problem "p"})
+                                                              {:role :implementer} b)
+                                               :max-turns 300
+                                               :style-gates (:gates (gates/style {:run {:style :lean}}))})))]
+    (testing ":stuck"
+      (is (= :stuck (decide {:consecutive-failures 3 :last-failed-tool "shell" :turns [{:tool "shell"}]})))
+      (is (not= :stuck (decide {:consecutive-failures 3 :last-failed-tool "done" :turns [{:tool "done"}]}))
+          "not when the failures are dones the review is holding")
+      (is (not= :stuck (decide {:role :supervisor :consecutive-failures 3 :last-failed-tool "shell"
+                                :turns [{:tool "shell"}]}))
+          "nor on the supervisor"))
+    (testing ":progress-stalled"
+      (let [stalled {:any-progress? true :turns-since-progress 20}]
+        (is (= :progress-stalled (decide (assoc stalled :turns [{:tool "eval"}]))))
+        (is (not= :progress-stalled (decide (assoc stalled :turns [{:tool "done"}])))
+            "not on a turn that was a done waiting on its review")
+        (is (not= :progress-stalled (decide (assoc stalled :role :tester :turns [{:tool "eval"}])))
+            "nor on the tester")))))

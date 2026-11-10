@@ -5475,7 +5475,11 @@
          beside the turn-budget bookkeeping."
    ;; the quantity the :when compares, recorded at every check (na2k.7)
    :measure (:consecutive-failures branch)
-   :when (>= (:consecutive-failures branch) (threshold :stuck-threshold))
+   ;; Not on a done the review is holding (ctb-r9 bun-sourcemap-leak: 13
+   ;; firings on refused dones), and not on the advisory roles.
+   :when (and (>= (:consecutive-failures branch) (threshold :stuck-threshold))
+              (not= "done" (:last-failed-tool branch))
+              (not (contains? #{:supervisor :tester} (:role branch))))
    ;; Rendered rather than read raw: the prose names `split` only where the
    ;; branch may call it, which is a {% if %} over message-context's
    ;; :can-split (karamazov-ioo.15.2).
@@ -5583,6 +5587,9 @@
               ;; Only a role that can write is told to (karamazov-1wv9):
               ;; an answerer reading is doing its job.
               (roles/may-use? (:role branch) "write_file")
+              ;; Not on a done waiting on its review: held, it makes no
+              ;; progress by design (ctb-r9 bun-sourcemap-leak).
+              (not= "done" (:tool (peek (vec (:turns branch)))))
               (>= (:turns-since-progress branch)
                   (threshold :progress-stall-threshold)))
    ;; RE-ANCHORED. A steer that says "nothing has advanced" without saying at
