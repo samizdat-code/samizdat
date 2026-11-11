@@ -1676,7 +1676,22 @@
       (is (str/includes? (str (:result r)) "t_speed.py") "held, naming what still fails")
       (is (= ["cd /tmp/blind-tests && python t_speed.py"] @ran) "the command, not the description"))
     (reset! failing? false)
-    (is (str/includes? (str (:result (done! b 12))) "accepted") "once it passes, the done ships")))
+    (is (str/includes? (str (:result (done! b 12))) "accepted") "once it passes, the done ships")
+    (testing "one script behind several failures runs once, and its output leads"
+      ;; vf2 one-vf2-5: both failures came from t3_graph.py; the hold ran it
+      ;; twice, printed the same output twice, and put the tester's first
+      ;; description ahead of output that showed a different failure.
+      (reset! failing? true)
+      (reset! ran [])
+      (journal/note! conn rid :tester-report
+                     {:data {:ran 4 :failing ["python3 t3.py — expected edges 0, got -1"
+                                              "python3 t3.py — expected degree to raise, got None"]}})
+      (let [r (str (:result (done! b 14)))]
+        (is (= ["python3 t3.py"] @ran) "the command once")
+        (is (str/includes? r "expected edges 0"))
+        (is (str/includes? r "expected degree to raise"))
+        (is (< (str/index-of r "x\n```") (str/index-of r "expected edges 0"))
+            "what it prints now comes before what the tester first saw")))))
 
 (deftest a-blind-tester-checks-the-deliverable-from-the-task-alone
   ;; karamazov-galq. ctb-r1..r4: most failures were hidden edge cases the

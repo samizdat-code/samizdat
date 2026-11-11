@@ -469,29 +469,34 @@
 
 (defn tester-still-failing
   "The blind tester's latest reported failures whose command still fails when
-  rerun now in the run's root, as {:command :expected :output} (gates.edn
-  :tester). A command the policy refuses or asks about cannot be judged here
-  and is left out."
+  rerun now in the run's root, as {:command :expected [..] :output} (gates.edn
+  :tester). Each distinct command runs once, with every expectation the tester
+  hung on it: one script often holds several checks. A command the policy
+  refuses or asks about cannot be judged here and is left out."
   [ctx]
   (let [{:keys [command-separator rerun-timeout-seconds output-chars]} (gates/threshold :tester)]
     (when command-separator
-      (vec (for [entry (journal/tester-failing (:conn ctx) (:run-id ctx))
-                 :let [s (str entry)
-                       i (str/index-of s command-separator)
-                       command (str/trim (if i (subs s 0 i) s))]
-                 :when (not (str/blank? command))
-                 :let [r (policy/run-shell (cond-> (assoc (select-keys ctx [:conn :run-id :root])
-                                                          :args {:command command})
-                                             rerun-timeout-seconds
-                                             (assoc :timeout-ms (* 1000 rerun-timeout-seconds))))]
-                 :when (and (not (contains? #{:deny :ask} (get-in r [:policy :effect])))
-                            (contains? #{:failure :timeout} (:category r)))]
-             {:command command
-              :expected (when i (str/trim (subs s (+ i (count command-separator)))))
-              :output (let [o (str (:result r))]
-                        (if (and output-chars (> (count o) output-chars))
-                          (subs o (- (count o) output-chars))
-                          o))})))))
+      (let [parsed (for [entry (journal/tester-failing (:conn ctx) (:run-id ctx))
+                         :let [s (str entry)
+                               i (str/index-of s command-separator)
+                               command (str/trim (if i (subs s 0 i) s))]
+                         :when (not (str/blank? command))]
+                     [command (when i (str/trim (subs s (+ i (count command-separator)))))])
+            commands (distinct (map first parsed))
+            expected (reduce (fn [m [c e]] (cond-> m e (update c (fnil conj []) e))) {} parsed)]
+        (vec (for [command commands
+                   :let [r (policy/run-shell (cond-> (assoc (select-keys ctx [:conn :run-id :root])
+                                                            :args {:command command})
+                                               rerun-timeout-seconds
+                                               (assoc :timeout-ms (* 1000 rerun-timeout-seconds))))]
+                   :when (and (not (contains? #{:deny :ask} (get-in r [:policy :effect])))
+                              (contains? #{:failure :timeout} (:category r)))]
+               {:command command
+                :expected (get expected command [])
+                :output (let [o (str (:result r))]
+                          (if (and output-chars (> (count o) output-chars))
+                            (subs o (- (count o) output-chars))
+                            o))}))))))
 
 (defn ship-gate-rung
   "The first lexical ship rung that fires on this evidence, as `{:name :message}`,
