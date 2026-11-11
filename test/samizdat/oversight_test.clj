@@ -282,6 +282,35 @@
       ((:handler (cell/get-cell! :oversight/reason)) ctx g))
     {:gather g :prob @prob}))
 
+(deftest past-the-early-share-the-tester-runs-before-any-done
+  ;; karamazov-s9qi: vf2 one-vf2-4's first done came at 96 of 118 minutes; the
+  ;; tester it started was cancelled at run end with no report. Past :tester
+  ;; :early-share of the clock, a pass runs it without a ship request.
+  (cells/load-cells!)
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "make it 5000x faster"})
+        limit 7200
+        ctx {:conn conn :run-id rid :config {:run {:time-limit-seconds limit}}
+             :started-ms (- (System/currentTimeMillis) (long (* 0.65 limit 1000)))}
+        g ((:handler (cell/get-cell! :oversight/gather)) ctx {})
+        brief (atom nil)
+        tester-ran (atom 0)]
+    (with-redefs [myc/run-compiled (fn [_ _ data]
+                                     (if (= "TST" (get-in data [:branch :id]))
+                                       (do (swap! tester-ran inc)
+                                           {:branch (assoc (:branch data)
+                                                           :final-result {:ran 2 :failing ["python3 t_speed.py — expected 5000x, got 478x"]}
+                                                           :final-answer "slow")})
+                                       (do (reset! brief (get-in data [:branch :problem]))
+                                           {:branch (assoc (:branch data) :final-answer "ok")})))]
+      ((:handler (cell/get-cell! :oversight/reason)) ctx g)
+      (is (= 1 @tester-ran) "no done was asked for, and the tester ran")
+      (is (= ["python3 t_speed.py — expected 5000x, got 478x"]
+             (journal/tester-failing conn rid)) "its failures are what the done-time rerun reads")
+      (is (str/includes? (str @brief) "not asked to ship") "the brief says it ran early")
+      ((:handler (cell/get-cell! :oversight/reason)) ctx g)
+      (is (= 1 @tester-ran) "once per run"))))
+
 (deftest a-crashed-stage-reaches-the-one-supervisor
   ;; The feature loop's stages fail soft and note :stage-error; the stage
   ;; that used to show those to a supervisor of its own is gone. The stream's
@@ -1670,11 +1699,26 @@
       (is (not (due? {:review-new? true :limit 900 :ran? false} p)) "not on a short clock")
       (is (not (due? {:review-new? true :limit 7200 :ran? true} p)) "once per run")
       (is (not (due? {:review-new? false :limit 7200 :ran? false} p)) "only when asked to ship")
-      (is (not (due? {:review-new? true :limit 7200 :ran? false} (assoc p :enabled? false))))))
+      (is (not (due? {:review-new? true :limit 7200 :ran? false} (assoc p :enabled? false)))))
+    (testing "karamazov-s9qi: past :early-share of the clock it runs without waiting for a done"
+      ;; vf2 one-vf2-4: the first done came at 96 of 118 minutes, the tester
+      ;; started then and was cancelled at run end with no report; the grader
+      ;; failed the speed bar the tester exists to measure.
+      (let [p (assoc p :early-share 0.5)]
+        (is (due? {:review-new? false :limit 7200 :ran? false :time-used 0.55} p))
+        (is (not (due? {:review-new? false :limit 7200 :ran? false :time-used 0.3} p)) "not before the share")
+        (is (not (due? {:review-new? false :limit 7200 :ran? true :time-used 0.8} p)) "still once per run")
+        (is (not (due? {:review-new? false :limit 900 :ran? false :time-used 0.8} p)) "not on a short clock")
+        (is (not (due? {:review-new? false :limit 7200 :ran? false :time-used 0.8} (dissoc p :early-share)))
+            "only when a share is set"))))
   (testing "its failures reach the supervisor's brief"
     (let [t (prompt/render "blind-tests" {:ran 12 :failing ["python3 t.py::srcdoc — expected no <script>, got one"]})]
       (is (str/includes? t "12"))
-      (is (str/includes? t "srcdoc"))))
+      (is (str/includes? t "srcdoc")))
+    (testing "an early report is not an answer to a ship request"
+      (let [t (prompt/render "blind-tests" {:ran 3 :failing ["python3 t.py — expected 5000x, got 478x"] :early true})]
+        (is (str/includes? t "not asked to ship"))
+        (is (not (str/includes? t "stays held until you send"))))))
   (testing "a long clock holds the done long enough for it"
     (let [{:keys [max-wait-seconds max-wait-long-seconds]} (gates/threshold :ship-review)]
       (is (= max-wait-long-seconds (gates/review-max-wait {:run {:time-limit-seconds 7200}})))

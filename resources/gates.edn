@@ -293,7 +293,12 @@
           ;; at done time the harness reruns the command before the first
           ;; :command-separator, each for up to :rerun-timeout-seconds, and a
           ;; done is held while one still fails (the :tester-failures rung).
-          :command-separator " — " :rerun-timeout-seconds 300 :output-chars 1500}
+          :command-separator " — " :rerun-timeout-seconds 300 :output-chars 1500
+          ;; It also starts at any oversight pass once the run has used this
+          ;; share of its clock, without waiting for a done (karamazov-s9qi):
+          ;; vf2 one-vf2-4's first done came at 96 of 118 minutes, and the
+          ;; tester it started was cancelled at run end with no report.
+          :early-share 0.5}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-galq"]
   :doc "The blind tester (karamazov-galq): at the first ship review of a run
