@@ -79,8 +79,15 @@
   [v]
   ;; A list may arrive JSON-encoded as one string ("[\"t3\", \"t4\"]"), so
   ;; brackets and quotes around a reference are punctuation, not part of it.
+  ;; And a branch-qualified turn written either way round ("t122/B1",
+  ;; "B1/t122") is the canonical "B1:t122".
   (vec (remove #(= "" %)
-               (map #(clojure.string/replace % #"^[\[\"']+|[\]\"']+$" "")
+               (map #(let [r (clojure.string/replace % #"^[\[\"']+|[\]\"']+$" "")]
+                       (if-let [[_ t b] (re-matches #"(t\d+)/([A-Za-z0-9._~-]+)" r)]
+                         (str b ":" t)
+                         (if-let [[_ b t] (re-matches #"([A-Za-z0-9._~-]+)/(t\d+)" r)]
+                           (str b ":" t)
+                           r)))
                     (cond (sequential? v) (map str v)
                           (some? v) (clojure.string/split (str v) #"[\s,]+")
                           :else [])))))

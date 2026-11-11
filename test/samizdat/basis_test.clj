@@ -78,7 +78,10 @@
   ;; it read as `["B1:t3"` and `"B1:t4"]`, neither a reference.
   (is (= ["B1:t3" "B1:t4"] (basis/refs "[\"B1:t3\", \"B1:t4\"]")))
   (is (= ["t3" "a#2"] (basis/refs "['t3', 'a#2']")))
-  (is (= ["t3" "B2:t7"] (basis/refs "t3, B2:t7"))))
+  (is (= ["t3" "B2:t7"] (basis/refs "t3, B2:t7")))
+  (testing "a turn written branch-last, as session-window-debug's supervisor did"
+    (is (= ["B1:t122"] (basis/refs "t122/B1")))
+    (is (= ["B1:t122"] (basis/refs "B1/t122")))))
 
 (defn- run-tool [c rid name args]
   (tools/run-tool {:tool-name name :args args :conn c :run-id rid :turn 5
