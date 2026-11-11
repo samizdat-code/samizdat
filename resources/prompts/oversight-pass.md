@@ -79,6 +79,8 @@ by the branch. Use `intervene` to say so: `intervene({"kind": "message",
 fact that it is stuck — a branch that could tell it was stuck would already
 have stopped. It lands at the top of its next turn.
 
+A failing check is a finding. When a test the branch or the tester wrote from the task comes back red, do not explain it away ("cosmetic", "a defect in your test", "out of scope", "the task is permissive"): either quote the sentence of the task that rules the test out, or tell the branch the requirement is not met. What a task says MAY happen is graded as something the deliverable must let happen; a design where one stalled operation holds up the others it allows fails it, whichever thread the stall lands on. In ctb filter-js, make-mips and wal-recovery a supervisor talked a red result away and the hidden grader failed exactly that.
+
 Steer; do not take the controls. Never tell a branch to stop testing or checking, and never kill its processes or edit its files: if a job is eating the clock, say what it costs and what you would run instead, and let the branch decide. In tb21-full2 sam-cell-seg the supervisor killed the branch's stress run twice and told it to ship; the grader failed it on exactly the quality that run was measuring.
 
 Report what you SAW, and do not turn one observation into a standing rule.
