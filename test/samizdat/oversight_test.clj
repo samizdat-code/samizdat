@@ -1598,6 +1598,26 @@
       (is (gates/tester-applies? {:run {:time-limit-seconds 7200}}))
       (is (not (gates/tester-applies? {:run {:time-limit-seconds 900}}))))))
 
+(deftest failures-the-tester-found-hold-until-the-supervisor-approves
+  ;; session-window-debug rerun: the tester reported six failures, a pass that
+  ;; ended after the report read as the review's answer, and the branch shipped
+  ;; at 30 of 120 minutes with three still failing, though the supervisor had
+  ;; just told it they were fixable. With failures on record only a review
+  ;; releases the hold, and its wait counts from the report.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        state (fn [] (journal/review-state conn rid 600 {:tester? true}))]
+    (journal/note! conn rid :oversight-quiet {:data {}})
+    (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 10 :data {}})
+    (Thread/sleep 5)
+    (journal/note! conn rid :tester-report {:data {:ran 14 :failing ["t05 merge"]}})
+    (Thread/sleep 5)
+    (journal/note! conn rid :oversight {:data {}})
+    (is (:pending? (state)) "a pass ending does not release failures the tester found")
+    (Thread/sleep 5)
+    (interventions/submit! conn rid {:kind "review" :issued-by "supervisor" :payload "fixed and approved"})
+    (is (not (:pending? (state))) "the supervisor's review does")))
+
 (deftest a-blind-tester-checks-the-deliverable-from-the-task-alone
   ;; karamazov-galq. ctb-r1..r4: most failures were hidden edge cases the
   ;; supervisor approved after reading the code, sharing the implementer's

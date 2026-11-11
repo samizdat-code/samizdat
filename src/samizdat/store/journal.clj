@@ -1149,19 +1149,29 @@
                  (nil? (:report r)) nil
                  (> (:report r) (:req r)) (:report r)
                  :else (:req r))
-        anchor-at (when anchor (:created_at (at anchor)))
+        anchor-row (when anchor (at anchor))
+        anchor-at (:created_at anchor-row)
+        ;; Failures the tester found are released only by the supervisor's
+        ;; review, never by a pass merely ending (session-window-debug: the
+        ;; branch shipped at 30 of 120 minutes with three still failing).
+        open-failures? (when (and tester? anchor (= anchor (:report r)))
+                         (some-> (db/fetch-one conn ["SELECT data FROM events WHERE id = ?" anchor])
+                                 :data str (json/read-str :key-fn keyword) :failing seq boolean))
         answered? (when anchor
-                    (or (and (:pass r) (> (:pass r) anchor))
+                    (or (and (not open-failures?) (:pass r) (> (:pass r) anchor))
                         (some? (db/fetch-one conn ["SELECT 1 AS x FROM interventions
                                                      WHERE run_id = ? AND issued_by = 'supervisor'
                                                        AND kind = 'review'
                                                        AND created_at > ? LIMIT 1"
                                                     run-id anchor-at]))))]
-    (let [pending? (boolean (and req (not answered?)
-                                 (< (double (or (:age req) 0)) (double (or max-wait-seconds 0)))))]
+    ;; The wait counts from what the answer has to follow: the request, or the
+    ;; tester's report, so the branch has time to act on what it found.
+    (let [age (double (or (:age (or anchor-row req)) 0))
+          pending? (boolean (and req (not answered?)
+                                 (< age (double (or max-wait-seconds 0)))))]
       (cond-> {:supervised? (some? (:supervised r)) :pending? pending?}
         ;; How long the hold has left, for the supervisor's own deadline gate.
-        pending? (assoc :left-seconds (long (- (double max-wait-seconds) (double (or (:age req) 0))))))))))
+        pending? (assoc :left-seconds (long (- (double max-wait-seconds) age))))))))
 
 (defn minutes-since
   "Minutes since the newest note of `kind` on this run, or since the run's
