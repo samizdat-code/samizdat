@@ -1111,6 +1111,13 @@
                             ORDER BY id"
                           run-id branch-id])))
 
+(defn tester-failing
+  "The :failing entries of the run's latest :tester-report, or nil."
+  [conn run-id]
+  (some-> (db/fetch-one conn ["SELECT data FROM events WHERE run_id = ? AND kind = 'tester-report'
+                               ORDER BY id DESC LIMIT 1" run-id])
+          :data str not-empty (json/read-str :key-fn keyword) :failing seq vec))
+
 (defn review-state
   "Whether a ship review is waiting on the supervisor (karamazov-oi16.11).
   `:supervised?` is whether the supervisor stream has looked at this run at

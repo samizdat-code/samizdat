@@ -1618,6 +1618,37 @@
     (interventions/submit! conn rid {:kind "review" :issued-by "supervisor" :payload "fixed and approved"})
     (is (not (:pending? (state))) "the supervisor's review does")))
 
+(deftest a-done-is-held-while-the-tester-s-failing-commands-still-fail
+  ;; vf2-speedup-networkx rerun: the tester reported 130x against the 5000x
+  ;; the task states, and the supervisor approved anyway, asking only that the
+  ;; answer say so; the grader measured 164x. Its failures are commands: the
+  ;; harness reruns them before a done ships, whatever the review said.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "make it fast"})
+        failing? (atom true)
+        ran (atom [])
+        done! (fn [b turn]
+                (with-redefs [samizdat.security.policy/run-shell
+                              (fn [ctx] (swap! ran conj (get-in ctx [:args :command]))
+                                {:category (if @failing? :failure :success) :result "x"})]
+                  (tools/run-tool {:branch b :tool-name "done" :turn turn :conn conn :run-id rid
+                                   :started-ms (System/currentTimeMillis)
+                                   :config {:run {:style :lean :time-limit-seconds 7200}}
+                                   :args {:answer "Done, and fast."}})))
+        b (assoc (state/new-branch {:id "B1" :problem "make it fast"}) :ship-refused {:supervisor-review 1 :time-left 1})]
+    (journal/note! conn rid :oversight-quiet {:data {}})
+    (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 1 :data {}})
+    (Thread/sleep 5)
+    (journal/note! conn rid :tester-report {:data {:ran 3 :failing ["cd /tmp/blind-tests && python t_speed.py — expected >= 5000x, got 130x"]}})
+    (Thread/sleep 5)
+    (let [id (interventions/submit! conn rid {:kind "review" :issued-by "supervisor" :payload "approved, say it is 42x"})]
+      (interventions/resolve! conn rid id :applied "delivered" 9))
+    (let [r (done! b 10)]
+      (is (str/includes? (str (:result r)) "t_speed.py") "held, naming what still fails")
+      (is (= ["cd /tmp/blind-tests && python t_speed.py"] @ran) "the command, not the description"))
+    (reset! failing? false)
+    (is (str/includes? (str (:result (done! b 12))) "accepted") "once it passes, the done ships")))
+
 (deftest a-blind-tester-checks-the-deliverable-from-the-task-alone
   ;; karamazov-galq. ctb-r1..r4: most failures were hidden edge cases the
   ;; supervisor approved after reading the code, sharing the implementer's

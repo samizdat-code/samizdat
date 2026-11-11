@@ -288,7 +288,12 @@
         index into it."}
 
  :tester
- {:value {:enabled? true :min-clock-seconds 3600 :max-turns 30}
+ {:value {:enabled? true :min-clock-seconds 3600 :max-turns 30
+          ;; A failure the tester reports is "<command> — expected …, got …";
+          ;; at done time the harness reruns the command before the first
+          ;; :command-separator, each for up to :rerun-timeout-seconds, and a
+          ;; done is held while one still fails (the :tester-failures rung).
+          :command-separator " — " :rerun-timeout-seconds 300 :output-chars 1500}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-galq"]
   :doc "The blind tester (karamazov-galq): at the first ship review of a run
@@ -4568,6 +4573,16 @@
      :advisory? true
      :when (and unread-directive? (not verdict?))
      :message-form unread-hold}
+    {:name :tester-failures
+     ;; vf2-speedup-networkx: the blind tester measured 130x against the 5000x
+     ;; the task states, the supervisor approved anyway ("That is 42x... approval
+     ;; to ship"), and the grader measured 164x. The tester's failures are
+     ;; commands; the harness reran them at done time and they still failed. A
+     ;; done is held while one does, until winding down, whatever the review said.
+     :advisory? true
+     :when (and (seq tester-still-failing) time-used wind-down (not verdict?)
+                (< time-used wind-down))
+     :message-form tester-hold}
     {:name :supervisor-review
      ;; karamazov-oi16.11. 20 of 23 failing TB 2.1 trials ended on an accepted done,
      ;; several with half their time left (protein-assembly at 38%), and the supervisor

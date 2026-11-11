@@ -247,6 +247,7 @@
    :directive-outcomes "prompts/directive-outcomes.md"
    :ship-review "prompts/ship-review.md"
    :ship-review-hold "prompts/ship-review-hold.md"
+   :tester-failures-hold "prompts/tester-failures-hold.md"
    :review-deadline "prompts/review-deadline.md"
    :unread-directive-hold "prompts/unread-directive-hold.md"
    :ship-review-notice "prompts/ship-review-notice.md"

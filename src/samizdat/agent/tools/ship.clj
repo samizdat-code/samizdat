@@ -26,6 +26,7 @@
             [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
             [samizdat.sandbox.sci :as sandbox]
+            [samizdat.security.policy :as policy]
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
             [samizdat.store.tasks :as tasks]
@@ -442,7 +443,11 @@
                   ;; A directive to this branch is queued and no boundary has
                   ;; delivered it yet, and what to say.
                   ~'unread-directive? (get ~'ctx :unread-directive? false)
-                  ~'unread-hold       (get ~'ctx :unread-hold)]
+                  ~'unread-hold       (get ~'ctx :unread-hold)
+                  ;; The blind tester's failing commands that still fail when
+                  ;; rerun now, and what to say.
+                  ~'tester-still-failing (get ~'ctx :tester-still-failing)
+                  ~'tester-hold       (get ~'ctx :tester-hold)]
               ~form)))
 
 (def ship-gates
@@ -461,6 +466,32 @@
                               (compile-rung-form (:message-form rung))
                               (:message rung))))
           (gates/threshold :ship-gates))))
+
+(defn tester-still-failing
+  "The blind tester's latest reported failures whose command still fails when
+  rerun now in the run's root, as {:command :expected :output} (gates.edn
+  :tester). A command the policy refuses or asks about cannot be judged here
+  and is left out."
+  [ctx]
+  (let [{:keys [command-separator rerun-timeout-seconds output-chars]} (gates/threshold :tester)]
+    (when command-separator
+      (vec (for [entry (journal/tester-failing (:conn ctx) (:run-id ctx))
+                 :let [s (str entry)
+                       i (str/index-of s command-separator)
+                       command (str/trim (if i (subs s 0 i) s))]
+                 :when (not (str/blank? command))
+                 :let [r (policy/run-shell (cond-> (assoc (select-keys ctx [:conn :run-id :root])
+                                                          :args {:command command})
+                                             rerun-timeout-seconds
+                                             (assoc :timeout-ms (* 1000 rerun-timeout-seconds))))]
+                 :when (and (not (contains? #{:deny :ask} (get-in r [:policy :effect])))
+                            (contains? #{:failure :timeout} (:category r)))]
+             {:command command
+              :expected (when i (str/trim (subs s (+ i (count command-separator)))))
+              :output (let [o (str (:result r))]
+                        (if (and output-chars (> (count o) output-chars))
+                          (subs o (- (count o) output-chars))
+                          o))})))))
 
 (defn ship-gate-rung
   "The first lexical ship rung that fires on this evidence, as `{:name :message}`,
@@ -676,6 +707,15 @@
                  (journal/review-state (:conn ctx) (:run-id ctx)
                                        (gates/review-max-wait (:config ctx))
                                        {:tester? (gates/tester-applies? (:config ctx))}))
+        time-used (gates/time-used (get-in ctx [:config :run :time-limit-seconds])
+                                   (:started-ms ctx) (System/currentTimeMillis))
+        wind-down (:wind-down (gates/threshold :time-budget))
+        ;; The blind tester's reported failures, rerun now: a review that
+        ;; approved past them does not make them pass (vf2-speedup-networkx).
+        still-failing (when (and (not (:advisory? branch)) (:conn ctx) (:run-id ctx)
+                                 time-used wind-down (< time-used wind-down)
+                                 (gates/tester-applies? (:config ctx)))
+                        (tester-still-failing ctx))
         ;; Directives queued for this branch that no boundary has delivered:
         ;; a done ahead of them ships without the branch having read them.
         unread (when (and (:conn ctx) (:run-id ctx) (:id branch))
@@ -692,9 +732,11 @@
                  :unaccounted-checklist (checklist/unaccounted items accounted)
                  :checklist-items items
                  :done-streak (state/done-streak branch)
-                 :time-used (gates/time-used (get-in ctx [:config :run :time-limit-seconds])
-                                             (:started-ms ctx) (System/currentTimeMillis))
-                 :wind-down (:wind-down (gates/threshold :time-budget))
+                 :time-used time-used
+                 :wind-down wind-down
+                 :tester-still-failing still-failing
+                 :tester-hold (when (seq still-failing)
+                                (prompt/render "tester-failures-hold" {:failing still-failing}))
                  :supervised? (:supervised? review)
                  :review-pending? (:pending? review)
                  :review-hold (prompt/render "ship-review-hold" {:pending (:pending? review)})
