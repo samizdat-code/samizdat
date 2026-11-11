@@ -26,7 +26,7 @@
             [samizdat.agent.verify :as verify]
             [samizdat.llm.client :as llm]
             [samizdat.progress :as progress]
-            [samizdat.sdiff.address :as address]
+            [samizdat.sdiff.reads :as reads]
             [samizdat.security.flow :as flow]))
 
 (defn run-ended!
@@ -34,7 +34,7 @@
   retired, the file reads its branches made and where its branches last were. Each is best effort: one
   failing must not keep the rest."
   [run-id]
-  (doseq [f [verify/unseal-run! flow/forget-run! llm/forget-retired! address/forget-reads!
+  (doseq [f [verify/unseal-run! flow/forget-run! llm/forget-retired! reads/forget-reads!
              progress/forget-run! context-edit/forget-run!
              (requiring-resolve 'samizdat.agent.tools.resource/forget-run!)
              (requiring-resolve 'samizdat.inference.environment/forget-run!)

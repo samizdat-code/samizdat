@@ -56,7 +56,7 @@
   - `:repaired` is present only when the text actually CHANGED, and `:code` is
     then the changed text. A note describing something that did not happen is
     how the original lie was told."
-  (:require [samizdat.lisp :as lisp]
+  (:require [jolt-lsp.syntax :as lisp]
             [samizdat.prompt :as prompt]))
 
 (defn explain

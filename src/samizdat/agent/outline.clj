@@ -9,8 +9,15 @@
   range it wants instead: `read_file({path, outline: true})` returns it, and
   an offset and limit read the one definition. Pure; what counts as a
   definition is gates.edn :outline :patterns, one regex per language shape
-  whose first group is the name."
-  (:require [clojure.string :as str]))
+  whose first group is the name.
+
+  A Clojure file is outlined from jolt-lsp's parse instead (`clojure-outline`):
+  each top-level form whose head is a defining form, with the lines the form
+  really spans, so a comment block or a `#_` form between two definitions is
+  nobody's, and a definition whose name carries metadata is still found."
+  (:require [clojure.string :as str]
+            [jolt-lsp.forms :as forms]
+            [jolt-lsp.tree :as tree]))
 
 (defn outline
   "Every line of `text` a pattern in `patterns` matches, as
@@ -30,3 +37,19 @@
                                         (dec (:line nxt))
                                         (count lines))))
                       hits))))
+
+(defn clojure-outline
+  "Every top-level form of Clojure `text` whose head is in `heads` (strings),
+  as [{:line :end :name}] (1-based, inclusive, the form's own lines). The
+  parse is tolerant — a broken form is masked, the ones around it kept — so
+  an empty outline, not an error, is what tells the caller to fall back to
+  the patterns."
+  [text heads]
+  (try
+    (vec (for [{:keys [range node]} (forms/top-level-forms (str text))
+               :when (= :list (tree/tag node))
+               :let [[h nm] (map (comp tree/token-text tree/meta-form)
+                                 (take 2 (tree/children node)))]
+               :when (contains? heads h)]
+           {:line (nth range 0) :end (nth range 2) :name (or nm h)}))
+    (catch Throwable _ nil)))

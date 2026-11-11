@@ -104,7 +104,6 @@
             [samizdat.beam-cancel-test]
             [samizdat.eval-deadline-test]
             [samizdat.events-flow-test]
-            [samizdat.lsp-cancel-test]
             [samizdat.finish-signal-test]
             [samizdat.tasks-test]
             [samizdat.kernel-write-test]
@@ -148,7 +147,6 @@
             [samizdat.hashline-test]
             [samizdat.control-test]
             [samizdat.util-test]
-            [samizdat.lisp-test]
             [samizdat.lsp-test]
             [samizdat.lsp-edit-test]
             [samizdat.resource-test]
@@ -227,9 +225,7 @@
             [samizdat.security.flow-handoff-test]
             [samizdat.security.replay-test]
             [samizdat.security.token-test]
-            [samizdat.sdiff.core-test]
             [samizdat.sdiff.address-test]
-            [samizdat.sdiff.names-test]
             [samizdat.sdiff.group-test]
             [samizdat.llm-fallback-test]
             [samizdat.injection-probe-test]
@@ -435,7 +431,6 @@
     samizdat.beam-cancel-test
     samizdat.eval-deadline-test
     samizdat.events-flow-test
-    samizdat.lsp-cancel-test
     samizdat.finish-signal-test
     samizdat.tasks-test
     samizdat.kernel-write-test
@@ -479,7 +474,7 @@
     samizdat.hashline-test
     samizdat.control-test
     samizdat.util-test
-    samizdat.lisp-test
+   
     samizdat.lsp-test
     samizdat.lsp-edit-test
     samizdat.resource-test
@@ -558,9 +553,9 @@
     samizdat.security.flow-handoff-test
     samizdat.security.replay-test
     samizdat.security.token-test
-    samizdat.sdiff.core-test
+   
     samizdat.sdiff.address-test
-    samizdat.sdiff.names-test
+   
     samizdat.sdiff.group-test
     samizdat.llm-fallback-test
     samizdat.injection-probe-test

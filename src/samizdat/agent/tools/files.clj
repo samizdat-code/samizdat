@@ -26,8 +26,10 @@
             [samizdat.agent.files :as files]
             [samizdat.agent.source :as source]
             [samizdat.agent.tools.base :as base]
-            [samizdat.sdiff.address :as address]
-            [samizdat.sdiff.core :as sdiff]
+            [jolt-lsp.extract :as lsp-extract]
+            [jolt-lsp.sdiff.address :as address]
+            [samizdat.sdiff.reads :as reads]
+            [jolt-lsp.sdiff.core :as sdiff]
             [samizdat.agent.gates :as gates]
             [samizdat.prompt :as prompt]
             [samizdat.repl.route :as route]
@@ -35,12 +37,11 @@
             [samizdat.userspace :as userspace]))
 
 (defn- declared-ns
-  "The namespace a Clojure source declares, from its `(ns name` head, or nil."
+  "The namespace a Clojure source declares, as jolt-lsp's analyzer reads its
+  ns form (metadata and reader conditionals included), or nil."
   [source]
-  (when-let [i (str/index-of source "(ns ")]
-    (let [tail (str/triml (subs source (+ i 4)))
-          ends (keep #(str/index-of tail %) [" " "\n" ")" "\t" (str (char 13))])]
-      (not-empty (subs tail 0 (if (seq ends) (apply min ends) (count tail)))))))
+  (some-> (try (lsp-extract/ns-name source "declared.clj") (catch Throwable _ nil))
+          str not-empty))
 
 (defn read-report
   "Whether the Clojure file at `path` reads, as the file tools would say it, or nil when it
@@ -127,7 +128,7 @@
 
 (defmethod base/run-tool "read_file" [{:keys [branch args] :as ctx}]
   ;; {form, at?}: the lines of one form, or one place in it, by its name
-  ;; (samizdat.sdiff.address) rather than by line numbers.
+  ;; (jolt-lsp.sdiff.address) rather than by line numbers.
   (if (str/blank? (str (:form args)))
     (let [r (files/read-file ctx)]
       ;; A WHOLE read of a Clojure file says which forms changed since this
@@ -139,7 +140,7 @@
                      (sdiff/clj? (str (:path args))))
             (try
               (let [abs (files/resolve-read! ctx (files/ctx-reference-roots ctx) (str (:path args)))
-                    d (address/since-read! (:run-id ctx) (:id branch) (str abs) (slurp abs))]
+                    d (reads/since-read! (:run-id ctx) (:id branch) (str abs) (slurp abs))]
                 (when (and d (or (seq (:changed d)) (seq (:added d)) (seq (:removed d))))
                   (update r :result str "\n\n"
                           (prompt/render "forms-since-read"

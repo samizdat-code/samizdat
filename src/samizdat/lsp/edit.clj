@@ -120,10 +120,20 @@
     (fail :unsupported-file-operation {:kind kind :uri (or uri oldUri)})))
 
 (defn workspace-edit->members
-  "Convert a WorkspaceEdit to staged resource data without publishing anything."
+  "Convert a WorkspaceEdit to staged resource data without publishing anything.
+  A file with text edits that is also renamed is ONE member: LSP applies the
+  edits, then the rename, so the rename carries the edited text."
   [edit read-observation]
-  (vec
-   (concat
-    (map (fn [[uri edits]] (member read-observation uri edits)) (text-edits edit))
-    (map #(file-member read-observation %)
-         (remove :textDocument (:documentChanges edit))))))
+  (let [writes (mapv (fn [[uri edits]] (member read-observation uri edits)) (text-edits edit))
+        files (mapv #(file-member read-observation %)
+                    (remove :textDocument (:documentChanges edit)))
+        edited (into {} (map (juxt :uri identity)) writes)
+        renamed (set (keep #(when (= :rename (:operation %)) (:uri %)) files))]
+    (vec
+     (concat
+      (remove #(contains? renamed (:uri %)) writes)
+      (map (fn [m]
+             (if-let [w (and (= :rename (:operation m)) (edited (:uri m)))]
+               (assoc m :replacement (:replacement w))
+               m))
+           files)))))

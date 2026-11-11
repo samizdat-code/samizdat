@@ -36,7 +36,7 @@
             [samizdat.agent.source :as source]
             [samizdat.agent.tools.base :as base]
             [samizdat.agent.tools.repl]
-            [samizdat.lisp]))
+            [jolt-lsp.syntax]))
 
 (deftest wholly-authored-text-is-repaired
   (testing "a trailing truncation is closed and the repair is reported"
@@ -141,7 +141,7 @@
     (doseq [text ["(defn f [] (+ 1 2)" "(inc 1)))" "(defn f [] 1)"]]
       (let [r (source/vet text {:whole? true})]
         (when-let [c (:code r)]
-          (is (nil? (samizdat.lisp/diagnose c))
+          (is (nil? (jolt-lsp.syntax/diagnose c))
               (str "vet returned code that does not load: " (pr-str c))))))))
 
 (deftest non-clojure-text-is-none-of-this-namespaces-business
@@ -222,7 +222,7 @@
         (str "nothing after the label: " (pr-str (:result r))))))
 
 (deftest a-form-swallowing-the-next-is-explained
-  (with-redefs [samizdat.lisp/indent-repair (constantly nil)]
+  (with-redefs [jolt-lsp.syntax/indent-repair (constantly nil)]
     (let [{:keys [note]} (source/vet "(defn a [s]\n  (inc s)\n\n(defn b [] 2)\n" {:whole? true :clojure? true})]
       (is (str/includes? note "line 1"))
       (is (str/includes? note "Line 4")))))

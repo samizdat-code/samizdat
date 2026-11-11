@@ -69,6 +69,23 @@
     (is (= 3 @writes) "create, delete, and rename sources are observed")
     (is (zero? (count (filter #(= :write (:operation %)) members))))))
 
+(deftest a-file-edited-then-renamed-is-one-member
+  ;; LSP orders a WorkspaceEdit: a file's text edits, then its rename. Two
+  ;; members for one file were refused as a duplicate resource, so a move
+  ;; that also rewrote the moved file's ns form could not publish.
+  (let [read-observation (fn [uri]
+                           {:uri uri :resolver :workspace :identity (subs uri 7)
+                            :revision "r1" :content "(ns old)\n"
+                            :metadata {:path (subs uri 7)}})
+        members (edit/workspace-edit->members
+                 {:changes {"file:///p/old.clj" [{:range (range* 0 4 0 7) :newText "new"}]}
+                  :documentChanges [{:kind "rename" :oldUri "file:///p/old.clj"
+                                     :newUri "file:///p/new.clj"}]}
+                 read-observation)]
+    (is (= [:rename] (mapv :operation members)))
+    (is (= "(ns new)\n" (:replacement (first members))) "the edits travel with the move")
+    (is (= "(ns old)\n" (:original (first members))))))
+
 (deftest unsupported-document-uris-are-refused
   (is (= :unsupported-uri
          (try

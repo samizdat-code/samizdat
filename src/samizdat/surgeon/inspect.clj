@@ -10,8 +10,8 @@
   (:require [clojure.string :as str]
             [samizdat.resource.workspace :as workspace]
             [samizdat.surgeon.edit-dsl :as edit-dsl]
-            [samizdat.surgeon.outline :as outline]
-            [samizdat.surgeon.owner-hypotheses :as owner-hypotheses]
+            [jolt-lsp.surgeon.outline :as outline]
+            [jolt-lsp.surgeon.owner-hypotheses :as owner-hypotheses]
             [samizdat.surgeon.structural-lens :as structural-lens]))
 
 (defn outline-source

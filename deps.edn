@@ -15,7 +15,7 @@
  ;; cannot create its AOT cache runs without one instead of dying, which a
  ;; sandboxed image needs (jolt-lang/jolt#1335); and a set or map literal
  ;; whose computed keys collide throws, as on the JVM.
- :jolt/min-version "0.8.22"
+ :jolt/min-version "0.8.25"
 
  :paths ["src" "resources"]
 
@@ -91,6 +91,15 @@
         {:git/url "https://github.com/jlt-commons/jolt-metrics"
          :git/tag "v0.3.2"
          :git/sha "5f36452d3b998f3ccb3b078c0433098d5312fe8a"}
+
+        ;; Clojure code intelligence: the syntax check and repair every write
+        ;; of Clojure goes through, the project index the lsp tool answers
+        ;; from, structural diff (sdiff) and the restructuring plans behind
+        ;; the surgeon tools. Moved out of samizdat into its own library.
+        io.github.jlt-commons/jolt-lsp
+        {:git/url "https://github.com/jlt-commons/jolt-lsp"
+         :git/tag "v0.2.0"
+         :git/sha "fae804f70b92a92a621ea6cffcc3dcb94796cafa"}
 
         io.github.jlt-commons/augur
         {:git/url "https://github.com/jlt-commons/augur"

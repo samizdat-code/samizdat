@@ -23,7 +23,7 @@
             [clojure.test :refer [deftest testing is]]
             [samizdat.agent.tools]
             [jolt.fs :as fs]
-            [samizdat.sdiff.address :as address]))
+            [samizdat.sdiff.reads]))
 
 (def src
   (str "(ns demo.core)\n"
@@ -38,23 +38,6 @@
        "  ([a b] (let [cap b] (+ a cap))))\n"
        "\n"
        "(defmethod run :fast [m] m)\n"))
-
-(deftest a-form-by-its-id-or-its-unique-name
-  (is (= [3 6] (:rows (address/locate src "defn route"))))
-  (is (= [3 6] (:rows (address/locate src "route"))) "a bare name when it is unique")
-  (is (= [12 12] (:rows (address/locate src "defmethod run :fast"))))
-  (let [miss (address/locate src "routes")]
-    (is (= :none (:error miss)))
-    (is (some #{"defn route"} (:forms miss)) "a miss lists what there is")))
-
-(deftest a-place-inside-a-form-by-its-path-or-a-unique-end-of-it
-  (is (= [4 4] (:rows (address/locate src "route" "body › binding cap"))))
-  (is (= [4 4] (:rows (address/locate src "route" "binding cap"))) "an end no sibling shares")
-  (is (= [10 10] (:rows (address/locate src "helper" "arity 2 › let 2 › binding cap"))))
-  (testing "an end two places share is ambiguous, and both are named"
-    (let [r (address/locate src "helper" "vector 1")]
-      (is (= :ambiguous (:error r)))
-      (is (= 2 (count (:candidates r)))))))
 
 (deftest read-file-takes-a-form
   (let [root (str (fs/create-temp-dir))]
@@ -93,4 +76,4 @@
         (is (not (re-find #"changed:.*defn helper" r)) "moving a form or adding a comment is not a change"))
       (testing "per branch: a sibling's first read has nothing to compare"
         (is (not (str/includes? (read "B2") "since you last read"))))
-      (finally (samizdat.sdiff.address/forget-reads! "R")))))
+      (finally (samizdat.sdiff.reads/forget-reads! "R")))))

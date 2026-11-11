@@ -13,7 +13,7 @@
             [samizdat.resource.workspace :as workspace]
             [samizdat.surgeon.binding-rename :as binding-rename]
             [samizdat.surgeon.intent-transaction :as intent]
-            [samizdat.surgeon.rename :as rename]
+            [jolt-lsp.surgeon.rename :as rename]
             [samizdat.surgeon.semantic :as semantic]
             [samizdat.surgeon.tool :as tool]))
 
@@ -194,7 +194,8 @@
                           observations)
             analysis (binding-analysis ctx changes sources policy)
             plan (intent/compile-changes sources {:changes changes :expect (base/arg ctx :expect)}
-                                         {:binding-analysis analysis})]
+                                         {:binding-analysis analysis
+                                          :max-candidate-files (:max-candidate-files policy)})]
         (publish-plan ctx registry policy observations
                       (vec (distinct (mapcat :in changes))) plan nil)))))
 

@@ -56,7 +56,6 @@
             [mycelium.core :as myc]
             [samizdat.session :as session]
             [samizdat.steps :as steps]
-            [samizdat.lsp.client :as lsp-client]
             [samizdat.mcp.client :as mcp-client]
             [samizdat.store.db :as db]
             [samizdat.store.runs :as runs]
@@ -358,7 +357,6 @@
                        ;; built-in chain instead of resolving manifests against
                        ;; an unbound store.
                        ["repair seam" #(fence/install-repair! nil)]
-                       ["lsp clients" #(lsp-client/shutdown-all!)]
                        ["mcp servers" #(mcp-client/shutdown-all!)]
                        ["debug adapters" #((requiring-resolve 'samizdat.debug.sessions/close-all!))]
                        ;; Unbind BEFORE the connection closes: a userspace read

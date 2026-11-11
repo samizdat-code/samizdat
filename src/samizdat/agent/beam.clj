@@ -844,9 +844,8 @@
   transcript, and stop working on a replay that did not include B1. The beam's
   premise is that branches are independent lines of inquiry.
 
-  clojure-lsp is deliberately NOT disposed here: its clients are keyed by
-  ROOT, every branch of a run shares one root, and one server per root is
-  correct. `system/stop!` sweeps those.
+  The lsp index is deliberately NOT disposed here: it is keyed by ROOT and
+  every branch of a run shares one root.
 
   Safe to call twice by contract — `repl/close-session` is idempotent on an
   unknown name — and the run-end teardown still sweeps every branch in case

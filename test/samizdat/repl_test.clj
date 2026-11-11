@@ -111,22 +111,22 @@
 (deftest can-reach-the-live-harness-image
   ;; The homoiconic point: the agent evaluates against the running harness, so
   ;; it can inspect and exercise samizdat's own code, not a fresh sandbox.
-  (let [r (repl/eval-code "(require '[samizdat.lisp :as l]) (:status (l/balance \"(+ 1 2\"))")]
+  (let [r (repl/eval-code "(require '[jolt-lsp.syntax :as l]) (:status (l/balance \"(+ 1 2\"))")]
     (is (:ok r))
     (is (= ":repaired" (:value r)))))
 
 (deftest doc-of-a-project-var
   (testing "arglists and docstring of samizdat's own code"
-    (let [r (repl/doc-sym "samizdat.lisp/balance")]
+    (let [r (repl/doc-sym "jolt-lsp.syntax/balance")]
       (is (= '([s]) (:arglists r)))
       (is (str/includes? (:doc r) "delimiter"))))
   (testing "an unknown symbol is reported, not thrown"
-    (is (:not-found (repl/doc-sym "samizdat.lisp/nope")))))
+    (is (:not-found (repl/doc-sym "jolt-lsp.syntax/nope")))))
 
 (deftest complete-a-prefix
   (testing "public symbols of a namespace matching a prefix"
-    (let [ms (repl/complete "samizdat.lisp/b")]
-      (is (some #{"samizdat.lisp/balance"} ms))))
+    (let [ms (repl/complete "jolt-lsp.syntax/b")]
+      (is (some #{"jolt-lsp.syntax/balance"} ms))))
   (testing "a bare prefix completes across clojure.core"
     (is (some #{"reduce"} (repl/complete "redu")))))
 

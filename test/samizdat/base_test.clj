@@ -236,31 +236,6 @@
                    comes back as it was: a bound on a loop, not a decision
                    (karamazov-0e2c.11)."}}
 
-   "src/samizdat/sdiff/group.clj"
-   {:vocabulary {"(^|/)test/|_test\\.clj"
-                 "Which files are tests, so calling from many of them does not
-                  make a hub: ported from sdiff (karamazov-0e2c.17)."}}
-
-   "src/samizdat/sdiff/names.clj"
-   {:vocabulary {"(^|/)test/|_test\\.clj"
-                 "Which files are tests, so their aliases (SUT) do not name
-                  namespaces: ported from sdiff (karamazov-0e2c.16)."}
-    :threshold {3 "sdiff's namespaces of three or more segments are the ones
-                   worth shortening; ported as written (karamazov-0e2c.16)."}}
-
-   "src/samizdat/sdiff/core.clj"
-   {:vocabulary {"\\.(clj|cljs|cljc|edn|bb)$"
-                 "Which files are Clojure source: the language's extensions,
-                  ported from sdiff (karamazov-0e2c)."
-                 ":private"
-                 "Clojure's own metadata key, read to tell a private def."}
-    :threshold {60 "sdiff's display cut for a form's source in a change line;
-                    ported as written (karamazov-0e2c)."
-                0.5 "sdiff's pair-threshold: a removed and an added form pair
-                     when half their structure and tokens agree. Its author
-                     tuned it on 25 merges; used for reporting only, never
-                     for a decision (karamazov-0e2c.1)."}}
-
    "src/samizdat/sandbox/sci.clj"
    {:vocabulary {"Could not find namespace ([\\w.\\-]+)"
                  "SCI's own resolution-failure wording, matched to say what
@@ -482,16 +457,6 @@
    {:vocabulary {"(?i)Content-Length:\\s*(\\d+)"
                  "The DAP base protocol header. Fixed by the specification;
                   nobody may retune it."}}
-
-   "src/samizdat/lsp/client.clj"
-   {:threshold {5000 "LSP request timeout."
-                20000 "LSP read timeout."}
-    :vocabulary {"(?i)Content-Length:\\s*(\\d+)"
-                 "The LSP base protocol header. Fixed by the specification;
-                  nobody may retune it."}}
-
-   "src/samizdat/lisp.clj"
-   {:threshold {256 "Reader recursion bound."}}
 
    "src/samizdat/agent/state.clj"
    {:threshold
@@ -780,8 +745,6 @@
     }
    "src/samizdat/agent/tools/lsp.clj"
    #{
-    "clojure-lsp is not installed; install it to use the lsp tool"
-    "could not start clojure-lsp for root"
     "line and col must be integers. "
     }
    "src/samizdat/agent/tools/messages.clj"
@@ -847,9 +810,6 @@
    #{
     "Review what you have and ship it."
     }
-   ;; samizdat/lisp.clj is off the backlog entirely: `balance` answers in DATA
-   ;; (a reason plus line/col plus the reader's own words) and every sentence
-   ;; around it moved to resources/prompts/file-tool.md, keyed by reason.
    "src/samizdat/llm/client.clj"
    #{
     " :max-tokens or shorten the context."
@@ -878,11 +838,6 @@
     "(an infinite loop or a heavy computation?). If it genuinely "
     "(no docstring — jolt strips core-var metadata)"
     "ms — the code ran too long "
-    }
-   ;; Ported verbatim from sdiff (karamazov-0e2c); its report's own label.
-   "src/samizdat/sdiff/core.clj"
-   #{
-    "signature only: parameters changed, body did not"
     }
    "src/samizdat/smoke.clj"
    #{

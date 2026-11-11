@@ -204,14 +204,16 @@
     :summary "What a person allowed ALWAYS on a run in this session (the permission dialog's `a`): shell grant patterns like `cargo *`, merged into the policy's grants for that run, held in memory only, and dropped when the run ends. Never written to the project. Where no pattern can stand for the command — a flow gap, a compound that hides what it runs — `a` allows that exact text again for the run instead (the request carries :always-exact)."}
    {:name samizdat.security.token/issue!
     :summary "The HTTP API's bearer token: issued when the server starts, written owner-only to ~/.config/samizdat/http/<port>.token (a place no shell command or eval image can read), required on every request but /health, dropped on stop. samizdat.api.client and the event stream send it for a loopback base URL."}
-   {:name samizdat.sdiff.group/by-calls
-    :summary "The critic's structural report opens with the changed forms grouped by the calls between them (read from the source: a bare name in the same namespace, an alias or full name elsewhere), forms used from three or more other files set apart as shared so they do not join every caller into one group."}
-   {:name samizdat.sdiff.names/used
+   {:name jolt-lsp.sdiff.group/by-calls
+    :summary "The critic's structural report opens with the changed forms grouped by the calls between them (a bare name in the same namespace, an alias or full name elsewhere, with namespaces and aliases resolved by jolt-lsp's analyzer), forms used from three or more other files set apart as shared so they do not join every caller into one group."}
+   {:name jolt-lsp.sdiff.names/used
     :summary "Shortened names in the critic's structural report: a long path or namespace becomes its shortest unique suffix (or the alias its files agree on) only where that saves more than the legend line costs, and the legend leads the report. Not used in anything a model calls a tool with."}
-   {:name samizdat.surgeon.move/plan-form
+   {:name jolt-lsp.surgeon.move/plan-form
     :summary "Pure dependency-aware form movement returns future source without writing; exact moves refuse stranded dependencies or callers, and dependency-expanded moves preserve attached comments and reject cycles. Cell move uses the same planner and passes its future source through the validated cell save path."}
-   {:name samizdat.sdiff.address/locate
+   {:name jolt-lsp.sdiff.address/locate
     :summary "A top-level Clojure form by its id (defn route) or unique bare name, and a place in it by sdiff's printed path (body › binding cap) or any end of that path only one place has. read_file {path, form, at?} reads it; a miss or an ambiguity lists the candidates."}
+   {:name samizdat.sdiff.reads/since-read!
+    :summary "Which top-level forms of a file changed since this branch last read it whole ({:changed :added :removed :same}, by form id), from jolt-lsp's form fingerprints; the per-run ledger of reads is samizdat's and is dropped at run end (forget-reads!)."}
    {:name samizdat.basis/unresolved
     :summary "What a claim rests on, checked: remember and intervene take a basis — turns (t12, B2:t7), artifacts (a#3, s#2), tasks (sz-…) or memories (k-…) — and refuse when any does not exist in the record, naming each. The basis travels with the memory's cause and the directive's text. Ported from sdiff's validate-ref."}
    {:name samizdat.llm.client/chat-one
@@ -226,7 +228,7 @@
     :summary "The ship-gate critic asked gates.edn :critic-consensus :samples times: the majority of the samples that answered decides, the split {:passes :total :errors} is journaled on the :critic note, an errored sample is not a vote, a tie does not pass, and all failing is the usual fail-open."}
    {:name samizdat.agent.gitdiff/review-diff
     :summary "What a critic reads of a run's changes: sdiff's structural report of the changed Clojure files (each change named by the binding, clause or arity it lives in, renames rolled up, whitespace- or comment-only files named) and then the line diff of the rest. gates.edn :review-diff; samizdat.sdiff is sdiff (semantic-namespace/diff) ported."}
-   {:name samizdat.sdiff.core/file-report
+   {:name jolt-lsp.sdiff.core/file-report
     :summary "Structural diff of one Clojure file's old and new source: forms paired by identity, children by role, the rest by LCS of structural hashes; :verdict :semantic, :comments-only or :whitespace-only (:rename-only from rollup-renames); moves, extractions with drift, signature-only changes."}
    {:name samizdat.security.flow/label-of
     :summary "What a branch has read, as {:trust :trusted|:untrusted :audience :project|:operator :because {...}}. Web content (webfetch, websearch) makes it :untrusted; an approved read outside the project makes it :operator. Labels only narrow. After :untrusted a shell command that is not read-only asks a person; after :operator webfetch, websearch and any non-read-only command do. The table is in src (samizdat.security.flow/table), not gates.edn: it confines the agent. Each change is a :flow journal note."}
@@ -395,10 +397,12 @@
     :summary "Recover an interrupted publication from its durable original snapshots without reusing its proposal."}
    {:name samizdat.lsp.edit/workspace-edit->members
     :summary "Normalize LSP text and file edits into data-only revisioned resource members, including UTF-16 positions and overlapping-edit refusal."}
-   {:name samizdat.lsp.client/code-actions
-    :summary "Request CodeAction values for selection and optional codeAction/resolve; their edits publish through resource changes."}
-   {:name samizdat.lsp.client/prepare-file-rename
-    :summary "Request a will-rename WorkspaceEdit without touching the filesystem."}
+   {:name samizdat.lsp.index/definition
+    :summary "The lsp tool's language server: jolt-lsp's project index in this process, in LSP shapes (0-based UTF-16 positions, Location, Hover, WorkspaceEdit). Nothing to install or start; the index re-reads files changed on disk before each answer. definition, references, hover, diagnostics and rename (a WorkspaceEdit proposal)."}
+   {:name samizdat.lsp.index/code-actions
+    :summary "jolt-lsp's refactors that apply at a position (clean namespace, sort requires, inline symbol, cycle keyword, destructure / restructure keys), each with its WorkspaceEdit already computed; the chosen one publishes through resource changes."}
+   {:name samizdat.lsp.index/prepare-file-rename
+    :summary "The WorkspaceEdit for moving a file: the namespace the new path implies replaces the old one in the moved file and in every require and qualified reference (jolt-lsp rename-namespace). Nothing is written; the lsp tool's move op publishes it with the move as one resource change."}
    {:name samizdat.structural.backend/query
     :summary "Optional ast-grep queries run against observed workspace content, with executable approval, deadlines, and bounded matches. Rewrites only produce staged resource changes; the backend never writes files."}
    {:name samizdat.debug.dap/request!
@@ -427,6 +431,8 @@
     :summary "The files a shell command prints (cat, head, tail, sed -n, less, more, nl), or none when a substitution, redirection or cd makes that unknowable. Stale-read notices, the digest steer and provider exposure count these as reads."}
    {:name samizdat.agent.outline/outline
     :summary "A file's definitions with the line ranges they span, by gates.edn :outline :patterns. read_file({path, outline: true}) returns it, so the next read can take one range instead of the whole file."}
+   {:name samizdat.agent.outline/clojure-outline
+    :summary "A Clojure file's outline from jolt-lsp's parse (gates.edn :outline :clojure): each top-level form whose head defines something, with the lines the form itself spans, so comments and #_ forms between definitions belong to none. read_file uses it for those extensions and falls back to the patterns when it finds nothing."}
    {:name samizdat.agent.files/large-shell-print?
     :summary "Whether a shell call is a lone `cat FILE` of a file over gates.edn :digest :min-lines — the phases.edn rule :large-shell-print-needs-a-digest refuses it toward read_digest."}]}
 
@@ -477,11 +483,11 @@
 
  {:group "Reading and writing Clojure"
   :entries
-  [{:name samizdat.lisp/diagnose
+  [{:name jolt-lsp.syntax/diagnose
     :summary "Why a piece of Clojure would not load AS WRITTEN, or nil — reason plus 1-based line/col, naming both ends of a mismatch. Answers 'is this loadable now', which is a different question from lisp/balance's 'could this be repaired': the delimiters balancing does not promise it READS, and `(defn f [] :)` is perfectly balanced and is not Clojure."}
-   {:name samizdat.lisp/balance
+   {:name jolt-lsp.syntax/balance
     :summary "The repair half, two rungs deep: closes a trailing truncation or trims a trailing over-close from the delimiter stack, and where the stack has to give up falls to lisp/indent-repair. Refuses anything it cannot repair by ADDING, because removing or moving a mid-file delimiter re-parents code. Returns data, not sentences — the words live in prompts/file-tool.md."}
-   {:name samizdat.lisp/indent-repair
+   {:name jolt-lsp.syntax/indent-repair
     :summary "Repair from INDENTATION rather than from the delimiter stack (vendored parinferish, indent mode). The stack knows how many delimiters are open and never where the missing one goes, so it can only append at the end; indentation says an unclosed binding vector ended before the body indented under it, and puts the `]` there. Accepted only when every change is an INSERTED delimiter and the result reads — parinfer would also resolve a mismatch or a stray by deleting, and deleting from a model's text is a corruption, not a repair. Reached by write_file and eval (whole texts), never by edit_file, which refuses instead."}
    {:name samizdat.escapes/decode-unicode-escapes
     :summary "Undo the \\uXXXX drift a model writes when it meant the character itself — the six characters \\u2014 become an em dash. Deliberately narrow, and the narrowness is why it is safe: the backslash must be UNESCAPED (text about an escape is left alone) and the escape must name a VISIBLE ASSIGNED character judged on the code point, so an ASCII or control escape, a private-use point, an unassigned point, a bidi override, a zero-width joiner, a line separator and a space that is not a space all survive verbatim. A surrogate pair is judged by the character it builds, so emoji decode and an invisible tag character cannot sneak in as one. Applied to the model's OWN text — write_file's content, edit_file's new_text, patch's replace — never to the assembled file, so an edit cannot rewrite lines it did not touch."}
@@ -515,7 +521,7 @@
     :summary "Everything wrong with a proposed split, as data: a stub the parent named but never wrote, one that is already implemented (a contract already met gives the child nothing to do), one claimed by two pieces, a missing test file, fewer than two pieces. Pure over the two readers it is handed, so the whole rule set is testable without a tree. The split is all-or-nothing — a half-created delegation leaves rows nobody owns and a parent believing it delegated less than it did — and a rejection is base/rejected, not charged to the branch, the same treatment a manifest that does not compile gets. Words in prompts/split-tool.md."}
    {:name samizdat.agent.stubs/filled?
     :summary "Whether a stub a parent delegated has been implemented: the name is still defined and its body is no longer a stub. Both halves matter — a child that DELETED the stub rather than filling it has not delivered, because the parent's composition calls that name. Beside it: `definitions` (every top-level def in a source, read rather than grepped, {} on a source that does not read), `definition` (one by name), `stub?` (the three shapes a stub is written in: no body, a body of exactly nil, a body whose only form is a throw), and `missing` (which of these names a source does not define, as data). This is the delegation boundary made checkable — a parent that splits a task writes the stubs the pieces must fill, so the two layers share the signature and nothing else."}
-   {:name samizdat.lisp/first-odd-quote-line
+   {:name jolt-lsp.syntax/first-odd-quote-line
     :summary "The line where the running unescaped-quote count first goes odd — the line that most likely opened a string nobody closed, which is NOT where the reader complains."}
    {:name samizdat.hashline/line-anchor
     :summary "Mint a `<line>:<hash>` anchor: the line locates, the three-hex content hash of the trimmed line verifies. What read_file({anchors: true}) prints and the patch tool spends."}

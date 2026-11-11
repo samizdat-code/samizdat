@@ -2,13 +2,14 @@
 ;; License: GPL-3.0-or-later
 
 (ns samizdat.agent.tools.lsp
-  "LSP navigation and semantic proposals published as resource changes."
+  "LSP navigation and semantic proposals published as resource changes,
+  answered by jolt-lsp's project index in this process (samizdat.lsp.index)."
   (:require [clojure.string :as str]
             [samizdat.agent.files :as files]
             [samizdat.agent.roles :as roles]
             [samizdat.agent.tools.base :as base]
             [samizdat.agent.tools.resource :as resource-tool]
-            [samizdat.lsp.client :as client]
+            [samizdat.lsp.index :as client]
             [samizdat.lsp.edit :as edit]
             [samizdat.prompt :as prompt]
             [samizdat.resource :as resource]
@@ -206,7 +207,7 @@
 
 (defmethod base/run-tool "lsp" [{:keys [branch root] :as ctx}]
   (if-not (client/available?)
-    (base/fail branch "clojure-lsp is not installed; install it to use the lsp tool")
+    (base/fail branch (prompt/render "lsp-tool" {:unavailable true}))
     (let [op (some-> (base/arg ctx :op) str str/trim str/lower-case not-empty)]
       (if-not (#{"definition" "references" "hover" "diagnostics" "rename"
                  "code_action" "move"} op)
@@ -231,7 +232,7 @@
             (= op "diagnostics")
             (let [c (client/client-for root)]
               (if (nil? c)
-                (base/fail branch "could not start clojure-lsp for root")
+                (base/fail branch (prompt/render "lsp-tool" {:no-root true}))
                 (let [ds (client/diagnostics c file)]
                   (base/ok branch (if (seq ds) (str/join "\n" (map render-diag ds)) "no problems")
                            :resource {:diagnostics ds}))))
@@ -242,7 +243,7 @@
                 (base/malformed branch err-pos)
                 (let [c (client/client-for root)]
                   (if (nil? c)
-                    (base/fail branch "could not start clojure-lsp for root")
+                    (base/fail branch (prompt/render "lsp-tool" {:no-root true}))
                     (base/ok branch (lookup-op op c file
                                                (parse-int-or-nil (base/arg ctx :line))
                                                (parse-int-or-nil (base/arg ctx :col))))))))))))))

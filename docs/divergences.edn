@@ -16,7 +16,7 @@
 ;; What it cannot do is spot a divergence nobody wrote down; that needs the
 ;; upstream as an oracle, and none of them run under jolt.
 ;;
-;; :lib  is :mycelium, :maestro or :parinferish.
+;; :lib  is :mycelium or :maestro.
 ;; :kind is :port (the runtime differs), :harness (samizdat asked for it), or
 ;;       :behaviour (observable difference not forced by either).
 
@@ -37,12 +37,6 @@
   :kind     :port
   :summary  "Reader conditionals dropped from the .cljc source; jolt shims System/nanoTime."
   :unpinned "A property of the file, not a behaviour a test can observe."}
-
- {:id       :parinferish-last-index-of-takes-a-string
-  :lib      :parinferish
-  :kind     :port
-  :summary  "count-last-line passes \"\\n\" rather than \\newline to clojure.string/last-index-of: jolt's takes a string needle where the JVM's also accepts a char. Reached by any multi-line string token; unported it threw out of parse on exactly the truncated input the repair rung exists for."
-  :unpinned "Exercised through samizdat.lisp/balance's parinfer rung on multi-line input; no test isolates the needle."}
 
  {:id       :mycelium-resilience-is-native
   :lib      :mycelium

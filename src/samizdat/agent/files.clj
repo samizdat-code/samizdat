@@ -40,7 +40,7 @@
             [samizdat.agent.source :as source]
             [samizdat.hashline :as hashline]
             [samizdat.escapes :as escapes]
-            [samizdat.lisp :as lisp]
+            [jolt-lsp.syntax :as lisp]
             [samizdat.prompt :as prompt]
             [samizdat.agent.exam :as exam]
             [samizdat.agent.outline :as outline]
@@ -438,7 +438,10 @@
             ;; NAMES AND RANGES, NOT THE BODY (karamazov-d5wo.10): so the
             ;; next read can ask for the one definition it needs.
             (let [content (slurp abs)
-                  entries (outline/outline content (:patterns (gates/threshold :outline)))]
+                  {:keys [patterns clojure]} (gates/threshold :outline)
+                  entries (or (when (some #(str/ends-with? (str path) %) (:extensions clojure))
+                                (not-empty (outline/clojure-outline content (set (:heads clojure)))))
+                              (outline/outline content patterns))]
               {:result (msg {:outline true :path path
                              :total (count (str/split-lines content))
                              :entries (str/join "\n" (map (fn [{:keys [line end name]}]
@@ -922,7 +925,7 @@
         ;; a file that does not read is a file that does not load. A trailing
         ;; truncation or over-close is fixed mechanically and noted; anything
         ;; else is written as-is with the problem reported, because closing a
-        ;; mid-file imbalance would silently re-parent code (see samizdat.lisp).
+        ;; mid-file imbalance would silently re-parent code (see jolt-lsp.syntax).
         ;;
         ;; A WHOLESALE write reports and writes where edit_file refuses. The
         ;; two are different acts: an edit lands in code the model did not

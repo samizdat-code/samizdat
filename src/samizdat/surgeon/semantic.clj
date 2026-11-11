@@ -12,13 +12,13 @@
             [jolt.fs :as fs]
             [samizdat.agent.files :as files]
             [samizdat.agent.gates :as gates]
-            [samizdat.lsp.client :as client]
+            [samizdat.lsp.index :as client]
             [samizdat.resource :as resource]
             [samizdat.resource.workspace :as workspace]
             [samizdat.store.executions :as executions]
             [samizdat.surgeon.intent-transaction :as intent]
-            [samizdat.surgeon.outline :as outline]
-            [samizdat.surgeon.quoted-var-refs :as quoted]
+            [jolt-lsp.surgeon.outline :as outline]
+            [jolt-lsp.surgeon.quoted-var-refs :as quoted]
             [samizdat.surgeon.source-anchor :as source-anchor]
             [samizdat.surgeon.tool :as tool])
   (:import [java.net URI]))
@@ -459,7 +459,8 @@
       (let [spec {:changes changes
                   :expect {:changes (count changes) :edits (count changes)
                            :files (count (distinct (mapcat :in changes)))}}
-            plan (intent/compile-changes (:sources basis) spec)]
+            plan (intent/compile-changes (:sources basis) spec
+                                         {:max-candidate-files (:max-candidate-files (gates/threshold :clj-surgeon))})]
         {:ok true :basis basis :observations (:observations basis)
          :changes changes :plan plan}))
     (catch clojure.lang.ExceptionInfo error

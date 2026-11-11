@@ -113,9 +113,9 @@ eval({code, timeout_ms?, restart?, wait?, abort?})
     from eval as `lex/name`. Helpers that call the project's own code belong
     in its dev/ source instead. `rationale` says why later runs need it.
 doc({symbol})
-    The arglists and docstring of a var, e.g. doc({symbol: "samizdat.lisp/balance"}).
+    The arglists and docstring of a var, e.g. doc({symbol: "jolt-lsp.syntax/balance"}).
 complete({prefix})
-    Symbols starting with a prefix — a qualified prefix ("samizdat.lisp/b")
+    Symbols starting with a prefix — a qualified prefix ("jolt-lsp.syntax/b")
     completes within that namespace, a bare one ("redu") across the core.
 manual({name?})
 {% if harness-image %}    The harness's OWN command surface: the functions worth calling from eval,
@@ -302,7 +302,7 @@ wait({seconds?, until?, every?})
     or acceptance command, nothing else — every `every` seconds until it
     passes or `seconds` run out, all in one turn. Bounded at half an hour.
 lsp({op, file, line, col, new_name?, new_path?, preview?})
-    Code navigation and semantic edits via clojure-lsp. definition|references|
+    Code navigation and semantic edits from the project index. definition|references|
     hover need file, line, col; diagnostics needs only file. rename needs
     new_name. code_action needs line, col, end_line, end_col. move needs
     new_path. Semantic edits are staged as resource changes: preview: true

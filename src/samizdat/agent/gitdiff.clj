@@ -11,12 +11,25 @@
   error yields an empty diff, and the critic simply reviews completeness only."
   (:require [clojure.string :as str]
             [samizdat.engine.proc :as proc]
-            [samizdat.sdiff.core :as sdiff]
-            [samizdat.sdiff.group :as group]
-            [samizdat.sdiff.names :as names]
-            [samizdat.sdiff.text :as sdiff-text]
+            [jolt-lsp.sdiff.core :as sdiff]
+            [jolt-lsp.sdiff.group :as group]
+            [jolt-lsp.sdiff.names :as names]
+            [samizdat.prompt :as prompt]
+            [jolt-lsp.sdiff.text :as sdiff-text]
             [samizdat.lexicon :as lexicon]
             [samizdat.security.secrets :as secrets]))
+
+(defn change-groups-text
+  "A grouping from jolt-lsp.sdiff.group/by-calls as the text
+  prompts/change-groups.md makes of it."
+  [{:keys [groups shared singles edges]}]
+  (let [m (fn [[p id]] (str p " · " id))]
+    (prompt/render "change-groups"
+                   {:groups (for [g groups :let [[_ id] (group/hub g edges)]]
+                              {:hub id :count (count g) :files (count (distinct (map first g)))
+                               :members (map m g)})
+                    :shared (seq (map m shared))
+                    :singles (seq (map m singles))})))
 
 (defn max-diff-chars
   "How much of the working-tree diff a branch and the judge are shown.
@@ -362,7 +375,7 @@
                            ;; (sdiff group, karamazov-0e2c.17).
                            grouping (try (let [g (group/by-calls {:clj files})]
                                            (when (or (seq (:groups g)) (seq (:shared g)))
-                                             (group/outline-text g)))
+                                             (change-groups-text g)))
                                          (catch Throwable _ nil))
                            t (if grouping (str (str/trim grouping) "\n\n" t) t)
                            ;; Long paths and namespaces shortened, with a
