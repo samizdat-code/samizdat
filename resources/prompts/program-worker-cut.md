@@ -1,0 +1,1 @@
+worker EXCEEDED THE TOKEN LIMIT and was cut off before finishing task: {{task}}. No complete solution was produced -- the approach was too long to finish in one call, so prefer a simpler or different approach next. Summary of its partial thinking: {{digest}}

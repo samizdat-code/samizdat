@@ -84,6 +84,20 @@
       (is (str/includes? (:result r) "line-trimmed"))
       (is (str/includes? (read* root "a.clj") "(let [x 2]")))))
 
+(deftest an-edit-to-a-file-that-already-will-not-load-is-kept
+  ;; Refusing it locked the file: csview's first error was fixed by an edit, but a later
+  ;; error kept the result from loading, so the edit was refused and the model sent the
+  ;; whole file again.
+  (with-root [root]
+    (write root "a.clj" "(defn f [] (+ 1 2])\n(defn g [] (+ 3 4])\n")
+    (let [r (files/edit-file (ctx root {:path "a.clj"
+                                        :old_text "(+ 1 2]" :new_text "(+ 1 2)"}))]
+      (is (= :success (:category r)))
+      (is (str/includes? (read* root "a.clj") "(+ 1 2)"))
+      (testing "and it says what is still wrong"
+        (is (str/includes? (:result r) "still does not load"))
+        (is (str/includes? (:result r) "line 2"))))))
+
 (deftest an-edit-that-unbalances-clojure-is-refused
   ;; This used to assert that the broken edit was WRITTEN and flagged. It is
   ;; now refused outright and the file is left alone (karamazov-2d3): writing

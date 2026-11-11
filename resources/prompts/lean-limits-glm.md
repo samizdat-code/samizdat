@@ -1,0 +1,4 @@
+- **Stay in scope.** Do what the request asks, all of it, and keep the behaviour it does not ask you to change.
+- **Batch your steps.** Read every file you mean to change in one reply before editing, and make related changes together in one reply. A file listing or a grep match is not a read.
+- **Fix what you can see.** When a check shows several failures, fix each one you can diagnose before running it again. Rerun a check only after a change.
+- **Report briefly.** When it works and you have checked it, say what you did and how you checked it in a sentence or two.

@@ -121,6 +121,17 @@
             {:id id :why line}))
         (get sections "WRONG")))
 
+(defn- scoped
+  "A RULE or GOTCHA with the task it was learned on. The memory trap
+  (2611.07554v1): a note that drops the situation it came from is read later
+  as a standing rule, and notes from legitimate stale-test repairs led agents
+  to rewrite correct tests. Facts and the overview describe the project and
+  keep their wording."
+  [section line task]
+  (if (and (#{"RULES" "GOTCHAS"} section) (seq (str task)))
+    (str line " (learned on: " (clip (str/replace (str/trim (str task)) #"\s+" " ") 120) ")")
+    line))
+
 (defn record!
   "Write the parsed sections as memories, and report the wrong ones.
 
@@ -136,7 +147,7 @@
   corroborated that description rather than correcting it, and the same run
   flagged the memory it had just agreed with as WRONG. A standing fact
   corroborates; a description restates."
-  [conn {:keys [run-id shown source]} sections]
+  [conn {:keys [run-id shown source task]} sections]
   (let [written
         (vec (for [[section lines] sections
                    :let [kind (section->kind section)]
@@ -158,7 +169,8 @@
                        restated (when (= "OVERVIEW" section)
                                   (knowledge/restate! conn (:id existing) line))]
                    {:id (or restated (:id existing)) :kind kind :repeat? true})
-                 {:id (knowledge/remember! conn {:content line :kind kind
+                 {:id (knowledge/remember! conn {:content (scoped section line task)
+                                                 :kind kind :origin :inferred
                                                  :run-id run-id :pattern-key key
                                                  :confidence 0.7 :source source})
                   :kind kind :repeat? false})))]
@@ -170,6 +182,21 @@
       (when (and (contains? (set shown) id) (= 1 (:current (knowledge/get-by-id conn id))))
         (knowledge/record-outcome! conn id false)))
     written))
+
+(defn consolidator
+  "The model call `knowledge/consolidate!` is handed at a run's end, with its cost
+  on the record. nil with no model."
+  [{:keys [conn run-id llm-adapter llm-config]}]
+  (when llm-adapter
+    (fn [text]
+      (let [answer (llm/chat llm-adapter llm-config
+                             [{:role "system" :content (prompt/prompt "memory-consolidate")}
+                              {:role "user" :content text}]
+                             {:temperature 0.0})]
+        (journal/record-side-call! conn run-id {:kind :consolidation
+                                                :model (:model llm-config)
+                                                :usage (:usage answer)})
+        (:content answer)))))
 
 (defn distil-task!
   "Run the reflection and write what it found. Returns what was written.
@@ -210,7 +237,8 @@
           source (let [ts (keep :turn turns)]
                    (when (seq ts)
                      {:branch (:id branch) :from (reduce min ts) :to (reduce max ts)}))
-          written (record! conn {:run-id run-id :shown (set shown) :source source} sections)]
+          written (record! conn {:run-id run-id :shown (set shown) :source source
+                                 :task (:problem branch)} sections)]
       (journal/note! conn run-id :task-reflection
                      {:branch-id (:id branch)
                       :data {:sections (keys sections) :written (count written)}})

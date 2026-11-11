@@ -106,8 +106,8 @@
     ;; The beam driver's steps. Each takes branches through turns, which reach
     ;; tools only through the tool path's policy and approval.
     samizdat.agent.beam
-    {:vars [advance-all await-resume! drain-directives! ensure-scored finish-now?
-            record-inactive! round-max-turns select-done-branch spawn-children! spent-tokens]
+    {:vars [advance-all await-cap-decision! await-resume! drain-directives! ensure-scored finish-now?
+            record-inactive! round-max-turns with-live-loop select-done-branch spawn-children! spent-tokens]
      :effects #{:net :db :run}}
 
     ;; Token-budget reservations for calls in flight (karamazov-05z0.3). In
@@ -117,8 +117,8 @@
 
     ;; Context-window arithmetic over message vectors. Pure.
     samizdat.agent.compaction
-    {:vars [aggressive? apply-eviction apply-summary cap-oversized-results compress-window
-            estimate-tokens evictable-turns evicted-turns fold-pays? fold-task fold? pressure
+    {:vars [aggressive? apply-eviction apply-summary cap-oversized-results clip-write-bodies snapshot-facts snapshot-empty? compress-window
+            estimate-tokens evictable-turns evicted-turns fold-pays? fold-task fold? ladder-tokens pressure
             prune-options prune-tool-outputs result-cap results-of
             snip-bought-enough? summary-budget task-span tier turn-range unpinned-in
             validate-summary]}
@@ -144,7 +144,7 @@
 
     ;; Reads of the policy tables. Pure lookups.
     samizdat.agent.gates
-    {:vars [threshold tool-vocab]}
+    {:vars [review-max-wait run-time-left threshold tool-vocab]}
 
     ;; Which tools a role may call, read from the role table. Pure lookup; the
     ;; supervisor's gather asks it which branches can write (karamazov-rz7t.1).
@@ -161,7 +161,7 @@
      :effects #{:proc :fs}}
 
     samizdat.agent.gitdiff
-    {:vars [baseline changed-files diff max-diff-chars review-diff]
+    {:vars [baseline changed-files diff max-diff-chars restore-work-tree! review-diff work-tree-id]
      :effects #{:proc}}
 
     ;; The probe's model calls and its journal line.
@@ -201,6 +201,10 @@
     samizdat.agent.phases
     {:vars [withholds]}
 
+    ;; A role reply as named sections. Pure.
+    samizdat.agent.sections
+    {:vars [bullets counterexample parse reply-text strip-code strip-think parse-exact strip-code-exact extract-program parse-task-list add-tasks py-repr]}
+
     ;; Plan prompt text and parsing. Pure.
     samizdat.agent.planner
     {:vars [default-max-parts parse-plan plan-prompt]}
@@ -224,7 +228,7 @@
 
     ;; Branch-map functions. Pure.
     samizdat.agent.state
-    {:vars [active? add-message finish-planning planned? unwritten banked-in-last branch-id-for build-residual-report
+    {:vars [active? add-message finish-planning planned? unwritten done-streak banked-in-last branch-id-for build-residual-report
             confirmed-artifacts new-branch own-turn-count parked? plan reframe-active?
             render-residual-report residual]}
 
@@ -262,7 +266,7 @@
     ;; Cancellation: whether an exception is the run being stopped, and a
     ;; cancellable fiber for a cell's own function.
     samizdat.cancel
-    {:vars [control-signal? spawn]
+    {:vars [control-signal? sleep! spawn]
      :effects #{:run}}
 
     ;; Resolves a role's provider settings from the config map. Pure.
@@ -311,18 +315,32 @@
 
     ;; The supervisor's queued directives: read, and resolved once applied.
     samizdat.store.interventions
-    {:vars [payload pending resolve! text-of turns-asked workflow-kinds]
+    {:vars [history outcomes payload pending resolve! text-of turns-asked workflow-kinds]
      :effects #{:db}}
+
+    ;; The run's record of what each command led to, scored, and what to say
+    ;; about the ones that keep failing (karamazov-oi16.4). Pure over notes.
+    samizdat.agent.actions
+    {:vars [scores steer test-counts test-plateau]}
 
     ;; The run journal: reads, and appending a note or a side call's usage.
     samizdat.store.journal
-    {:vars [branch-turns gate-firings gate-tally last-note last-turn note! notes notes-since
+    {:vars [branch-turns gate-firings gate-tally last-note last-turn minutes-since note! notes notes-since
             progress record-side-call! retirement-candidates run-usage turns]
      :effects #{:db}}
 
+    ;; The paired-sample grader — the team-solve workflow's DETERMINISTIC
+    ;; gate. Grade an artifact against paired .in/.out cases, list them, and
+    ;; read/write the artifact file itself. Never model-facing: the cell
+    ;; passes paths it derived from the run's config, and grading runs a
+    ;; subprocess under the grader's own minimal env and timeout.
+    samizdat.eval.samples
+    {:vars [grade paired-tests read-artifact run-one write-artifact!]
+     :effects #{:fs :proc :db}}
+
     ;; The project's lessons: read, and recording one.
     samizdat.store.knowledge
-    {:vars [graduation-candidates remember! standing]
+    {:vars [graduation-candidates past-steers remember! standing with-provenance]
      :effects #{:db}}
 
     ;; Open papercuts, for the supervisor's brief (karamazov-05z0.5).
@@ -345,7 +363,7 @@
     ;; Run and branch rows, through the store's own functions. get-branch replaced
     ;; a raw SELECT in cells/board.clj.
     samizdat.store.runs
-    {:vars [branches close-branch! extend-budget! finish-run! get-branch nth-recent-start open-branch!]
+    {:vars [branches close-branch! extend-budget! finish-run! get-branch get-run nth-recent-start open-branch!]
      :effects #{:db}}
 
     ;; The task board, through its own functions.
@@ -390,9 +408,9 @@
     samizdat.agent.state {:vars [active? confirmed-artifacts confirmed-in-last
                                  has-relevant-confirmed? last-failure orienting-too-long?
                                  own-turn-count plan-stale? planned? planning?
-                                 safe-state-due? stated-goal turn-count unwritten]}
+                                 safe-state-due? stated-goal turn-count unwritten done-streak]}
     samizdat.agent.storm {:vars [oscillation-blocked? repeat-blocked?]}
-    samizdat.agent.supervisor {:vars [over-studying? repeating-one-failure? stall-nudge
+    samizdat.agent.supervisor {:vars [over-studying? shipped? repeating-one-failure? stall-nudge
                                       unchanged-failure]}
     samizdat.agent.tools.ship {:vars [asks-the-reader? engages-problem? unfinished-claim?]}
     samizdat.prompt {:vars [render-str]}})

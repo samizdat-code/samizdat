@@ -138,10 +138,15 @@
 
 (defn- source-files [dir {:keys [extensions max-files]}]
   (when (fs/directory? dir)
-    (->> (fs/glob dir "**/*")
+    ;; Both patterns, as `**/*` does not match a file directly in the directory.
+    (->> (concat (fs/glob dir "*") (fs/glob dir "**/*"))
          (map str)
+         distinct
          (filter (fn [p] (some #(str/ends-with? p %) extensions)))
          (filter fs/regular-file?)
+         ;; A link out of the directory is not this project's source.
+         (filter (let [top (str (fs/canonicalize dir) "/")]
+                   #(str/starts-with? (str (fs/canonicalize %)) top)))
          sort
          (take max-files))))
 

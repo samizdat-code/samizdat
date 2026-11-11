@@ -761,6 +761,14 @@
                                  WHERE run_id = ? AND branch_id LIKE 'seed:%'
                                  ORDER BY id" run-id]))}))
 
+(defn run-turn
+  "Whether any branch of the run has a turn numbered `turn`: the first such
+  row, or nil. For a reader that watches the whole run, the supervisor, whose
+  bare `t12` may be any branch's."
+  [conn run-id turn]
+  (db/fetch-one conn ["SELECT * FROM turns WHERE run_id = ? AND turn = ?
+                       ORDER BY id LIMIT 1" run-id turn]))
+
 (defn branch-turn
   "One turn of one branch, whole.
 
@@ -1102,6 +1110,87 @@
                             WHERE run_id = ? AND branch_id = ? AND kind IN ('exposed', 'recall')
                             ORDER BY id"
                           run-id branch-id])))
+
+(defn tester-failing
+  "The :failing entries of the run's latest :tester-report, or nil."
+  [conn run-id]
+  (some-> (db/fetch-one conn ["SELECT data FROM events WHERE run_id = ? AND kind = 'tester-report'
+                               ORDER BY id DESC LIMIT 1" run-id])
+          :data str not-empty (json/read-str :key-fn keyword) :failing seq vec))
+
+(defn review-state
+  "Whether a ship review is waiting on the supervisor (karamazov-oi16.11).
+  `:supervised?` is whether the supervisor stream has looked at this run at
+  all. `:pending?` is whether the newest :ship-review-requested note is still
+  unanswered and younger than `max-wait-seconds`. Answered means a spent pass
+  (:oversight) ended after it, or the supervisor issued a `review` after it:
+  in tb21-review the request arrived mid-pass and the answer was a directive
+  minutes before that pass ended. Only a review: a message is a steer
+  mid-review, and in tb21-unread make-mips one released the hold and the done
+  shipped a minute before the review itself. Seconds, not turns, because a turn is 20 s
+  on one task and 50 s on another.
+
+  With `{:tester? true}` (a run the blind tester applies to, karamazov-galq)
+  the answer must come after the tester's report: in ctb-r5 bun-sourcemap-leak
+  a pass that began before the request ended after it, read as the answer,
+  and the tester the next pass started was cancelled at run end. Until a
+  report exists the review is pending; once one exists after the request,
+  only a pass or a review after the report answers it."
+  ([conn run-id max-wait-seconds] (review-state conn run-id max-wait-seconds nil))
+  ([conn run-id max-wait-seconds {:keys [tester?]}]
+  (let [r (db/fetch-one conn ["SELECT
+                                 MAX(CASE WHEN kind IN ('oversight', 'oversight-quiet') THEN 1 END) AS supervised,
+                                 MAX(CASE WHEN kind = 'ship-review-requested' THEN id END) AS req,
+                                 MAX(CASE WHEN kind = 'oversight' THEN id END) AS pass,
+                                 MAX(CASE WHEN kind = 'tester-report' THEN id END) AS report
+                               FROM events WHERE run_id = ?" run-id])
+        at (fn [id] (db/fetch-one conn ["SELECT created_at,
+                                                (julianday('now') - julianday(created_at)) * 86400.0 AS age
+                                           FROM events WHERE id = ?" id]))
+        req (when (:req r) (at (:req r)))
+        ;; What the answer has to come after: the request, or the tester's
+        ;; report when the tester applies and reported after the request.
+        anchor (cond
+                 (not req) nil
+                 (not tester?) (:req r)
+                 (nil? (:report r)) nil
+                 (> (:report r) (:req r)) (:report r)
+                 :else (:req r))
+        anchor-row (when anchor (at anchor))
+        anchor-at (:created_at anchor-row)
+        ;; Failures the tester found are released only by the supervisor's
+        ;; review, never by a pass merely ending (session-window-debug: the
+        ;; branch shipped at 30 of 120 minutes with three still failing).
+        open-failures? (when (and tester? anchor (= anchor (:report r)))
+                         (some-> (db/fetch-one conn ["SELECT data FROM events WHERE id = ?" anchor])
+                                 :data str (json/read-str :key-fn keyword) :failing seq boolean))
+        answered? (when anchor
+                    (or (and (not open-failures?) (:pass r) (> (:pass r) anchor))
+                        (some? (db/fetch-one conn ["SELECT 1 AS x FROM interventions
+                                                     WHERE run_id = ? AND issued_by = 'supervisor'
+                                                       AND kind = 'review'
+                                                       AND created_at > ? LIMIT 1"
+                                                    run-id anchor-at]))))]
+    ;; The wait counts from what the answer has to follow: the request, or the
+    ;; tester's report, so the branch has time to act on what it found.
+    (let [age (double (or (:age (or anchor-row req)) 0))
+          pending? (boolean (and req (not answered?)
+                                 (< age (double (or max-wait-seconds 0)))))]
+      (cond-> {:supervised? (some? (:supervised r)) :pending? pending?}
+        ;; How long the hold has left, for the supervisor's own deadline gate.
+        pending? (assoc :left-seconds (long (- (double max-wait-seconds) age))))))))
+
+(defn minutes-since
+  "Minutes since the newest note of `kind` on this run, or since the run's
+  first note when there is none, as a double; nil for a run with no notes.
+  For the supervisor's check-in: a run that churns without tripping any
+  counter still gets a look after a while (ctb-r1 interleaved-vigenere)."
+  [conn run-id kind]
+  (some-> (db/fetch-one conn ["SELECT (julianday('now') - julianday(COALESCE(
+                                 (SELECT MAX(created_at) FROM events WHERE run_id = ? AND kind = ?),
+                                 (SELECT MIN(created_at) FROM events WHERE run_id = ?)))) * 1440.0 AS m"
+                               run-id (name kind) run-id])
+          :m double))
 
 (defn notes-since
   "Notes of any of `kinds` on this run created at or after `since` (an ISO

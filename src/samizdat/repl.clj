@@ -447,7 +447,7 @@
 
 (defn complete
   "Public symbols whose name starts with `prefix`. A qualified prefix
-  (`samizdat.lisp/b`) completes within that namespace; a bare prefix
+  (`jolt-lsp.syntax/b`) completes within that namespace; a bare prefix
   (`redu`) completes across clojure.core and, with `session`, the session's
   own defs. Returns a sorted vector of strings."
   ([prefix] (complete prefix nil))

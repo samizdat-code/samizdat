@@ -18,6 +18,7 @@
             [samizdat.agent.budget :as budget]
             [samizdat.agent.compaction :as cmp]
             [samizdat.agent.gates :as gates]
+            [samizdat.store.tasks :as tasks]
             [samizdat.agent.infer :as infer]
             [samizdat.agent.instructions :as instr]
             [samizdat.agent.loop :as turn]
@@ -132,7 +133,7 @@
         signals, append what the assistant actually said. On a provider failure
         this passes the data through untouched for the error route."
    :pure true
-   :requires []
+   :requires [:llm-config]
    :input  [:map [:branch :map] [:call :map] [:turn :int]]
    ;; PER-TRANSITION, because the two halves of the docstring are two shapes.
    ;; On :provider-error the handler returns `data` untouched and adds nothing
@@ -144,11 +145,13 @@
                        [:signals :any] [:said :any]]
              :tool    [:map [:branch :map] [:parsed :any]
                        [:signals :any] [:said :any]]}]}
-  (fn [_ctx {:keys [branch call turn] :as data}]
+  (fn [ctx {:keys [branch call turn request-ctx] :as data}]
     (if-not (:ok call)
       data
-      (let [{:keys [branch parsed signals said]}
-            (turn/absorb-response branch (:response call) turn)]
+      (let [{:keys [llm-config]} (or request-ctx (turn/request-context ctx branch))
+            {:keys [branch parsed signals said]}
+            (turn/absorb-response branch (:response call) turn
+                                  (or (:context-window llm-config) (:max-context llm-config)))]
         (assoc data :branch branch :parsed parsed :signals signals :said said)))))
 
 (cell/defcell :loop/provider-error
@@ -201,14 +204,20 @@
   "Fold the task this call closed down to one line, when its span is long
   enough to be worth the cache rewrite (gates.edn :task-fold). Only a close of
   the HELD task: a close of someone's backlog row, or one the tool refused,
-  leaves the held task in place and folds nothing."
-  [parsed before branch]
-  (let [{:keys [enabled? min-messages carry]} (gates/threshold :task-fold)
+  leaves the held task in place and folds nothing. Nor with nothing left on the
+  board, under :only-with-next?: the line left behind says what closed and not
+  what it found, and a branch with no next task needs that to decide it is
+  finished."
+  [{:keys [conn run-id]} parsed before branch]
+  (let [{:keys [enabled? min-messages carry only-with-next?]} (gates/threshold :task-fold)
         held (:task before)
         args (:args parsed)
         closed? (and enabled? held (nil? (:task branch))
                      (= "task" (:name parsed))
-                     (= "close" (str (or (:action args) (get args "action")))))
+                     (= "close" (str (or (:action args) (get args "action"))))
+                     (or (not only-with-next?) (nil? conn)
+                         (some #(= "open" (str (:status %)))
+                               (tasks/board conn {:run-id run-id}))))
         span (when closed? (cmp/task-span (:messages branch) (:id held)))]
     (if (and span (>= (- (second span) (first span)) min-messages))
       (let [[from to] (cmp/turn-range (subvec (vec (:messages branch)) (first span) (second span)))
@@ -237,7 +246,7 @@
     (let [out (turn/tool-step ctx branch turn parsed)]
       (merge data (update out :branch
                           #(->> %
-                                (fold-closed-task parsed branch)
+                                (fold-closed-task ctx parsed branch)
                                 (load-instructions ctx parsed)))))))
 
 (cell/defcell :journal/record
@@ -349,6 +358,11 @@
                         (gates/threshold :provider-error-limit))
                     :abandoned
 
+                    ;; Rate limits lift by themselves, so they get far longer.
+                    (>= (or (:consecutive-rate-limits branch) 0)
+                        (:limit (gates/threshold :rate-limit)))
+                    :abandoned
+
                     ;; The run has spent its token budget (the arbiter read
                     ;; it): every loop's branch ends, nested ones included.
                     (:over-budget? data) :exhausted
@@ -364,7 +378,8 @@
         (assoc-in [:branch :inactive-reason]
                   (str/trim (prompt/render "abandoned-reason"
                                            (if (state/active? branch)
-                                             {:provider-errors (:consecutive-provider-errors branch)}
+                                             {:provider-errors (+ (or (:consecutive-provider-errors branch) 0)
+                                                                  (or (:consecutive-rate-limits branch) 0))}
                                              {:status (some-> (:status branch) name)}))))
 
         (= verdict :continue)

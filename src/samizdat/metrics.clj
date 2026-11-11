@@ -38,7 +38,7 @@
   gates.edn :code-quality. Pure computation does not park, so map/mapv are fine.
 
   Reuses the reader path `samizdat.agent.stubs` already relies on and the
-  lexer-aware skipping `samizdat.lisp/scan` documents; the clone term folds the
+  lexer-aware skipping `jolt-lsp.syntax/scan` documents; the clone term folds the
   same content hash `samizdat.hashline/line-hash` uses for its anchors."
   (:require [clojure.string :as str]
             [samizdat.hashline :as hashline]))
@@ -71,7 +71,7 @@
   "Every top-level LIST in `source`, as `{:text :start :end}` character spans.
 
   A depth-0 lexer scan: it skips strings, char literals (`\\x`) and line
-  comments exactly as `samizdat.lisp/scan` does, so a paren inside a string or
+  comments exactly as `jolt-lsp.syntax/scan` does, so a paren inside a string or
   a `;` comment never opens a form. Only lists are returned — every `def*` is a
   list, and a bare top-level symbol or number defines nothing to measure.
 

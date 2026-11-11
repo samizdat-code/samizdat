@@ -76,11 +76,12 @@
         :userspace {:mode :shipped}) boots the shipped workflow outright."}
 
  :wakeups
- {:value {:max-wait-ms 1800000 :poll-floor-ms 15000}
+ {:value {:max-wait-ms 840000 :poll-floor-ms 15000}
   :kind :threshold :capability-tunable? false
-  :provenance ["karamazov-05z0.21"]
-  :doc "The `wait` tool's bounds. A wait lasts at most :max-wait-ms (thirty
-        minutes) whatever it asks for, and polls its condition no more often
+  :provenance ["karamazov-05z0.21" "karamazov-0wvc"]
+  :doc "The `wait` tool's bounds. A wait lasts at most :max-wait-ms (fourteen
+        minutes, under :turn-deadline-ms, which would cancel a longer one as a
+        hung turn) whatever it asks for, and polls its condition no more often
         than every :poll-floor-ms, so a branch waiting on a build costs one
         turn and a handful of check runs rather than a turn a look."}
 
@@ -195,6 +196,15 @@
         cap. Run 3020cbca's supervisor made 2810 calls to a server that was not
         running, and 74ddebb8's 1002 that all failed the same way."}
 
+ :rate-limit
+ {:value {:pause-ms 20000 :limit 30} :kind :threshold :capability-tunable? false
+  :provenance ["fix6 team-solve yj"]
+  :doc "A provider's rate limit lifts by itself, so a branch waits :pause-ms after a call
+        that failed on one, on top of the client's own retries, and gives up after :limit
+        in a row, about 17 minutes. Counted apart from :provider-error-limit: GLM limited
+        the account for a few minutes and five failures in under a minute ended a run with
+        28 of its 30 minutes left."}
+
  :cull-recent-window
  {:value 5 :kind :threshold :capability-tunable? false
   :doc "A confirmed artifact this recently protects a branch from culling."}
@@ -236,9 +246,13 @@
         reframing."}
 
  :progress-stall-threshold
- {:value 4 :kind :threshold :capability-tunable? false
+ {:value 8 :kind :threshold :capability-tunable? false
   :doc "Turns with no progress event before the stall nudge fires. Arms only
-        after the first progress event; see prologue-cap for the other case."}
+        after the first progress event; see prologue-cap for the other case.
+        A write is progress. 8, not 4: with :progress-stalled on under lean
+        (2026-11-10), ctb-r8 bun-sourcemap-leak was told it was busy and not
+        advancing four times, each after an edit and four eval runs checking
+        it, a write-then-test cycle that is the work, not a stall."}
 
  :prologue-cap
  {:value 8 :kind :threshold :capability-tunable? false
@@ -247,6 +261,19 @@
         counter arms on a progress event, so a run that produced nothing never
         armed it and the monitor was structurally blind to the one case it most
         needed to report (dirge PR 739, dirge-t5dh)."}
+
+ :green-check
+ {:value {:green-finish-after-turns 5}
+  :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-i692"]
+  :doc "How long a branch whose paired samples passed may look at what they miss
+        before :check-green tells it to finish. Not at once: on gap-intervals a
+        cross-check run after the samples passed found a real bug on tied ends."}
+
+ :max-green-nudges
+ {:value 2 :kind :re-fire-guard :capability-tunable? true
+  :provenance ["karamazov-i692"]
+  :doc "How often :check-green may re-fire on one branch."}
 
  :max-stall-nudges
  {:value 2 :kind :re-fire-guard :capability-tunable? true
@@ -259,6 +286,93 @@
         Enough to read back what it decided without storing a whole reply per
         pass. The full reasoning lives in its branch's messages; this is the
         index into it."}
+
+ :tester
+ {:value {:enabled? true :min-clock-seconds 3600 :max-turns 30
+          ;; A failure the tester reports is "<command> — expected …, got …";
+          ;; at done time the harness reruns the command before the first
+          ;; :command-separator, each for up to :rerun-timeout-seconds, and a
+          ;; done is held while one still fails (the :tester-failures rung).
+          :command-separator " — " :rerun-timeout-seconds 300 :output-chars 1500}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-galq"]
+  :doc "The blind tester (karamazov-galq): at the first ship review of a run
+        whose clock is at least :min-clock-seconds, the supervisor's pass first
+        runs a fresh :tester branch for up to :max-turns turns. It sees the
+        task statement and nothing of the run, writes the tests a hidden grader
+        would, runs them against the deliverable black-box, and its failures go
+        into the supervisor's brief (prompts/blind-tests.md). ctb-r1..r4: the
+        failures were hidden edge cases a supervisor approved after reading the
+        code; a reviewer who never saw it does not share its blind spots."}
+
+ :test-progress
+ {:value
+  {;; First entry whose :detect matches the output wins; :passed and :failed are
+   ;; the LAST match of each in it, every group summed, 0 when absent.
+   :patterns
+   [{:runner "bun" :detect "Ran \\d+ tests? across"
+     :passed "(?m)^\\s*(\\d+) pass\\b" :failed "(?m)^\\s*(\\d+) fail\\b"}
+    {:runner "clojure.test" :detect "(?m)^Ran \\d+ tests"
+     :passed "(\\d+) assertions passed" :failed "(\\d+) failures, (\\d+) errors"}
+    {:runner "cargo" :detect "(?m)^test result: "
+     :passed "(\\d+) passed;" :failed "(\\d+) failed;"}
+    {:runner "jest" :detect "(?m)^\\s*Tests:\\s+.*\\d+ total"
+     :passed "(\\d+) passed" :failed "(\\d+) failed"}
+    {:runner "mocha" :detect "(?m)^\\s*\\d+ passing\\b"
+     :passed "(?m)^\\s*(\\d+) passing\\b" :failed "(?m)^\\s*(\\d+) failing\\b"}
+    {:runner "node" :detect "(?m)^# tests \\d+"
+     :passed "(?m)^# pass (\\d+)" :failed "(?m)^# fail (\\d+)"}
+    {:runner "pytest" :detect "\\b\\d+ (passed|failed)\\b.*\\bin [\\d.]+s"
+     :passed "(\\d+) passed" :failed "(\\d+) failed"}]
+   ;; Test runs in a row reporting the same counts, with failures, that wake the
+   ;; supervisor; again after as many more.
+   :plateau-runs 4}
+  :kind :policy :capability-tunable? true
+  :provenance ["owner 2026-11-09"]
+  :doc "Reading progress off the test runs a branch makes. A branch that keeps
+        running the tests while the pass count stays where it was is stuck,
+        however busy it looks: it writes files (so idle never trips) and its
+        commands succeed (so nothing counts as failing). The owner's heuristic
+        (2026-11-09), after ctb-r1 interleaved-vigenere churned an hour
+        unsupervised. :patterns read each runner's summary; a project on
+        another runner adds its own."}
+
+ :oversight-limits
+ {:value {:done-refused-floor 2 :near-cap-fraction 0.8 :cap-wait-ms 240000 :cap-poll-ms 2000
+         :failing-action-floor 3 :failing-shown 5 :checkin-minutes 20}
+  :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-i692" "karamazov-oi16.4"]
+  :doc "When the supervisor is asked to decide about a run's ending. Refused
+        `done` calls by watched branches before it looks: on the hard corpus a
+        worker with a verified program was refused three times with no look
+        until its turn 39. And how far through the turn cap a branch gets before
+        the cap is put to it. Below :wind-down-fraction, so it answers before
+        the branch is told to wrap up. A run can reach its cap inside the
+        stream's spacing, so at the cap it also asks and waits :cap-wait-ms for
+        `extend` or `finish` before ending exhausted. Silence ends it as it
+        always did, so a dead stream cannot hang a run.
+
+        :checkin-minutes — wall clock with no spent pass after which the
+        supervisor looks anyway; nil turns it off. ctb-r1 interleaved-vigenere
+        churned an hour on analysis scripts at 16% accuracy and nothing woke
+        it: files kept being written and commands kept succeeding.
+
+        :failing-action-floor — failures of one command, never having worked,
+        that wake the supervisor (karamazov-oi16.4): set above :actions
+        :min-failures, so the :repeat-failing-action gate has the first word and
+        the supervisor is asked when that did not move it. A branch editing
+        files between retries never crosses the idle floor, and on TB 2.1 its
+        steers arrived after the run had ended. :failing-shown is how many of
+        those commands the brief lists."}
+
+ :finish-directive
+ {:value {:requires-check? true}
+  :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-i692"]
+  :doc "Whether the `finish` directive needs a passing run_check still true of
+        the files on disk. Off, a supervisor can end a run on its own judgement,
+        which a project with no samples may need; on, it cannot ship what
+        nothing has passed."}
 
  :oversight-unmet-floor
  {:value 2 :kind :threshold :capability-tunable? true
@@ -348,6 +462,15 @@
         Four is deliberately tight. The nudge is cheap, bounded by
         :max-no-edit-nudges, and the cost it prevents is a whole run's turns
         spent in a REPL whose state dies with the run."}
+
+ :max-paperwork-refusals
+ {:value 3 :kind :re-fire-guard :capability-tunable? true
+  :provenance ["karamazov-0wvc"]
+  :doc "How many `done` calls in an unbroken row may be refused over accounting
+        (the checklist, a plan's unwritten files) before the answer is let
+        through. The work is on disk either way, and these rungs protect a
+        record of it. datasurgeon gave up over a plan naming files it had moved;
+        code-minimap spent its last 14 turns answering a checklist."}
 
  :max-no-edit-nudges
  {:value 3 :kind :re-fire-guard :capability-tunable? true
@@ -488,6 +611,16 @@
         down and spent six turns of three attempts on every branch and the
         supervisor before :provider-error-limit abandoned them. False starts
         the run anyway and leaves the outage to that limit."}
+
+ :stage-errors
+ {:value {:limit 3}
+  :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-0wvc.6"]
+  :doc "How many times a turn may throw inside the harness before its branch is
+        abandoned. Under this the branch loses the turn and is told what broke;
+        one bad call ending the only branch ended the run before the supervisor
+        could act. Iterating loops only: in a manifest where a turn is the whole
+        job, going round again would repeat all of it."}
 
  :job-stall-ms
  {:value 1800000 :kind :threshold :capability-tunable? false
@@ -655,6 +788,229 @@
         done call for a branch with confirmed artifacts: UCLA's harness found a
         run with no reserved shipping tail spends its whole budget exploring
         and ships nothing."}
+
+ :time-budget
+ {:value {:first-write 0.15 :first-write-again 0.25 :whole-running 0.33 :whole-running-again 0.45 :wind-down 0.85 :last-call 0.93
+          ;; A done with time left is sent back again, up to :keep-going-max times in
+          ;; all, while less than :keep-going-share of the clock is gone (ship rung
+          ;; :time-left). ctb-r1 wal-recovery-ordering shipped at 20 minutes of 120 and
+          ;; failed two hidden edge cases. Ten, not three: ctb-r2 session-window-debug
+          ;; spent three refusals in seven minutes and still shipped at 16 of 120;
+          ;; the share is the bound that matters. Then back to 1 (only the first
+          ;; refusal): over ctb-r1..r3 every pass shipped at 26-27 minutes with one
+          ;; refusal, and 0 of 9 passed when pushed to 55-60 minutes, html-js-filter
+          ;; among them after passing at 26 in r1. Raise it to try again.
+          :keep-going-share 0.5 :keep-going-max 1}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-0wvc"]
+  :doc "whole-running-again was 0.55 until GLM's fix4: the check at 0.33 lands as the first
+        files appear and changes nothing, and the second is what got runs building, so it
+        comes as soon as there is something to wire up.
+        Shares of a run's wall-clock limit (config.edn :run :time-limit-seconds,
+        none by default) at which the branch is told to wrap up, and then made
+        to attempt a done, and before those, once, asked whether the whole thing
+        runs yet. Wind-down was 0.7 until three ProgramBench runs stopped editing 7
+        to 9 minutes before they ended. The turn cap cannot stand in for this: a turn takes
+        two seconds or two minutes. Six of the thirty Terminal-Bench next-30
+        trials had passing files and ran out their limit never knowing there
+        was one, and an overrun scores zero."}
+
+ :call-batch
+ {:value {;; Every other call runs, in order. These end a turn or reshape the harness, so
+          ;; they stay where a reply puts them last.
+          :never #{"done" "give_up" "plan" "thesis" "branch_theses" "split" "reload_cells"
+                   "adopt" "policy" "prompt" "manifest" "cell"}
+          :max-extra 10 :result-chars 12000}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-lu4p"]
+  :doc "Which of a reply's calls run besides its last. All of them now, in order, each on
+        the branch the one before left, as Pi, deepseek-harness and memdoor do: each call
+        that was dropped cost a round trip to send again, and round trips are the cost
+        under a clock. Read-only calls alone ran until 2026-11-07. A call written without
+        seeing an earlier one's result can go wrong, which the model sees in that result.
+        :never names the calls that end a turn or reshape the harness; they are named back
+        to the model, not run."}
+
+ :default-style
+ {:value :lean :kind :policy :capability-tunable? true
+  :provenance ["karamazov-92kq"]
+  :doc "The :styles entry a run uses when its config names none; :full names the full loop.
+        Lean since lean1 (DeepSeek, three attempts on csview, figlet and yj): 66.4% mean
+        against 61.7%, median 61.1% against 60.1%, with a 4K-character prompt against 55K.
+        It wrote 28% more output per trial, which the per-family scope limits address."}
+
+ :styles
+ {:value
+  {:lean
+   {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
+    :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
+             :time-nothing-written :time-whole-running :wind-down :plan-wind-down
+             :human-directive :directive-notice :shell-roundtrips :metrics-worse :repeat-failing-action
+             :review-deadline
+             ;; Split-when-stuck (owner, 2026-11-10): left out of lean at its
+             ;; start, so 74 lean benchmark trials saw no :stuck or
+             ;; :progress-stalled firing and made no `task` call, against 31 and
+             ;; 284 over 40 full-style trials.
+             :stuck :progress-stalled}
+    :context-block? false
+    :system-prompt "system-lean"
+    ;; Scope, check and report limits, by model family: the first key the provider or
+    ;; model name starts with, else :default. agenc-core found DeepSeek Flash wrote 83%
+    ;; more output without them over 22 tasks.
+    :scope-limits {:deepseek "lean-limits-deepseek" :glm "lean-limits-glm" :default "lean-limits"}
+    ;; The project's file names in the first message: 75 of 110 DeepSeek trials in
+    ;; agenc-core spent their first call listing files.
+    :workspace-files {:max-files 300}
+    :lenient-done? true}
+   ;; Lean without a shell tool beside eval: programs run through `sh` in a
+   ;; script (karamazov-6p51.7, after xi, which drops bash while clj is on).
+   ;; An arm to measure, not a default: Terminal-Bench tasks are shell-heavy.
+   :lean-repl
+   {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
+    :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
+             :time-nothing-written :time-whole-running :wind-down :plan-wind-down
+             :human-directive :directive-notice :metrics-worse :repeat-failing-action
+             :review-deadline
+             ;; Split-when-stuck (owner, 2026-11-10): left out of lean at its
+             ;; start, so 74 lean benchmark trials saw no :stuck or
+             ;; :progress-stalled firing and made no `task` call, against 31 and
+             ;; 284 over 40 full-style trials.
+             :stuck :progress-stalled}
+    :context-block? false
+    :system-prompt "system-lean"
+    :no-shell? true
+    :scope-limits {:deepseek "lean-limits-deepseek" :glm "lean-limits-glm" :default "lean-limits"}
+    :workspace-files {:max-files 300}
+    :lenient-done? true}}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-92kq" "karamazov-6p51.7"]
+  :doc "Ways a run can be driven, chosen by config.edn :run :style; no style is the full
+        loop. :lean is what Pi, deepseek-harness, memdoor and mini-SWE-agent (ProgramBench's
+        own) do: a short prompt, the core tools, little steering, a plain done. It keeps
+        what samizdat showed to be worth having: the clock gates and the time-left rung,
+        refusing late breaking rewrites, and REPL work with code mode. :phase-rules and
+        :gates are what stays on; :system-prompt names the frame; :lenient-done? holds done
+        to the rungs an advisory branch gets."}
+
+ :time-stamp
+ {:value {:enabled? true}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-92kq"]
+  :doc "Whether a timed run's tool results end with the seconds left, fixed when each
+        result completes so the cached prefix does not move (agenc-core run-deadline.ts).
+        The model knows the time on every turn without a steering message."}
+
+ :prefill-args
+ {:value {"done" "answer" "give_up" "reason"}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-6p51"]
+  :doc "The argument a gate's prefill opens when it forces a tool that needs one. Prefilled
+        with the bare name, DeepSeek closed `done` in two tokens with no answer; the
+        answer-exists rung refused it, the clock gate forced it again, and the branch spent
+        its last minute on 39 empty dones (tb21-code torch-pipeline-parallelism,
+        karamazov-6p51)."}
+
+ :actions
+ {:value {:command-chars 400 :min-failures 2}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-oi16"]
+  :doc "The run's record of what each action led to (karamazov-oi16): the shell tool
+        journals every command it runs, a turn's own and an eval script's bridged `sh`,
+        as an :action note, and samizdat.agent.actions scores them per action key.
+        :command-chars is how much of a command a note keeps; :min-failures is how often
+        an action has to fail, never having worked, before it counts as failing. On TB
+        2.1 nothing a run learned about its project reached the implementer during the
+        run; this is the record that can."}
+
+ :tree-writes
+ {:value {:ignore ["**/__pycache__/**" "**/*.pyc" "**/.pytest_cache/**" "**/*.o" "**/*.class"
+                   "**/.mypy_cache/**" "**/.ruff_cache/**" "**/node_modules/**" "**/.cache/**"
+                   ".samizdat/**" "**/*.log"]}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-6p51"]
+  :doc "Files a shell or eval turn changes that do not make it a write: output a run leaves
+        behind. On tb21-code (karamazov-6p51) torch-pipeline-parallelism's checks each
+        imported the module, Python wrote __pycache__, the check counted as a write, and
+        the :check-after-last-write rung refused done on a branch that had just checked."}
+
+ :load-on-write
+ {:value {:enabled? true :timeout-ms 15000 :extensions [".clj" ".cljc"]
+          ;; Of the files an eval or shell turn changed, how many are loaded at most.
+          :max-files 3}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-92kq"]
+  :doc "Whether a Clojure file written while the branch has a project REPL is loaded there
+        straight away, with the outcome in the write's own result. memdoor builds after
+        every Go edit for the same reason: a model that has to remember to check learns
+        late that a file is broken. Agents ran 49 fresh `jolt -e` processes in 14 runs to
+        find out what a reload would have told them."}
+
+ :code-metrics
+ {:value {:severities #{:critical} :extensions [".clj" ".cljc"] :max-files 20 :max-shown 5
+          ;; How many of the project's commits the :unusual-change ship rung scores a
+          ;; run's change against (jolt-metrics' --commits).
+          :entropy-commits 500
+          ;; What the entropy checks read: they count words, so any language.
+          :entropy-extensions [".clj" ".cljc" ".cljs" ".py" ".js" ".ts" ".jsx" ".tsx" ".c" ".h"
+                               ".cc" ".cpp" ".hpp" ".go" ".rs" ".java" ".rb" ".sh"]
+          ;; The most of the project's files the unusual-file check reads.
+          :entropy-files 2000}
+  :kind :policy :capability-tunable? true
+  :provenance ["jolt-metrics"]
+  :doc "What :metrics-worse counts, read from jolt-metrics' refactoring queue on each turn
+        that writes a file. :critical alone to begin with: its warnings fire on about one
+        function in ten by its own measure, and a steer that frequent is noise. Add
+        :warning to ask for more."}
+
+ :shell-roundtrips
+ {:value 3 :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-92kq"]
+  :doc "Round trips in a row before :shell-roundtrips suggests one script instead: shell
+        calls, and evals that only wrap one tool call (57 of 78 evals in the first lean trial)."}
+
+ :max-code-mode-steers
+ {:value 3 :kind :re-fire-guard :capability-tunable? false
+  :provenance ["karamazov-92kq"]
+  :doc "How often :shell-roundtrips may speak on one branch."}
+
+ :max-action-steers
+ {:value 3 :kind :re-fire-guard :capability-tunable? false
+  :provenance ["karamazov-oi16"]
+  :doc "How often :repeat-failing-action may speak on one branch (karamazov-oi16)."}
+
+ :max-metric-steers
+ {:value 3 :kind :re-fire-guard :capability-tunable? false
+  :provenance ["jolt-metrics"]
+  :doc "How often :metrics-worse may speak on one branch. A lifetime count, because a
+        write settles it as met, and a budget restarts at a met settlement."}
+
+ :max-time-steers
+ {:value 2 :kind :re-fire-guard :capability-tunable? false
+  :provenance ["karamazov-0wvc"]
+  :doc "How often each wall-clock rung may speak on one branch."}
+
+ :max-whole-running-checks
+ {:value 2 :kind :re-fire-guard :capability-tunable? false
+  :provenance ["karamazov-0wvc"]
+  :doc "How often a branch is asked, by the clock, whether the whole thing runs. A
+        lifetime count, read in the gate's :when: a budget resets on a met settlement,
+        and this gate is met by any ordinary call."}
+
+ :orphan-call
+ {:value [[["command"] "shell"]
+          [["path" "old_text"] "edit_file"]
+          [["path" "new_text"] "edit_file"]
+          [["path" "content"] "write_file"]
+          [["path" "edits"] "patch"]
+          [["seconds"] "wait"]
+          [["answer"] "done"]
+          [["path"] "read_file"]]
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-0wvc"]
+  :doc "Which tool a damaged call means when the provider lost its opening tag
+        and only parameters are left (samizdat.llm.fence/orphan-call), most
+        specific first. Only ever consulted where the turn was about to be
+        answered 'no tool-call block'."}
 
  :max-wind-down-steers
  {:value 1 :kind :re-fire-guard :capability-tunable? false
@@ -1568,6 +1924,20 @@
           ;; of one pass to the start of the next.
           :every-ms 120000
           :budget 12
+          ;; A run that journals nothing for this long gets a look without
+          ;; waiting for a turn to end. Well above one model call on the local
+          ;; model, and well below :job-stall-ms, which cancels the job.
+          :silent-ms 900000
+          ;; Turns one pass may spend. Uncapped it took the run's own cap: a pass
+          ;; spent 40 turns and 866K tokens reading a three-minute run. At 10 a
+          ;; pass that found a broken cell by turn 8 was forced to `done` before
+          ;; it could fix it, twice (karamazov-i692). A pass with nothing to do
+          ;; ends itself, so this bounds the ones that are doing something.
+          :pass-max-turns 20
+          ;; Journal events that skip the spacing: a workflow asking for help,
+          ;; a stage that crashed, and a done held for its ship review
+          ;; (karamazov-oi16.11), whose hold would outlast a two-minute wait.
+          :urgent-kinds #{:workflow-signal :stage-error :ship-review-requested}
           ;; The read timeout for the supervisor's OWN model calls, in ms;
           ;; nil keeps the run's. Its brief is a run-health digest plus a
           ;; carried context, and on GLM-5.3 with thinking those calls ran
@@ -1776,13 +2146,16 @@
 
  :shell-logs
  {:value {:retain-bytes-per-stream 1048576
-          :preview-chars 4000 :preview-stdout-fraction 0.5
+          :preview-chars 10000 :preview-stdout-fraction 0.5
           :search-scan-bytes 1048576 :search-results 20
           :max-age-ms 86400000 :max-count 100 :max-capacity-bytes 104857600}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-d1pw.3" "autolith retained command output"]
+  :provenance ["karamazov-d1pw.3" "autolith retained command output" "karamazov-0wvc.2"]
   :doc "Per-stream retention, inline preview allocation, bounded literal search,
-        and delivered-capture age/count/capacity retention. Active and undelivered
+        and delivered-capture age/count/capacity retention. :preview-chars is
+        what one command shows in all; :preview-stdout-fraction is stdout's share
+        when both streams want more than that, and a stream that needs less than
+        its share leaves the rest to the other (karamazov-0wvc.2). Active and undelivered
         captures are never pruned."}
 
  :async
@@ -1847,7 +2220,11 @@
 
  :tool-clip
  {:value
-  {:message "\n… [{{shown}} of {{total}} chars shown — the rest was clipped. Ask for the part you still need (a narrower command, a `read_file` with an `offset`, or a filter{% if turn %}, or `read_digest {turns: [{{turn}}], question}` to ask about the whole of this result{% endif %}), not the same call again.]"
+  {:message "\n… [{{shown}} of {{total}} chars shown, from the start and the end — the middle was clipped. {% if file %}The whole result is in `{{file}}`: search it from `eval` with `(grep #\"re\" \"{{file}}\")` or read part of it, rather than running this again. {% endif %}Ask for the part you still need (a narrower command, a `read_file` with an `offset`, or a filter{% if turn %}, or `read_digest {turns: [{{turn}}], question}` to ask about the whole of this result{% endif %}), not the same call again.]"
+   ;; The most of a clipped result written to .samizdat/results/ for a script
+   ;; to read (karamazov-6p51.3, after xi, which saves a long result to a file
+   ;; and names it).
+   :spill-chars 16000000
    ;; What a clipped result keeps on its turn row for read_digest {turns}
    ;; (karamazov-05z0.15): the whole result up to this, so one huge output
    ;; cannot fill the journal.
@@ -1865,7 +2242,12 @@
         do (how much it got, how much exists) and says plainly that repeating
         the call is not the move. `read_file` does better than this and pages
         properly; this is the floor for every other tool, where the harness
-        cannot know what a narrower request would look like."}
+        cannot know what a narrower request would look like.
+
+        AND THE WHOLE RESULT GOES TO A FILE (karamazov-6p51.3), named in the
+        line, so a script in eval can grep it instead of the call running again
+        (xi saves a result over 30k chars the same way)."
+  :provenance ["karamazov-6p51.3"]}
 
  :approval-classifier
  {:value {:timeout-ms 10000 :reach 1 :rationale-chars 800
@@ -1913,10 +2295,94 @@
         :cascade}), never this file's."
   :provenance ["karamazov-dcnj" "2610.21412"]}
 
+ :eval-samples
+ {:value {:per-case-timeout-ms 10000}
+  :kind :policy :capability-tunable? false
+  :provenance ["agent-roles"]
+  :doc "THE PAIRED-SAMPLE GRADER'S NUMBERS (samizdat.eval.samples).
+        :per-case-timeout-ms is the window one graded run of a solution gets
+        per test input — the same window GVS5H's sample runner used, and the
+        corpus's large stress inputs are sized to separate an O(N) answer
+        from an O(N^2) one inside it. The grader is mechanism: it decides
+        nothing else, and what the corpus IS lives under evals/team-solve/."}
+
+ :team-solve
+ {:value {:max-rounds 10
+          :max-tasks 12
+          :worker-max-turns 40
+          :worker-max-turns-timed 100
+          :repo-task-chars 400
+          :stall-rounds 2
+          :max-unsticks 2
+          :max-green-revisions 1
+          :max-reviews 2
+          :unstick-wait-ms 240000
+          :unstick-poll-ms 5000
+          :call-retries 1
+          :max-call-failures 2
+          :verify-timeout-ms 600000
+          :artifact "solution.py"
+          :plan-chars 4000
+          :notes-chars 8000
+          :current-chars 20000
+          :report-chars 600
+          :cutoff-chars 9000
+          :ideate? true
+          :ideators ["team-solve-ideator-a" "team-solve-ideator-b"]
+          :program-worker :one-call
+          :loss-guards? true
+          :program-clips {:task 80 :notes 200 :digest 500 :input 600 :output 400 :stderr 200
+                          :cutoff-head 3500 :cutoff-tail 5500}
+          :program-sample-timeout-ms 10000
+          :program-brute-timeout-ms 30000
+          :program-llm {:local {:max-tokens 128000 :top-p 0.95 :top-k 20
+                                :max-response-ms 14400000}}
+          :temperatures {:plan 0.3 :ideate 0.4 :manage 0.2 :work 0.2 :cutoff 0.2 :review 0.2}}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-p4b3" "karamazov-9jkl"]
+  :doc "THE TEAM-SOLVE WORKFLOW'S NUMBERS (cells/team_solve.clj). :max-rounds is
+        GVS5H's bound on the manager loop, after which one finalize round runs.
+        :stall-rounds is how many rounds an identical check failure may repeat
+        before the team goes to :unstick. :max-unsticks bounds those escalations.
+        :max-call-failures is how many role calls may fail before the run ends
+        saying the model could not be reached.
+        :max-green-revisions is how many rounds a checked counterexample may buy
+        against passing work. :max-reviews bounds the independent review of a
+        repository change: at 15 worker turns, last-call forced a ProgramBench worker to
+        finish its only long stretch of work, so it now has 40. :repo-task-chars
+        bounds the manager's task on a repository, where it says where to start and the
+        worker reads the request itself. :max-reviews: once it has refused that many times the run ends unsolved
+        with its findings, rather than ship what a reviewer refused. :unstick-wait-ms is how long :unstick waits for the
+        supervisor before taking its mechanical way out. :worker-max-turns caps
+        one worker on one task; a supervisor `budget` directive overrides it.
+        :worker-max-turns-timed replaces it when the run has a time limit: there the
+        clock is the limit, and a worker pushed to finish with time left hands over to
+        one that has to read everything again.
+        :temperatures are GVS5H's values as starting points, per step: expect to
+        retune per model. :ideate? off is the ablation arm of the empirical test, and a run with
+        a time limit skips ideation whatever it says.
+        :ideators names the directive prompts, one call each.
+
+        A task with paired samples is a PROGRAM, and on it this workflow is
+        GVS5H's multiagent_solve, request for request (karamazov-9jkl, pinned by
+        samizdat.team-solve-parity-test). :program-worker :one-call is their
+        worker, one model call with no tools; :tools runs the tool-using worker
+        there instead, which their numbers do not describe. :loss-guards? adds the
+        fixes for their published loss modes, which change what ships and never
+        what a role is sent: the last passing program ships if the final one fails,
+        and a manager's concrete counterexample against passing samples is checked,
+        by two extra calls, against the program and a brute force. :program-clips and :program-sample-timeout-ms are
+        their slices and their 10 s per sample. :program-llm is what their parity run
+        asked of the model, by provider type: 128K replies, top_p 0.95, top_k 20, and
+        a four-hour clock on a call. Only :local has it, because a hosted model's
+        ceiling is its own and an unknown field can be a refused request; those run
+        on their configured values, which is one more way they are not the measured
+        setting. A llama-server slot still stops at its own context size."}
+
  :workflow-selection
  {:value
   {:enabled?          true
-   :candidates        #{"loop" "decompose" "team" "critic" "answer"}
+   :candidates        #{"loop" "team-solve" "decompose" "team" "critic" "answer"}
    :fallback          "loop"
    :min-problem-chars 0
    ;; What the triage call may say a task IS, and how big.
@@ -1937,9 +2403,9 @@
    :effort
    {:answer      {:any     {:beam-width 1 :max-turns 40 :workflow "answer"}}
     :investigate {:any     {:beam-width 1 :max-turns 120}}
-    :change      {:trivial {:beam-width 1 :max-turns 60 :reasoning-effort "low"}
-                  :small   {:beam-width 1 :max-turns 200}
-                  :large   {:beam-width 5 :reasoning-effort "high"}}}}
+    :change      {:trivial {:beam-width 1 :max-turns 60 :reasoning-effort "low" :workflow "loop"}
+                  :small   {:beam-width 1 :max-turns 200 :workflow "team-solve"}
+                  :large   {:beam-width 5 :reasoning-effort "high" :workflow "team-solve"}}}}
   :kind :policy :capability-tunable? false
   :provenance ["karamazov-1wv9"]
   :doc "WHICH WORKFLOW DRIVES A RUN THAT DID NOT ASK FOR ONE, AND HOW HARD.
@@ -1973,8 +2439,13 @@
         which workflow suits which task, and it should be made on evidence.
 
         :fallback is what a run uses when selection is off, the call fails, or
-        the reply names nothing on the menu. It is the factory loop — what the
-        run would have used anyway — so a failure to choose costs nothing.
+        the reply names nothing on the menu. It is the factory loop, because a
+        failed triage usually means the model cannot be reached, and it must match
+        workflow/loop-name. THE DEFAULT FOR A CHANGE IS THE :effort ROW: since
+        2026-11 a small or large change runs team-solve whatever the chooser said,
+        on the evidence in docs/plans/agent-roles-team-solve.md. A trivial change,
+        a question and an investigation keep their shorter workflows. To go back,
+        drop :workflow from those two rows.
 
         An explicit :run :loop (HARNESS_LOOP, or a project's config.edn) always
         wins over selection. This fills the gap where a caller said nothing; it
@@ -2103,10 +2574,32 @@
         Not capability-tunable: a tier under observation should not be able to
         stop its own shapes being checked."}
 
+ :steer-facts
+ {:value
+  {:line "A supervisor `{{kind}}` to {{branch}} in an earlier run: \"{{text}}\"{{expect}} — {{outcome}}.{{next}}"
+   :expect " (expecting `{{expect}}`)"
+   :next " The branch's next move: {{next}}"
+   :outcomes {"met" "acted on" "met-late" "acted on, late" "unmet" "not acted on"
+              "open" "not settled before the run ended" "rejected" "refused: {{disposition}}"
+              "pending" "never delivered: the run ended first"}
+   :text-chars 240
+   :next-chars 160
+   :recall 12}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-oi16.10"]
+  :doc "THE WORDS A REMEMBERED STEER IS WRITTEN IN, and how many the next run's
+        supervisor is shown. At run end each of the supervisor's directives is
+        written to memory with what came of it (knowledge/distil-steers!), so a
+        later supervisor learns from its own past actions the way it learns
+        from a reverted experiment. :outcomes maps the steer's settlement, or
+        the directive's status when it was never applied, to the phrase used;
+        :recall is how many of the newest the oversight pass shows."}
+
  :project-facts
  {:value
   {:cmd-works   "In this project `{{cmd}}` works."
    :cmd-refused "In this project `{{cmd}}` is refused by the shell policy — do not spend a turn on it."
+   :cmd-instead "In this project `{{cmd}}` keeps failing; `{{instead}}` works instead."
    :workflow    "The `{{cmd}}` workflow has driven a run on this project."}
   :kind :policy :capability-tunable? false
   :doc "THE WORDS A DERIVED PROJECT MEMORY IS WRITTEN IN.
@@ -2366,7 +2859,35 @@
 
  :memory
  {:value
-  {:kind-salience {:working 0.3 :episodic 0.45 :procedural 0.5
+  {;; WHAT MAY BECOME A MEMORY (karamazov-4wky, after /src/sleep's safety layer).
+   ;; :ceiling caps confidence by who wrote the text. Injection-shaped text is
+   ;; parked from anyone but a person; rule-shaped text from a model is parked
+   ;; unless evidence stands behind it. Parked rows stay readable, not recallable.
+   :admission {:ceiling {:user 1.0 :harness 0.9 :agent 0.7 :inferred 0.5}
+               :quarantine-prefix "quarantined: "
+               :reasons {:injection "it reads like an injected instruction"
+                         :directive "it is a standing rule with no evidence behind it"}
+               :secret-regex "(?i)\\b(api[_-]?key|apikey|secret|token|password|passwd|pwd|access[_-]?key|private[_-]?key)\\b\\s*[:=]\\s*\\S{8,}"
+               :injection-regex "(?i)(ignore|disregard|forget)\\s+(all\\s+|any\\s+)?(previous|prior|above|earlier)\\s+(instructions|prompts?|rules)|\\.ssh/id_|exfiltrat|you are now\\b|new system prompt"
+               :directive-regex "(?i)^\\s*(\\*\\*)?(always|never|do not|don't|you must|you should|must not|from now on)\\b"}
+   ;; WHAT A SHELL COMMAND MUST LOOK LIKE TO BE A PROJECT FACT. One command, short,
+   ;; that builds, tests or runs the project. Everything else was a probe: 71 of
+   ;; 163 rows on one trial recorded that a one-off `sed` worked.
+   :fact-command {:max-chars 100
+                  :prefix-regex "^cd\\s+\\S+\\s*&&\\s*"
+                  :noise-regex "[;|\\n]|&&|<<|/tmp/|\\bjolt\\s+-e\\b|^(cat|sed|head|tail|less|ls|tree|grep|rg|find|wc|echo|printf|file|od|xxd|hexdump|strings|nm|which|pwd|diff|cmp|stat|sort|uniq|awk|python3?|git|rm|cp|mv|mkdir|touch|chmod|sleep|time|timeout)\\b"}
+   ;; ONE PASS AT A RUN'S END over what automatic writers inferred during it. Most
+   ;; runs leave nothing worth carrying, and keeping nothing is a valid answer.
+   :consolidation {:min-records 5 :max-input-chars 12000 :max-known 15 :max-new 3
+                   :keep-regex "^KEEP\\s+(\\S+)"
+                   :new-regex "^NEW\\s+(semantic|procedural|episodic):\\s*(.+)$"
+                   :none-word "NONE"
+                   :heading-notes "THE RUN'S NOTES"
+                   :heading-known "ALREADY KNOWN"
+                   :retired-reason "not kept when run {{run}} was consolidated"}
+   ;; A memory reads as unverified until this many runs have seen it.
+   :established-runs 2
+   :kind-salience {:working 0.3 :episodic 0.45 :procedural 0.5
                    :semantic 0.6 :identity 0.75 :overview 0.95
                    :note 0.5}
    :default-confidence 0.6
@@ -2637,6 +3158,32 @@
         The cap is what keeps a rambling judge from growing the events table
         without bound; it is not what makes the record useful, which is the
         outcome `jolt export --verdicts` labels each row with."}
+
+ :ship-review
+ {:value {:max-wait-seconds 360 :evidence-shown 25 :unread-kinds #{"message" "review"}
+          ;; On a clock of :long-clock-seconds or more the review runs a blind
+          ;; tester first (:tester), so the done is held long enough for both.
+          :long-clock-seconds 3600 :max-wait-long-seconds 1500}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-oi16.11"]
+  :doc "The supervisor's review of a done with time left (ship rung :supervisor-review).
+        :max-wait-seconds is how long the branch's dones are held for a review that has
+        not been answered (a pass ending, or a supervisor directive, after the
+        request), so a stream that never answers costs minutes rather than the run.
+        Seconds: a turn is 20 s on one task and 50 s on another, and the one review
+        measured (tb21-review dna-assembly) took five minutes. :evidence-shown is how many of the run's last commands, with their exit
+        codes, the supervisor's brief lists beside the answer."}
+
+ :directive-notice-issuers
+ {:value #{"execution" "heldout" "ship-review"}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-oi16.6"]
+  :doc "Who writes to the directive queue to REPORT rather than to steer:
+        execution completion receipts and held-out verdicts. Their directives
+        reach the branch through :directive-notice, which rides along with
+        whatever steer fires, instead of :human-directive, which outranks
+        every gate and tells the branch to obey it this turn. An issuer not
+        listed here steers."}
 
  :prediction-grace-turns
  {:value 4
@@ -2940,11 +3487,12 @@
         a guard on one retry, not as a steer of its own."}
 
  :context-pressure
- {:value {:operating-ceiling 24000
+ {:value {:window-fraction 0.75
+          :operating-ceiling 24000
           :advisory 0.75
           :urgent 0.90}
   :kind :threshold :capability-tunable? false
-  :provenance ["karamazov-d41" "karamazov-3y5"]
+  :provenance ["karamazov-d41" "karamazov-3y5" "karamazov-0wvc.1"]
   :doc "WHEN A PROMPT IS GETTING TOO BIG, MEASURED BEFORE IT IS FATAL.
 
         TWO CEILINGS. The HARD one is the endpoint's context window — the
@@ -2956,11 +3504,14 @@
         15% saturation with 850k headroom while its own hint is already
         saying FOLD SOON.
 
-        :operating-ceiling  prompt tokens one request should stay under.
-                            NOT the context window — leave room for the
-                            reply, the tool result, and the next exchange.
-                            24000 suits a 32k local endpoint; raise it with
-                            the window.
+        :window-fraction    the share of the model's context budget one
+                            request should stay under, which leaves room for
+                            the reply, the tool result, and the next exchange.
+        :operating-ceiling  the same in tokens, for a model with no window
+                            recorded. A fixed 24000 for everyone squeezed a
+                            128k model at turn 13, with the system prompt most
+                            of it, down to one exchange of memory for the rest
+                            of the branch (karamazov-0wvc.1).
         :advisory           fraction of the ceiling that counts as close
         :urgent             fraction at which the branch's compaction budget
                             is squeezed a notch, one turn BEFORE the wall
@@ -3294,13 +3845,46 @@
         A docstring's first line is cut at :vocabulary :doc-chars, the same
         cut the opening uses, so one var reads the same in both."}
 
- :eval-bridge
- {:value {:enabled? false
-          :tools #{"read_file" "read_digest" "grep" "glob" "lsp" "doc" "recall"}
-          :cells? true
-          :call-timeout-ms 60000 :poll-ms 50}
+ :helper-hints
+ {:value {"cat" "(cat f)" "head" "(head f n)" "tail" "(tail f n)" "ls" "(ls d)"
+          "grep" "(grep #\"re\" path)" "rg" "(grep #\"re\" path)" "find" "(glob \"**/*.ext\")"
+          "wc" "(count (clojure.string/split-lines (cat f)))" "stat" "(stat p)"
+          "curl" "(curl url)" "jq" "(json s)" "mkdir" "(mkdir d)" "which" "(which \"cmd\")"}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-xn0h.7" "karamazov-xn0h.8" "karamazov-xn0h.9"]
+  :provenance ["karamazov-6p51.2"]
+  :doc "A SHELL CALL THAT RUNS A PROGRAM A CODE-MODE HELPER REPLACES gets a one-line
+        hint naming the helper (karamazov-6p51.2), after xi's clj tool, which appends
+        'prefer the builtin helpers' to such a result. Steering at the moment of the
+        habit, where :shell-roundtrips counts calls and speaks later. Program head ->
+        the helper call to show; only when code mode is on. An empty map turns it off."}
+
+ :eval-bridge
+ {:value {:enabled? true
+          :tools #{"read_file" "read_digest" "grep" "glob" "lsp" "doc" "recall"
+                   "write_file" "edit_file" "patch" "shell" "run_check" "mcp"}
+          :cells? true
+          ;; An eval with the bridge on may run a build through tool/shell, so its own
+          ;; default deadline is this rather than the REPL's 10 s.
+          ;; With a bridged call the eval may run this long, ten minutes; past
+          ;; :stall-after-ms it comes back to the branch and goes on, so the
+          ;; branch is never blocked longer than that (karamazov-6p51.5, after
+          ;; xi's :stall-after-s). It was 120000 and the eval killed there.
+          :eval-timeout-ms 600000
+          :stall-after-ms 60000
+          ;; How much of a handed-back eval's code its notices quote.
+          :preview-chars 80
+          ;; Above the shell tool's own 120 s, so a bridged (sh ...) of a long build
+          ;; ends by the shell's deadline, which says what ran, not this one.
+          :call-timeout-ms 150000 :poll-ms 50
+          ;; The code-mode helpers (cat, grep, glob, sh, spit, ...), a userspace
+          ;; prompt role installed in the image with the bridge and referred into
+          ;; every eval session (karamazov-6p51.4). nil installs none.
+          :helpers "code-mode-helpers"
+          ;; The most of one stream a bridged shell call hands a script as data.
+          :data-chars 4000000}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-xn0h.7" "karamazov-xn0h.8" "karamazov-xn0h.9" "karamazov-92kq"
+               "karamazov-6p51.4" "karamazov-6p51.5"]
   :doc "TOOLS CALLABLE AS FUNCTIONS FROM INSIDE AN EVAL in the project image:
         (tool/grep {:pattern \"x\"}) returns the tool's result text to the
         form, which can bind, filter and combine it before anything reaches
@@ -3310,7 +3894,11 @@
         journaled as an :eval-call note on the turn that made it; it is not
         a turn of its own.
 
-        OFF BY DEFAULT, MEASURED (karamazov-xn0h.9, 2026-10-11): the xn0h9
+        ON BY DEFAULT, WITH WRITES AND SHELL (karamazov-92kq, 2026-11-07): the code-mode
+        pattern, a script that orchestrates several calls in one turn, steered to by the
+        :shell-roundtrips gate, as round trips are the cost under a clock. It is measured
+        in the lean comparison. Before, it was off by default, on this measurement
+        (karamazov-xn0h.9, 2026-10-11): the xn0h9
         arms on horizon-fade, GLM-5.3 n=2 and DeepSeek flash n=1. Branches
         bridged about one eval in ten, and those calls were 2-3% of the
         tool-result text a branch read; turns, tokens and acceptance did
@@ -3408,7 +3996,13 @@
  {:value {:patterns ["^\\((?:defn-?|def|defmacro|defmulti|defmethod|defprotocol|defrecord|deftype|defonce|ns)\\s+([^\\s()\\[\\]]+)"
                      "^\\s*(?:async\\s+)?(?:def|class)\\s+(\\w+)"
                      "^\\s*(?:export\\s+)?(?:default\\s+)?(?:async\\s+)?(?:function\\*?|func|interface|type|enum)\\s+(\\w+)"
-                     "^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:async\\s+)?(?:fn|struct|enum|trait|impl|mod)\\s+(\\w+)"]}
+                     "^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:async\\s+)?(?:fn|struct|enum|trait|impl|mod)\\s+(\\w+)"]
+          ;; Clojure is outlined from jolt-lsp's parse: forms with these
+          ;; heads, with the lines each form spans.
+          :clojure {:extensions [".clj" ".cljc" ".cljs" ".bb"]
+                    :heads ["ns" "defn" "defn-" "def" "defmacro" "defmulti" "defmethod"
+                            "defprotocol" "defrecord" "deftype" "defonce" "definterface"
+                            "deftest" "defspec"]}}
   :kind :policy :capability-tunable? false
   :provenance ["karamazov-d5wo.10"]
   :doc "WHAT COUNTS AS A DEFINITION in read_file({path, outline: true})
@@ -3430,9 +4024,9 @@
         Not capability-tunable: it describes source files, not a branch."}
 
  :task-fold
- {:value {:enabled? true :min-messages 12 :carry ["ask_human"]}
+ {:value {:enabled? true :min-messages 12 :carry ["ask_human"] :only-with-next? true}
   :kind :policy :capability-tunable? false
-  :provenance ["karamazov-d5wo.5"]
+  :provenance ["karamazov-d5wo.5" "karamazov-0wvc"]
   :doc "FOLD A TASK'S WORK WHEN IT CLOSES (the :tool/dispatch cell;
         compaction/task-span and fold-task are the mechanism;
         prompts/task-folded.md is the line left behind).
@@ -3532,6 +4126,12 @@
    ;; summary of its own instructions. The TAIL is what is still in play.
    :protect-head 2
    :protect-tail 5
+
+   ;; How much of a request's reply budget the ladder counts as used. The most a
+   ;; reply is likely to need, not the most it may take, so a model given a large
+   ;; output budget for its thinking is not read as nearly full from turn one
+   ;; (karamazov-0wvc.9).
+   :reply-reserve-tokens 16384
    ;; The aggressive rung halves the tail it keeps.
    :aggressive-tail 2
 
@@ -3539,6 +4139,19 @@
    ;; whole result on its dispatch turn; later turns see head+tail with the
    ;; dropped count, and can call again for the middle.
    :result-cap {:normal 3000 :aggressive 1000}
+   ;; OLD WRITE BODIES, clipped at the same rung as oversized results. A file's
+   ;; content is on disk, and on ProgramBench write calls took 49-139K characters a
+   ;; trial against 71-126K for every tool result. One batch at a time: rewriting
+   ;; old history costs the prompt cache from there on.
+   :write-clip {:body-chars 300 :min-freed-tokens 4000
+                :tools #{"write_file" "edit_file" "patch" "edit_clojure"}
+                :note "[{{chars}} chars written and on disk: read_file for the file now, fetch_turn for this call]"}
+   ;; WHAT A FOLD KEEPS WITHOUT ASKING A MODEL (after context-mode). Read from the
+   ;; journal, so a rejected summary no longer leaves history unfolded.
+   :snapshot {:max-files 40 :max-commands 8 :max-errors 6 :result-chars 200
+              :write-tools #{"write_file" "edit_file" "patch" "edit_clojure"}
+              :command-tools #{"shell" "run_check"}}
+   :rejected-preview-chars 400
    ;; A result shorter than this is left alone: summarising it costs more
    ;; than it saves and loses something readable at a glance.
    :prune-min-chars 500
@@ -3634,7 +4247,14 @@
         role the compaction fold's summary call runs on."}
 
  :context-budget
- {:value {:tool-result-chars   4000
+ {:value {:tool-result-chars   40000
+          ;; One result may take this share of the model's window, in tokens times
+          ;; :chars-per-token, but never less than :tool-result-floor characters. The
+          ;; head share is what is kept from the start; the rest comes from the end.
+          :tool-result-window-share 0.04
+          :tool-result-floor   6000
+          :tool-result-head-share 0.3
+          :chars-per-token     4
           :file-read-chars     60000
           :test-output-lines   25
           :judge-rules-chars   6000
@@ -3660,8 +4280,16 @@
           :websearch-error-chars 200
           :inbox-lines         3
           :tree-lines          8
-          :keep-pairs          10
-          :compaction-chars    50000
+          :keep-pairs          30
+          ;; Of conversation: the system prompt is not counted. Under the
+          ;; :compaction ladder's first rung on the 128k budget, so this
+          ;; and the ladder do not fire together. At 50000 and 10, on
+          ;; Terminal-Bench, the agent forgot finished work and redid it
+          ;; (karamazov-0wvc.1).
+          :compaction-chars    240000
+          ;; On a model with a large window, history stays verbatim up to this share of
+          ;; it (tokens times :chars-per-token), never below :compaction-chars.
+          :compaction-window-share 0.3
           ;; How many exchanges the compaction frontier moves by at once
           ;; (karamazov-pdes). Measured on run 5e78b96a: advancing one
           ;; exchange per turn re-prefilled the whole verbatim window on
@@ -3679,7 +4307,15 @@
           ;; "retry at a doubled budget" contract silently degraded to a
           ;; same-budget repeat, reproducing the truncation it exists to
           ;; escape (blt.38).
-          :retry-base-tokens   8192}
+          :retry-base-tokens   8192
+          ;; Over this a new file was not written by the model, it was fetched
+          ;; or generated, and does not count against :task-line-budget
+          ;; (karamazov-0wvc.8).
+          :written-file-bytes  131072
+          ;; Untracked paths that tools make, not the model. A Jolt project's
+          ;; .jolt/ cache read as hundreds of lines on the first write, so the
+          ;; over-budget gate fired before any real code existed (karamazov-0wvc).
+          :generated-path-regex "^(\\.samizdat/|\\.jolt/|\\.cpcache/|\\.nrepl-port$|\\.clj-kondo/|\\.lsp/|[^/]+\\.build/)"}
   :kind :cost-ceiling :capability-tunable? false
   :doc "HOW MUCH THE MODEL GETS TO SEE. Every one of these was a constant in
         code, and together they are the most project-specific numbers in the
@@ -3900,7 +4536,10 @@
   ;; through :ns-whitelist-regex, so the quoted payload genuinely contains
   ;; no single quotes (provenance R3-1).
   {:value
-   {:test-file-regex "(?i)(^|/)(test|spec)s?/|[_-](test|spec)\\.[a-z]+$"
+   {:test-file-regex "(?i)(^|/)(test|spec)s?/|[_-](test|spec)\\.[a-z]+$|(^|/)test_[^/]+$"
+    ;; What the TDD rung is about: a change with none of these in it (a report,
+    ;; a data file, an answer written to out.txt) owes no test (karamazov-0wvc.3).
+    :code-file-regex "(?i)\\.(clj|cljc|cljs|py|pyx|ts|tsx|js|jsx|mjs|rs|go|c|h|cc|cpp|cxx|hpp|java|kt|rb|php|pl|lua|swift|cs|sh|bash|zig|hs|ml|ex|exs|sql)$"
     :root-strip-regex "^(test|gui|src)/"
     :ext-strip-regex "\\.cljc?$"
     :ns-whitelist-regex "[a-zA-Z0-9.*-]+"
@@ -3931,7 +4570,76 @@
   ;; the run's own figures, so only the rungs marked :advisory? true bind it;
   ;; `advisory?` is in scope for a rung's forms.
   {:value
-   [{:name :answer-exists
+   [{:name :unread-directive
+     ;; tb21-review protein-assembly: the supervisor approved, then found the
+     ;; provenance claim unsupported and queued a correction; the branch's done
+     ;; landed five seconds later, before a boundary delivered it, and shipped
+     ;; the wrong answer. A directive of a :ship-review :unread-kinds kind still
+     ;; queued for this branch holds its done until a boundary delivers it.
+     :advisory? true
+     :when (and unread-directive? (not verdict?))
+     :message-form unread-hold}
+    {:name :tester-failures
+     ;; vf2-speedup-networkx: the blind tester measured 130x against the 5000x
+     ;; the task states, the supervisor approved anyway ("That is 42x... approval
+     ;; to ship"), and the grader measured 164x. The tester's failures are
+     ;; commands; the harness reran them at done time and they still failed. A
+     ;; done is held while one does, until winding down, whatever the review said.
+     :advisory? true
+     :when (and (seq tester-still-failing) time-used wind-down (not verdict?)
+                (< time-used wind-down))
+     :message-form tester-hold}
+    {:name :supervisor-review
+     ;; karamazov-oi16.11. 20 of 23 failing TB 2.1 trials ended on an accepted done,
+     ;; several with half their time left (protein-assembly at 38%), and the supervisor
+     ;; never looked: a confident wrong ship trips none of its counters. A done with
+     ;; time left asks for its review (:note-once journals :ship-review-requested, which
+     ;; wakes the stream) and is held until a pass has ended or :ship-review
+     ;; :max-wait-seconds have gone. Only where a supervisor stream is running.
+     :advisory? true
+     :note-once :ship-review-requested
+     ;; And the running supervisor pass is told at its next turn, as a notice.
+     :tell {:branch "SUP" :prompt "ship-review-notice" :issued-by "ship-review"}
+     :when (and supervised? time-used wind-down (not verdict?) (< time-used wind-down)
+                (or (not (get refused :supervisor-review)) review-pending?))
+     :message-form review-hold}
+    {:name :time-left
+     ;; A run with a clock is sent back once when it calls done before winding down:
+     ;; samizdat stopped 2 to 9 minutes early on yj with HCL a stub and TOML hanging on
+     ;; a table, while Pi used its whole limit testing. Once per branch: a second done
+     ;; finishes even with work between (`refused`; per streak it refused mteb-retrieve
+     ;; 8 times), and a branch that delivers a verdict is never sent back.
+     :advisory? true
+     ;; After the first, again while under :time-budget :keep-going-share of the
+     ;; clock, up to :keep-going-max in all, with the sharper keep-working-again
+     ;; (ctb-r1 wal-recovery-ordering shipped at 20 minutes of 120).
+     :when (and time-used wind-down (not verdict?) (zero? done-streak)
+               (let [n (or (get refused :time-left) 0)]
+                 (if (zero? n)
+                   (< time-used wind-down)
+                   (and keep-going-share keep-going-max
+                        (< n keep-going-max) (< time-used keep-going-share)))))
+     :message-form (if (pos? (or (get refused :time-left) 0))
+                     (or keep-working-again keep-working)
+                     keep-working)}
+    {:name :check-after-last-write
+     ;; agenc-core accepts a headless answer only when a check succeeded after the last
+     ;; change, as its remaining Terminal-Bench failures were done claims the transcript
+     ;; did not back. Once: a second done in a row finishes.
+     :advisory? true
+     :when (and unchecked-write? (not verdict?) (zero? done-streak)
+                (not (get refused :check-after-last-write)))
+     :message-form check-before-done}
+    {:name :unusual-change
+     ;; jolt-metrics' metrics.entropy (Torres et al. 2025): the run's change moves the
+     ;; code's information content more than three standard deviations from the
+     ;; project's commits, or a file it changed reads unlike the project's others
+     ;; (surprisal, jolt-metrics 0.3.2). Review the diff once; a second done in a row
+     ;; finishes.
+     :when (and unusual-change (not verdict?) (zero? done-streak)
+                (not (get refused :unusual-change)))
+     :message-form review-unusual}
+    {:name :answer-exists
      ;; The one rung an advisory branch (reviewer, supervisor) is held to:
      ;; its verdict is its product, and run 9ead0638's supervisor called done
      ;; with {} and was told "Answer accepted." (karamazov-qtj5).
@@ -3968,8 +4676,12 @@
      ;; which apply, :ship-checklist says how), and every item needs an
      ;; entry by id: met, not met or n/a, with a reason. A not-met ships —
      ;; an honest limit is a result (karamazov-ylte.1); silence does not.
-     :when (seq unaccounted-checklist)
-     :message-form (checklist/refusal unaccounted-checklist)
+     ;; Bounded: an unbroken row of refused `done` calls is a model that cannot
+     ;; satisfy this, and past the limit the answer ships with the items
+     ;; recorded as unaccounted. code-minimap spent 14 turns here.
+     :when (and (seq unaccounted-checklist)
+                (< done-streak (samizdat.agent.gates/threshold :max-paperwork-refusals)))
+     :message-form (checklist/refusal unaccounted-checklist checklist-items)
      :provenance ["karamazov-dsfx"]}
     {:name :exam-ratchet
      ;; karamazov-fgsb: a run may change or delete a test that was there
@@ -4164,7 +4876,7 @@
  ;; without a rebuild. agent-test walks every name against the registered
  ;; run-tools (provenance R3-6): a name the loop cannot dispatch is a gate whose
  ;; prediction silently narrows to :unmet.
- {:verification #{"eval" "shell"}
+ {:verification #{"eval" "shell" "run_check"}
   ;; What a role that cannot write may quote figures from, beside what it
   ;; measured: for a question about the project, the source it read IS the
   ;; subject (karamazov-1wv9). A role that can write still has to measure.
@@ -4176,6 +4888,9 @@
   :shipping #{"write_file" "edit_file" "patch" "shell" "reload_cells"
               "manifest" "done" "give_up" "thesis" "branch_theses"}
   :file-write #{"write_file" "edit_file" "patch"}
+  ;; Tools that can change files without being file tools. A turn on one is checked
+  ;; against the tree, and counts as a write when it changed a file.
+  :tree-writers #{"shell" "bash" "eval"}
   ;; The storm guard's tool classification (karamazov-ekk). :storm-exempt is
   ;; the read-only surface — repeated identical reads are over-studying's
   ;; business, not a storm — plus done/give_up, whose repetition belongs to
@@ -4193,7 +4908,10 @@
                     "forget" "retire"}
   :settle-called
   {:orienting        #{"plan" "write_file" "edit_file" "patch"}
-   :no-edits         #{"write_file" "edit_file" "patch"}
+   ;; The supervisor sent what it found, or ended the pass to approve.
+   :review-deadline  #{"intervene" "done"}
+   :check-green      #{"done" "give_up" "write_file" "edit_file" "patch" "run_check"}
+   :no-edits         #{"write_file" "edit_file" "patch" "done" "give_up"}
    ;; A WRITE, not another test run. The steer asked the branch to form a
    ;; hypothesis about where the defect is; editing the test it doubted and
    ;; editing the implementation it now believes is wrong are both that
@@ -4218,6 +4936,13 @@
    :turn-budget      #{"done" "give_up"}
    :wind-down        #{"done"}
    :last-call        #{"done" "give_up"}
+   :time-whole-running #{"shell" "write_file" "edit_file" "patch" "done" "give_up"}
+   :shell-roundtrips #{"eval" "done" "give_up"}
+   :repeat-failing-action #{"write_file" "edit_file" "patch" "eval" "done" "give_up"}
+   :metrics-worse    #{"write_file" "edit_file" "patch" "done" "give_up"}
+   :time-nothing-written #{"write_file" "edit_file" "patch" "done" "give_up"}
+   :time-wind-down   #{"write_file" "edit_file" "patch" "done" "give_up"}
+   :time-last-call   #{"done" "give_up"}
    ;; The planning branch's terminal is its declaration, so its wind-down
    ;; rungs are met by `plan` — a `done` from it is refused before dispatch.
    :plan-wind-down   #{"plan"}
@@ -4383,6 +5108,99 @@
                 an account of what was tried, or a genuinely different
                 approach"
    :window 2}
+
+  {:gate :review-deadline
+   :provenance ["ctb-r1 interleaved-vigenere 2026-11-10"]
+   :priority 0.6
+   :doc "A ship review is pending: on each of the supervisor's turns, the
+         seconds before the held done ships whatever it has found. In ctb-r1
+         interleaved-vigenere the supervisor spent its twelve review turns doing
+         the cryptanalysis itself, found the key's offsets, and sent nothing;
+         the hold lapsed and a 19%-correct cracker shipped (raman-fitting the
+         same). The review prose already asked for each gap as soon as it can
+         be named; this says it every turn, with the clock."
+   :when (and (= :supervisor (:role branch)) (:review-left-seconds ctx))
+   :message-form (sp/render-str (prompt "review-deadline")
+                                {:left (:review-left-seconds ctx)
+                                 ;; The run's own clock, so the review's is not read as it:
+                                 ;; ctb-r2 interleaved-vigenere told the branch it was out
+                                 ;; of time with 80 minutes left.
+                                 :run-minutes (some-> (:time-left-seconds ctx) (quot 60))})
+   :prediction "the supervisor sends what it has found"
+   :window 1}
+
+  {:gate :time-last-call
+   :provenance ["karamazov-0wvc"]
+   :priority 2.65
+   :budget :max-time-steers
+   :tool "done"
+   :doc "Nearly out of the run's wall-clock limit: force a done attempt. Same
+         reasoning as :last-call, against time rather than turns."
+   :when (and (state/active? branch)
+              (not (state/planning? branch))
+              (:time-used ctx)
+              (>= (:time-used ctx) (:last-call (threshold :time-budget))))
+   :message-file "time-last-call"
+   :prediction "the branch ships"
+   :window 2}
+
+  {:gate :time-wind-down
+   :provenance ["karamazov-0wvc"]
+   :priority 3.25
+   :doc "Past the share of the run's wall-clock limit reserved for finishing.
+         Told once or twice, with the seconds left, and :time-last-call follows. A
+         lifetime count, because a write settles this gate as met."
+   :when (and (state/active? branch)
+                (not= :supervisor (:role branch))
+              (not (state/planning? branch))
+              (:time-used ctx)
+              (< (count (filter (fn [f] (and (= :time-wind-down (:gate f)) (not (:settled f)))) (:gate-history branch)))
+                 (threshold :max-time-steers))
+              (>= (:time-used ctx) (:wind-down (threshold :time-budget))))
+   :message-file "time-wind-down"
+   :prediction "the branch makes what the request names run, fixes what it knows of, or ships"
+   :window 3}
+
+  {:gate :time-nothing-written
+   :provenance ["karamazov-0wvc"]
+   :priority 3.35
+   :doc "Part of the way through the wall-clock limit with nothing written yet. On fix2
+         GLM spent 14 to 23 of 30 minutes investigating, and about 90K tokens of output
+         was all a whole run had to spend. Asked twice at most, then :time-whole-running
+         takes over. Only for a limit: without one, reading first costs nothing. Fires
+         ahead of the whole-running question, whose budget is its own."
+   :when (let [p (threshold :time-budget)
+               n (count (filter (fn [f] (and (= :time-nothing-written (:gate f)) (not (:settled f)))) (:gate-history branch)))]
+           (and (state/active? branch)
+                (not= :supervisor (:role branch))
+                (not (state/planning? branch))
+                (roles/may-use? (:role branch) "write_file")
+                (:time-used ctx)
+                (< n (threshold :max-time-steers))
+                (>= (:time-used ctx) (if (zero? n) (:first-write p) (:first-write-again p)))
+                (not (:work-exists? branch))
+                (not-any? (fn [t] (supervisor/shipped? (tool-vocab :file-write) t)) (:turns branch))))
+   :message-file "time-nothing-written"
+   :prediction "the branch writes the first version of what the request names"
+   :window 3}
+
+  {:gate :time-whole-running
+   :provenance ["karamazov-0wvc"]
+   :priority 3.3
+   :doc "Part of the way through the wall-clock limit, ask whether what the request
+         names builds and runs, and once more later if the run gets that far. The
+         harness cannot tell, so the branch is asked rather than told."
+   :when (let [p (threshold :time-budget)
+               n (count (filter (fn [f] (and (= :time-whole-running (:gate f)) (not (:settled f)))) (:gate-history branch)))]
+           (and (state/active? branch)
+                (not= :supervisor (:role branch))
+                (not (state/planning? branch))
+                (:time-used ctx)
+                (< n (threshold :max-whole-running-checks))
+                (>= (:time-used ctx) (if (zero? n) (:whole-running p) (:whole-running-again p)))))
+   :message-file "time-whole-running"
+   :prediction "the branch builds and runs the whole thing, or goes on because it already does"
+   :window 3}
 
   {:gate :wind-down
    :priority 3
@@ -4555,32 +5373,56 @@
   ;; prompt/threshold/state — evaluated at fire time.
 
   {:gate :human-directive
-   :provenance ["RFC-012 F5" "dirge PR 717"]
+   :provenance ["RFC-012 F5" "dirge PR 717" "karamazov-oi16.6" "karamazov-oi16.7"]
    :priority 0
    :budget nil
+   :carries-directive true
    :doc "A directive from the queue reached the branch: a human's, the
          supervisor's, or the reflex's — the one write path into a run, and
          this gate is where it lands (RFC-012 F5). Outranks every machine
          gate, which is dirge PR 717's finding arriving as a design property
          rather than a bug fix. The message names the ISSUER: the gate
-         firing is the one ledger of what was said to a branch and by whom,
-         and it used to say `a human` whatever wrote the directive."
-   :when (some? directive)
+         firing is the one ledger of what was said to a branch and by whom.
+
+         Not the issuers in :directive-notice-issuers: a receipt is not an
+         order, and every issuer this gate did not know used to be announced
+         as a human and obeyed this turn — pilot-10-loop fired it 2328 times
+         on execution receipts, nearly every turn, over every machine gate
+         (karamazov-oi16.6). :carries-directive puts the directive's `expect`
+         on the firing, and settle judges the steer against it, or against
+         the action the branch was taking when it arrived (karamazov-oi16.7)."
+   :when (and (some? directive)
+              (not (contains? (threshold :directive-notice-issuers)
+                              (str (:issued_by directive)))))
    ;; :payload-text is attached by the drains — the payload column is a JSON
    ;; blob ({"text": "..."}), and rendering it raw framed `{"text":"[watch]
    ;; ..."}` as the human's words (blt.38). An unattributed directive is the
    ;; operator's: the REPL path predates issued_by.
-   :message-form (str "**"
-                      (case (str (:issued_by directive))
-                        "supervisor" "The supervisor"
-                        "watch"      "The harness's reflex"
-                        "A human")
-                      " has intervened in this run.**\n\n"
-                      (or (:payload-text directive) (:payload directive))
-                      "\n\nThis takes precedence over anything the harness has told"
-                      " you. Act on it on this turn.")
+   :message-form (sp/render-str (prompt "directive-steer")
+                                {:issuer (str (:issued_by directive))
+                                 :text (or (:payload-text directive) (:payload directive))
+                                 :expect (:expect directive)})
    :prediction "the branch acts on the directive on the next turn"
    :window 1}
+
+  {:gate :directive-notice
+   :provenance ["karamazov-oi16.6"]
+   :priority 0.5
+   :budget nil
+   :ride-along true
+   :doc "A report from the harness reached the branch through the directive
+         queue: a background execution finished, a held-out check decided.
+         Information, not an order, so it RIDES ALONG: appended to whatever
+         steer fires this turn, and the steer only when nothing else does.
+         Which issuers count is :directive-notice-issuers."
+   :when (and (some? directive)
+              (contains? (threshold :directive-notice-issuers)
+                         (str (:issued_by directive))))
+   :message-form (sp/render-str (prompt "directive-notice")
+                                {:issuer (str (:issued_by directive))
+                                 :text (or (:payload-text directive) (:payload directive))})
+   :prediction "none: a notice asks for nothing"
+   :window 0}
 
   {:gate :done-blocked
    :priority 1
@@ -4654,7 +5496,11 @@
          beside the turn-budget bookkeeping."
    ;; the quantity the :when compares, recorded at every check (na2k.7)
    :measure (:consecutive-failures branch)
-   :when (>= (:consecutive-failures branch) (threshold :stuck-threshold))
+   ;; Not on a done the review is holding (ctb-r9 bun-sourcemap-leak: 13
+   ;; firings on refused dones), and not on the advisory roles.
+   :when (and (>= (:consecutive-failures branch) (threshold :stuck-threshold))
+              (not= "done" (:last-failed-tool branch))
+              (not (contains? #{:supervisor :tester} (:role branch))))
    ;; Rendered rather than read raw: the prose names `split` only where the
    ;; branch may call it, which is a {% if %} over message-context's
    ;; :can-split (karamazov-ioo.15.2).
@@ -4729,6 +5575,24 @@
                 action, or closes the task"
    :window 3}
 
+  {:gate :check-green
+   :provenance ["karamazov-i692"]
+   :priority 8.9
+   :budget :max-green-nudges
+   :doc "THE CHECK PASSED, SO FINISH. Every hard-corpus loop run had a passing
+         program by worker turn 10 and carried on for hundreds of turns, because
+         nothing said a passing check was the end. Above :no-edits and :studying,
+         which would ask for more writing."
+   :measure (if-let [g (:green-check branch)]
+              (- (state/turn-count branch) (:turn g))
+              0)
+   :when (when-let [g (:green-check branch)]
+           (>= (- (state/turn-count branch) (:turn g))
+               (:green-finish-after-turns (threshold :green-check))))
+   :message-form (prompt "check-green")
+   :prediction "the branch calls done, or changes the program and checks it again"
+   :window 3}
+
   {:gate :progress-stalled
    :priority 10
    :budget :max-stall-nudges
@@ -4738,9 +5602,15 @@
    ;; the quantity the :when compares, recorded at every check (na2k.7)
    :measure (:turns-since-progress branch)
    :when (and (:any-progress? branch)
+              ;; Passing samples are not a stall: the stall count is what opens
+              ;; siblings to "approach it differently" on a finished program.
+              (nil? (:green-check branch))
               ;; Only a role that can write is told to (karamazov-1wv9):
               ;; an answerer reading is doing its job.
               (roles/may-use? (:role branch) "write_file")
+              ;; Not on a done waiting on its review: held, it makes no
+              ;; progress by design (ctb-r9 bun-sourcemap-leak).
+              (not= "done" (:tool (peek (vec (:turns branch)))))
               (>= (:turns-since-progress branch)
                   (threshold :progress-stall-threshold)))
    ;; RE-ANCHORED. A steer that says "nothing has advanced" without saying at
@@ -4913,7 +5783,12 @@
          the ship gate, the critic and the turn budget all remain downstream
          of it. What it buys is that the question gets asked WHEN THE EVIDENCE
          EXISTS rather than only at claim time, when nobody can answer it."
+   ;; Only for a role that holds the board: splitting is what it asks for, and a
+   ;; team-solve worker has no `task` tool to do it with.
    :when (and (state/active? branch)
+              (roles/may-use? (:role branch) "task")
+              ;; Against a clock the time gates steer, and reorganising costs what is left.
+              (not (:time-used ctx))
               (number? (:lines-written branch))
               (> (:lines-written branch) (threshold :task-line-budget)))
    :message-form (str (prompt "over-budget")
@@ -4922,6 +5797,63 @@
                       " lines, against a budget of "
                       (threshold :task-line-budget) ".")
    :prediction "the branch splits the task or says why it is one change"
+   :window 3}
+
+  {:gate :shell-roundtrips
+   :provenance ["karamazov-92kq"]
+   :priority 10.48
+   :doc "Several shell calls in a row, each a round trip, where one eval script calling
+         tool/shell and the other tools as functions would do the lot in one turn and keep
+         only what matters. Only where the branch has a project REPL with the bridge on."
+   :when (let [n (threshold :shell-roundtrips)
+               recent (take-last n (:turns branch))]
+           (and (state/active? branch)
+                (:code-mode? ctx)
+                (roles/may-use? (:role branch) "eval")
+                (= n (count recent))
+                (every? (fn [t] (or (= "shell" (:tool t)) (:single-call? t))) recent)
+                (< (count (filter (fn [f] (and (= :shell-roundtrips (:gate f)) (not (:settled f))))
+                                  (:gate-history branch)))
+                   (threshold :max-code-mode-steers))))
+   :message-file "shell-roundtrips"
+   :prediction "the branch does its next steps in one eval script"
+   :window 2}
+
+  {:gate :repeat-failing-action
+   :provenance ["karamazov-oi16"]
+   :priority 10.485
+   :doc "A command has failed, the same way, at least :actions :min-failures times and never
+         worked in this run (karamazov-oi16): name it, and what worked here instead, from the
+         run's record of actions (samizdat.agent.actions). Once for each action that comes to
+         fail, up to :max-action-steers. What a run learns about its project by trying —
+         which program exists, which install works — reached the implementer only through
+         its own memory of the transcript."
+   :when (let [said (count (filter (fn [f] (= :repeat-failing-action (:gate f)))
+                                   (:gate-history branch)))]
+           (and (state/active? branch)
+                (> (count (:failing-actions ctx)) said)
+                (< said (threshold :max-action-steers))))
+   :message-form (sp/render-str (prompt "failing-action") {:actions (:failing-actions ctx)})
+   :prediction "the branch changes what it runs instead of repeating a command that fails"
+   :window 3}
+
+  {:gate :metrics-worse
+   :provenance ["jolt-metrics"]
+   :priority 10.47
+   :doc "The branch has written a function past a critical limit for complexity, nesting or
+         size, or made one worse, as jolt-metrics measures it against the baseline. A
+         suggestion: code can need that shape, and the branch can say so. Quiet against a
+         clock, where cleaning up spends what is left, and below the gates about landing
+         work at all."
+   :when (and (state/active? branch)
+              (roles/may-use? (:role branch) "write_file")
+              (not (:time-used ctx))
+              (seq (:metric-findings branch))
+              (< (count (filter (fn [f] (and (= :metrics-worse (:gate f)) (not (:settled f))))
+                                (:gate-history branch)))
+                 (threshold :max-metric-steers)))
+   :message-form (str (prompt "metrics-worse") "\n" (:metric-report branch))
+   :prediction "the branch simplifies what it wrote or says why it is that shape"
    :window 3}
 
   {:gate :studying

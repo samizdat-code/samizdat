@@ -6,8 +6,8 @@
   autolith's MCP design).
 
   One long-lived process per configured server, speaking JSON-RPC 2.0 one
-  message per line on stdin/stdout — the MCP stdio transport. The shape is
-  samizdat.lsp.client's: one reader thread routes responses to the request
+  message per line on stdin/stdout — the MCP stdio transport. One reader
+  thread per server routes responses to the request
   parked on their id, and any exit releases every waiter and forgets the
   server, so the next call starts it again rather than waiting on a corpse.
 

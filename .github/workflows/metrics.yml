@@ -1,0 +1,65 @@
+name: code metrics
+
+# jolt-metrics over src: the report on every push and pull request, and on a pull request
+# what it made worse against its base, with the same measurement and policy as the
+# :metrics-worse gate (gates.edn :code-metrics). The project already has functions over the
+# critical limits, so limits alone would fail every build; only what a change adds counts.
+#
+# Findings are warnings. Set the METRICS_FAIL_ON_WORSE repository variable to true to fail
+# the check on them instead, without a commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  metrics:
+    name: jolt-metrics
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      JOLT_GITLIBS_DIR: ${{ github.workspace }}/.ci-deps/gitlibs
+      JOLT_MAVEN_REPOSITORY: ${{ github.workspace }}/.ci-deps/m2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Churn for the hotspots, and the base commit for the comparison.
+          fetch-depth: 0
+
+      - name: Install jolt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver=$(gh api repos/jolt-lang/jolt/releases/latest --jq .tag_name)
+          [ -n "$ver" ] && [ "$ver" != "null" ] || { echo "could not resolve latest jolt"; exit 1; }
+          ci/install-jolt.sh "$ver" x86_64-linux
+
+      - name: Cache deps
+        uses: actions/cache@v6
+        with:
+          path: .ci-deps
+          key: ci-deps-${{ runner.os }}-${{ hashFiles('deps.edn') }}
+          restore-keys: ci-deps-${{ runner.os }}-
+
+      - name: Report
+        run: |
+          jolt -m metrics.cli src metrics-report.md
+          cat metrics-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: metrics-report
+          path: metrics-report.md
+
+      - name: What this change made worse
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          FAIL: ${{ vars.METRICS_FAIL_ON_WORSE == 'true' && '--fail' || '' }}
+        run: jolt ci/metrics.clj "$BASE" $FAIL

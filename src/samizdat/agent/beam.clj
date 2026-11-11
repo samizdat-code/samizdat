@@ -66,6 +66,7 @@
             [mycelium.core :as myc]
             [samizdat.agent.budget :as budget]
             [samizdat.agent.critic :as critic]
+            [samizdat.agent.actions :as actions]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.handoff :as handoff]
             [samizdat.agent.gitdiff :as gitdiff]
@@ -93,6 +94,7 @@
             [samizdat.store.failures :as failures]
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
+            [samizdat.agent.reflect :as reflect]
             [samizdat.store.knowledge :as knowledge]
             [samizdat.store.runs :as runs]
             [samizdat.userspace :as userspace]
@@ -208,6 +210,8 @@
                (log/warn "closing branch" id "eval session after initialization failed:"
                          (ex-message close-error))))
         (throw e)))))
+
+(declare unwrap-round-error)
 
 (defn ensure-scored
   "Fresh critic scores for every active branch, at most one sub-LLM call per
@@ -344,6 +348,56 @@
     (+ (or (:total-tokens (journal/run-usage conn run-id)) 0)
        (budget/unpriced run-id))))
 
+(defn await-cap-decision!
+  "Ask the supervisor about a run at its turn cap and wait, bounded, for `extend`
+  or `finish` to be queued. Returns true when one is. The signal wakes the stream
+  whatever its spacing. A pass that concludes without one, an abort, or the time
+  running out returns false, and the run ends as it would have."
+  [{:keys [conn run-id abort]} cap wait-ms poll-ms]
+  (let [looks #(count (journal/notes conn run-id :oversight))
+        seen (looks)
+        answer #(some (comp #{"extend" "finish"} :kind) (interventions/pending conn run-id))]
+    (journal/note! conn run-id :workflow-signal
+                   {:data {:workflow "loop" :kind "turn-cap" :stage "cap"
+                           :detail (prompt/render "turn-cap-signal" {:cap cap})}})
+    (loop [left wait-ms]
+      (cond
+        (answer) true
+        (and abort @abort) false
+        (> (looks) seen) (boolean (answer))
+        (<= left 0) false
+        :else (do (cancel/sleep! poll-ms) (recur (- left poll-ms)))))))
+
+(defn with-live-loop
+  "`ctx` with the turn loop this round should drive, so a project's edit to its
+  manifest or cells takes effect at the next round rather than the next run.
+  :live-loop is an atom holding the newest loop. An edit that will not compile,
+  or is no longer a per-turn loop, leaves the running one in place and says so on
+  the record: a run must not die of its own supervisor's edit."
+  [{:keys [conn run-id loop-name live-loop] :as ctx}]
+  (if-not (and loop-name live-loop)
+    ctx
+    (let [known @live-loop
+          keep-running (fn [note]
+                         (journal/note! conn run-id :loop-refresh-failed
+                                        {:data (assoc note :loop loop-name)})
+                         (assoc ctx :turn-workflow (:compiled known)))]
+      (try
+        (let [fresh (workflow/refresh-turn-loop conn loop-name known
+                                                {:on-trace (events/tracer run-id)})]
+          (cond
+            (nil? fresh) (assoc ctx :turn-workflow (:compiled known))
+            (not (:iterating? fresh)) (keep-running {:version (:version fresh)
+                                                     :error "no longer a per-turn loop"})
+            :else (do (journal/note! conn run-id :loop-refreshed
+                                     {:data {:loop loop-name :version (:version fresh)
+                                             :was (:version known)}})
+                      (reset! live-loop fresh)
+                      (assoc ctx :turn-workflow (:compiled fresh)))))
+        (catch Throwable e
+          (when (cancel/control-signal? e) (throw e))
+          (keep-running {:error (ex-message e)}))))))
+
 (defn round-max-turns
   "The turn cap this round compares against: the run's, plus whatever `extend`
   directives have raised it by.
@@ -436,7 +490,7 @@
   owners' budget, whether it stops — and the workflow's own directives stage
   is the boundary that applies them. Symmetric with the per-turn drain
   leaving the scheduler's kinds for this one (karamazov-blt.10)."
-  [{:keys [conn run-id]} branches directives turn]
+  [{:keys [conn run-id] :as ctx} branches directives turn]
   (reduce
    (fn [{:keys [branches] :as acc} d]
      (let [kind (:kind d)
@@ -548,6 +602,33 @@
          ("switch" "budget" "stop")
          ;; The workflow's, not the scheduler's. Left for its own stage.
          acc
+
+         "finish"
+         ;; The supervisor's decision that the work is finished, against a
+         ;; worker that cannot land it (karamazov-i692). A whole-run workflow
+         ;; has its own boundary for this. Otherwise it stands only on a check
+         ;; still true of the files, so it cannot ship what nothing has passed:
+         ;; `done`'s other rungs are about the worker's report, and this report
+         ;; is the supervisor's, on the record as theirs.
+         (if (false? (:iterating-loop? ctx))
+           acc
+           (let [holds? (fn [b] (and (state/active? b)
+                                     (matches? b)
+                                     (or (not (:requires-check? (gates/threshold :finish-directive)))
+                                         (verify/samples-pinned? (:root ctx) (:green-check b)))))
+                 chosen (first (filter holds? bs))]
+             (if-not chosen
+               (do (rejected conn run-id d turn {:finish-no-check true})
+                   acc)
+               (do (interventions/resolve! conn run-id (:id d) :applied nil turn)
+                   (assoc acc :branches
+                          (mapv #(if (= (:id %) (:id chosen))
+                                   (assoc % :status :done
+                                          :final-answer (interventions/text-of d)
+                                          :finished-by (str (or (:issued_by d) "supervisor"))
+                                          :inactive-reason "finished by the supervisor")
+                                   %)
+                                bs))))))
 
          ("pause" "resume")
          ;; Run-level and last-writer-wins: two pauses are one pause, and a
@@ -705,9 +786,24 @@
                            (when cancelling (swap! cancelling assoc (:id b) (:done t)))
                            (forfeit b))
                        :err
-                       (do (log/warn "branch" (:id b) "died on turn" turn ":" (ex-message r))
+                       ;; The cause, not mycelium's wrapper: "execution error" told
+                       ;; nobody what broke, and the supervisor reads this note.
+                       (let [{:keys [throwable node]} (unwrap-round-error r)
+                             why (or (ex-message throwable) (str throwable))]
+                         (log/warn "branch" (:id b) "died on turn" turn "at" node ":" why)
+                         (when (and (:conn ctx) (:run-id ctx))
+                           (journal/note! (:conn ctx) (:run-id ctx) :stage-error
+                                          {:branch-id (:id b) :turn turn
+                                           :data {:stage (some-> node name) :error why}}))
+                         (if (and iterating?
+                                  (< (inc (or (:stage-errors b) 0))
+                                     (:limit (gates/threshold :stage-errors))))
+                           (-> b
+                               (update :stage-errors (fnil inc 0))
+                               (update :messages into
+                                       (handoff/stage-error (:conn ctx) (:run-id ctx) b turn why)))
                            (assoc b :status :abandoned
-                                  :inactive-reason (str "branch error: " (ex-message r))))))))
+                                  :inactive-reason (str "branch error: " why))))))))
         ;; SERIAL, for a replay (karamazov-x0dx): each turn runs to its end
         ;; before the next starts, in the order the branches are listed. A
         ;; held-out replay of a run that forked read 11/14 and 13/14 on the
@@ -748,9 +844,8 @@
   transcript, and stop working on a replay that did not include B1. The beam's
   premise is that branches are independent lines of inquiry.
 
-  clojure-lsp is deliberately NOT disposed here: its clients are keyed by
-  ROOT, every branch of a run shares one root, and one server per root is
-  correct. `system/stop!` sweeps those.
+  The lsp index is deliberately NOT disposed here: it is keyed by ROOT and
+  every branch of a run shares one root.
 
   Safe to call twice by contract — `repl/close-session` is idempotent on an
   unknown name — and the run-end teardown still sweeps every branch in case
@@ -894,6 +989,7 @@
       (oversight/start!
        (assoc ctx :enabled? true
               :every-ms (:every-ms p) :budget (:budget p) :poll-ms (:poll-ms p)
+              :silent-ms (:silent-ms p)
               ;; PHASE 1 (RFC-012), on this stream rather than a second one.
               ;; The reflex reads the implementer's steps off the bus and may
               ;; nudge; it runs every poll and spends none of the budget,
@@ -903,7 +999,8 @@
               :reflex-fn oversight/reflex!)
        (fn [pass-ctx]
          (let [out (myc/run-compiled (workflow/compiled-manifest "oversight")
-                                     pass-ctx {:oversight/carry (:carry pass-ctx)})]
+                                     pass-ctx {:oversight/carry (:carry pass-ctx)
+                                               :oversight/silent-for-ms (:silent-for-ms pass-ctx)})]
            {;; The carry: the supervisor's branch, so the next pass continues
             ;; the same conversation rather than starting one. A QUIET pass
             ;; produces no branch, and returning its nil wiped the carry — so
@@ -1050,6 +1147,11 @@
         (try
           (let [{:keys [findings verdicts]}
                 (knowledge/distil-session! conn {:run-id run-id
+                                           ;; This command kept failing, that one worked
+                                           ;; instead (karamazov-oi16.12).
+                                           :patterns (actions/patterns (journal/notes conn run-id :action)
+                                                                       (gates/threshold :actions))
+                                                 :ask (reflect/consolidator ctx)
                                                  :findings (session/findings
                                                             ;; THIS RUN's window, not the
                                                             ;; whole-process tally: counters
@@ -1191,7 +1293,7 @@
                                 :llm-adapter llm-adapter :llm-config llm-config}
                                problem)
         effort (select/effort triage)
-        selected (or (:workflow effort) (:workflow triage))
+        selected (select/chosen-workflow triage effort)
         ceiling (fn [x cap] (if (and x cap) (min x cap) (or x cap)))
         max-turns (if asked-turns max-turns (ceiling (:max-turns effort) max-turns))
         requested-width (if asked-width
@@ -1209,7 +1311,7 @@
         ;; instead: a failed row with the reason, never a 'running' row
         ;; nobody will finish.
         {loop-version :version turn-wf :compiled iterating? :iterating?
-         loop-def :definition}
+         loop-def :definition :as first-loop}
         (workflow/compile-turn-loop conn loop-nm
                                     {:on-trace (events/tracer run-id*)})
         ;; The manifest's OWN instructions, appended to the base system prompt
@@ -1287,6 +1389,7 @@
              :serial-turns? serial-turns?
              :oversight? oversight?
              :max-turns max-turns :beam? (> width 1) :beam-width width
+             :width-asked? (some? asked-width)
              :token-budget token-budget
              :root root
              ;; What the manifest says this run is FOR — see seed-branch.
@@ -1300,10 +1403,16 @@
              ;; whether it is a per-turn loop at all (which decides the turn
              ;; deadline; see advance-all).
              :turn-workflow turn-wf
+             ;; What with-live-loop checks a project's edits against, so a
+             ;; supervisor's change reaches this run at the next round.
+             :loop-name loop-nm
+             :live-loop (atom first-loop)
              :iterating-loop? iterating?
              ;; What this run changed, for the ship gate's focused verify and
              ;; for a finalization critic reading the run's own diff.
              ;; Journalled, so a resume measures from the same point.
+             ;; When this run began, for a wall-clock limit (gates.edn :time-budget).
+             :started-ms (System/currentTimeMillis)
              :git-baseline (let [b (gitdiff/baseline root)]
                              (when (and b conn run-id)
                                (journal/note! conn run-id :git-baseline {:data {:ref b}}))

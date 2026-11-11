@@ -13,15 +13,15 @@
             [rewrite-clj.zip :as z]
             [samizdat.resource.workspace :as workspace]
             [samizdat.surgeon.binding-rename :as binding-rename]
-            [samizdat.surgeon.cljc.merge :as cljc-merge]
-            [samizdat.surgeon.cljc.require-ops :as cljc-require]
-            [samizdat.surgeon.cljc.split :as cljc-split]
-            [samizdat.surgeon.extract :as extract]
-            [samizdat.surgeon.fix-declares :as declares]
-            [samizdat.surgeon.move :as move]
+            [jolt-lsp.surgeon.cljc.merge :as cljc-merge]
+            [jolt-lsp.surgeon.cljc.require-ops :as cljc-require]
+            [jolt-lsp.surgeon.cljc.split :as cljc-split]
+            [jolt-lsp.surgeon.extract :as extract]
+            [jolt-lsp.surgeon.fix-declares :as declares]
+            [jolt-lsp.surgeon.move :as move]
             [samizdat.surgeon.operation-algebra :as algebra]
-            [samizdat.surgeon.outline :as outline]
-            [samizdat.surgeon.rename :as rename]))
+            [jolt-lsp.surgeon.outline :as outline]
+            [jolt-lsp.surgeon.rename :as rename]))
 
 (def ^:private supported-extensions [".clj" ".cljs" ".cljc" ".edn"])
 (def ^:private spec-keys #{:changes :expect})
@@ -799,7 +799,10 @@
 (defn- refactor-change? [change]
   (contains? refactor-operators (:operator change)))
 
-(defn- compile-refactor-plan [sources {:keys [operator files forms native-options]}]
+(defn- compile-refactor-plan
+  "`opts` :max-candidate-files bounds the files an extraction's quoted-var
+  scan reads (gates.edn :clj-surgeon); nil reads them all."
+  [sources {:keys [operator files forms native-options]} opts]
   (case operator
     :extract
     (let [file (first files)
@@ -807,7 +810,8 @@
                           #(str (or % (extract/file-path->ns-name (:to native-options)
                                                                   (:source-paths native-options)))))]
       (extract/compile-plan (merge options {:file file :source (get sources file)
-                                            :sources sources :forms forms})))
+                                            :sources sources :forms forms
+                                            :max-candidate-files (:max-candidate-files opts)})))
 
     :rename-namespace
     (rename/compile-plan (assoc native-options :sources sources))
@@ -838,12 +842,12 @@
       {:future-sources {file future} :created-files [] :deleted-files [] :renamed-files []
        :resource-effects [{:operation :write :file file}]})))
 
-(defn- compile-refactor-transaction [sources changes expect]
+(defn- compile-refactor-transaction [sources changes expect options]
   (when-not (= 1 (count changes))
     (refuse! :mixed-native-transaction nil
              {:change-ids (mapv :id changes) :operators (mapv :operator changes)}))
   (let [{:keys [id change-index operator files forms expect-count] :as change} (first changes)
-        result (compile-refactor-plan sources change)]
+        result (compile-refactor-plan sources change options)]
     (when (:error-type result)
       (refuse! (:error-type result) nil (assoc result :change-index change-index :change-id id)))
     (doseq [file (:created-files result)]
@@ -931,7 +935,7 @@
         files (vec (distinct (mapcat :files changes)))]
     (doseq [file files] (validate-complete-source! file (get sources file) :invalid-source))
     (cond
-      (some refactor-change? changes) (compile-refactor-transaction sources changes expect)
+      (some refactor-change? changes) (compile-refactor-transaction sources changes expect options)
       (some native-change? changes) (compile-native-transaction sources changes expect)
       :else
       (let [compiled-changes (mapv #(compile-change sources options %) changes)

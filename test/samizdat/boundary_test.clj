@@ -264,6 +264,10 @@
    ;; through verify/run-configured, which refuses any other (karamazov-05z0.21).
    "wait"        {:reach :spawns-process
                   :also "only verify/run-configured's sealed commands, in the sealed root"}
+   ;; Runs the graded program on the paired samples under the grader's minimal
+   ;; environment, or the sealed verify command. Takes no command.
+   "run_check"   {:reach :spawns-process
+                  :also "samples/grade's minimal env, or verify/run-configured's sealed commands"}
    "battery"     {:reach :spawns-process :also "heldout/draft! git update-ref under secrets/scrubbed-process-env"}
    "fetch_turn"  {:reach :harness-only}
    "fetch_artifact" {:reach :harness-only}
@@ -392,3 +396,10 @@
     (let [r (base/run-tool {:branch {:id "b1" :mechanics {:unknown-tools 2}}
                             :tool-name "no_such_tool"})]
       (is (= 3 (get-in r [:branch :mechanics :unknown-tools]))))))
+
+(deftest a-path-the-filesystem-cannot-represent-resolves-to-nothing
+  ;; karamazov-0wvc.6: the confinement primitive threw instead of failing closed.
+  (let [root (str (jolt.fs/create-temp-dir))]
+    (is (nil? (samizdat.agent.files/resolve-under-root
+               root (str root "/" (apply str (repeat 400 "a")) "/x.c"))))
+    (jolt.fs/delete-tree root)))

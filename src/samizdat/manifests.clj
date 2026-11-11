@@ -145,7 +145,12 @@
                              " (" (str/join " -> " (conj seen base-name)) ")."
                              " A manifest cannot extend itself, directly or through another.")
                         {:extends base-name :chain seen})))
-      (let [text (manifest-body base-name)]
+      ;; Unchecked when the checked read has nothing: judging this manifest reads
+      ;; its base, and judging the base compiles what extends it, so inside that
+      ;; check a checked read of the base answers nil. A base really rejected
+      ;; then fails the compile below in its own words.
+      (let [text (or (manifest-body base-name)
+                     (userspace/unchecked-body :manifest base-name))]
         (when-not text
           (throw (ex-info (str "manifest extends \"" base-name "\", and there is no"
                                " manifest named " base-name " — add that role to the"
@@ -394,7 +399,7 @@
     ;; The run's token budget, nil when unbounded (karamazov-aqsr.3)
     :token-budget
     ;; What the beam driver adds
-    :problem :beam? :beam-width :turn-workflow :iterating-loop? :git-baseline
+    :problem :beam? :width-asked? :beam-width :turn-workflow :loop-name :live-loop :iterating-loop? :git-baseline
     :repl-session :live-branches :cancelling
     ;; A replay's switches (samizdat.heldout.child, karamazov-x0dx)
     :serial-turns? :oversight?})

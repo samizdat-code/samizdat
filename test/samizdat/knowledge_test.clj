@@ -4,8 +4,11 @@
             [clojure.string :as str]
             [samizdat.memory :as memory]
             [samizdat.store.db :as db]
+            [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]
+            [samizdat.agent.state]
+            [samizdat.agent.loop]
             ;; The tool namespaces register their defmethods on load, and this
             ;; test dispatches `forget` through the multimethod. Requiring only
             ;; `tools.base` left that registration to whichever other test
@@ -428,7 +431,7 @@
         rid (runs/start-run! c {:problem "p"})]
     (runs/open-branch! c rid {:branch-id "B1"})
     (journal/record-turn! c rid {:branch-id "B1" :turn 1 :tool-name "shell"
-                                 :args {:command "cat deps.edn"} :result "{:paths}"
+                                 :args {:command "jolt -M:test"} :result "{:paths}"
                                  :category "success"})
     (journal/record-turn! c rid {:branch-id "B1" :turn 2 :tool-name "shell"
                                  :args {:command "find . | head -5"}
@@ -437,7 +440,7 @@
     (let [facts (knowledge/distil-project! c {:run-id rid})]
       (is (= 2 (count facts)))
       (let [contents (map (comp :content #(knowledge/get-by-id c %) :id) facts)]
-        (is (some #(str/includes? % "`cat deps.edn` works") contents))
+        (is (some #(str/includes? % "`jolt -M:test` works") contents))
         (is (some #(str/includes? % "refused by the shell policy") contents)
             "a refusal is a fact from the other side, and saves the next run
              the turn it would spend learning the same refusal")))
@@ -451,11 +454,11 @@
       (let [rid2 (runs/start-run! c {:problem "p2"})]
         (runs/open-branch! c rid2 {:branch-id "B1"})
         (journal/record-turn! c rid2 {:branch-id "B1" :turn 1 :tool-name "shell"
-                                      :args {:command "cat deps.edn"} :result "x"
+                                      :args {:command "jolt -M:test"} :result "x"
                                       :category "success"})
         (let [again (knowledge/distil-project! c {:run-id rid2})]
           (is (every? :repeat? again))
-          (is (= 2 (:corroborations (knowledge/by-pattern c "cmd-works:cat deps.edn")))))))))
+          (is (= 2 (:corroborations (knowledge/by-pattern c "cmd-works:jolt -M:test")))))))))
 
 (deftest a-recurring-finding-is-corroborated-not-penalised
   ;; karamazov-blt.25: the outcome axis means "did ACTING on this memory
@@ -811,3 +814,88 @@
          is already a rule, one sighting is an afternoon, and a refuted
          episode is not a rule in waiting")
     (is (= 3 (:corroborations (first (knowledge/graduation-candidates c)))))))
+
+(deftest a-run-remembers-what-its-supervisor-steers-did
+  ;; karamazov-oi16.10. A steer and what came of it died with the run, so a
+  ;; supervisor could not learn from its own past actions the way it learns
+  ;; from a reverted experiment.
+  (let [c @conn
+        rid (runs/start-run! c {:problem "p"})]
+    (runs/open-branch! c rid {:branch-id "B1"})
+    (let [d1 (interventions/submit! c rid {:branch-id "B1" :kind "message" :issued-by "supervisor"
+                                           :payload {:text "run pytest before done" :expect "pytest"}})
+          _ (interventions/submit! c rid {:branch-id "B1" :kind "message" :issued-by "watch"
+                                          :payload "reflex words"})
+          d3 (interventions/submit! c rid {:branch-id "B1" :kind "message" :issued-by "supervisor"
+                                           :payload {:text "stop rebuilding"}})]
+      (interventions/resolve! c rid d1 :applied nil 10)
+      (journal/settle-gate! c (journal/record-gate! c rid {:branch-id "B1" :turn 10 :gate :human-directive
+                                                           :priority 0 :message "m" :prediction "p" :window 1})
+                            :met 11)
+      (interventions/resolve! c rid d3 :applied nil 20)
+      (journal/settle-gate! c (journal/record-gate! c rid {:branch-id "B1" :turn 20 :gate :human-directive
+                                                           :priority 0 :message "m" :prediction "p" :window 1})
+                            :unmet 25))
+    (let [written (knowledge/distil-steers! c {:run-id rid})
+          past (knowledge/past-steers c 10)]
+      (is (= 2 (count written)) "the supervisor's two, not the reflex's")
+      (is (some #(and (str/includes? (:content %) "run pytest before done")
+                      (str/includes? (:content %) "acted on")) past))
+      (is (some #(and (str/includes? (:content %) "stop rebuilding")
+                      (str/includes? (:content %) "not acted on")) past))
+      (testing "a second run's distillation adds its own, and keeps the first run's"
+        (let [r2 (runs/start-run! c {:problem "p2"})]
+          (knowledge/distil-steers! c {:run-id r2})
+          (is (= 2 (count (knowledge/past-steers c 10)))))))))
+
+(deftest a-run-remembers-what-to-run-instead
+  ;; karamazov-oi16.12: a command that kept failing and the one that worked in
+  ;; its place, as a project fact both roles read on the next run.
+  (let [c @conn
+        r1 (runs/start-run! c {:problem "p"})
+        pats [{:key "python solve.py" :failed 3 :instead ["python3 solve.py"]}]
+        out (knowledge/distil-session! c {:run-id r1 :patterns pats})]
+    (is (= 1 (count (:patterns out))))
+    (let [m (knowledge/by-pattern c "cmd-instead:python solve.py")]
+      (is (str/includes? (:content m) "`python solve.py`"))
+      (is (str/includes? (:content m) "`python3 solve.py`"))
+      (is (= "semantic" (:kind m))))
+    (testing "a later run that finds the same corroborates it"
+      (let [r2 (runs/start-run! c {:problem "p"})]
+        (is (:repeat? (first (:patterns (knowledge/distil-session! c {:run-id r2 :patterns pats})))))))))
+
+(deftest a-memory-read-back-says-who-wrote-it-and-how-often-it-held
+  ;; The memory trap (2611.07554v1): self-written notes did more harm than raw
+  ;; transcripts, read as instructions rather than evidence.
+  (let [[m h] (knowledge/with-provenance [{:origin "inferred" :corroborations 1}
+                                          {:origin "harness" :corroborations 4}])]
+    (is (= "a model" (:written-by m)))
+    (is (:unverified m) "seen in one run")
+    (is (= "the harness" (:written-by h)))
+    (is (not (:unverified h)))))
+
+(deftest a-remembered-note-is-an-episode-unless-it-says-it-is-a-rule
+  ;; The memory trap: 69-94% of notes stated a standing rule. `remember` with
+  ;; no kind records what happened, not a rule.
+  (let [rid (runs/start-run! @conn {:problem "p"})
+        r (tools/run-tool {:branch (samizdat.agent.state/new-branch {:id "B1" :problem "p"})
+                           :tool-name "remember" :conn @conn :run-id rid
+                           :args {:content "the user said to skip confirmation for this cleanup"}})
+        id (second (re-find #"(k-[0-9a-f]+)" (str (:result r))))]
+    (is (= "episodic" (:kind (knowledge/get-by-id @conn id))))))
+
+(deftest what-the-last-run-left-is-labelled-by-who-wrote-it
+  ;; learned-since used to call every row "what the harness derived … not
+  ;; somebody's summary", model-written rules included (the memory trap).
+  (let [prev (runs/start-run! @conn {:problem "p"})
+        _ (Thread/sleep 5)
+        _ (knowledge/remember! @conn {:content "When a test disagrees, update the test."
+                                      :kind "procedural" :origin :inferred :run-id prev})
+        _ (runs/finish-run! @conn prev :completed nil)
+        _ (Thread/sleep 5)
+        now (runs/start-run! @conn {:problem "q"})
+        {:keys [text]} (#'samizdat.agent.loop/learned-block @conn now)]
+    (is (str/includes? text "update the test"))
+    (is (str/includes? text "a model") "a model's note is said to be one")
+    (is (not (str/includes? text "not somebody's summary")))))
+

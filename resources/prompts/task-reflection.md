@@ -31,7 +31,8 @@ about the PROJECT, not about your task.]
 ## RULES
 [One per line: something that will hold again next time. "Reload the namespace
 before re-running a test or you are testing the old definition." A rule is
-worth recording only if breaking it costs a turn.]
+worth recording only if breaking it costs a turn. Say what happens and why, not
+"always" or "never": a bare standing rule is not kept.]
 
 ## GOTCHAS
 [One per line: what wasted time here, with the exact error or refusal that

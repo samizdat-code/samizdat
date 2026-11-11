@@ -5,7 +5,7 @@
   "The gate on docs/divergences.md.
 
   docs/divergences.edn is the machine-readable half of the registry of how
-  the four in-tree libraries differ from their upstreams; this namespace keeps
+  the in-tree libraries differ from their upstreams; this namespace keeps
   the two from rotting apart: an entry whose prose was deleted, prose that
   describes an entry the registry never heard of, a pinning test that was
   renamed away. It cannot detect an UNLISTED divergence; that needs the
@@ -29,7 +29,7 @@
   (doseq [e (registry)]
     (testing (str (:id e))
       (is (keyword? (:id e)))
-      (is (#{:mycelium :maestro :parinferish} (:lib e)) "lib is one of the three")
+      (is (#{:mycelium :maestro} (:lib e)) "lib is one of the two")
       (is (#{:port :harness :behaviour} (:kind e)) "kind is one of the three")
       (is (and (string? (:summary e)) (not (str/blank? (:summary e)))))
       (is (or (symbol? (:pinned-by e))

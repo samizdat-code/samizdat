@@ -46,7 +46,7 @@ plan({files, tests?, goal?, rfc?, checklist?})
     problem is, and you may call plan again the moment you learn it is
     somewhere else. You cannot finish with a declared file unwritten, so the
     list is a promise rather than a wish.
-eval({code, timeout_ms?})
+eval({code, timeout_ms?, restart?, wait?, abort?})
     Evaluate Clojure in the {% if harness-image %}live harness image{% else %}project's own image{% endif %} and see the value and any
     printed output. This is how to work: try a form, inspect what it returns,
     and iterate BEFORE writing it to a file. Definitions persist across your
@@ -58,7 +58,10 @@ eval({code, timeout_ms?})
     inspecting takes one. Reach for that before reaching for four calls. You can
     require and exercise the project's own namespaces here too.
     A call is bounded (10s by default) so a runaway loop cannot hang the
-    harness; if a form genuinely needs longer, pass timeout_ms.
+    harness; if a form genuinely needs longer, pass timeout_ms. If the REPL is
+    in a bad state (a stuck var, a broken namespace you cannot reload), pass
+    `restart: true` to start a fresh one before the form runs; a REPL whose
+    process died is restarted for you. Either way its definitions are gone.
 {% if harness-image %}    LIVE means you share this process. The timeout covers a slow form, not a
     form that ends the process: calling a `-main`, or anything that reaches
     `System/exit`, kills the harness mid-run and takes every other branch with
@@ -71,14 +74,35 @@ eval({code, timeout_ms?})
     (`jolt -M:test`) — that is a child process and its exit code is the point.
     In eval, call the test namespaces directly (`(clojure.test/run-tests
     'flight.mechanics-test)`) rather than the runner that wraps them.
-{% if bridge-tools %}    TOOLS ARE FUNCTIONS INSIDE EVAL TOO: {% for t in bridge-tools %}`tool/{{t}}`{% if not forloop.last %}, {% endif %}{% endfor %}.
-    Each takes the map of arguments the tool takes and returns its result
-    text, so one eval can search, read, and keep only what matters:
-      (let [hits (tool/grep {:pattern "defn place-order"})]
-        (->> (clojure.string/split-lines hits) (take 5)))
-    A call is checked exactly as the tool call would be, and a refusal or a
-    failure throws where the call was made. Only the eval's final value
-    comes back to you, so return the part you need, not every result.
+{% if bridge-tools %}    CODE MODE: TOOLS ARE FUNCTIONS INSIDE EVAL, AND THIS IS THE WAY TO WORK.
+    Functions that return values: (sh "make" "test") → stdout, one program and
+    its arguments, a non-zero exit throws with (ex-data e) → {:exit :out :err};
+    (sh* ...) → {:exit :out :err}; (cat f) (head f n) (tail f n) → text;
+    (ls d) (glob "src/**/*.clj") → paths; (grep #"re" path?) → ["path:line:text"];
+    (stat p) (exists? p); (spit f s) (edit f old new), checked like write_file;
+    (mkdir d) (mv a b) (cp a b) (rm f); (curl url opts) → {:status :body};
+    (json s) (json-str x); background processes: (process/start "cmd") →
+    {:pid :log} (process/output pid n) (process/wait pid ms) (process/list)
+    (process/stop pid) (process/poll-url url {:status 200}) (process/poll-until
+    "cmd"). The tools too, returning their result text:
+    {% for t in bridge-tools %}`tool/{{t}}`{% if not forloop.last %}, {% endif %}{% endfor %}.
+    When the next steps are several — write a file, build, run it, compare its
+    output with a reference — do them in ONE eval script, not one call each:
+    every separate call is a round trip, and the script can loop, filter and
+    keep only what you need to see.
+      (let [_     (spit "src/app/core.clj" src)
+            build (sh* "./compile.sh")
+            same? (fn [args] (= (apply sh* "/tmp/ref" args) (apply sh* "./app" args)))]
+        {:build (:exit build) :failing (remove same? [["-h"] ["-n" "3" "in.txt"] ["--bad"]])})
+    Write files from a script with `spit` or `edit`, not `sed` or `echo >`:
+    they check the parens and refuse a change that breaks a file. Try code in the REPL itself rather than starting a fresh `jolt -e`
+    from the shell, which loses every definition each time. A call made from a script is
+    checked exactly as the tool call would be, and a refusal or a failure throws
+    where the call was made. A script with a bridge call may run up to ten
+    minutes without a timeout_ms; one still running after a minute comes back
+    and goes on in the background, and `wait: true` (no code) waits for its
+    result, `abort: true` stops it. Only the eval's final value comes back to you,
+    so return the part you need.
 {% endif %}propose_cell({name, body, rationale})
     Offer a helper worth keeping beyond this run as a callable cell: a
     `(cell/defcell :lex/name {:doc … :callable true :pure true :requires []
@@ -89,9 +113,9 @@ eval({code, timeout_ms?})
     from eval as `lex/name`. Helpers that call the project's own code belong
     in its dev/ source instead. `rationale` says why later runs need it.
 doc({symbol})
-    The arglists and docstring of a var, e.g. doc({symbol: "samizdat.lisp/balance"}).
+    The arglists and docstring of a var, e.g. doc({symbol: "jolt-lsp.syntax/balance"}).
 complete({prefix})
-    Symbols starting with a prefix — a qualified prefix ("samizdat.lisp/b")
+    Symbols starting with a prefix — a qualified prefix ("jolt-lsp.syntax/b")
     completes within that namespace, a bare one ("redu") across the core.
 manual({name?})
 {% if harness-image %}    The harness's OWN command surface: the functions worth calling from eval,
@@ -268,13 +292,17 @@ mcp({action, server?, tool?, arguments?})
     servers; tools {server}, each tool with its description and argument
     schema; call {server, tool, arguments}. A server's policy may ask a
     person before a call, or refuse tools it does not trust.
+run_check({})
+    Run this run's own check on the work as it stands: the paired samples in
+    tests/, or the configured verify command. Says what passed or the first
+    failure. Takes no arguments, and is how to run a program on the samples.
 wait({seconds?, until?, every?})
     Wait for the world instead of checking it every turn. {seconds} sleeps.
     {until, every?, seconds?} runs `until` — the run's own configured test
     or acceptance command, nothing else — every `every` seconds until it
     passes or `seconds` run out, all in one turn. Bounded at half an hour.
 lsp({op, file, line, col, new_name?, new_path?, preview?})
-    Code navigation and semantic edits via clojure-lsp. definition|references|
+    Code navigation and semantic edits from the project index. definition|references|
     hover need file, line, col; diagnostics needs only file. rename needs
     new_name. code_action needs line, col, end_line, end_col. move needs
     new_path. Semantic edits are staged as resource changes: preview: true
@@ -461,7 +489,7 @@ manifest({action, ...})
       revert {name, version, rationale}
                            Back to an older version, compiled and checked
                            like a save and stored as a new version.
-intervene({kind, branch?, text?, basis?})
+intervene({kind, branch?, text?, expect?, basis?})
     Steer a run that is happening right now. `kind` is one of message,
     review, cull, fork, retract, extend, pause, resume; `message` is the one
     you want almost always. It lands at the top of that branch's next turn,
@@ -470,7 +498,10 @@ intervene({kind, branch?, text?, basis?})
     that could tell it was stuck would have stopped already. Watch what it
     does with one directive before sending another. `basis`, as for
     `remember`, names the turns or artifacts the directive rests on; each
-    must exist, or nothing is sent.
+    must exist, or nothing is sent. `expect` is what the branch should do
+    next — a tool name, a command, a file ("pytest", "write_file",
+    "solve.py") — and the steer is judged acted on when its next turns do it;
+    your next look shows each steer's outcome and what the branch did next.
 experiment({name, change, hypothesis, kind?, target?, predicts?, until?})
     Bind a change you are making to what you expect it to do, so the next
     round can tell you whether it worked. Start one whenever you edit a cell,

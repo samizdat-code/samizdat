@@ -40,6 +40,14 @@
   [path]
   (boolean (re-find (re-pattern (:test-file-regex (conventions))) (str path))))
 
+(defn owes-test?
+  "Whether a set of changed paths is the kind of change the TDD ship gate is
+  about: some of it is code, and none of it is a test."
+  [changed]
+  (let [code (re-pattern (:code-file-regex (conventions)))]
+    (boolean (and (some #(re-find code (str %)) changed)
+                  (not (some test-file? changed))))))
+
 (defn ns-from-test-path
   "The Clojure namespace a test file defines: strip the leading source root
   (test/ or src/), drop the extension, '/'->'.', '_'->'-'. Returns nil for a
@@ -93,6 +101,21 @@
            (remove #(str/includes? out (mark %)))
            vec
            not-empty))))
+
+(defn green-check
+  "What a passing sample check leaves on a branch: which program passed, on what
+  turn, and its text as a digest, so a later edit is seen. nil with no program."
+  [root artifact turn]
+  (let [f (io/file (str root) (str artifact))]
+    (when (.isFile f)
+      {:artifact artifact :turn turn :digest (hash (slurp f))})))
+
+(defn samples-pinned?
+  "Whether `green`, a branch's :green-check, still describes the program on disk:
+  its samples pin the behaviour exactly as long as nobody has changed it."
+  [root green]
+  (when-let [artifact (:artifact green)]
+    (= (:digest green) (:digest (green-check root artifact nil)))))
 
 (defn focused-cmd
   "A test command that runs ONLY the test namespaces among `changed`, with an
@@ -161,8 +184,7 @@
          "test, then call done.")
 
     ;; TDD: files changed but none is a test — the behaviour was never pinned.
-    (and require-test? (some? changed) (seq changed)
-         (not (some test-file? changed))
+    (and require-test? (some? changed) (owes-test? changed)
          (empty? contracted-tests))
     (str "You added no test, so the new behaviour is not pinned. Write a focused "
          "test that FAILS without your change and passes with it, get it green, "

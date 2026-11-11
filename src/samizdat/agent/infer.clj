@@ -118,15 +118,21 @@
   :compaction-chars down by the policy's :factor, floored at the minimums so
   a squeezed branch still sees its current exchange. Level 0 (or nil) is the
   budget untouched."
-  [{:keys [keep-pairs compaction-chars]} squeeze
-   {:keys [factor min-keep-pairs min-compaction-chars]}]
-  (let [scale (if (pos? (or squeeze 0))
-                (Math/pow (double factor) (double squeeze))
-                1.0)]
-    {:keep-pairs (max (long min-keep-pairs)
-                      (long (* keep-pairs scale)))
-     :threshold-chars (max (long min-compaction-chars)
-                           (long (* compaction-chars scale)))}))
+  ([budget squeeze policy] (squeezed-budget budget squeeze policy nil))
+  ([{:keys [keep-pairs compaction-chars compaction-window-share chars-per-token]} squeeze
+    {:keys [factor min-keep-pairs min-compaction-chars]} window]
+   ;; On a large window history stays verbatim far longer: Pi kept its whole history up
+   ;; to its window (295K tokens on figlet), where 240,000 characters cut probe outputs.
+   (let [scale (if (pos? (or squeeze 0))
+                 (Math/pow (double factor) (double squeeze))
+                 1.0)
+         chars (if (and window compaction-window-share)
+                 (max compaction-chars (long (* compaction-window-share window chars-per-token)))
+                 compaction-chars)]
+     {:keep-pairs (max (long min-keep-pairs)
+                       (long (* keep-pairs scale)))
+      :threshold-chars (max (long min-compaction-chars)
+                            (long (* chars scale)))})))
 
 (defonce ^:private render-cache
   ;; Weak keys: an idle run's tape ids may be collected; entries never retain
@@ -141,10 +147,11 @@
 (defn render
   "The tape as it goes to the wire, with only a verified stable prefix reused.
   The source tape remains untouched, and the result equals llm.message/compact."
-  [{:keys [id messages turns squeeze]}]
+  [{:keys [id messages turns squeeze window]}]
   (let [budget (squeezed-budget (gates/threshold :context-budget)
                                 squeeze
-                                (gates/threshold :context-squeeze))
+                                (gates/threshold :context-squeeze)
+                                window)
         {:keys [entry messages]} (hydration/compact (get @render-cache id)
                                                     messages turns budget)]
     (.put ^java.util.Map @render-cache id entry)
@@ -367,7 +374,9 @@
 
 (defn- prepare*
   [ctx {:keys [id] :as tape} {:keys [attempt rendered fit? dispatch?] :or {attempt 1}}]
-  (let [rendered (or rendered (render tape))
+  (let [rendered (or rendered
+                     (render (assoc tape :window (or (get-in ctx [:llm-config :request-window])
+                                                     (get-in ctx [:llm-config :context-window])))))
         {:keys [grammar] forced-prefill :prefill forced-tool :force-tool}
         (force-mechanism ctx tape)
         reasoning-budget (reasoning-budget-for ctx tape)
@@ -393,7 +402,11 @@
         policy (gates/threshold :request-accounting)
         request {:provider (get-in ctx [:llm-config :provider])
                  :model (get-in ctx [:llm-config :model])
-                 :context-window (or (get-in ctx [:llm-config :context-window])
+                 ;; What the provider will take, which :context-window need not
+                 ;; be: on a model with a large window that is the ladder's
+                 ;; budget, chosen for when to fold.
+                 :context-window (or (get-in ctx [:llm-config :request-window])
+                                     (get-in ctx [:llm-config :context-window])
                                      (get-in ctx [:llm-config :max-context]))
                  :tools (tools-for-request tools)
                  :grammar grammar

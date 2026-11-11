@@ -63,6 +63,19 @@
    {:name samizdat.agent.compaction/results-of
     :summary "The framed bodies of some tools' results inside a span. The task fold puts gates.edn :task-fold :carry (ask_human) on its line, so a person's answers outlive the task that asked them."}]}
 
+ {:group "A team of fresh contexts"
+  :entries
+  [{:name samizdat.agent.sections/parse
+    :summary "A role's reply as named sections. Team-solve reads its one-call roles this way; a missing section is the caller's decision."}
+   {:name samizdat.agent.gitdiff/work-tree-id
+    :summary "A restorable git tree of the project's work, leaving out .samizdat. Team-solve keeps the last passing work this way on a repository."}
+   {:name samizdat.agent.gitdiff/restore-work-tree!
+    :summary "Put the work back as a work-tree-id holds it, removing files created since."}
+   {:name samizdat.eval.samples/grade
+    :summary "Run a program against paired tests/N.in and N.out. A team-solve gate: a script decides, never a model."}
+   {:name samizdat.eval.samples/run-one
+    :summary "Run a program once on one input. Team-solve runs a manager's counterexample this way before believing it."}]}
+
  {:group "Probing without committing"
   :entries
   [{:name samizdat.agent.infer/of-branch
@@ -115,6 +128,10 @@
     :summary "The held-out gate off the turn: after a save validates, the battery replays on a background lane and the edit is committed or refused there; the branch that made it is told by a message on a later turn. nil when the project has no battery, and the tool saves as before."}
    {:name samizdat.heldout/check-edit
     :summary "The held-out gate, stage 1: replay the project's battery (.samizdat/battery, stored in battery_cases) with a candidate cell, manifest or policy edit in place and without it, each case in a child process on the tree its recorded run started from, and refuse the edit when a target that passed fails. Ties accepted; a case that does not run at baseline is set aside by name. Opt-in by having cases; gates.edn :heldout. Each target is recorded in heldout_checks with its fixture, harness revision, model and scorer."}
+   {:name samizdat.workflow/refresh-turn-loop
+    :summary "The turn loop compiled again when its manifest or the cells have changed since it was last compiled, else nil. The beam asks at each round (beam/with-live-loop), so an edit reaches the running turn-at-a-time run at its next round. An edit that will not compile or is no longer per-turn leaves the running loop in place, noted :loop-refresh-failed; one that lands is noted :loop-refreshed."}
+   {:name samizdat.claims/denies-tool?
+    :summary "Whether a sentence says a tool itself does not work: the tool's whole name, at most two words, then a denial from wordlists.edn :tool-denials. intervene refuses such a directive when the run's record shows that tool working; anything else it passes."}
    {:name samizdat.heldout/draft!
     :summary "Freeze a finished run as a battery case: its replay, the expectations battery/draft-case writes, its git baseline (pinned under refs/samizdat/battery/) as the fixture, its loop and model. Behind `battery add`. Cases are written once and never rewritten."}
    {:name samizdat.heldout/live-verdict
@@ -129,6 +146,18 @@
     :summary "Every node's preconditions as one report — the ctx keys and data keys it requires, what holds on every path in, and what is unsatisfied with the path that fails — before an edit rather than as the refusal after."}
    {:name samizdat.progress/interceptors
     :summary "Where each branch is in its workflow, journaled as :progress notes by every compiled manifest. Entering a node the manifest lists under `:progress [...]` at its top is a stage move (per-turn nodes do not belong there; a node the graph lacks is refused at compile), and a change in any branch field gates.edn :progress :branch-keys watches (phase, task, goal, status) is a field move. journal/progress reads them back per branch — the supervisor's view of a run, instead of its steps."}
+   {:name samizdat.agent.code-metrics/of-tree
+    :summary "What a run has made worse since its baseline, measured with jolt-metrics: critical complexity, nesting and size findings on files it changed, ignoring what was already there. Read by the :metrics-worse gate; tuned in gates.edn :code-metrics."}
+   {:name samizdat.agent.code-metrics/unusual-change
+    :summary "Whether a run's change moves the code's information content (the Shannon entropy of its words, jolt-metrics' metrics.entropy) more than three standard deviations from the project's last :entropy-commits commits. Read at done by the :unusual-change ship rung, which asks once for a review of the diff; nil with too little history to tell. Its sibling unusual-file-change names the files the run changed whose words are far more surprising than the project's other files' (jolt-metrics 0.3.2); both read any language (:entropy-extensions)."}
+   {:name samizdat.bridge/install-source
+    :summary "Code mode, in every project-image eval session (resources/prompts/code-mode-helpers.clj, a userspace prompt role): sh and sh* return a program's output as data, cat/head/tail/ls/glob/grep/stat read in the image, spit/edit/mkdir/mv/cp/rm write through the gated tools, curl and json for HTTP and JSON, and process/start, output, wait, list, stop, poll-until and poll-url for background processes that go with the image. An eval past gates.edn :eval-bridge :stall-after-ms comes back and goes on; eval {wait: true} or {abort: true} answers it."}
+   {:name samizdat.agent.actions/scores
+    :summary "The run's record of what each action led to (karamazov-oi16): every command the shell tool runs, a turn's own or an eval's bridged sh, is an :action note (command, exit, ms, via), and scores reads them back per action key (policy/command-keys: `pip install`, `python3 solve.py`) as how often it worked, failed or timed out and the command that worked. failing names what keeps failing and never worked, working what did. Read with (journal/notes conn run-id :action); policy in gates.edn :actions."}
+   {:name samizdat.memory/admit
+    :summary "What text may become a memory, by who wrote it: secrets redacted, confidence capped, and injection or unbacked rule-shaped text parked. Policy in gates.edn :memory :admission. `remember!` applies it; `samizdat.store.knowledge/quarantine` lists what was parked."}
+   {:name samizdat.store.knowledge/consolidate!
+    :summary "One pass at a run's end over the notes automatic writers inferred during it: a model keeps a few, adds up to :max-new, and the rest are retired. Keeping nothing is valid; an unreadable reply changes nothing. Numbers in gates.edn :memory :consolidation, words in prompts/memory-consolidate.md."}
    {:name samizdat.agent.revise/revise!
     :summary "Backward revision (ReHarness): after a branch ends, each memory it was shown that an earlier run wrote is put back beside the turns it was written from (knowledge source_branch/source_turn_*), with this branch's outcome as feedback only, and kept, rewritten through restate! (its lineage keeps the old wording) or retired. The :memory/revise cell (node :revisit after :distil) decides under gates.edn :memory-revise — off until the arena has measured it, clean endings only. Each call is a :revision side call and a :memory-revised note."}
    {:name samizdat.workflow/compile-loop
@@ -175,14 +204,16 @@
     :summary "What a person allowed ALWAYS on a run in this session (the permission dialog's `a`): shell grant patterns like `cargo *`, merged into the policy's grants for that run, held in memory only, and dropped when the run ends. Never written to the project. Where no pattern can stand for the command — a flow gap, a compound that hides what it runs — `a` allows that exact text again for the run instead (the request carries :always-exact)."}
    {:name samizdat.security.token/issue!
     :summary "The HTTP API's bearer token: issued when the server starts, written owner-only to ~/.config/samizdat/http/<port>.token (a place no shell command or eval image can read), required on every request but /health, dropped on stop. samizdat.api.client and the event stream send it for a loopback base URL."}
-   {:name samizdat.sdiff.group/by-calls
-    :summary "The critic's structural report opens with the changed forms grouped by the calls between them (read from the source: a bare name in the same namespace, an alias or full name elsewhere), forms used from three or more other files set apart as shared so they do not join every caller into one group."}
-   {:name samizdat.sdiff.names/used
+   {:name jolt-lsp.sdiff.group/by-calls
+    :summary "The critic's structural report opens with the changed forms grouped by the calls between them (a bare name in the same namespace, an alias or full name elsewhere, with namespaces and aliases resolved by jolt-lsp's analyzer), forms used from three or more other files set apart as shared so they do not join every caller into one group."}
+   {:name jolt-lsp.sdiff.names/used
     :summary "Shortened names in the critic's structural report: a long path or namespace becomes its shortest unique suffix (or the alias its files agree on) only where that saves more than the legend line costs, and the legend leads the report. Not used in anything a model calls a tool with."}
-   {:name samizdat.surgeon.move/plan-form
+   {:name jolt-lsp.surgeon.move/plan-form
     :summary "Pure dependency-aware form movement returns future source without writing; exact moves refuse stranded dependencies or callers, and dependency-expanded moves preserve attached comments and reject cycles. Cell move uses the same planner and passes its future source through the validated cell save path."}
-   {:name samizdat.sdiff.address/locate
+   {:name jolt-lsp.sdiff.address/locate
     :summary "A top-level Clojure form by its id (defn route) or unique bare name, and a place in it by sdiff's printed path (body › binding cap) or any end of that path only one place has. read_file {path, form, at?} reads it; a miss or an ambiguity lists the candidates."}
+   {:name samizdat.sdiff.reads/since-read!
+    :summary "Which top-level forms of a file changed since this branch last read it whole ({:changed :added :removed :same}, by form id), from jolt-lsp's form fingerprints; the per-run ledger of reads is samizdat's and is dropped at run end (forget-reads!)."}
    {:name samizdat.basis/unresolved
     :summary "What a claim rests on, checked: remember and intervene take a basis — turns (t12, B2:t7), artifacts (a#3, s#2), tasks (sz-…) or memories (k-…) — and refuse when any does not exist in the record, naming each. The basis travels with the memory's cause and the directive's text. Ported from sdiff's validate-ref."}
    {:name samizdat.llm.client/chat-one
@@ -197,7 +228,7 @@
     :summary "The ship-gate critic asked gates.edn :critic-consensus :samples times: the majority of the samples that answered decides, the split {:passes :total :errors} is journaled on the :critic note, an errored sample is not a vote, a tie does not pass, and all failing is the usual fail-open."}
    {:name samizdat.agent.gitdiff/review-diff
     :summary "What a critic reads of a run's changes: sdiff's structural report of the changed Clojure files (each change named by the binding, clause or arity it lives in, renames rolled up, whitespace- or comment-only files named) and then the line diff of the rest. gates.edn :review-diff; samizdat.sdiff is sdiff (semantic-namespace/diff) ported."}
-   {:name samizdat.sdiff.core/file-report
+   {:name jolt-lsp.sdiff.core/file-report
     :summary "Structural diff of one Clojure file's old and new source: forms paired by identity, children by role, the rest by LCS of structural hashes; :verdict :semantic, :comments-only or :whitespace-only (:rename-only from rollup-renames); moves, extractions with drift, signature-only changes."}
    {:name samizdat.security.flow/label-of
     :summary "What a branch has read, as {:trust :trusted|:untrusted :audience :project|:operator :because {...}}. Web content (webfetch, websearch) makes it :untrusted; an approved read outside the project makes it :operator. Labels only narrow. After :untrusted a shell command that is not read-only asks a person; after :operator webfetch, websearch and any non-read-only command do. The table is in src (samizdat.security.flow/table), not gates.edn: it confines the agent. Each change is a :flow journal note."}
@@ -291,6 +322,12 @@
     :summary "Re-read gates.edn from userspace and recompile the steer table. The policy tool's save does this for you."}
    {:name samizdat.agent.gates/message-context
     :summary "The render context a gate's prose is selmer-rendered against: turn count and budget, the branch's stated goal, its last failure, and whether it may call `split`. A :message-form in gates.edn passes it to sp/render-str so a gate written that way gets the same {% if %} and {{...}} as a plain :message-file."}
+   {:name samizdat.agent.gates/time-used
+    :summary "Share of a run's wall-clock limit spent, nil when the run has none. A limit comes from config.edn :run :time-limit-seconds; the :time-wind-down and :time-last-call gates read this against gates.edn :time-budget, at most :max-time-steers times a run."}
+   {:name samizdat.agent.gates/time-left-seconds
+    :summary "Seconds left of a run's wall-clock limit, nil when the run has none; a gate's prose gets it as {{time-left-seconds}}."}
+   {:name samizdat.llm.fence/install-orphan-tools!
+    :summary "Set the table that names the tool for a damaged tool call whose invoke line was lost, by which parameters it carries. Order matters: first match wins. The table is gates.edn :orphan-call."}
    {:name samizdat.userspace/save!
     :summary "Append a new version of any userspace piece (:cell :manifest :policy :prompt), with a rationale the history shows. Prefer the matching tool, which validates first and requires the rationale."}
    {:name samizdat.userspace/revert!
@@ -360,10 +397,12 @@
     :summary "Recover an interrupted publication from its durable original snapshots without reusing its proposal."}
    {:name samizdat.lsp.edit/workspace-edit->members
     :summary "Normalize LSP text and file edits into data-only revisioned resource members, including UTF-16 positions and overlapping-edit refusal."}
-   {:name samizdat.lsp.client/code-actions
-    :summary "Request CodeAction values for selection and optional codeAction/resolve; their edits publish through resource changes."}
-   {:name samizdat.lsp.client/prepare-file-rename
-    :summary "Request a will-rename WorkspaceEdit without touching the filesystem."}
+   {:name samizdat.lsp.index/definition
+    :summary "The lsp tool's language server: jolt-lsp's project index in this process, in LSP shapes (0-based UTF-16 positions, Location, Hover, WorkspaceEdit). Nothing to install or start; the index re-reads files changed on disk before each answer. definition, references, hover, diagnostics and rename (a WorkspaceEdit proposal)."}
+   {:name samizdat.lsp.index/code-actions
+    :summary "jolt-lsp's refactors that apply at a position (clean namespace, sort requires, inline symbol, cycle keyword, destructure / restructure keys), each with its WorkspaceEdit already computed; the chosen one publishes through resource changes."}
+   {:name samizdat.lsp.index/prepare-file-rename
+    :summary "The WorkspaceEdit for moving a file: the namespace the new path implies replaces the old one in the moved file and in every require and qualified reference (jolt-lsp rename-namespace). Nothing is written; the lsp tool's move op publishes it with the move as one resource change."}
    {:name samizdat.structural.backend/query
     :summary "Optional ast-grep queries run against observed workspace content, with executable approval, deadlines, and bounded matches. Rewrites only produce staged resource changes; the backend never writes files."}
    {:name samizdat.debug.dap/request!
@@ -392,6 +431,8 @@
     :summary "The files a shell command prints (cat, head, tail, sed -n, less, more, nl), or none when a substitution, redirection or cd makes that unknowable. Stale-read notices, the digest steer and provider exposure count these as reads."}
    {:name samizdat.agent.outline/outline
     :summary "A file's definitions with the line ranges they span, by gates.edn :outline :patterns. read_file({path, outline: true}) returns it, so the next read can take one range instead of the whole file."}
+   {:name samizdat.agent.outline/clojure-outline
+    :summary "A Clojure file's outline from jolt-lsp's parse (gates.edn :outline :clojure): each top-level form whose head defines something, with the lines the form itself spans, so comments and #_ forms between definitions belong to none. read_file uses it for those extensions and falls back to the patterns when it finds nothing."}
    {:name samizdat.agent.files/large-shell-print?
     :summary "Whether a shell call is a lone `cat FILE` of a file over gates.edn :digest :min-lines — the phases.edn rule :large-shell-print-needs-a-digest refuses it toward read_digest."}]}
 
@@ -442,11 +483,11 @@
 
  {:group "Reading and writing Clojure"
   :entries
-  [{:name samizdat.lisp/diagnose
+  [{:name jolt-lsp.syntax/diagnose
     :summary "Why a piece of Clojure would not load AS WRITTEN, or nil — reason plus 1-based line/col, naming both ends of a mismatch. Answers 'is this loadable now', which is a different question from lisp/balance's 'could this be repaired': the delimiters balancing does not promise it READS, and `(defn f [] :)` is perfectly balanced and is not Clojure."}
-   {:name samizdat.lisp/balance
+   {:name jolt-lsp.syntax/balance
     :summary "The repair half, two rungs deep: closes a trailing truncation or trims a trailing over-close from the delimiter stack, and where the stack has to give up falls to lisp/indent-repair. Refuses anything it cannot repair by ADDING, because removing or moving a mid-file delimiter re-parents code. Returns data, not sentences — the words live in prompts/file-tool.md."}
-   {:name samizdat.lisp/indent-repair
+   {:name jolt-lsp.syntax/indent-repair
     :summary "Repair from INDENTATION rather than from the delimiter stack (vendored parinferish, indent mode). The stack knows how many delimiters are open and never where the missing one goes, so it can only append at the end; indentation says an unclosed binding vector ended before the body indented under it, and puts the `]` there. Accepted only when every change is an INSERTED delimiter and the result reads — parinfer would also resolve a mismatch or a stray by deleting, and deleting from a model's text is a corruption, not a repair. Reached by write_file and eval (whole texts), never by edit_file, which refuses instead."}
    {:name samizdat.escapes/decode-unicode-escapes
     :summary "Undo the \\uXXXX drift a model writes when it meant the character itself — the six characters \\u2014 become an em dash. Deliberately narrow, and the narrowness is why it is safe: the backslash must be UNESCAPED (text about an escape is left alone) and the escape must name a VISIBLE ASSIGNED character judged on the code point, so an ASCII or control escape, a private-use point, an unassigned point, a bidi override, a zero-width joiner, a line separator and a space that is not a space all survive verbatim. A surrogate pair is judged by the character it builds, so emoji decode and an invisible tag character cannot sneak in as one. Applied to the model's OWN text — write_file's content, edit_file's new_text, patch's replace — never to the assembled file, so an edit cannot rewrite lines it did not touch."}
@@ -480,7 +521,7 @@
     :summary "Everything wrong with a proposed split, as data: a stub the parent named but never wrote, one that is already implemented (a contract already met gives the child nothing to do), one claimed by two pieces, a missing test file, fewer than two pieces. Pure over the two readers it is handed, so the whole rule set is testable without a tree. The split is all-or-nothing — a half-created delegation leaves rows nobody owns and a parent believing it delegated less than it did — and a rejection is base/rejected, not charged to the branch, the same treatment a manifest that does not compile gets. Words in prompts/split-tool.md."}
    {:name samizdat.agent.stubs/filled?
     :summary "Whether a stub a parent delegated has been implemented: the name is still defined and its body is no longer a stub. Both halves matter — a child that DELETED the stub rather than filling it has not delivered, because the parent's composition calls that name. Beside it: `definitions` (every top-level def in a source, read rather than grepped, {} on a source that does not read), `definition` (one by name), `stub?` (the three shapes a stub is written in: no body, a body of exactly nil, a body whose only form is a throw), and `missing` (which of these names a source does not define, as data). This is the delegation boundary made checkable — a parent that splits a task writes the stubs the pieces must fill, so the two layers share the signature and nothing else."}
-   {:name samizdat.lisp/first-odd-quote-line
+   {:name jolt-lsp.syntax/first-odd-quote-line
     :summary "The line where the running unescaped-quote count first goes odd — the line that most likely opened a string nobody closed, which is NOT where the reader complains."}
    {:name samizdat.hashline/line-anchor
     :summary "Mint a `<line>:<hash>` anchor: the line locates, the three-hex content hash of the trimmed line verifies. What read_file({anchors: true}) prints and the patch tool spends."}
@@ -499,6 +540,20 @@
     :summary "Every note of one kind on a run, oldest first. What the stream reads :stage-error notes with — each is a crash a stage survived, and all of them are the supervisor's to look at. Beside them it reads :run-error, the crash that ended a run, which a resume of that run shows the supervisor: {:error :type :node :trace}, :node the cell that threw and :trace its frames innermost first (gates.edn :run-error-frames). jolt eliminates tail calls, so a function whose LAST act was the failing call leaves no frame: a short trace is missing its tail callers, not wrong, and :node still names the cell. A :model note is written the turn a branch first learns which model the provider says is answering, and again only if that changes: {:requested :reported :was}, on the branch and turn. requested != reported is the provider substituting a model behind a 200, which nothing else shows."}
    {:name samizdat.store.interventions/kinds
     :summary "Every directive that can be queued against a run, with what each does — a person's at the control API, the supervisor's through `intervene`, the reflex's. Three boundaries own them: a branch's steer boundary (message, review), the beam's round top (cull, fork, retract, extend, pause, resume), and the feature loop's directives stage (switch, budget, stop). Each drain leaves alone what it does not own."}
+   {:name samizdat.store.interventions/outcomes
+    :summary "What became of each supervisor directive, from the run's record: delivered or refused (and why), acted on or not (the steer firing's settlement), and the branch's next move. The oversight pass shows the ones that changed since the last look; run end writes each to memory (knowledge/distil-steers!) and the next run's supervisor reads the newest (knowledge/past-steers, gates.edn :steer-facts). A steer is settled on its `expect` — intervene({kind, branch, text, expect}), a tool, command or file — or, without one, on the branch no longer repeating the action it was taking. Directives from the issuers in gates.edn :directive-notice-issuers (execution receipts, held-out verdicts) are notices: they ride along with whatever steer fires (gate :ride-along) instead of outranking it."}
+   {:name samizdat.store.journal/review-state
+    :summary "Whether a ship review is waiting on the supervisor. The ship rung :supervisor-review (gates.edn :ship-gates) holds a done called with time left: its first refusal journals :ship-review-requested (the rung's :note-once), which wakes the supervisor stream, and the brief shows the task, the answer and the commands the run executed (prompts/ship-review.md). Later dones are held until the supervisor answers (a pass ends, or it issues a `review`; a message steers without releasing) or gates.edn :ship-review :max-wait-seconds pass; only where a supervisor stream is running. The rung before it, :unread-directive, holds a done while a directive of a :ship-review :unread-kinds kind is still queued for the branch, so a correction sent after an approval is read before the answer ships (prompts/unread-directive-hold.md)."}
+   {:name samizdat.agent.tools.ship/tester-still-failing
+    :summary "The blind tester's latest reported failures (journal/tester-failing) rerun now in the run's root: the command is the text before gates.edn :tester :command-separator, each bounded by :rerun-timeout-seconds. The ship rung :tester-failures holds a done while any still fails and the run has not reached wind-down, whatever the supervisor's review said (prompts/tester-failures-hold.md)."}
+   {:name samizdat.agent.gates/review-max-wait
+    :summary "How long a ship review holds a done: gates.edn :ship-review :max-wait-seconds, or :max-wait-long-seconds on a run whose clock is at least :long-clock-seconds. On such a run the supervisor's review pass first runs the blind tester (gates.edn :tester, roles.edn :tester, prompts/roles/tester.md): a fresh TST branch that sees only the task statement, writes the tests a hidden grader would under /tmp/blind-tests, runs them against the deliverable black-box, and returns {:ran :failing}; the failures are shown to the supervisor (prompts/blind-tests.md) and journalled as :tester-report (karamazov-galq)."}
+   {:name samizdat.agent.actions/test-plateau
+    :summary "Whether a branch's tests stopped improving: the trailing streak of test runs reporting the same passed and failed counts, with failures. actions/test-counts reads each runner's summary line (gates.edn :test-progress :patterns: pytest, clojure.test/jolt, cargo, jest, mocha, node --test, bun; a project adds its own), and :plateau-runs in a row wakes the supervisor with the counts (prompts/test-plateau.md)."}
+   {:name samizdat.store.journal/minutes-since
+    :summary "Minutes since the newest note of a kind on the run, or since its first note. The supervisor's check-in reads it: gates.edn :oversight-limits :checkin-minutes of wall clock with no spent pass wakes it anyway, so a run that churns without tripping a counter still gets a look; the pass is asked whether the work is converging."}
+   {:name samizdat.agent.actions/patterns
+    :summary "What a run learned by trying: each command that kept failing (gates.edn :actions :min-failures) beside what worked instead. At run end each pair is written as a project fact (knowledge/distil-patterns!, wording gates.edn :project-facts :cmd-instead), corroborated across runs, and read by both roles on the next."}
    {:name samizdat.store.journal/search-turns
     :summary "Bounded literal search over one branch's journal: assistant text, arguments, results and tool names, never reasoning. fetch_turn({query, branch?, limit?, before?}) returns newest previews and a way to open each whole turn; deterministic eviction keeps cumulative turn references under gates.edn :compaction :strategy :evict."}
    {:name samizdat.store.journal/artifacts

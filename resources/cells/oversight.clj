@@ -7,6 +7,7 @@
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [mycelium.cell :as cell]
+            [samizdat.agent.actions :as actions]
             [samizdat.agent.compaction :as cmp]
             [samizdat.agent.loop :as turn]
             [samizdat.agent.roles :as roles]
@@ -16,6 +17,7 @@
             [samizdat.prompt :as prompt]
             [samizdat.session :as session]
             [samizdat.store.journal :as journal]
+            [samizdat.store.interventions :as interventions]
             [samizdat.store.knowledge :as knowledge]
             [samizdat.store.papercuts :as papercuts]
             [samizdat.store.runs :as runs]
@@ -87,6 +89,44 @@
     failed to carry a requirement or the ship gate let it through, and both
     are the harness's words failing. No floor; one is the signal.
 
+  - THE WORKFLOW ASKED. A cell raised a :workflow-signal: it knows it is stuck in
+    a way no counter here can see, and it may be waiting for the answer. No floor.
+
+  - THE RUN WENT SILENT. Nothing journalled for :oversight :silent-ms. A stage
+    that makes side calls ends no turns, so nothing else would wake this.
+
+  - A WORKER CANNOT LAND ITS ANSWER. `done` refused repeatedly, which is the
+    last step of the work failing, and nothing else here reads it as distress:
+    gates are met, files were written, nothing crashed (karamazov-i692).
+
+  - A BRANCH ASKS TO SHIP WITH TIME LEFT. Its `done` is held (ship rung
+    :supervisor-review) until a pass ends, so this look is the review: 20 of
+    23 failing TB 2.1 trials ended on an accepted done the supervisor never
+    saw (karamazov-oi16.11). No floor.
+
+  - A COMMAND KEEPS FAILING. One the branch has run :failing-action-floor
+    times, never successfully (karamazov-oi16.4). The steering gate names it
+    first; this is the look when that did not move it. A branch that edits
+    files between retries never trips the idle floor, and on TB 2.1 that is
+    why the supervisor's steers arrived after the run had ended.
+
+  - THE TESTS STOPPED IMPROVING. :test-progress :plateau-runs test runs in a
+    row reporting the same passed and failed counts, with failures (the
+    owner's heuristic, 2026-11-09). Busy is not progress: the branch writes
+    and its commands succeed, and only the counts say it is going nowhere.
+
+  - NOBODY HAS LOOKED IN A WHILE. :oversight-limits :checkin-minutes of wall
+    clock since the last spent pass (or the run's start). The exception to
+    'time has passed', for one shape no counter sees: a run that writes a
+    file every few turns and whose commands all succeed, while the work goes
+    nowhere. ctb-r1 interleaved-vigenere spent an hour and 164 turns on its
+    63rd analysis script at 16% accuracy and the supervisor never looked.
+    nil turns it off.
+
+  - THE RUN IS NEARING ITS TURN CAP. Whether it deserves more turns, should
+    ship what it has or should stop is a decision, and `extend`, `finish` and
+    `stop` are how it is made. Once per cap.
+
   - something is ON OFFER to the project's workflow and this run has not
     shown it yet: a role or template a later release shipped, or a version
     the project stored before its workflow lived in files (karamazov-1a51.6).
@@ -105,10 +145,25 @@
   idle, no crash, cap far off, something DID ship, nothing refused. That is
   what the last trigger is for."
   [{:keys [unmet-gates idle-turns errors at-cap? nothing-shipped? refused
-           sent-back-green? offers]}
-   {:keys [unmet-floor idle-floor]}]
+           sent-back-green? offers workflow-signals silent? done-refused near-cap?
+           failing-actions review-requested checkin? test-plateau]}
+   {:keys [unmet-floor idle-floor done-refused-floor plateau-runs]}]
   (boolean (or (>= (or unmet-gates 0) unmet-floor)
+               ;; The tests keep reporting the same failures.
+               (and plateau-runs (>= (or test-plateau 0) plateau-runs))
+               ;; A long run nobody has looked at for :checkin-minutes.
+               checkin?
+               ;; A branch asked to ship with time left, and its done is held
+               ;; until this pass ends (karamazov-oi16.11).
+               (pos? (or review-requested 0))
+               ;; A command that keeps failing, never having worked, past what
+               ;; the :repeat-failing-action gate already said (oi16.4).
+               (pos? (or failing-actions 0))
                (>= (or idle-turns 0) idle-floor)
+               (and done-refused-floor (>= (or done-refused 0) done-refused-floor))
+               near-cap?
+               (seq workflow-signals)
+               silent?
                (seq errors)
                (seq refused)
                at-cap?
@@ -162,15 +217,24 @@
     come from the journal in order, so the count is a position.
   - the round's flags (at the cap, nothing shipped, green work sent back):
     once per round, the round being how many :route notes there are.
+  - workflow signals: the entries past the ones already read, like errors.
+  - silence: the driver only reports it once per silence, so it is news when set.
+  - refused dones: the firings since, like unmet.
+  - the cap: once per cap, so an `extend` can be asked about again.
   - offers are already once per run."
   [{:keys [unmet idle idle-by-branch errors refused round at-cap? nothing-shipped?
-           sent-back-green? offers]}
-   prev {:keys [idle-floor]}]
+           sent-back-green? offers workflow-signals silent? done-refused near-cap-at
+           failing-actions review-requested minutes-since-look test-plateau]}
+   prev {:keys [idle-floor checkin-minutes plateau-runs]}]
   (let [new-round? (or (nil? prev) (not= round (:round prev)))
         ;; A note round-trips through JSON, so the branch ids come back as
         ;; keywords; compare them by name.
         p-by (into {} (map (fn [[k v]] [(name k) v])) (:idle-by-branch prev))]
     {:unmet-gates (- (or unmet 0) (if prev (or (:unmet prev) 0) 0))
+     :done-refused (- (or done-refused 0) (if prev (or (:done-refused prev) 0) 0))
+     :failing-actions (max 0 (- (or failing-actions 0) (if prev (or (:failing-actions prev) 0) 0)))
+     :review-requested (max 0 (- (or review-requested 0) (if prev (or (:review-requested prev) 0) 0)))
+     :near-cap? (boolean (and near-cap-at (not= near-cap-at (:near-cap-at prev))))
      :idle-turns (if (seq idle-by-branch)
                    (reduce max 0 (map (fn [[b n]] (idle-news n (get p-by (name b)) idle-floor))
                                       idle-by-branch))
@@ -180,6 +244,13 @@
      :at-cap? (and at-cap? new-round?)
      :nothing-shipped? (and nothing-shipped? new-round?)
      :sent-back-green? (and sent-back-green? new-round?)
+     :workflow-signals (seq (drop (if prev (or (:workflow-signals prev) 0) 0) workflow-signals))
+     :silent? silent?
+     :test-plateau (if plateau-runs
+                     (idle-news (or test-plateau 0) (when prev (or (:test-plateau prev) 0)) plateau-runs)
+                     0)
+     :checkin? (boolean (and checkin-minutes minutes-since-look
+                             (>= minutes-since-look checkin-minutes)))
      :offers offers}))
 
 (defn sent-back-green?
@@ -253,7 +324,7 @@
    ;; Nothing. That is the docstring's claim made checkable: the stream reads
    ;; the journal, so it depends on nothing having been handed to it, and a
    ;; cell declaring no input is a cell no stalled stage can starve.
-   :input  [:map]
+   :input  [:map [:oversight/silent-for-ms {:optional true} :any]]
    ;; PER-TRANSITION, because the two edges leave with genuinely different
    ;; maps. The :quiet side is also the fallback's shape — a gather that threw
    ;; still routes, carrying only the decision not to look further — so
@@ -269,12 +340,20 @@
                       [:oversight/self-graded :any]
                       [:oversight/refused :any]
                       [:oversight/signals :any]
+                      [:oversight/workflow-signals :any]
+                      [:oversight/position :any]
+                      [:oversight/silent-for-ms :any]
+                      [:oversight/directives :any]
+                      [:oversight/failing :any]
+                      [:oversight/reviews :any]
                       [:oversight/worth-a-look? :boolean]]
              :quiet  [:map [:oversight/worth-a-look? :boolean]]}]}
   (fn [{:keys [conn run-id]} data]
     (safely :gather
      (fn []
        (let [turns (journal/turns conn run-id)
+             ;; What a workflow says about itself, which no counter can infer.
+             workflow-signals (vec (journal/notes conn run-id :workflow-signal))
              firings (journal/gate-firings conn run-id)
              unmet (count (filter #(= "unmet" (str (:outcome %))) firings))
              ;; Turns since anything was written. The stream's cheapest and
@@ -299,8 +378,19 @@
              ;; The supervisor's own turns are not the run it watches: left
              ;; in, they were a branch of the digest and their failures were
              ;; its exemplars (karamazov-rz7t.3).
-             own? (fn [b] (= "supervisor" (some-> (get role-of b) name)))
+             own? (fn [b] (contains? #{"supervisor" "tester"} (some-> (get role-of b) name)))
              watched (into [] (remove #(own? (str (:branch_id %)))) turns)
+             ;; THE TESTS STOPPED IMPROVING (owner, 2026-11-09): per branch,
+             ;; the trailing streak of test runs reporting the same counts with
+             ;; failures; the longest one is the signal.
+             tp (gates/threshold :test-progress)
+             plateau (->> (group-by :branch_id watched)
+                          (keep (fn [[b ts]]
+                                  (some-> (actions/test-plateau
+                                           (vec (keep #(actions/test-counts (:result %) (:patterns tp)) ts)))
+                                          (assoc :branch (str b)))))
+                          (sort-by :runs >)
+                          first)
              since (reduce max 0 (vals by-branch))
              findings (session/findings (session/run-window run-id))
              ;; THE ROUND, off the journal. The feature loop's stage used to
@@ -354,10 +444,40 @@
              errors (vec (concat (filter :error findings) crashes))
              refusals (vec (concat refused rejected))
              idle-floor (gates/threshold :oversight-idle-floor)
+             limits (gates/threshold :oversight-limits)
+             ;; WHAT BECAME OF THE SUPERVISOR'S OWN DIRECTIVES (oi16.8): landed
+             ;; or refused, acted on or not, and what the branch did next.
+             directives (interventions/outcomes (interventions/history conn run-id) firings turns)
+             ;; THE COMMANDS THAT KEEP FAILING, with what worked instead
+             ;; (oi16.4), over the watched branches' :action notes.
+             failing (vec (actions/steer
+                           (actions/scores (remove #(own? (str (:branch-id %)))
+                                                   (journal/notes conn run-id :action)))
+                           (assoc (gates/threshold :actions)
+                                  :min-failures (:failing-action-floor limits))))
+             ;; SHIP REVIEWS ASKED FOR (oi16.11): a branch's done with time
+             ;; left, held until a pass ends.
+             reviews (vec (journal/notes conn run-id :ship-review-requested))
              ;; What a pass that spends a call records, so the next gather
              ;; can tell new evidence from evidence already read.
              signals {:unmet unmet :idle since :idle-by-branch by-branch
+                      :done-refused (count (filter #(= "done-blocked" (str (:gate %))) firings))
+                      ;; The run's cap, once a branch is close to it.
+                      :near-cap-at (let [cap (:max_turns (runs/get-run conn run-id))
+                                         most (reduce max 0 (vals (frequencies (map :branch_id watched))))]
+                                     (when (and cap (pos? cap)
+                                                (>= most (* cap (:near-cap-fraction (gates/threshold :oversight-limits)))))
+                                       cap))
                       :errors (count errors) :refused (count refusals)
+                      :workflow-signals (count workflow-signals)
+                      :failing-actions (count failing)
+                      :review-requested (count reviews)
+                      :test-plateau (or (:runs plateau) 0)
+                      ;; Wall clock since the last spent pass, for the check-in.
+                      :minutes-since-look (journal/minutes-since conn run-id :oversight)
+                      ;; Each directive's status/outcome, so the next pass is
+                      ;; told only what changed.
+                      :directives (into {} (map (juxt (comp str :id) :state)) directives)
                       :round (count (journal/notes conn run-id :route))}]
          (assoc data
                 :oversight/turns watched
@@ -377,6 +497,13 @@
                 :oversight/crashes crashes
                 :oversight/offers (vec offers)
                 :oversight/signals signals
+                :oversight/workflow-signals workflow-signals
+                :oversight/position (journal/last-note conn run-id :workflow-position)
+                :oversight/silent-for-ms (:oversight/silent-for-ms data)
+                :oversight/directives directives
+                :oversight/failing failing
+                :oversight/reviews reviews
+                :oversight/plateau plateau
                 :oversight/worth-a-look?
                 (worth-a-look? (since-last-look
                                 (assoc signals
@@ -384,14 +511,30 @@
                                        :at-cap? (at-cap? round)
                                        :nothing-shipped? (nothing-shipped? results)
                                        :sent-back-green? (sent-back-green? round)
+                                       :workflow-signals workflow-signals
+                                       :silent? (some? (:oversight/silent-for-ms data))
                                        :offers offers)
                                 (:signals (journal/last-note conn run-id :oversight))
-                                {:idle-floor idle-floor})
+                                {:idle-floor idle-floor
+                                 :checkin-minutes (:checkin-minutes limits)
+                                 :plateau-runs (:plateau-runs tp)})
                                {:unmet-floor (gates/threshold :oversight-unmet-floor)
-                                :idle-floor idle-floor}))))
+                                :idle-floor idle-floor
+                                :done-refused-floor (:done-refused-floor (gates/threshold :oversight-limits))
+                                :plateau-runs (:plateau-runs tp)}))))
      (assoc data :oversight/worth-a-look? false))))
 
 ;; --- reason -----------------------------------------------------------------
+
+(defn directive-news
+  "The directives whose status/outcome changed since the last spent pass,
+  which recorded each one's :state under its signals' :directives
+  (karamazov-oi16.8). A pass is told what came of its steers once, when it
+  happens, not every look. `prev` round-trips through JSON, so its keys may
+  come back as keywords; compared by name."
+  [directives prev]
+  (let [seen (into {} (map (fn [[k v]] [(if (keyword? k) (name k) (str k)) v])) prev)]
+    (filterv #(not= (:state %) (get seen (str (:id %)))) directives)))
 
 (defn resume-branch
   "The carried branch, ready for another pass.
@@ -418,7 +561,7 @@
   ;; a pass is not charged for how the one before it ended.
   (cond-> (-> b
               (dissoc :final-answer :verdict :done? :inactive-reason
-                      :consecutive-mechanics-failures :consecutive-provider-errors)
+                      :consecutive-mechanics-failures :consecutive-provider-errors :consecutive-rate-limits)
               (assoc :status :active :advisory? true))
     brief (update :messages (fnil conj []) {:role "user" :content brief})))
 
@@ -427,7 +570,7 @@
   The digest and the since-last-look block are not among them: the run's
   position is the news of every pass."
   [:learned :candidates :drift :offers :rejected :refused :retire :reviews
-   :inconclusive :prune :papercuts :removals :fallback :catalog])
+   :inconclusive :prune :papercuts :removals :fallback :catalog :failing :plateau :past-steers])
 
 (defn visible-sections
   "{section hash} for what the carried branch can still see: the sections
@@ -484,6 +627,43 @@
         (assoc :messages ms)
         (update :brief-shown #(select-keys (assoc % id hashes) live)))))
 
+(defn tester-due?
+  "Whether this pass should first run the blind tester (karamazov-galq): a
+  ship review newly asked for, on a run whose clock is at least gates.edn
+  :tester :min-clock-seconds, the tester enabled, and not yet run this run."
+  [{:keys [review-new? limit ran?]} {:keys [enabled? min-clock-seconds]}]
+  (boolean (and enabled? review-new? (not ran?) limit min-clock-seconds
+                (>= limit min-clock-seconds))))
+
+(defn- run-tester!
+  "Run the blind tester on a fresh `TST` branch: role :tester, whose problem is
+  the task statement and nothing of the run, for gates.edn :tester :max-turns.
+  Journals and returns {:ran :failing :answer}; the branch is closed after, so
+  no steer or count mistakes it for a worker."
+  [ctx conn run-id]
+  (let [p (gates/threshold :tester)
+        bid "TST"
+        suffix (wf/prompt-text "roles/tester")
+        prob (prompt/render "tester-task" {:problem (:problem (runs/get-run conn run-id))
+                                           :turns (:max-turns p)})
+        _ (runs/open-branch! conn run-id {:branch-id bid :problem prob :role :tester
+                                          :prompt-suffix suffix})
+        b (assoc (state/new-branch {:id bid :problem prob
+                                    :messages (turn/initial-messages prob suffix :tester)})
+                 :advisory? true :role :tester)
+        out (try (myc/run-compiled (wf/compiled-manifest "tester")
+                                   (assoc (wf/role-ctx ctx :tester) :max-turns (:max-turns p))
+                                   {:branch b :turn 1})
+                 (catch Throwable e {:error (ex-message e)}))
+        res (get-in out [:branch :final-result])
+        report {:ran (or (:ran res) 0)
+                :failing (vec (map str (:failing res)))
+                :answer (some-> (get-in out [:branch :final-answer]) str)
+                :error (:error out)}]
+    (runs/close-branch! conn run-id bid "done" "blind tester finished")
+    (journal/note! conn run-id :tester-report {:branch-id bid :data report})
+    report))
+
 (cell/defcell :oversight/reason
   {:doc "One turn of the supervisor ROLE, in the stream's OWN branch.
 
@@ -513,6 +693,7 @@
             ;; that silently reports 0/0 because nobody declared the key is
             ;; the bug this closes (karamazov-u5uy).
             [:oversight/results :any]
+            [:oversight/signals {:optional true} :any]
             [:oversight/self-graded {:optional true} :any]
             [:oversight/refused {:optional true} :any]
             [:oversight/round {:optional true} :any]
@@ -521,7 +702,13 @@
             [:oversight/carry {:optional true} :any]
             [:oversight/progress {:optional true} :any]
             [:oversight/statuses {:optional true} :any]
-            [:oversight/idle-by-branch {:optional true} :any]]
+            [:oversight/idle-by-branch {:optional true} :any]
+            [:oversight/workflow-signals {:optional true} :any]
+            [:oversight/position {:optional true} :any]
+            [:oversight/silent-for-ms {:optional true} :any]
+            [:oversight/directives {:optional true} :any]
+            [:oversight/failing {:optional true} :any]
+            [:oversight/reviews {:optional true} :any]]
    ;; :oversight/branch only on the path that ran — the fallback records a
    ;; verdict and an explanation, and there is no branch to carry.
    :output [:map [:oversight/verdict :keyword] [:oversight/answer :any]
@@ -530,6 +717,15 @@
     (safely :reason
      (fn []
        (let [round (:oversight/round data)
+             ;; THE BLIND TESTER (karamazov-galq), before anything is shown: at
+             ;; the first review of a long-clock run, a branch that never saw
+             ;; the code tests the deliverable from the task alone.
+             tester (when (tester-due? {:review-new? (> (count (:oversight/reviews data))
+                                                        (or (:review-requested (:signals (journal/last-note conn run-id :oversight))) 0))
+                                        :limit (get-in ctx [:config :run :time-limit-seconds])
+                                        :ran? (some? (journal/last-note conn run-id :tester-report))}
+                                       (gates/threshold :tester))
+                      (run-tester! ctx conn run-id))
              ;; The mark the supervisor's deltas are measured from, stamped
              ;; BEFORE it is shown anything, so `since` covers the interval
              ;; from its last look to now — the interval its last change was
@@ -586,7 +782,55 @@
              full (identity
                                  {:digest dig
                                   :since (not-empty (str live))
-                                  :learned (seq (knowledge/standing conn))
+                                  ;; WHAT CAME OF ITS OWN STEERS since the last
+                                  ;; look (karamazov-oi16.8): delivered or
+                                  ;; refused, acted on or not, the branch's
+                                  ;; next move.
+                                  :directives (when-let [ds (seq (directive-news
+                                                                  (:oversight/directives data)
+                                                                  (:directives (:signals (journal/last-note conn run-id :oversight)))))]
+                                                (prompt/render "directive-outcomes"
+                                                               {:directives
+                                                                (mapv #(-> %
+                                                                           (update :text clip (gates/threshold :oversight-note-chars))
+                                                                           (update :next clip (gates/threshold :oversight-note-chars))
+                                                                           (update :disposition clip (gates/threshold :oversight-note-chars)))
+                                                                      ds)}))
+                                  ;; A DONE WAITING ON ITS REVIEW (oi16.11): the
+                                  ;; task, the answer, and what the run actually
+                                  ;; executed, newest last. Shown only when one
+                                  ;; arrived since the last look.
+                                  :ship-review (let [prev (or (:review-requested (:signals (journal/last-note conn run-id :oversight))) 0)
+                                                     rs (:oversight/reviews data)]
+                                                 (when (> (count rs) prev)
+                                                   (let [r (last rs)
+                                                         p (gates/threshold :ship-review)]
+                                                     (prompt/render "ship-review"
+                                                                    {:problem (:problem (runs/get-run conn run-id))
+                                                                     :branch (:branch r)
+                                                                     :wait (gates/review-max-wait (:config ctx))
+                                                                     :answer (:answer r)
+                                                                     :evidence (vec (take-last (:evidence-shown p)
+                                                                                               (map (fn [a] {:command (clip (:command a) (gates/threshold :oversight-note-chars))
+                                                                                                             :exit (:exit a) :refused (:refused? a)})
+                                                                                                    (journal/notes conn run-id :action))))}))))
+                                  ;; The commands that keep failing and what
+                                  ;; worked instead (karamazov-oi16.4).
+                                  ;; What the blind tester found, this pass.
+                                  :blind-tests (when tester (prompt/render "blind-tests" tester))
+                                  ;; The tests stopped improving (owner, 2026-11-09).
+                                  :plateau (let [p (:oversight/plateau data)]
+                                             (when-let [f (:plateau-runs (gates/threshold :test-progress))]
+                                               (when (and p (>= (:runs p) f))
+                                                 (prompt/render "test-plateau" p))))
+                                  :failing (when-let [fs (seq (:oversight/failing data))]
+                                             (prompt/render "failing-commands"
+                                                            {:commands (vec (take (:failing-shown (gates/threshold :oversight-limits)) fs))}))
+                                  ;; What its steers did in EARLIER runs
+                                  ;; (karamazov-oi16.10).
+                                  :past-steers (seq (knowledge/past-steers
+                                                     conn (:recall (gates/threshold :steer-facts))))
+                                  :learned (seq (knowledge/with-provenance (knowledge/standing conn)))
                                   ;; Episodes seen in enough distinct runs
                                   ;; to ask whether they are rules. The
                                   ;; store surfaces; the supervisor judges
@@ -774,7 +1018,41 @@
                              (visible-sections carry))
              prob (prompt/render "oversight-pass"
                                  (merge full (dissoc shown :instructions)
-                                        {:again (nil? (:instructions shown))}))
+                                        {:again (nil? (:instructions shown))
+                                         :position (:oversight/position data)
+                                         ;; The branches a steer can reach, by id: with
+                                         ;; none named, a review spent four minutes
+                                         ;; looking for one (tb21-unread filter-js).
+                                         :branches (seq (for [r (runs/branches conn run-id)
+                                                              :when (not (contains? #{"supervisor" "tester"} (some-> (:role r) name)))
+                                                              :when (contains? #{"active" "exhausted"} (str (:status r)))]
+                                                          (str (:id r))))
+                                         ;; Any refused done or nearby cap: how the
+                                         ;; run ends is put to the supervisor.
+                                         :ending (let [{:keys [done-refused near-cap-at]} (:oversight/signals data)]
+                                                   (when (or (pos? (or done-refused 0)) near-cap-at)
+                                                     {:done-refused (when (pos? (or done-refused 0)) done-refused)
+                                                      :near-cap-at near-cap-at}))
+                                         ;; Only what arrived since the last look.
+                                         :workflow-signals
+                                         (seq (drop (or (:workflow-signals
+                                                         (:signals (journal/last-note conn run-id :oversight)))
+                                                        0)
+                                                    (:oversight/workflow-signals data)))
+                                         :silent-minutes (some-> (:oversight/silent-for-ms data)
+                                                                 (quot 60000))
+                                         ;; The run's clock on every pass: without it the
+                                         ;; supervisor guessed, and wrote ENDGAME 30 minutes
+                                         ;; into a 120-minute run (ctb-r2 kv-live-surgery).
+                                         :clock (when-let [limit (get-in ctx [:config :run :time-limit-seconds])]
+                                                  (when-let [left (gates/run-time-left ctx)]
+                                                    {:limit (quot (long limit) 60)
+                                                     :left (quot left 60)
+                                                     :used (quot (- (long limit) left) 60)}))
+                                         ;; A check-in: nothing woke it but the clock.
+                                         :checkin (let [m (:minutes-since-look (:oversight/signals data))
+                                                        c (:checkin-minutes (gates/threshold :oversight-limits))]
+                                                    (when (and m c (>= m c)) (long m)))}))
              brief-id (inc (reduce max 0 (keys (:brief-shown carry))))
              ;; ONE branch for the run, carried by the stream. Opened once;
              ;; re-opening an existing id is a no-op that returns the row.
@@ -814,7 +1092,13 @@
                       ;; before the implementer's would (karamazov-rz7t.6).
                       w (assoc-in [:llm-config :context-window]
                                   (supervisor-window (get-in rc [:llm-config :context-window]) w))
-                      (and (pos? done) (:max-turns rc)) (update :max-turns + done)))
+                      ;; A pass keeps an allowance of its own, on top of the turns
+                      ;; this branch has already spent.
+                      (:pass-max-turns (gates/threshold :oversight))
+                      (assoc :max-turns (+ done (:pass-max-turns (gates/threshold :oversight))))
+                      (and (pos? done) (:max-turns rc)
+                           (nil? (:pass-max-turns (gates/threshold :oversight))))
+                      (update :max-turns + done)))
              out (myc/run-compiled (wf/compiled-manifest "supervisor")
                                    rctx
                                    {:branch b :turn (inc done)})]

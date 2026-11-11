@@ -354,7 +354,7 @@
 
         Reads the abort flag and the journal, so not pure."
    :effects [:db]
-   :requires [:abort :conn :run-id :token-budget]
+   :requires [:abort :conn :run-id :token-budget :oversight?]
    ;; The ROUND's shape. Every beam cell reads and writes the same working
    ;; set, so these declarations are the round's data flow written down: what
    ;; each stage needs to have happened before it, and what it leaves for the
@@ -368,7 +368,8 @@
    ;; ended the run, for the branch close reasons and the run's record.
    :output [:map [:active :any] [:done-branch :any]
             [:multi-candidate? :boolean] [:verdict :keyword]
-            [:exhausted-because {:optional true} :any]]}
+            [:exhausted-because {:optional true} :any]
+            [:cap-asked {:optional true} :any]]}
   (fn [{:keys [abort token-budget] :as ctx} {:keys [branches turn] :as data}]
     ;; A paused run waits HERE, at the top of the round, before anything is
     ;; scheduled — which is what `pause` promises: no new turns, and whatever
@@ -386,12 +387,22 @@
                     (and abort @abort) :aborted
                     done :completed
                     (or (empty? active) (> turn cap) over-budget?) :exhausted
-                    :else :continue)]
+                    :else :continue)
+          ;; How long a run goes is the supervisor's call, so a cap is put to it
+          ;; once before it ends the run. Only when the cap is all that is ending
+          ;; it, and only on a run with a supervisor.
+          {:keys [cap-wait-ms cap-poll-ms]} (gates/threshold :oversight-limits)
+          ask? (and (= :exhausted verdict) (seq active) (not over-budget?)
+                    (not (false? (:oversight? ctx)))
+                    (not= cap (:cap-asked data)))
+          answered? (and ask? (beam/await-cap-decision! ctx cap cap-wait-ms cap-poll-ms))
+          verdict (if answered? :continue verdict)]
       (cond-> (assoc data
                      :active active
                      :done-branch done
                      :multi-candidate? (< 1 (count candidates))
                      :verdict verdict)
+        ask? (assoc :cap-asked cap)
         (= verdict :exhausted)
         (assoc :exhausted-because
                (cond over-budget? {:reason :token-budget
@@ -458,7 +469,7 @@
         deadline. A branch that throws is abandoned rather than taking the beam
         down with it; a branch that hangs loses only its own turn."
    :effects [:net :db :fs :proc]
-   :requires [:live-branches]
+   :requires [:live-branches :loop-name :live-loop]
    :input  [:map [:active :any] [:branches :any] [:turn :int]]
    :output [:map [:advanced :any]]}
   (fn [ctx {:keys [active branches turn] :as data}]
@@ -467,7 +478,7 @@
     ;; cap routed :exhausted -> :memory/distil — one LLM reflection per
     ;; branch per extended round — while the beam kept scheduling
     ;; (karamazov-blt.12).
-    (let [advanced (beam/advance-all (assoc ctx
+    (let [advanced (beam/advance-all (assoc (beam/with-live-loop ctx)
                                             :branch-count (count branches)
                                             :max-turns (beam/round-max-turns ctx data))
                                      (filterv state/active? active)
@@ -618,12 +629,13 @@
         next, opens them — and the run's reasoning effort goes to
         :reasoning-effort for every role from its next request. Once per run
         (:escalated? persists across rounds), and never for a run already
-        that wide."
+        that wide, or one whose caller asked for its width: that is how a local
+        model is kept to the one generation it can serve at speed."
    :effects [:db]
-   :requires [:conn :run-id :beam-width]
+   :requires [:conn :run-id :beam-width :width-asked?]
    :input  [:map [:culled :any] [:turn :int] [:escalated? {:optional true} :any]]
    :output [:map [:culled :any] [:escalated? {:optional true} :any]]}
-  (fn [{:keys [conn run-id beam-width]} {:keys [culled escalated?] :as data}]
+  (fn [{:keys [conn run-id beam-width width-asked?]} {:keys [culled escalated?] :as data}]
     (let [{:keys [enabled? after-stalls to-width reasoning-effort]} (lexicon/policy :escalation)
           stalls (or (some #(when (= "progress-stalled" (str (:gate %))) (:fired %))
                            (journal/gate-tally conn run-id))
@@ -631,7 +643,7 @@
           alive (filterv state/active? culled)
           room (- (or to-width 0) (count alive))
           target (first alive)]
-      (if (or escalated? (not enabled?) (nil? target) (not (pos? room))
+      (if (or escalated? width-asked? (not enabled?) (nil? target) (not (pos? room))
               (>= (or beam-width 1) (or to-width 0))
               (< stalls (or after-stalls 0)))
         data

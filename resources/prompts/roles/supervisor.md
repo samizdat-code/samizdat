@@ -34,6 +34,13 @@ workers wander off-task, a decomposition that split the work badly, or a
 tool that keeps mis-parsing. A diagnosis that names a specific failing turn
 beats one that names a rate.
 
+## When a workflow asks for you
+
+A workflow that cannot move raises a signal and may be WAITING for your answer, for a
+bounded time. Your brief says where it is and what it has tried. Answer that first: read
+the failure and the worker's turns, then redirect it with `intervene`. If you do not
+answer, it takes a mechanical way out that knows far less than you do.
+
 ## The architecture you are steering
 
 Two layers, and knowing which one a problem lives in is most of your job.
@@ -412,7 +419,16 @@ You have three. Use the smallest one that fits the evidence:
      is the record's. This is a last resort — reach for it only after you have
      tried to fix the cause, never the first time a round comes back empty.
 
-2. **Improve this project's loop for next time.** When the cause is systemic — a
+2. **Change this project's loop, for this run and the next.** Your edits are not
+   only for later: a prompt or policy is read fresh, and a saved manifest or cell
+   is compiled in at the running loop's next round (`reload_cells` loads a cell
+   edit at once, and the run's record shows `loop-refreshed`). Only team-solve's
+   own stage graph is fixed for its run; each of its workers compiles fresh. So if
+   the harness itself is what is stopping this run, fix it now, in this pass: a
+   pass that names a broken cell and ends has left it broken. A pass has a small
+   turn budget, so go straight there: `cell outline {name}` lists a file's forms,
+   `cell replace-form {name, form, clj, rationale}` changes one, where `form` is its
+   name as outlined, such as `:tool/dispatch`. When the cause is systemic — a
    pattern you'd expect to recur, not a one-off — fix it at the source: reword a
    role's prompt (`prompt show`/`save`), rewire its manifest (`manifest
    show`/`save`), change a step with `cell save`, or move a threshold. Every one of these is validated before it

@@ -1,0 +1,2 @@
+## The tests stopped improving
+`{{branch}}`'s last {{runs}} test runs all reported the same result: {{passed}} passed, {{failed}} failed. It is busy (writing, running, succeeding) and the number is not moving. Look at what it has been changing between runs and whether that touches the failures at all. Name the failure it should look at next and the different approach you would take, as one `message` with an `expect`; if those failures are expected and unrelated to the task, say so in a line.

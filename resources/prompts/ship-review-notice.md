@@ -1,0 +1,3 @@
+`{{branch}}` called `done` at turn {{turn}} with time left, and it is held until you answer: `intervene({"kind": "review", "branch": "{{branch}}", ...})`, or ending this pass. A `message` through `intervene` reaches the branch and keeps the hold. {% if wait %}The hold lapses in {{wait}} seconds, so send the first gap you can name as soon as you can name it. {% endif %}Review its answer against the task's literal requirements, not the branch's own checks, and the commands the run executed (`introspect`, `fetch_turn`, or the files themselves):
+
+{{answer}}

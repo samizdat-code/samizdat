@@ -37,10 +37,17 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
+            [samizdat.agent.actions :as actions]
+            [samizdat.agent.code-metrics :as code-metrics]
+            [samizdat.agent.tools.files :as files-tools]
+            [samizdat.cancel :as cancel]
+            [samizdat.repl.route :as route]
+            [samizdat.security.exposure :as exposure]
             [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.files :as files]
             [samizdat.agent.context-rules :as context-rules]
             [samizdat.agent.corrections :as corrections]
+            [samizdat.agent.compaction :as cmp]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.handoff :as handoff]
             [samizdat.agent.gitdiff :as gitdiff]
@@ -106,6 +113,18 @@
   (into {}
         (map (fn [[k nm]] [(keyword k) (chomp (prompt/render nm ctx))]))
         system-segments))
+
+(defn- scope-limits
+  "The lean style's scope limits for the bound model family, rendered, or nil."
+  [style]
+  (when-let [m (:scope-limits style)]
+    (let [{:keys [provider model]} (userspace/model-context)
+          names (map #(str/lower-case (name (or % ""))) [provider model])
+          k (some (fn [k] (when (and (not= :default k)
+                                     (some #(str/starts-with? % (name k)) names))
+                            k))
+                  (keys m))]
+      (some-> (get m (or k :default)) prompt/prompt str/trim))))
 
 (defn system-prompt-for
   "The system prompt as ROLE sees it: the tool catalogue filtered to that
@@ -173,9 +192,20 @@
                 ;; file can replace the 8 lines that were measured to matter
                 ;; without forking the other 490 (karamazov-1g6b.3) — the
                 ;; first extract; the sections are the rest (system-segments).
-                :split-decision (prompt/prompt "split-decision")}]
+                :split-decision (prompt/prompt "split-decision")
+                :limits (scope-limits (gates/style (config/file-config root)))
+                ;; A style may leave the shell out of the tools it describes, so
+                ;; programs run through eval's `sh` (karamazov-6p51.7). The tool
+                ;; stays callable: `sh` reaches it through the bridge.
+                :no-shell (boolean (:no-shell? (gates/style (config/file-config root))))}]
        ((if presentation? roles/presentation-catalogue roles/scope-catalogue)
-        (prompt/render-str (or (prompt/layer :system) "")
+        ;; A role may name its own frame in roles.edn :frame, for a fresh-context
+        ;; worker that should not read the implementer's whole working method.
+        (prompt/render-str (or (some-> (:frame (roles/spec role)) prompt/prompt)
+                               ;; The run's style may name a frame of its own (lean).
+                               (some-> (gates/style (config/file-config root)) :system-prompt prompt/prompt)
+                               (prompt/layer :system)
+                               "")
                            (merge ctx (render-segments ctx)))
         role eval-mode)))))
 
@@ -250,21 +280,70 @@
                   (or (not require-relevance?)
                       (state/advances-thesis? branch (:claim artifact)))))))
 
+(defn time-stamp
+  "The seconds left on a timed run, for the end of a tool result, or nil."
+  [ctx]
+  (when (:enabled? (gates/threshold :time-stamp))
+    (when-let [left (gates/run-time-left ctx)]
+      (str/trim (prompt/render "time-left-stamp" {:seconds left})))))
+
+(defn truncated-reply-message
+  "What a reply that ran out of room before any tool call is told."
+  []
+  (str/trim (prompt/render "carry-on" {:truncated true})))
+
+(defn- result-window
+  "The model's window in tokens, which a tool result's budget scales with."
+  [ctx]
+  (or (get-in ctx [:llm-config :request-window])
+      (get-in ctx [:llm-config :context-window])
+      (get-in ctx [:llm-config :max-context])))
+
 (defn- truncate
-  "Clip a tool result to the budget, ending with what the model can DO about
-  it. See gates.edn :tool-clip for why the marker carries the sizes and the
-  instruction rather than the bare word `truncated`. `turn`, when given, is
-  named in the marker, since the whole result is kept on that turn's row for
-  read_digest {turns} (karamazov-05z0.15)."
-  ([s] (truncate s nil))
-  ([s turn]
+  "Clip a tool result to the budget, keeping its start and its end: what a command prints
+  last, a test summary or a diff's total, is as often the point as what it prints first.
+  The budget grows with the model's window, up to gates.edn :context-budget
+  :tool-result-chars, so a small local model is not flooded. The marker says what to do
+  about the cut (see gates.edn :tool-clip). `turn`, when given, is named in it, since the
+  whole result is kept on that turn's row for read_digest {turns} (karamazov-05z0.15)."
+  ([s] (truncate s nil nil))
+  ([s turn] (truncate s turn nil))
+  ([s turn window] (truncate s turn window nil))
+  ([s turn window spill]
    (let [s (str s)
-         cap (max-result-chars)]
+         {:keys [tool-result-chars tool-result-window-share tool-result-floor
+                 tool-result-head-share chars-per-token]} (gates/threshold :context-budget)
+         cap (if window
+               (max tool-result-floor
+                    (min tool-result-chars
+                         (long (* tool-result-window-share window chars-per-token))))
+               tool-result-chars)]
      (if (> (count s) cap)
-       (str (subs s 0 cap)
-            (prompt/render-str (:message (gates/threshold :tool-clip))
-                               {:shown cap :total (count s) :turn turn}))
+       (let [head (long (* cap tool-result-head-share))
+             tail (- cap head)]
+         (str (subs s 0 head)
+              (prompt/render-str (:message (gates/threshold :tool-clip))
+                                 {:shown cap :total (count s) :turn turn
+                                  ;; The whole result in a file a script can read
+                                  ;; (karamazov-6p51.3), when the caller keeps one.
+                                  :file (when spill (try (spill s) (catch Throwable _ nil)))})
+              "\n"
+              (subs s (- (count s) tail))))
        s))))
+
+(defn- spill-to
+  "A function writing a clipped result whole to the project's
+  .samizdat/results/turn-<turn>.txt and returning that path, relative to the
+  root, so a script can grep it (karamazov-6p51.3) — or nil without a root."
+  [ctx turn tool]
+  (when-let [root (:root ctx)]
+    (fn [s]
+      (let [rel (str ".samizdat/results/turn-" turn "-" tool ".txt")
+            f (io/file root rel)
+            max-chars (:spill-chars (gates/threshold :tool-clip))]
+        (io/make-parents f)
+        (spit f (if (and max-chars (> (count s) max-chars)) (subs s 0 max-chars) s))
+        rel))))
 
 (defn- unclipped
   "What a clipped result was before the clip, up to gates.edn :tool-clip
@@ -274,6 +353,16 @@
     (when (> (count s) (max-result-chars))
       (let [keep (or (:keep-chars (gates/threshold :tool-clip)) 0)]
         (when (pos? keep) (subs s 0 (min keep (count s))))))))
+
+(defn- workspace-files
+  "The project's file names for the first message, when the run's style asks for them."
+  []
+  (let [root (userspace/project-root)]
+    (when-let [{:keys [max-files]} (:workspace-files (gates/style (config/file-config root)))]
+      (when-let [fs (seq (try (gitdiff/project-files root) (catch Throwable _ nil)))]
+        (str/join "\n" (concat (take max-files fs)
+                               (when (> (count fs) max-files)
+                                 [(str "… and " (- (count fs) max-files) " more")])))))))
 
 (defn initial-messages
   "The branch's opening messages. A workflow may hand a `prompt-suffix` — extra
@@ -296,7 +385,8 @@
     ;; The opening user turn is prose the model reads and a project may want
     ;; worded differently — prompts/problem.md, not a `str` here.
     {:role "user" :content (prompt/render "problem" {:problem problem
-                                                     :orient (not-empty (str orient))})}]))
+                                                     :orient (not-empty (str orient))
+                                                     :files (workspace-files)})}]))
 
 (defn- shared-tree
   "The other branches' work on this run's tree, for the context block.
@@ -336,8 +426,12 @@
       (when (or rows errors)
         {:text (prompt/render "learned-since"
                               {:run (str (:id prev))
+                               ;; Whose word each is (the memory trap, 2611.07554v1).
                                :memories (when rows
-                                           (str/join "\n" (map #(str "- " (:content %)) rows)))
+                                           (str/join "\n" (map #(str "- " (:content %) " (" (:kind %)
+                                                                     ", written by " (:written-by %)
+                                                                     (when (:unverified %) ", one run") ")")
+                                                                (knowledge/with-provenance rows))))
                                :errors (vec errors)})
          :ids (mapv :id rows)}))))
 
@@ -370,7 +464,9 @@
                  (corrections/rules {:corrections (corrections/combine person project)})
                  (corrections/facts branch p) p)]
       (when (seq shown)
-        (prompt/render "corrections-block" {:rules shown})))))
+        (prompt/render "corrections-block"
+                       {:person (filterv #(= "person" (:by %)) shown)
+                        :project (filterv #(not= "person" (:by %)) shown)})))))
 
 (defn modes-text
   "The words of the modes `names` the run was started with, as the context
@@ -384,6 +480,12 @@
                       names)]
       (when (seq texts)
         (prompt/render "modes-block" {:modes (mapv (fn [t] {:text t}) texts)})))))
+
+(defn context-block?
+  "Whether a run sends the per-turn context block: ledger, memories, failures and the
+  like. The lean style does not, as no lean harness does."
+  [config]
+  (not (false? (:context-block? (gates/style config)))))
 
 (defn- context-block
   "What the harness adds to the branch's view before its next turn: the
@@ -471,7 +573,7 @@
                             (if-let [t (:task branch)]
                               (prompt/render "task-current"
                                              {:id (:id t) :title (:title t)})
-                              (prompt/prompt "task-none")))]
+                              (prompt/render "task-none" {:closed-id (:closed-task branch)})))]
                    ;; The run's settled state, first and complete: what is
                    ;; established and — the half nothing carried before — what
                    ;; is RULED OUT. Read from the artifacts table every turn, so
@@ -600,14 +702,21 @@
                           :data (assoc d :branch (:id branch))})))
       r)))
 
+(defn- action-text
+  "One turn's call as text — its tool and its arguments — which a directive's
+  settlement compares (karamazov-oi16.7)."
+  [parsed]
+  (when parsed (str (:name parsed) " " (pr-str (:args parsed)))))
+
 (defn- settle-predictions!
   "Close out any prediction whose window has passed or whose expectation the
   branch just met. Deterministic; no model in the path."
-  [conn branch turn tools-called before after]
+  [conn branch turn tools-called before after & [action-text]]
   (let [{kept true closed false}
         (group-by (fn [p]
                     (nil? (arbiter/settle p {:current-turn turn
                                              :tools-called tools-called
+                                             :action-text action-text
                                              :branch-before before
                                              :branch-after after})))
                   (:open-predictions after))]
@@ -615,6 +724,7 @@
       (journal/settle-gate! conn (:id p)
                             (arbiter/settle p {:current-turn turn
                                                :tools-called tools-called
+                                               :action-text action-text
                                                :branch-before before
                                                :branch-after after})
                             turn))
@@ -628,6 +738,7 @@
                                            #{:met :met-late}
                                            (arbiter/settle p {:current-turn turn
                                                               :tools-called tools-called
+                                                              :action-text action-text
                                                               :branch-before before
                                                               :branch-after after}))))
                                 (map :gate))
@@ -694,13 +805,20 @@
                      (when (and run-id (:id branch)) [run-id (:id branch)]))
    (log/warn "branch" (:id branch) "turn" turn "model call failed:" error)
    ;; Failed calls in a row, which :loop/route weighs against gates.edn
-   ;; :provider-error-limit; absorb-response clears it (karamazov-e8iw).
-   (let [branch (update branch :consecutive-provider-errors (fnil inc 0))]
+   ;; :provider-error-limit; absorb-response clears it (karamazov-e8iw). A rate
+   ;; limit is counted apart, against its own wider limit: it lifts by itself, and
+   ;; five in a row took under a minute.
+   (let [rate-limited? (contains? #{:rate-limited :rate-limit-latch} reason)
+         branch (update branch (if rate-limited? :consecutive-rate-limits :consecutive-provider-errors)
+                        (fnil inc 0))]
    (journal/record-turn! conn run-id
                          {:branch-id (:id branch) :turn turn
                           :tool-name "__provider_error__" :result error
                           :category "neutral" :task-id (:id (:task branch))})
-   (if (#{:context-overflow :context-window-exceeded} reason)
+   (when rate-limited? (cancel/sleep! (:pause-ms (gates/threshold :rate-limit))))
+   (cond
+     rate-limited? branch
+     (#{:context-overflow :context-window-exceeded} reason)
      ;; The prompt outgrew the window, or local fitting exhausted its rewrites.
      ;; 'Try again' is exactly wrong here — the failure is upstream of the model
      ;; seeing anything, the next assemble would be just as oversized, and
@@ -709,6 +827,11 @@
      ;; fits, and the model continues none the wiser, which is how compaction
      ;; always works.
      (state/squeeze-context branch)
+     ;; An empty reply asked for a final answer had DeepSeek describe its unfinished
+     ;; work and stop (agenc-core); it is asked to carry on instead.
+     (= :empty-reply reason)
+     (state/add-message branch "user" (str/trim (prompt/render "carry-on" {:empty true})) {:turn turn})
+     :else
      (state/add-message branch "user"
                         (str "[harness] The provider call failed: " error
                              " Try again.")
@@ -725,7 +848,8 @@
   probe deliberately does not touch: a bounce that parsed badly is not a
   branch that called badly."
   ([branch response] (absorb-response branch response nil))
-  ([branch response turn]
+  ([branch response turn] (absorb-response branch response turn nil))
+  ([branch response turn window]
    (let [{:keys [tape parsed signals said]}
          (infer/absorb (infer/of-branch branch) response turn)
          ;; PROACTIVE, not reactive (karamazov-3y5). The only thing that used
@@ -740,7 +864,8 @@
          ;; move is noise.
          pressure (state/context-pressure
                    (get-in response [:usage :prompt-tokens])
-                   (gates/threshold :context-pressure))
+                   (gates/threshold :context-pressure)
+                   window)
          ;; WHAT THE CACHE WAS ASKED (karamazov-o4wm.1). The response carries
          ;; the fingerprint of the wire messages it answered; against the
          ;; branch's previous render that says whether only the tail moved
@@ -778,7 +903,7 @@
                           (state/record-mechanics signals)
                           ;; The provider answered: whatever outage the
                           ;; count measured is over (karamazov-e8iw).
-                          (dissoc :last-prefix :model-change :consecutive-provider-errors))
+                          (dissoc :last-prefix :model-change :consecutive-provider-errors :consecutive-rate-limits))
                 (contains? #{:urgent :over} pressure) state/squeeze-context
                 wire (assoc :last-wire wire :last-prefix prefix)
                 model-change (assoc :model-reported reported
@@ -825,8 +950,7 @@
               (prompt/render "no-call-periodic"
                              {:repeats (or (:periodic-repeats signals) 0)})
               (:truncated signals)
-              (str "[harness] Your response hit the token limit before you"
-                   " emitted a tool call. Think less and call a tool.")
+              (truncated-reply-message)
               ;; THE LADDER (karamazov-068 item c). The complaint alone went
               ;; 0-for-42 on run 89f6487a, which is the project's own rule
               ;; about suggestion-only gates arriving again. No gate can
@@ -967,6 +1091,45 @@
           branch
           (transition-effects {:result result :artifact artifact})))
 
+(defn single-call-eval?
+  "Whether an eval's code is nothing but one bridged tool call: a round trip dressed as a
+  script, which code mode exists to replace."
+  [args]
+  (let [code (str/trim (str (:code args)))
+        n (loop [i 0 n 0]
+            (if-let [j (str/index-of code "(tool/" i)] (recur (inc j) (inc n)) n))]
+    (and (= 1 n) (str/starts-with? code "(tool/"))))
+
+(defn tree-load-reports
+  "Load reports for the Clojure files among `paths` that a script or shell command
+  changed: the same feedback a file tool's write gets, so an edit made with spit in an
+  eval cannot leave a broken namespace unnoticed. At most :max-files of them."
+  [ctx paths]
+  (let [n (:max-files (gates/threshold :load-on-write))]
+    (some->> paths
+             ;; One that does not read is named with its line, as the file tools would,
+             ;; and is not loaded, since it cannot be.
+             (keep #(or (files-tools/read-report ctx %) (files-tools/load-report ctx %)))
+             (take n)
+             seq
+             (str/join "\n"))))
+
+(defn- note-tree-writes
+  "After a call that could write files, what it changed on disk: a shell heredoc writes a
+  file as surely as write_file does, and both models write most files that way."
+  [branch ctx tool refused?]
+  (let [file-tool? (contains? (gates/tool-vocab :file-write) tool)]
+    (if (or refused?
+            (not (or file-tool? (contains? (gates/tool-vocab :tree-writers) tool))))
+      branch
+      (if-let [stamps (gitdiff/file-stamps (:root ctx) (:git-baseline ctx))]
+        ;; Output a run leaves behind (a bytecode cache, an object file) is not a
+        ;; write: counted as one, every check that imported a module undid itself.
+        (let [ignore (:ignore (gates/threshold :tree-writes))
+              stamps (into {} (remove (fn [[p _]] (some #(exposure/glob-matches? % p) ignore))) stamps)]
+          (state/note-tree-writes branch stamps file-tool?))
+        branch))))
+
 (defn- note-storm
   "The storm guard's per-call bookkeeping (karamazov-ekk): note the
   dispatched call in the branch's window, count consecutive withholds as
@@ -1060,9 +1223,16 @@
                   :said (when (= "assistant" (str (:role last-m)))
                           (handoff/clip (:content last-m) said-chars))})
                 (catch Throwable _ nil))))
-        result (or refusal
-                   (tools/run-tool (assoc ctx :branch branch :turn turn
-                                          :tool-name tool :args (:args parsed))))
+        ;; Before the call the reply is answered with: that is the order it sent them.
+        batched (when (and (not refusal) (seq (:dropped-calls parsed)))
+                  (tools/run-batched (assoc ctx :branch branch :turn turn) parsed))
+        ;; The earlier calls may have written or read, so the last runs on what they left.
+        branch (or (:branch batched) branch)
+        result (cond-> (or refusal
+                           (tools/run-tool (assoc ctx :branch branch :turn turn
+                                                  :tool-name tool :args (:args parsed))))
+                 batched (-> (update :result #(str (:text batched) %))
+                             (assoc :still-dropped (:still-dropped batched))))
         storm-policy (gates/storm-policy)
         branch (-> (:branch result)
                     ;; The tool and the claim ride along so the branch can
@@ -1078,6 +1248,10 @@
                                       (gates/threshold :timeout-failure-weight))))
                    (state/add-turn {:turn turn :tool tool
                                     :category (:category result)
+                                    ;; An eval that ran a program through the bridge
+                                    ;; checked something, whatever else it wrote.
+                                    :ran? (:ran? result)
+                                    :single-call? (when (= "eval" tool) (single-call-eval? (:args parsed)))
                                     :args (when (= "tool_search" tool) (:args parsed))
                                     ;; Kept for failures AND malformed calls,
                                     ;; only so repeating-failure? can see a
@@ -1094,7 +1268,14 @@
                                 :verify? (storm/verify-call?
                                           tool (:args parsed)
                                           (get-in ctx [:config :run :verify-cmd]))}
-                               storm-policy))
+                               storm-policy)
+                   (note-tree-writes ctx tool (some? refusal)))
+        ;; A script or shell command that changed Clojure files gets them loaded, as a
+        ;; file tool's write does.
+        result (if-let [r (when (contains? (gates/tool-vocab :tree-writers) tool)
+                            (tree-load-reports (assoc ctx :branch branch) (:last-tree-changes branch)))]
+                 (update result :result str "\n" r)
+                 result)
         ;; 29 of gen-20's 57 failures were four identical (tool, message)
         ;; pairs, and the harness answered the fifth exactly as it answered
         ;; the first. Say something different instead.
@@ -1277,7 +1458,11 @@
                  ;; :payload-text = the parsed human words; the raw column is
                  ;; a JSON blob the gate would render verbatim (blt.38).
                  (assoc (context-rules/apply-directive b d turn) :pending-directive
-                        (assoc d :payload-text (interventions/text-of d)))))
+                        (assoc d :payload-text (interventions/text-of d)
+                                 ;; What the issuer expects the branch to do
+                                 ;; next, which the steer is settled on
+                                 ;; (karamazov-oi16.7).
+                                 :expect (interventions/expect-of d)))))
 
            "extend"
            (if beam?
@@ -1295,7 +1480,19 @@
                                            turn)
                    b)))
 
+           "finish" b ;; the round top's, at any width: it needs the whole branch set
+
            (cond
+             ;; A workflow that goes a turn at a time has no round boundary, so
+             ;; nothing would ever apply these. Saying so beats leaving a directive
+             ;; queued for the rest of the run while its issuer believes it.
+             (and (contains? interventions/workflow-kinds (:kind d))
+                  (true? (:iterating-loop? ctx)))
+             (do (interventions/resolve! conn run-id (:id d) :rejected
+                                         (prompt/render "directive-rejected"
+                                                        {:no-workflow-boundary true :kind (:kind d)})
+                                         turn)
+                 b)
              ;; the workflow's own boundary owns these, in either shape
              (contains? interventions/workflow-kinds (:kind d)) b
              ;; scheduler kinds: the beam drain owns them
@@ -1336,7 +1533,8 @@
   the count being how many predictions this turn closed."
   [{:keys [conn]} before branch turn {:keys [parsed]}]
   (let [open (count (:open-predictions branch))
-        branch (settle-predictions! conn branch turn [(:name parsed)] before branch)]
+        branch (settle-predictions! conn branch turn [(:name parsed)] before branch
+                                    (action-text parsed))]
     {:branch branch
      :closed (- open (count (:open-predictions branch)))}))
 
@@ -1365,7 +1563,8 @@
       ;; a message that does not say which tool produced it gets the generic
       ;; preview instead, which is the one shape that carries nothing.
       (state/add-message branch "user"
-                         (message/frame-result tool (truncate (:result result) turn))
+                         (message/frame-result tool (str (truncate (:result result) turn (result-window ctx) (spill-to ctx turn tool))
+                                                             (some->> (time-stamp ctx) (str "\n"))))
                          {:turn turn :tool tool})
       ;; Coverage answers whether the safe-state rung's fallback is honest:
       ;; the green cursor still points into a turn log the journal can
@@ -1378,17 +1577,47 @@
             ;; nothing. Carried on the branch so the gate's :when stays pure —
             ;; the same shape state/unwritten and plan-stale? use.
             branch (if (contains? (gates/tool-vocab :file-write) (str tool))
-                     (assoc branch :lines-written
-                            (gitdiff/changed-lines (:root ctx) (:git-baseline ctx)))
-                     branch)
+                     (let [policy (gates/threshold :code-metrics)
+                           ;; Its gate is quiet against a clock, so that is not paid for.
+                           found (when-not (get-in ctx [:config :run :time-limit-seconds])
+                                   (code-metrics/of-tree (:root ctx) (:git-baseline ctx) policy))]
+                       (-> branch
+                           (state/note-lines (gitdiff/changed-lines (:root ctx) (:git-baseline ctx)))
+                           (state/note-metrics found (code-metrics/report policy found))))
+                     (state/rebase-lines branch))
+            limit (get-in ctx [:config :run :time-limit-seconds])
+            now (System/currentTimeMillis)
             gate-ctx {:branch branch
                       :max-turns max-turns
+                      :style-gates (:gates (gates/style (:config ctx)))
+                      ;; Whether the branch can script its tool calls in a project REPL,
+                      ;; which :shell-roundtrips steers it to.
+                      :code-mode? (and (:enabled? (route/bridge-policy))
+                                       (= :project (try (route/image-of ctx) (catch Throwable _ nil))))
+                      ;; Against the wall clock, for :time-wind-down and
+                      ;; :time-last-call. nil without a limit.
+                      :time-used (gates/time-used limit (:started-ms ctx) now)
+                      :time-left-seconds (gates/time-left-seconds limit (:started-ms ctx) now)
+                      ;; Seconds until a pending ship review's hold lapses, on the
+                      ;; supervisor's own turns, for :review-deadline.
+                      :review-left-seconds (when (and conn run-id (= :supervisor (:role branch)))
+                                             (:left-seconds (journal/review-state
+                                                             conn run-id
+                                                             (gates/review-max-wait (:config ctx))
+                                                             {:tester? (gates/tester-applies? (:config ctx))})))
                       ;; How wide the beam already is, so the reproduction
                       ;; rung knows whether the run can afford offspring.
                       :branch-count (or (:branch-count ctx) 1)
                       :done-block (:done-block result)
                       :directive (or (:pending-directive branch)
                                      (:directive ctx))
+                      ;; What keeps failing in this run and what worked instead, for
+                      ;; :repeat-failing-action (karamazov-oi16). Read only on a turn
+                      ;; that ran something.
+                      :failing-actions (when (and conn run-id (contains? #{"shell" "eval"} (str tool)))
+                                         (actions/steer (actions/scores (journal/notes conn run-id :action)
+                                                                        (:id branch))
+                                                        (gates/threshold :actions)))
                       :safe-state-coverage coverage}
             decision (arbiter/decide gate-ctx)
             ;; Every measured gate's value this check, fired or not, so its
@@ -1398,12 +1627,14 @@
                                            (:gate decision))
             rule-context (context-rules/boundary ctx branch parsed result turn)
             {ctx-block :block branch :branch}
-            (context-block conn run-id branch
+            (if-not (context-block? (:config ctx))
+              {:block nil :branch branch}
+              (context-block conn run-id branch
                            (get-in parsed [:args :claim])
                            (get-in ctx [:config :run :share-artifacts?])
                            (get-in ctx [:config :run :modes])
                            (roles/may-use? (or (:role ctx) (:role branch) :implementor) "task")
-                           (:texts rule-context))
+                           (:texts rule-context)))
             branch (assoc branch :context-rule-facts (:facts rule-context))
             ;; What the block cost, durably: one note per turn per branch,
             ;; sizes by part (karamazov-o4wm.6). The branch keeps the same
@@ -1415,7 +1646,10 @@
                   (journal/note! conn run-id :context-block
                                  {:branch-id (:id branch) :turn turn
                                   :data (cond-> {:sizes (vec sizes)
-                                                 :total (reduce + 0 (map second sizes))}
+                                                 :total (reduce + 0 (map second sizes))
+                                                 :parts (cmp/prompt-parts
+                                                         (:messages branch)
+                                                         (:tools (:write-clip (gates/threshold :compaction))))}
                                           (seq (:contributions rule-context))
                                           (assoc :context-rules
                                                  {:generation turn
@@ -1425,12 +1659,13 @@
             ;; then the harness's own blocks (karamazov-o4wm.3): what the
             ;; model can trust about who is speaking is the frame, not the
             ;; `---` rule — a file can carry one of those.
-            body (str (message/frame-result tool (truncate (:result result) turn))
-                      ;; One call runs per reply; say which others did not.
-                      (when (seq (:dropped parsed))
+            body (str (message/frame-result tool (str (truncate (:result result) turn (result-window ctx) (spill-to ctx turn tool))
+                                                             (some->> (time-stamp ctx) (str "\n"))))
+                      ;; Say which of the reply's other calls did not run.
+                      (when-let [dropped (seq (or (:still-dropped result) (:dropped parsed)))]
                         (str "\n\n" (prompt/render "calls-dropped"
                                                     {:ran tool
-                                                     :dropped (str/join ", " (:dropped parsed))})))
+                                                     :dropped (str/join ", " dropped)})))
                       (when ctx-block (str "\n\n" ctx-block))
                       (when decision (str "\n\n---\n\n" (:message decision))))
             ;; Recorded exactly once. The row id is what a later turn settles,
@@ -1462,7 +1697,11 @@
                              :gate (:gate decision)
                              :prediction (:prediction decision)
                              :window (:window decision)
-                             :turn turn})
+                             :turn turn
+                             ;; What a directive asked for, and what the branch
+                             ;; was doing when it arrived (karamazov-oi16.7).
+                             :expect (:expect decision)
+                             :addressed (action-text parsed)})
            ;; Consumed by the NEXT call-model and cleared there, so a steer
            ;; forecloses prose on exactly the turn it steers and no later one.
            ;; These are the INTENT: a gate naming a forceable tool sets both a

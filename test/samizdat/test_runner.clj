@@ -104,7 +104,7 @@
             [samizdat.beam-cancel-test]
             [samizdat.eval-deadline-test]
             [samizdat.events-flow-test]
-            [samizdat.lsp-cancel-test]
+            [samizdat.finish-signal-test]
             [samizdat.tasks-test]
             [samizdat.kernel-write-test]
             [samizdat.knowledge-test]
@@ -147,7 +147,6 @@
             [samizdat.hashline-test]
             [samizdat.control-test]
             [samizdat.util-test]
-            [samizdat.lisp-test]
             [samizdat.lsp-test]
             [samizdat.lsp-edit-test]
             [samizdat.resource-test]
@@ -183,6 +182,8 @@
             [samizdat.repl-project-test]
             [samizdat.vocabulary-test]
             [samizdat.bridge-test]
+            [samizdat.code-mode-test]
+            [samizdat.actions-test]
             [samizdat.callable-test]
             [samizdat.propose-test]
             [samizdat.retire-test]
@@ -224,15 +225,19 @@
             [samizdat.security.flow-handoff-test]
             [samizdat.security.replay-test]
             [samizdat.security.token-test]
-            [samizdat.sdiff.core-test]
             [samizdat.sdiff.address-test]
-            [samizdat.sdiff.names-test]
             [samizdat.sdiff.group-test]
             [samizdat.llm-fallback-test]
             [samizdat.injection-probe-test]
             [samizdat.perturb-test]
             [samizdat.basis-test]
             [samizdat.eval-hint-test]
+            [samizdat.sections-test]
+            [samizdat.check-tool-test]
+            [samizdat.team-solve-test]
+            [samizdat.team-solve-parity-test]
+            [samizdat.eval-samples-test]
+            [samizdat.eval-corpus-test]
             [samizdat.grant-proposal-test]
             [samizdat.llm-test]
             [samizdat.toolspec-test]
@@ -249,6 +254,16 @@
             [samizdat.progress-test]
             [samizdat.introspect-branch-test]
             [samizdat.memory-exposure-test]
+            [samizdat.context-handling-test]
+            [samizdat.glm-adapter-test]
+            [samizdat.native-history-test]
+            [samizdat.code-metrics-test]
+            [samizdat.shell-writes-test]
+            [samizdat.repl-restart-test]
+            [samizdat.load-on-write-test]
+            [samizdat.lean-style-test]
+            [samizdat.lean-extras-test]
+            [samizdat.memory-admission-test]
             [samizdat.memory-source-test]
             [samizdat.memory-revise-test]
             [samizdat.battery-test]
@@ -334,6 +349,16 @@
     samizdat.progress-test
     samizdat.introspect-branch-test
     samizdat.memory-exposure-test
+    samizdat.context-handling-test
+    samizdat.glm-adapter-test
+    samizdat.native-history-test
+    samizdat.code-metrics-test
+    samizdat.shell-writes-test
+    samizdat.repl-restart-test
+    samizdat.load-on-write-test
+    samizdat.lean-style-test
+    samizdat.lean-extras-test
+    samizdat.memory-admission-test
     samizdat.memory-source-test
     samizdat.memory-revise-test
     samizdat.battery-test
@@ -406,7 +431,7 @@
     samizdat.beam-cancel-test
     samizdat.eval-deadline-test
     samizdat.events-flow-test
-    samizdat.lsp-cancel-test
+    samizdat.finish-signal-test
     samizdat.tasks-test
     samizdat.kernel-write-test
     samizdat.knowledge-test
@@ -449,7 +474,7 @@
     samizdat.hashline-test
     samizdat.control-test
     samizdat.util-test
-    samizdat.lisp-test
+   
     samizdat.lsp-test
     samizdat.lsp-edit-test
     samizdat.resource-test
@@ -485,6 +510,8 @@
     samizdat.repl-project-test
     samizdat.vocabulary-test
     samizdat.bridge-test
+    samizdat.code-mode-test
+    samizdat.actions-test
     samizdat.callable-test
     samizdat.propose-test
     samizdat.retire-test
@@ -526,22 +553,36 @@
     samizdat.security.flow-handoff-test
     samizdat.security.replay-test
     samizdat.security.token-test
-    samizdat.sdiff.core-test
+   
     samizdat.sdiff.address-test
-    samizdat.sdiff.names-test
+   
     samizdat.sdiff.group-test
     samizdat.llm-fallback-test
     samizdat.injection-probe-test
     samizdat.perturb-test
     samizdat.basis-test
     samizdat.eval-hint-test
+    samizdat.sections-test
+    samizdat.check-tool-test
+    samizdat.team-solve-parity-test
+    samizdat.team-solve-test
+    samizdat.eval-samples-test
+    samizdat.eval-corpus-test
     samizdat.grant-proposal-test
     samizdat.prompt-test
     samizdat.server-test
     samizdat.adapter-test
     samizdat.proc-test])
 
+(defn- no-wait-at-the-cap!
+  "A run at its cap waits minutes for the supervisor, and many tests reach a cap
+  with nothing to answer. Still asks, and still sees an answer already queued."
+  []
+  (alter-var-root #'samizdat.agent.beam/await-cap-decision!
+                  (fn [f] (fn [ctx cap _ poll] (f ctx cap 0 poll)))))
+
 (defn run []
+  (no-wait-at-the-cap!)
   ;; Each test project is a fresh temp root with its own confined caches
   ;; (karamazov-1gbh); keep them out of ~/.cache and drop them afterwards.
   (let [base (str (jolt.fs/create-temp-dir))]

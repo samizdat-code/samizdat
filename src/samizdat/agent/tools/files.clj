@@ -24,12 +24,63 @@
   helpers and the run-tool multimethod."
   (:require [clojure.string :as str]
             [samizdat.agent.files :as files]
+            [samizdat.agent.source :as source]
             [samizdat.agent.tools.base :as base]
-            [samizdat.sdiff.address :as address]
-            [samizdat.sdiff.core :as sdiff]
+            [jolt-lsp.extract :as lsp-extract]
+            [jolt-lsp.sdiff.address :as address]
+            [samizdat.sdiff.reads :as reads]
+            [jolt-lsp.sdiff.core :as sdiff]
+            [samizdat.agent.gates :as gates]
             [samizdat.prompt :as prompt]
+            [samizdat.repl.route :as route]
             [samizdat.security.exposure :as exposure]
             [samizdat.userspace :as userspace]))
+
+(defn- declared-ns
+  "The namespace a Clojure source declares, as jolt-lsp's analyzer reads its
+  ns form (metadata and reader conditionals included), or nil."
+  [source]
+  (some-> (try (lsp-extract/ns-name source "declared.clj") (catch Throwable _ nil))
+          str not-empty))
+
+(defn read-report
+  "Whether the Clojure file at `path` reads, as the file tools would say it, or nil when it
+  does. For a file a script or a shell command wrote, which no file tool checked."
+  [{:keys [root]} path]
+  (let [{:keys [extensions]} (gates/threshold :load-on-write)
+        path (str path)]
+    (when (some #(str/ends-with? path %) extensions)
+      (when-let [source (try (slurp (str root "/" path)) (catch Throwable _ nil))]
+        (let [{:keys [problem note]} (source/vet source {:whole? false :clojure? true})]
+          (when problem
+            (str/trim (prompt/render "script-write-syntax" {:path path :syntax (str/trim (str note))}))))))))
+
+(defn load-report
+  "Load the Clojure file at `path` in the branch's project REPL and say whether it loaded,
+  or nil when there is no project REPL, it is not Clojure, or it declares no namespace.
+  gates.edn :load-on-write."
+  [{:keys [root branch] :as ctx} path]
+  (let [{:keys [enabled? timeout-ms extensions]} (gates/threshold :load-on-write)
+        path (str path)]
+    (when (and enabled?
+               (some #(str/ends-with? path %) extensions)
+               (= :project (route/image-of ctx)))
+      (when-let [ns-name (some-> (try (slurp (str root "/" path)) (catch Throwable _ nil))
+                                 declared-ns)]
+        (let [r (try (route/eval-for ctx (str "(require '" ns-name " :reload)")
+                                     (:repl-session branch) timeout-ms)
+                     (catch Throwable e {:ok false :error (or (ex-message e) (str e))}))]
+          (str/trim (prompt/render "load-on-write"
+                                   {:ns ns-name :loaded (:ok r) :error (:error r)})))))))
+
+(defn- with-load-check
+  "A Clojure file written while the branch has a project REPL is loaded there, and the
+  write's result says whether it loaded: a model learns a file it wrote is broken without
+  having to remember to reload it (memdoor's build-after-edit, done the Clojure way)."
+  [{:keys [category] :as result} ctx]
+  (if-let [report (when (= :success category) (load-report ctx (get-in ctx [:args :path])))]
+    (update result :result str "\n" report)
+    result))
 
 (defn- with-userspace-check
   "A successful write to a file that serves a role of the project's workflow
@@ -77,7 +128,7 @@
 
 (defmethod base/run-tool "read_file" [{:keys [branch args] :as ctx}]
   ;; {form, at?}: the lines of one form, or one place in it, by its name
-  ;; (samizdat.sdiff.address) rather than by line numbers.
+  ;; (jolt-lsp.sdiff.address) rather than by line numbers.
   (if (str/blank? (str (:form args)))
     (let [r (files/read-file ctx)]
       ;; A WHOLE read of a Clojure file says which forms changed since this
@@ -89,7 +140,7 @@
                      (sdiff/clj? (str (:path args))))
             (try
               (let [abs (files/resolve-read! ctx (files/ctx-reference-roots ctx) (str (:path args)))
-                    d (address/since-read! (:run-id ctx) (:id branch) (str abs) (slurp abs))]
+                    d (reads/since-read! (:run-id ctx) (:id branch) (str abs) (slurp abs))]
                 (when (and d (or (seq (:changed d)) (seq (:added d)) (seq (:removed d))))
                   (update r :result str "\n\n"
                           (prompt/render "forms-since-read"
@@ -110,17 +161,17 @@
   ;; The sibling notice rides the RESULT rather than gating the call: workers
   ;; sharing a tree are collaborating, and which version should win is not the
   ;; harness's judgement to make. See samizdat.agent.files/stale-note.
-  (-> (files/write-file ctx) (files/with-stale ctx) (with-userspace-check ctx)))
+  (-> (files/write-file ctx) (files/with-stale ctx) (with-userspace-check ctx) (with-load-check ctx)))
 
 (defmethod base/run-tool "edit_file" [ctx]
-  (-> (files/edit-file ctx) (files/with-stale ctx) (with-userspace-check ctx)))
+  (-> (files/edit-file ctx) (files/with-stale ctx) (with-userspace-check ctx) (with-load-check ctx)))
 
 (defmethod base/run-tool "patch" [ctx]
   ;; Anchored editing (karamazov-0kk). Beside edit_file rather than replacing
   ;; it: clojure-mcp made the same bet on addressed editing and later demoted
   ;; its own to a fallback, so which one a model actually reaches for is a
   ;; question to MEASURE, not to assume.
-  (-> (files/patch-file ctx) (files/with-stale ctx) (with-userspace-check ctx)))
+  (-> (files/patch-file ctx) (files/with-stale ctx) (with-userspace-check ctx) (with-load-check ctx)))
 
 (defmethod base/run-tool "glob" [{:keys [branch root] :as ctx}]
   ;; Find files by NAME (karamazov-fn68). :neutral — locating establishes

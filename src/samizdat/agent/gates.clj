@@ -239,6 +239,9 @@
      ;; it is being steered because something broke — what broke, in the
      ;; failure's own words, with the turn number that makes it fetchable.
      :goal (state/stated-goal branch)
+     ;; What the whole run was asked for. The goal above narrows to the subtask
+     ;; held, and a run ends on the request, not the subtask.
+     :problem (:problem branch)
      ;; WHETHER THIS BRANCH IS PLANNING OR BUILDING, so a template can say
      ;; "declare it with plan" to the one and "land it" to the other. The
      ;; turn-budget notice told every design branch to land what it could
@@ -327,8 +330,8 @@
   the same {{...}} convention and the same engine (samizdat.prompt) as
   every other prompt seam."
   [{:keys [message-file message-suffix]}]
-  (fn [{:keys [branch max-turns]}]
-    (let [ctx (message-context branch max-turns)]
+  (fn [{:keys [branch max-turns time-left-seconds]}]
+    (let [ctx (assoc (message-context branch max-turns) :time-left-seconds time-left-seconds)]
       (str (some-> message-file sp/prompt (sp/render-str ctx))
            (some-> message-suffix (sp/render-str ctx))))))
 
@@ -364,6 +367,52 @@
   "The compiled gate `k`, or nil."
   [k]
   (get (by-name*) k))
+
+(defn time-used
+  "The share of a run's `limit-seconds` gone at `now-ms`, or nil when it has no
+  limit or no start."
+  [limit-seconds started-ms now-ms]
+  (when (and limit-seconds started-ms)
+    (/ (double (- now-ms started-ms)) (* 1000.0 limit-seconds))))
+
+(defn time-left-seconds
+  "Whole seconds of `limit-seconds` left at `now-ms`, never below zero."
+  [limit-seconds started-ms now-ms]
+  (when (and limit-seconds started-ms)
+    (max 0 (long (- limit-seconds (/ (- now-ms started-ms) 1000))))))
+
+(defn style
+  "The style a run's config chooses, as gates.edn :styles has it, or nil for the full loop.
+  A style says which phase rules and gates apply, whether the per-turn context block is
+  sent, which system prompt frame is used and whether done asks only for an answer."
+  [config]
+  (when-let [k (get-in config [:run :style])]
+    (get (threshold :styles) (keyword (name k)))))
+
+(defn review-max-wait
+  "Seconds a ship review holds a done: gates.edn :ship-review :max-wait-seconds,
+  or :max-wait-long-seconds on a run whose limit is at least
+  :long-clock-seconds, where the review runs a blind tester first
+  (karamazov-galq) and the short hold would lapse under it."
+  [config]
+  (let [{:keys [max-wait-seconds max-wait-long-seconds long-clock-seconds]} (threshold :ship-review)
+        limit (get-in config [:run :time-limit-seconds])]
+    (if (and limit long-clock-seconds max-wait-long-seconds (>= limit long-clock-seconds))
+      max-wait-long-seconds
+      max-wait-seconds)))
+
+(defn tester-applies?
+  "Whether the blind tester runs on this run (gates.edn :tester): enabled, and
+  the run's clock at least :min-clock-seconds."
+  [config]
+  (let [{:keys [enabled? min-clock-seconds]} (threshold :tester)
+        limit (get-in config [:run :time-limit-seconds])]
+    (boolean (and enabled? limit min-clock-seconds (>= limit min-clock-seconds)))))
+
+(defn run-time-left
+  "Whole seconds a run has left by the clock, or nil when it has no limit."
+  [{:keys [config started-ms]}]
+  (time-left-seconds (get-in config [:run :time-limit-seconds]) started-ms (System/currentTimeMillis)))
 
 (defn crossed-fractions
   "Which turn-budget notice thresholds this branch has now passed. The loop

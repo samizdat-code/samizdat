@@ -751,8 +751,28 @@
 (defn- redact-capture-file [source target known]
   (spit target (secrets/redact (slurp source) known)))
 
+(defn- stream-text
+  "One stream of a finished command as data for a script (karamazov-6p51.4):
+  the redacted capture file when there was one, the redacted text the
+  process returned otherwise, cut to `cap` characters. Not the preview: a
+  script filters what it gets, so it gets all of it up to the cap."
+  [path text known cap]
+  (let [s (or (when path (try (slurp path) (catch Throwable _ nil)))
+              (secrets/redact (str text) known))]
+    (if (and cap (> (count s) cap)) (subs s 0 cap) s)))
+
 (defn- preview-stream [text cap known]
   (util/truncate-middle (secrets/redact (str text) known) cap))
+
+(defn preview-caps
+  "How much of each stream one command's preview shows, out of `total`: each
+  has its share, and what one does not use goes to the other. A fixed split
+  showed half the preview for a command with nothing on stderr."
+  [stdout-chars stderr-chars total fraction]
+  (let [stdout-share (long (Math/round (* (double total) (double fraction))))
+        stderr-share (- total stdout-share)]
+    [(max stdout-share (- total (min stderr-chars stderr-share)))
+     (max stderr-share (- total (min stdout-chars stdout-share)))]))
 
 (defn run-shell
   "Run a shell command through the full gate: decide, then (on allow) resolve
@@ -956,19 +976,19 @@
                   e)))
             out (if allocation
                   (let [policy (:policy allocation)
-                        total (:preview-chars policy)
-                        stdout-cap (long (Math/round (* total (:preview-stdout-fraction policy))))
-                        stderr-cap (- total stdout-cap)
-                        stdout (preview-stream
-                                (str (:out r) (:out-tail r)
-                                     (when (:timeout r)
-                                       (str "\n[timed out after " (:ms r) "ms]"))
-                                     (when (:cancelled r) "\n[cancelled]")
-                                     (when (:message r) (str "\n" (:message r)))
-                                     (when finalization-error
-                                       (str "\n" (ex-message finalization-error))))
-                                stdout-cap known)
-                        stderr (preview-stream (str (:err r) (:err-tail r)) stderr-cap known)]
+                        stdout-text (str (:out r) (:out-tail r)
+                                         (when (:timeout r)
+                                           (str "\n[timed out after " (:ms r) "ms]"))
+                                         (when (:cancelled r) "\n[cancelled]")
+                                         (when (:message r) (str "\n" (:message r)))
+                                         (when finalization-error
+                                           (str "\n" (ex-message finalization-error))))
+                        stderr-text (str (:err r) (:err-tail r))
+                        [stdout-cap stderr-cap] (preview-caps (count stdout-text) (count stderr-text)
+                                                              (:preview-chars policy)
+                                                              (:preview-stdout-fraction policy))
+                        stdout (preview-stream stdout-text stdout-cap known)
+                        stderr (preview-stream stderr-text stderr-cap known)]
                     (str stdout (when (seq stderr) (str "\n" stderr))))
                   (cond
                     (:message r) (str (:message r))
@@ -991,8 +1011,17 @@
                             (:timeout r) :timeout
                             (:error r) :error
                             :else :complete)
-                  :artifacts (mapv :uri (vals (select-keys public-capture [:stdout :stderr])))}))
-            reference-note (when public-capture
+                  :artifacts (mapv :uri (vals (select-keys public-capture [:stdout :stderr])))
+                  ;; The caller is holding the result, so it needs no message
+                  ;; saying the command finished (karamazov-0wvc.4).
+                  :delivered? true}))
+            ;; Only when there is more to fetch than was shown.
+            streams (vals (select-keys public-capture [:stdout :stderr]))
+            reference-note (when (and public-capture
+                                      (or (not-every? #(= :complete (:status %)) streams)
+                                          (some #(false? (:complete? %)) streams)
+                                          (> (reduce + 0 (map #(long (or (:observed-bytes %) 0)) streams))
+                                             (long (:preview-chars (:policy allocation))))))
                              (str "\nCaptures: " (pr-str public-capture)))]
         ;; What ran read outside the project: the branch holds it now.
         (when outside-all
@@ -1017,6 +1046,17 @@
            ;; the loop weights a timeout heavier on the failure streak and drops
            ;; the storm window's retry allowance for the call that hung.
            :timeout? (boolean (:timeout r))
+           ;; The same run as data, for a script calling the tool through
+           ;; the eval bridge: it composes on the exit code and the streams
+           ;; rather than parsing the text written for the model.
+           :data (let [cap (:data-chars (gates/threshold :eval-bridge))]
+                   {:exit (:exit r) :timeout? (boolean (:timeout r))
+                    :out (stream-text (when (and allocation (not finalization-error))
+                                        (:stdout-read-path allocation))
+                                      (str (:out r) (:out-tail r)) known cap)
+                    :err (stream-text (when (and allocation (not finalization-error))
+                                        (:stderr-read-path allocation))
+                                      (str (:err r) (:err-tail r)) known cap)})
            :policy {:effect :allow}}
           public-capture (assoc :captures public-capture))))))
 
@@ -1082,6 +1122,63 @@
             (some #{"cd" "pushd"} heads))
       []
       (vec (mapcat #(segment-reads (exec-prefix-stripped %)) segments)))))
+
+(defn- without-heredocs
+  "`command` with each heredoc's body removed, so the lines a program reads on
+  stdin are not taken for statements: `python3 - <<'EOF'` then a script used
+  to report `import` and `EOF` as programs."
+  [command]
+  (loop [lines (str/split-lines (str command)) out [] end nil]
+    (if-let [l (first lines)]
+      (cond
+        end (recur (rest lines) out (when-not (= end (str/trim l)) end))
+        :else (recur (rest lines) (conj out l)
+                     (some-> (re-find #"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?" l) second)))
+      (str/join "\n" out))))
+
+(defn command-heads
+  "The program each statement of a shell command runs, in order, wrapper
+  prefixes stripped; empty for a string that does not split."
+  [command]
+  (let [{:keys [segments malformed]} (shell-split (str/trim (without-heredocs command)))]
+    (if malformed
+      []
+      (vec (distinct (keep #(not-empty (command-head %)) segments))))))
+
+(defn- action-arg
+  "What a program runs, as an action key shows it: a file path by its name,
+  a directory without its trailing slash."
+  [w]
+  (let [w (str/replace w #"/+$" "")
+        base (last (str/split w #"/"))]
+    (if (and (str/includes? w "/") (str/includes? (str base) ".")) base w)))
+
+(defn command-keys
+  "What each statement of a shell command runs, as the key a run's record of
+  actions knows it by (karamazov-oi16.1): the program and the first thing it
+  is given that is not a flag — `pip install`, `python3 solve.py`, `pytest
+  tests` — or the program alone. `-` (a script on stdin) counts as what it
+  runs. A shell's `-c` script is the statements inside it."
+  [command]
+  (let [{:keys [segments malformed]} (shell-split (str/trim (without-heredocs command)))]
+    (if malformed
+      []
+      (vec
+       (mapcat
+        (fn [seg]
+          ;; `timeout 60 cmd` leaves its duration ahead of the command.
+          (let [[head & args] (drop-while #(re-matches #"\d+(\.\d+)?[a-z]?" %)
+                                          (words (exec-prefix-stripped seg)))
+                prog (last (str/split (str head) #"/"))
+                script (when (contains? #{"sh" "bash" "zsh" "dash"} prog)
+                         (second (drop-while #(not= "-c" %) args)))]
+            (cond
+              (str/blank? prog) []
+              script (command-keys script)
+              :else (let [arg (first (remove #(and (flag? %) (not= "-" %))
+                                             (remove #(str/starts-with? % "<") args)))]
+                      [(if arg (str prog " " (action-arg arg)) prog)]))))
+        segments)))))
 
 (defn whole-file-read?
   "Whether the command prints one whole file and nothing cuts it: a lone

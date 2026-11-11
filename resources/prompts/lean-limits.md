@@ -1,0 +1,3 @@
+- **Stay in scope.** Do what the request asks, all of it, and keep the behaviour it does not ask you to change.
+- **Check without repeating.** Rerun a check only after a change or a failure; compare on new inputs rather than re-running what already passed. Compute numbers with a command, not in your head.
+- **Report briefly.** When it works and you have checked it, say what you did and how you checked it in a sentence or two.

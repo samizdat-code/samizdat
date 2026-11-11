@@ -9,6 +9,7 @@
             [clojure.walk :as walk]
             [samizdat.agent.acceptance :as acceptance]
             [samizdat.agent.checklist :as checklist]
+            [samizdat.agent.code-metrics :as code-metrics]
             [samizdat.agent.exam :as exam]
             [samizdat.agent.files :as files]
             [samizdat.agent.gitdiff :as gitdiff]
@@ -17,6 +18,7 @@
             ;; With jolt.time first, as base and journal load it.
             [jolt.time]
             [clojure.data.json :as json]
+            [clojure.tools.logging :as log]
             [samizdat.agent.state :as state]
             [samizdat.agent.stubs :as stubs]
             [samizdat.agent.roles :as roles]
@@ -24,6 +26,8 @@
             [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
             [samizdat.sandbox.sci :as sandbox]
+            [samizdat.security.policy :as policy]
+            [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
             [samizdat.store.tasks :as tasks]
             [samizdat.util :as util]
@@ -356,6 +360,30 @@
 ;; locals, fns resolve in this namespace at compile, and the VALUES arrive
 ;; at fire time. Adding a rung is a data edit.
 
+(defn unchecked-write?
+  "Whether the branch wrote something and ran nothing that succeeded after its last write:
+  a done on that is a claim no check backs (agenc-core's completion gate)."
+  [branch]
+  (let [ts (vec (:turns branch))
+        writes (gates/tool-vocab :file-write)
+        category (fn [t] (name (or (:category t) :none)))
+        ;; A script that ran a program that succeeded is a check, and one that also
+        ;; wrote checked its own write, so it is not the write a later check has to
+        ;; follow. A successful eval is :neutral (base/ok), so that counts here:
+        ;; requiring :success refused every eval check (tb21-code protein-assembly).
+        ran? (fn [t] (and (:ran? t) (contains? #{"success" "neutral"} (category t))))
+        last-write (last (keep-indexed (fn [i t] (when (or (contains? writes (str (:tool t)))
+                                                           (and (:wrote t) (not (ran? t))))
+                                                   i))
+                                       ts))]
+    (boolean
+     (and last-write
+          (not-any? (fn [t] (or (ran? t)
+                                (and (contains? #{"eval" "shell" "run_check"} (str (:tool t)))
+                                     (= "success" (category t))
+                                     (not (:wrote t)))))
+                    (subvec ts (inc last-write)))))))
+
 (defn- compile-rung-form
   "In SCI, in the :ship home (samizdat.sandbox.sci): `str/…`, `checklist/…`,
   `exam/…` and this namespace's `engages-problem?`, `asks-the-reader?` and
@@ -375,9 +403,51 @@
                   ;; The checklist items the answer has not accounted for
                   ;; (karamazov-dsfx); empty when nothing is owed.
                   ~'unaccounted-checklist (get ~'ctx :unaccounted-checklist)
+                  ~'checklist-items   (get ~'ctx :checklist-items)
+                  ;; `done` calls refused in an unbroken row before this one.
+                  ~'done-streak       (get ~'ctx :done-streak 0)
+                  ;; How many times each rung, by name, has already refused this
+                  ;; branch: a rung that sends a branch back once reads this, as a
+                  ;; streak resets whenever work comes between two dones.
+                  ~'refused           (get ~'ctx :refused {})
                   ;; Pre-existing tests changed or deleted with no reason
                   ;; given (karamazov-fgsb); empty when none.
-                  ~'unexplained-tests (get ~'ctx :unexplained-tests)]
+                  ~'unexplained-tests (get ~'ctx :unexplained-tests)
+                  ;; The share of the run's time limit gone, nil without one, and the
+                  ;; share at which it winds down.
+                  ~'time-used         (get ~'ctx :time-used)
+                  ;; A branch whose done delivers a verdict (reviewer, supervisor,
+                  ;; worker), as against one held to the advisory rungs by its style.
+                  ~'verdict?          (get ~'ctx :verdict? false)
+                  ;; What the time-left rung says, from prompts/keep-working.md.
+                  ~'keep-working      (get ~'ctx :keep-working)
+                  ;; Its later refusals' words, and the share of the clock and the
+                  ;; count they stop at (gates.edn :time-budget).
+                  ~'keep-working-again (get ~'ctx :keep-working-again)
+                  ~'keep-going-share  (get ~'ctx :keep-going-share)
+                  ~'keep-going-max    (get ~'ctx :keep-going-max)
+                  ;; Something was written and nothing ran after it, and what to say.
+                  ~'unchecked-write?  (get ~'ctx :unchecked-write? false)
+                  ~'check-before-done (get ~'ctx :check-before-done)
+                  ;; The change is unusual against the project's history, and what
+                  ;; to say (jolt-metrics' metrics.entropy).
+                  ~'unusual-change    (get ~'ctx :unusual-change false)
+                  ~'review-unusual    (get ~'ctx :review-unusual)
+                  ~'wind-down         (get ~'ctx :wind-down)
+                  ;; A supervisor stream is watching this run, a ship review it
+                  ;; was asked for has not landed, and what to say meanwhile
+                  ;; (karamazov-oi16.11).
+                  ~'supervised?       (get ~'ctx :supervised? false)
+                  ~'review-pending?   (get ~'ctx :review-pending? false)
+                  ~'review-hold       (get ~'ctx :review-hold)
+                  ;; A directive to this branch is queued and no boundary has
+                  ;; delivered it yet, and what to say.
+                  ~'unread-directive? (get ~'ctx :unread-directive? false)
+                  ~'unread-hold       (get ~'ctx :unread-hold)
+                  ;; The blind tester's failing commands that still fail when
+                  ;; rerun now, and what to say.
+                  ~'tester-still-failing (get ~'ctx :tester-still-failing)
+                  ~'tester-hold       (get ~'ctx :tester-hold)]
               ~form)))
 
 (def ship-gates
@@ -397,6 +467,42 @@
                               (:message rung))))
           (gates/threshold :ship-gates))))
 
+(defn tester-still-failing
+  "The blind tester's latest reported failures whose command still fails when
+  rerun now in the run's root, as {:command :expected :output} (gates.edn
+  :tester). A command the policy refuses or asks about cannot be judged here
+  and is left out."
+  [ctx]
+  (let [{:keys [command-separator rerun-timeout-seconds output-chars]} (gates/threshold :tester)]
+    (when command-separator
+      (vec (for [entry (journal/tester-failing (:conn ctx) (:run-id ctx))
+                 :let [s (str entry)
+                       i (str/index-of s command-separator)
+                       command (str/trim (if i (subs s 0 i) s))]
+                 :when (not (str/blank? command))
+                 :let [r (policy/run-shell (cond-> (assoc (select-keys ctx [:conn :run-id :root])
+                                                          :args {:command command})
+                                             rerun-timeout-seconds
+                                             (assoc :timeout-ms (* 1000 rerun-timeout-seconds))))]
+                 :when (and (not (contains? #{:deny :ask} (get-in r [:policy :effect])))
+                            (contains? #{:failure :timeout} (:category r)))]
+             {:command command
+              :expected (when i (str/trim (subs s (+ i (count command-separator)))))
+              :output (let [o (str (:result r))]
+                        (if (and output-chars (> (count o) output-chars))
+                          (subs o (- (count o) output-chars))
+                          o))})))))
+
+(defn ship-gate-rung
+  "The first lexical ship rung that fires on this evidence, as `{:name :message}`,
+  or nil."
+  [evidence]
+  (some (fn [rung]
+          (when ((:when rung) evidence)
+            (let [m (:message rung)]
+              {:name (:name rung) :message (if (fn? m) (m evidence) m)})))
+        (cond->> (ship-gates) (:advisory? evidence) (filter :advisory?))))
+
 (defn ship-gate-block
   "The first lexical ship rung that fires on this evidence, or nil. Pure —
   `done` computes the evidence and calls this.
@@ -406,11 +512,7 @@
   figures, so the evidence rungs do not fit it, but some — that there is an
   answer at all — do, and which is a gates.edn decision."
   [evidence]
-  (some (fn [rung]
-          (when ((:when rung) evidence)
-            (let [m (:message rung)]
-              (if (fn? m) (m evidence) m))))
-        (cond->> (ship-gates) (:advisory? evidence) (filter :advisory?))))
+  (:message (ship-gate-rung evidence)))
 
 ;; --- the give_up rungs ------------------------------------------------------
 
@@ -512,7 +614,9 @@
         ;; caller read an exhaustion fallback instead of the verdict
         ;; (karamazov-t86 — observed on every supervisor branch of three
         ;; consecutive live runs). run-role marks the branch.
-        advisory? (boolean (:advisory? branch))
+        ;; The lean style finishes on the answer, as an advisory branch does.
+        advisory? (boolean (or (:advisory? branch)
+                               (:lenient-done? (gates/style (:config ctx)))))
         confirmed (state/confirmed-artifacts branch)
         ;; Plus what the branch itself measured — its eval and shell output
         ;; off the journal. Computed here and banked nowhere: it is evidence
@@ -582,14 +686,84 @@
                           (into #{} (comp (mapcat :entries)
                                           (map (juxt :path :test :after-hash)))
                                 (journal/notes (:conn ctx) (:run-id ctx) :tests-explained)))
-        block (ship-gate-block
+        ;; AN UNUSUAL CHANGE (jolt-metrics' metrics.entropy): the run's change
+        ;; moved the code's information content far more than the project's
+        ;; commits do. Read on a first done only, and not for a verdict.
+        review? (and (not advisory?) (:root ctx) (:git-baseline ctx)
+                     (zero? (state/done-streak branch)))
+        unusual (when review?
+                  (code-metrics/unusual-change (:root ctx) (:git-baseline ctx)
+                                               (gates/threshold :code-metrics)))
+        ;; And a file it changed whose words stand out from the project's others.
+        odd-files (when review?
+                    (code-metrics/unusual-file-change (:root ctx) (:git-baseline ctx)
+                                                      (gates/threshold :code-metrics)))
+        ;; Whether a supervisor is watching and a review it was asked for is
+        ;; still out (karamazov-oi16.11). A branch that delivers a verdict is
+        ;; never held, so it skips the read — keyed on the BRANCH, not on
+        ;; `advisory?`, which lean also sets for its implementer and which
+        ;; kept the review from ever running there.
+        review (when (and (not (:advisory? branch)) (:conn ctx) (:run-id ctx))
+                 (journal/review-state (:conn ctx) (:run-id ctx)
+                                       (gates/review-max-wait (:config ctx))
+                                       {:tester? (gates/tester-applies? (:config ctx))}))
+        time-used (gates/time-used (get-in ctx [:config :run :time-limit-seconds])
+                                   (:started-ms ctx) (System/currentTimeMillis))
+        wind-down (:wind-down (gates/threshold :time-budget))
+        ;; The blind tester's reported failures, rerun now: a review that
+        ;; approved past them does not make them pass (vf2-speedup-networkx).
+        still-failing (when (and (not (:advisory? branch)) (:conn ctx) (:run-id ctx)
+                                 time-used wind-down (< time-used wind-down)
+                                 (gates/tester-applies? (:config ctx)))
+                        (tester-still-failing ctx))
+        ;; Directives queued for this branch that no boundary has delivered:
+        ;; a done ahead of them ships without the branch having read them.
+        unread (when (and (:conn ctx) (:run-id ctx) (:id branch))
+                 (let [kinds (set (:unread-kinds (gates/threshold :ship-review)))]
+                   (filter #(contains? kinds (:kind %))
+                           (interventions/pending (:conn ctx) (:run-id ctx) (:id branch)))))
+        rung (ship-gate-rung
                 {:answer answer :problem problem
+                 :refused (or (:ship-refused branch) {})
                  :evidence evidence
                  :uncovered-numbers uncovered-numbers
                  :can-write? (roles/may-use? (:role branch) "write_file")
                  :advisory? advisory?
                  :unaccounted-checklist (checklist/unaccounted items accounted)
+                 :checklist-items items
+                 :done-streak (state/done-streak branch)
+                 :time-used time-used
+                 :wind-down wind-down
+                 :tester-still-failing still-failing
+                 :tester-hold (when (seq still-failing)
+                                (prompt/render "tester-failures-hold" {:failing still-failing}))
+                 :supervised? (:supervised? review)
+                 :review-pending? (:pending? review)
+                 :review-hold (prompt/render "ship-review-hold" {:pending (:pending? review)})
+                 :unread-directive? (boolean (seq unread))
+                 :unread-hold (when (seq unread)
+                                (prompt/render "unread-directive-hold"
+                                               {:issuers (str/join ", " (distinct (map :issued_by unread)))}))
+                 :verdict? (boolean (:advisory? branch))
+                 :keep-working (prompt/prompt "keep-working")
+                 :keep-working-again (prompt/prompt "keep-working-again")
+                 :keep-going-share (:keep-going-share (gates/threshold :time-budget))
+                 :keep-going-max (:keep-going-max (gates/threshold :time-budget))
+                 :unchecked-write? (unchecked-write? branch)
+                 :check-before-done (prompt/prompt "check-before-done")
+                 :unusual-change (boolean (or unusual (seq odd-files)))
+                 :review-unusual (when (or unusual (seq odd-files))
+                                   (prompt/render "unusual-change"
+                                                  {:change (some? unusual)
+                                                   :z (some-> unusual :z double abs (->> (format "%.1f")))
+                                                   :added (some-> unusual :delta pos?)
+                                                   :commits (:commits unusual)
+                                                   :files (str/join ", " (map #(str "`" % "`") (take 5 (:files unusual))))
+                                                   :odd (seq odd-files)
+                                                   :odd-files (str/join ", " (for [{:keys [path z]} (take 5 odd-files)]
+                                                                              (format "`%s` (%.1f)" path (double z))))}))
                  :unexplained-tests (exam/unexplained touched-tests explained (or prior-explained #{}))})
+        block (:message rung)
         ;; The test rung — what makes the loop test-driven rather than one-shot.
         ;; `done` is not terminal until the unit's tests actually pass: run the
         ;; unit's tests, and a red / hollow / untested result is fed back so the
@@ -599,7 +773,10 @@
         ;; :verify-focused? is true; loops with neither behave exactly as before.
         verify-cmd (get-in ctx [:config :run :verify-cmd])
         verify-focused? (get-in ctx [:config :run :verify-focused?] false)
-        require-test? (get-in ctx [:config :run :require-test?] true)
+        ;; Paired samples that passed on this very program are its test: a
+        ;; program with them has nothing further to pin.
+        require-test? (and (get-in ctx [:config :run :require-test?] true)
+                           (not (verify/samples-pinned? (:root ctx) (:green-check branch))))
         ;; THE TEST FILE THIS PIECE WAS DELEGATED, from the task it holds.
         ;; A split leaves the tree RED on purpose — the stubs are the failing
         ;; tests — so a child that ran the whole suite would drown in its
@@ -670,8 +847,8 @@
                                 (when (or verify-focused? contracted-tests) changed)))
         cmd (when verify-on? (or (verify/focused-cmd focus) verify-cmd))
         pre-doomed? (or (and (some? changed) (empty? changed))
-                        (and require-test? (some? changed) (seq changed)
-                             (not (some verify/test-file? changed))
+                        (and require-test? (some? changed)
+                             (verify/owes-test? changed)
                              (nil? contracted-tests)))
         ;; Through the run's memory of this tree (gates.edn :verify-memo):
         ;; :feature/verify runs the same command on the same tree next.
@@ -777,8 +954,32 @@
                      {:branch-id (:id branch) :turn (:turn ctx)
                       :data {:tokens (vec (take 20 borrowed))
                              :sources (vec (distinct (keep :branch_id elsewhere)))}}))
+    ;; A rung may name a note to journal the first time it refuses a branch —
+    ;; :supervisor-review asks the supervisor stream for its review that way.
+    ;; And may name a branch to TELL, through the directive queue: a supervisor
+    ;; pass already running reads its brief only at the start, so a review
+    ;; asked for mid-pass reached nobody until the hold ran out (tb21-review
+    ;; dna-assembly). The notice lands at that branch's next turn.
+    (when-let [spec (and rung (:conn ctx) (:run-id ctx)
+                         (not (get (:ship-refused branch) (:name rung)))
+                         (some #(when (= (:name rung) (:name %)) %) (ship-gates)))]
+      (when-let [k (:note-once spec)]
+        (journal/note! (:conn ctx) (:run-id ctx) (keyword (name k))
+                       {:branch-id (:id branch) :turn (:turn ctx)
+                        :data {:answer (str answer) :rung (:name rung) :branch (:id branch)}}))
+      (when-let [{to :branch p :prompt by :issued-by} (:tell spec)]
+        (try (interventions/submit! (:conn ctx) (:run-id ctx)
+                                    {:branch-id to :kind "message" :issued-by by
+                                     :payload (prompt/render p {:branch (:id branch) :turn (:turn ctx)
+                                                                :wait (gates/review-max-wait (:config ctx))
+                                                                :answer (str answer)})})
+             (catch Throwable e
+               (log/warn "ship: telling" to "failed:" (ex-message e))))))
     (if block
-      (base/fail branch (str "`done` refused.\n\n" block) :done-block block)
+      ;; Which lexical rung refused, counted on the branch for `refused`. The later
+      ;; blocks (verify, acceptance) apply only when no rung fired.
+      (base/fail (cond-> branch rung (update-in [:ship-refused (:name rung)] (fnil inc 0)))
+                 (str "`done` refused.\n\n" block) :done-block block)
       (cond->
        {:branch (assoc branch :final-answer answer :status :done)
         :category :success

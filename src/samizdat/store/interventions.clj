@@ -57,13 +57,14 @@
 (def scheduler-kinds
   "Applied at the beam's round top: facts about the run or its set of
   branches."
-  #{"cull" "fork" "retract" "extend" "pause" "resume"})
+  #{"cull" "fork" "retract" "extend" "pause" "resume" "finish"})
 
 (def workflow-kinds
   "Applied at a workflow's own directives stage — the feature loop's, between
-  its verify and its route — because they decide that workflow's NEXT ROUND
+  its verify and its route, and team-solve's manager and unstick boundaries —
+  because they decide that workflow's NEXT ROUND
   and nothing at the turn or scheduler level has anywhere to put them."
-  #{"switch" "budget" "stop"})
+  #{"switch" "budget" "stop" "retask"})
 
 (def kinds
   "Every directive kind that may be queued: the NAMES, which are mechanism —
@@ -94,6 +95,52 @@
     (if (and (string? p) (not (str/starts-with? (str/trim p) "{")))
       p
       (some-> (payload d) :text str))))
+
+(defn expect-of
+  "What a directive's issuer expects the branch to do next — a tool name or a
+  fragment of the call — or nil. The steer is settled on it
+  (karamazov-oi16.7); a bare-string payload carries none."
+  [d]
+  (some-> (payload d) :expect str str/trim not-empty))
+
+(defn outcomes
+  "What became of each SUPERVISOR directive, joined from the run's own record:
+  the directive rows, the gate firings (the steer's settled prediction) and
+  the turn rows (what the branch did next). PURE, so the supervisor's brief
+  and the run-end distillation read one answer (karamazov-oi16.8, oi16.10).
+
+  Each is {:id :kind :branch :status :turn :text :expect :disposition
+  :outcome :next :state}: :outcome is the steer firing's settlement (met,
+  met-late, unmet, or open) for an applied directive and nil otherwise;
+  :next is the tool and arguments of the branch's first turn after the steer;
+  :state is status/outcome, which is what a later look compares to tell news
+  from what it has already seen."
+  [directives firings turns]
+  (let [steer? #(= "human-directive" (str (:gate %)))
+        firing-at (fn [b t]
+                    (first (filter #(and (steer? %) (= t (:turn %))
+                                         (or (nil? b) (= (str b) (str (:branch_id %)))))
+                                   firings)))
+        next-turn (fn [b t]
+                    (->> turns
+                         (filter #(and (> (or (:turn %) 0) t)
+                                       (or (nil? b) (= (str b) (str (:branch_id %))))))
+                         (sort-by :turn)
+                         first))]
+    (vec
+     (for [d directives
+           :when (= "supervisor" (str (:issued_by d)))
+           :let [b (:branch_id d)
+                 t (:applied_at_turn d)
+                 applied? (and t (= "applied" (str (:status d))))
+                 f (when applied? (firing-at b t))
+                 outcome (when applied? (or (some-> (:outcome f) str not-empty) "open"))
+                 nx (when applied? (next-turn b t))]]
+       {:id (:id d) :kind (str (:kind d)) :branch b :status (str (:status d)) :turn t
+        :text (text-of d) :expect (expect-of d) :disposition (:disposition d)
+        :outcome outcome
+        :next (when nx (str/trim (str (:tool_name nx) " " (or (:args nx) ""))))
+        :state (str (:status d) "/" (or outcome "-"))}))))
 
 (defn turns-asked
   "How many turns a directive asks for, or nil.

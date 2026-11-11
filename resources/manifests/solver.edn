@@ -1,0 +1,6 @@
+;; The SOLVER sub-loop: one worker on one team-solve task. The turn chain and
+;; nothing after it. The factory worker adds a reflection and a memory revision
+;; per ending, which is two model calls per round the method does not have: what
+;; a round owes the next one is in the ledger.
+{:description "One team-solve worker on one task: the turn chain, returning its verdict to the manager. A component of team-solve, not usually run on its own."
+ :extends "turn"}

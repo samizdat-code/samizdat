@@ -52,6 +52,37 @@
              (mapv :ref (basis/unresolved ctx ["t9" "B2:t3" "a#999" "sz-ffffff" "k-ffffff" "the docs"]))))
       (is (every? :why (basis/unresolved ctx ["t9" "the docs"]))))))
 
+(deftest a-steer-may-cite-the-branch-it-steers-by-bare-turn
+  ;; tb21-unread filter-js: the supervisor's review of B1 cited `t45`, B1's
+  ;; done, and was refused as "no such turn" because a bare turn was read as
+  ;; the supervisor's own. The approval never landed. A directive's bare turn
+  ;; resolves on the caller's branch or on the branch it is addressed to.
+  (with-run [c rid]
+    (journal/record-turn! c rid {:branch-id "B1" :turn 45 :tool-name "done" :args {} :result "ok"
+                                 :category :success})
+    (journal/record-turn! c rid {:branch-id "SUP" :turn 4 :tool-name "shell" :args {} :result "ok"
+                                 :category :success})
+    (let [ctx {:conn c :run-id rid :branch {:id "SUP"}}]
+      (is (= ["t45"] (mapv :ref (basis/unresolved ctx ["t45" "t4"]))) "plain: the caller's own only")
+      (is (empty? (basis/unresolved (assoc ctx :addressed "B1") ["t45" "t4"])))
+      (is (= ["t46"] (mapv :ref (basis/unresolved (assoc ctx :addressed "B1") ["t46"]))))
+      (testing "and the supervisor's memory may cite the run it watched"
+        ;; tb21-paced mteb: its `remember` citing B1's t24 was refused.
+        (let [sup (assoc ctx :branch {:id "SUP" :role :supervisor})]
+          (is (empty? (basis/unresolved sup ["t45" "t4"])))
+          (is (= ["t46"] (mapv :ref (basis/unresolved sup ["t46"])))))))))
+
+(deftest a-basis-sent-as-a-json-list-string-is-read-as-the-list
+  ;; tb21-full2 query-optimize: the supervisor's `remember` passed its basis
+  ;; as the string "[\"B1:t3\", \"B1:t4\"]" and was refused: split on commas
+  ;; it read as `["B1:t3"` and `"B1:t4"]`, neither a reference.
+  (is (= ["B1:t3" "B1:t4"] (basis/refs "[\"B1:t3\", \"B1:t4\"]")))
+  (is (= ["t3" "a#2"] (basis/refs "['t3', 'a#2']")))
+  (is (= ["t3" "B2:t7"] (basis/refs "t3, B2:t7")))
+  (testing "a turn written branch-last, as session-window-debug's supervisor did"
+    (is (= ["B1:t122"] (basis/refs "t122/B1")))
+    (is (= ["B1:t122"] (basis/refs "B1/t122")))))
+
 (defn- run-tool [c rid name args]
   (tools/run-tool {:tool-name name :args args :conn c :run-id rid :turn 5
                    :branch (state/new-branch {:id "B1" :problem "p"})}))

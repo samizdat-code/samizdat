@@ -17,7 +17,7 @@ Three rings:
   workflow layer (vendored, running on a jolt port of
   [maestro](https://github.com/yogthos/maestro)). The loop is an EDN manifest;
   cells are the plugin unit and declare whether they are pure or effectful.
-- **capabilities** — nREPL, clojure-lsp, and shell surface as plugins; every
+- **capabilities** — nREPL, the lsp index (jolt-lsp), and shell surface as plugins; every
   plugin is a cell in the workflow graph.
 
 Multiple agents work each non-trivial task: work is grounded in a kanban

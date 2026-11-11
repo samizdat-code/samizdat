@@ -84,6 +84,17 @@
   belongs in config where :timeout-ms already lives, and overrides this."
   50)
 
+(def default-stream-idle-ms
+  "How long a streamed reply that has STARTED may send nothing before the
+  call is cut and retried. A hosted model streams its reasoning, so a silent
+  minute mid-stream is a stall, not thought: in tb21-paced
+  configure-git-webserver one DeepSeek stream went quiet and held a turn ten
+  and a half minutes, because the read timeout is sized for a whole
+  generation. Before the first byte the read timeout still applies, since a
+  long prompt's prefill is legitimately silent. A provider's :stream-idle-ms
+  overrides it, and 0 turns it off."
+  120000)
+
 (def default-read-timeout-overhead-ms
   "Fixed headroom added to the budget-derived read timeout: connect, prefill of
   a long prompt, and first-token latency, none of which scale with the output
@@ -294,7 +305,12 @@
                            (str " — " (subs (str (:body resp))
                                             0 (min 300 (count (str (:body resp))))))))}
       overflow? (assoc :reason :context-overflow)
-      cap?      (assoc :reason :usage-cap))))
+      cap?      (assoc :reason :usage-cap)
+      ;; A window that will reopen, which the loop waits out rather than counting
+      ;; towards an outage.
+      (and (not overflow?) (not cap?)
+           (or (= 429 status) (retryable-code? decoded)))
+      (assoc :reason :rate-limited))))
 
 (defn- post-once* [adapter config request url]
   (let [;; Whether the prefill in the request was actually sent — the adapter
@@ -317,7 +333,8 @@
               :conn-timeout (:conn-timeout-ms config default-conn-timeout-ms)}
         resp (try
                (if streamed?
-                 (stream/post url (assoc opts :max-response-ms (:max-response-ms config))
+                 (stream/post url (assoc opts :max-response-ms (:max-response-ms config)
+                                         :idle-ms (:stream-idle-ms config default-stream-idle-ms))
                               (:on-delta request))
                  (http/post url (assoc opts :throw-exceptions false)))
                (catch Throwable e
@@ -494,11 +511,14 @@
                                     on-delta tools continuation-attempt continuation-seed
                                     accounting-scope accounting-estimate]
                            :as opts}]
-   (let [request {:messages (message/prepare messages)
+   (let [request {:messages (message/prepare messages {:replay-reasoning? (config/supports? config :replay-reasoning)})
                   :accounting-scope accounting-scope
                   :accounting-estimate accounting-estimate
                   :max-tokens (or max-tokens (:max-tokens config))
                   :temperature (or temperature (:temperature config))
+                  ;; Sampling a role's policy asked of a model that takes it.
+                  :top-p (:top-p config)
+                  :top-k (:top-k config)
                   ;; Passed through as given; the adapter decides whether it
                   ;; can honour it, and one that cannot must ignore it rather
                   ;; than approximate it.

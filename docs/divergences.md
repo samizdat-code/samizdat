@@ -1,6 +1,7 @@
 # Divergences from upstream
 
-samizdat carries four libraries in-tree, and each differs from its upstream.
+samizdat carries two libraries in-tree, and each differs from its upstream
+(parinferish went to jolt-lsp with the syntax repair that uses it).
 This is the record of how, written once, here, instead of in headers that
 drift. `docs/divergences.edn` is the machine-readable half and
 `test/samizdat/divergences_test.clj` checks the two against each other on
@@ -16,7 +17,6 @@ the upstream as an oracle, and none of them run under jolt.
 |---|---|---|---|
 | mycelium | [mycelium-clj/mycelium](https://github.com/mycelium-clj/mycelium), sha not recorded when vendored; `patch.clj`, `fragment.clj`, `manifest.clj` and `dev.clj` synced to `b7c8c6e` (2026-09-19) | `src/mycelium/` | as upstream |
 | maestro | [yogthos/maestro](https://github.com/yogthos/maestro) `src/maestro/core.cljc` | `src/maestro/` | as upstream |
-| parinferish | [oakes/parinferish](https://github.com/oakes/parinferish) `src/parinferish/core.cljc` | `src/parinferish/` | public domain, not ours to relicense |
 
 ## maestro
 
@@ -39,16 +39,6 @@ an ebb task under `karamazov-3cll.8`. Pinned by
 <!-- divergence: maestro-cljc-flattened -->
 **The `.cljc` is flattened.** Reader conditionals dropped; jolt shims
 `System/nanoTime`. A property of the file, not a behaviour.
-
-## parinferish
-
-<!-- divergence: parinferish-last-index-of-takes-a-string -->
-**`last-index-of` takes a string needle.** `count-last-line` passes `"\n"`
-rather than `\newline`: jolt's `clojure.string/last-index-of` takes a string
-where the JVM's also accepts a char. The line is reached by any multi-line
-string token, so unported it threw out of `parse` on exactly the truncated
-input the repair rung exists for. Marked `PORT CHANGE` inline. Exercised
-through `samizdat.lisp/balance`'s parinfer rung; no test isolates the needle.
 
 ## mycelium
 

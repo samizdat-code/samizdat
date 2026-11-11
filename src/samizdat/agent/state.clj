@@ -926,7 +926,7 @@
        ;; The TURN HISTORY, not :repl-written — that only tracks files a plan
        ;; declared, and a branch that wrote without one is still a branch that
        ;; is working rather than orienting.
-       (not-any? (set tools) (keep :tool (:turns branch)))
+       (not-any? #(or (contains? (set tools) (:tool %)) (:wrote %)) (:turns branch))
        (>= (count (:turns branch)) n)))
 
 (defn plan-stale?
@@ -946,7 +946,7 @@
   (let [ts (vec (:turns branch))]
     (and (seq (unwritten branch))
          (>= (count ts) n)
-         (not-any? (set tools) (keep :tool (take-last n ts))))))
+         (not-any? #(or (contains? (set tools) (:tool %)) (:wrote %)) (take-last n ts)))))
 
 (defn context-pressure
   "How close the LAST request came to the operating ceiling: nil, `:advisory`,
@@ -960,15 +960,63 @@
   over-budget-hint is already saying FOLD SOON.\" Measuring against the hard
   window means noticing pressure only once it is already fatal.
 
+  The soft ceiling follows the window when the model has one, since a size
+  that is saturation on a 32k endpoint is a quiet start on a 128k one.
+
   Pure, over the prompt-token count the provider reported."
-  [prompt-tokens {:keys [operating-ceiling advisory urgent]}]
-  (let [used (or prompt-tokens 0)]
-    (when (and (pos? used) (pos? (or operating-ceiling 0)))
-      (let [ratio (/ (double used) (double operating-ceiling))]
-        (cond (> ratio 1.0) :over
-              (>= ratio urgent) :urgent
-              (>= ratio advisory) :advisory
-              :else nil)))))
+  ([prompt-tokens policy] (context-pressure prompt-tokens policy nil))
+  ([prompt-tokens {:keys [operating-ceiling window-fraction advisory urgent]} window]
+   (let [used (or prompt-tokens 0)
+         ceiling (if (and window (pos? window) window-fraction)
+                   (* (double window) (double window-fraction))
+                   operating-ceiling)]
+     (when (and (pos? used) (pos? (or ceiling 0)))
+       (let [ratio (/ (double used) (double ceiling))]
+         (cond (> ratio 1.0) :over
+               (>= ratio urgent) :urgent
+               (>= ratio advisory) :advisory
+               :else nil))))))
+
+(defn note-lines
+  "Record `total`, the lines the run has written, against the task the branch
+  holds: :lines-written counts from where the tree stood when this task began,
+  so a split task's parts start clean."
+  [branch total]
+  (if (nil? total)
+    (assoc branch :lines-written nil)
+    (let [task (:id (:task branch))
+          base (if (= task (:lines-task branch))
+                 (or (:lines-base branch) 0)
+                 (or (:lines-total branch) 0))]
+      (assoc branch
+             :lines-task task :lines-base base :lines-total total
+             :lines-written (max 0 (- total base))))))
+
+(defn note-metrics
+  "Record what the run has made worse, for the :metrics-worse gate, whose :when stays
+  pure by reading it off the branch. nil means it could not tell, which clears it."
+  [branch found report]
+  (assoc branch :metric-findings (vec found) :metric-report report))
+
+(defn rebase-lines
+  "The held task changed with no file written: start its count here. note-lines
+  runs only on a write, so without this a split left the old task's total on the
+  branch for the over-budget gate to read, turn after turn."
+  [branch]
+  (let [task (:id (:task branch))]
+    (if (and (:lines-written branch) (not= task (:lines-task branch)))
+      (assoc branch
+             :lines-task task
+             :lines-base (or (:lines-total branch) 0)
+             :lines-written 0)
+      branch)))
+
+(defn done-streak
+  "How many of the branch's latest turns in an unbroken row called `done`."
+  [branch]
+  (->> (rseq (vec (:turns branch)))
+       (take-while #(= "done" (str (:tool %))))
+       count))
 
 (defn squeeze-context
   "Tighten this branch's compaction budget one notch (karamazov-d41).
@@ -982,6 +1030,18 @@
   the durable record that it did."
   [branch]
   (update branch :context-squeeze (fnil inc 0)))
+
+(defn note-tree-writes
+  "Record files a turn changed on disk, given the stamps before and after it: each one is
+  discharged from the plan, and the turn is marked :wrote when it was not a file tool's
+  own write. Keeps `stamps` for the next turn to compare against."
+  [branch stamps file-tool?]
+  (let [old (or (:tree-stamps branch) {})
+        changed (vec (keep (fn [[p s]] (when (not= s (get old p)) p)) stamps))]
+    (cond-> (assoc branch :tree-stamps stamps :last-tree-changes changed)
+      (seq changed) (as-> b (reduce note-write b changed))
+      (and (seq changed) (not file-tool?) (seq (:turns branch)))
+      (update :turns (fn [ts] (conj (pop (vec ts)) (assoc (peek (vec ts)) :wrote true)))))))
 
 (defn add-turn
   "Record one turn on the branch. `entry` carries :turn, :tool, :category, and

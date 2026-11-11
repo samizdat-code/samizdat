@@ -25,7 +25,8 @@
 
   Here a basis is a list of references into the run's own record:
 
-      t12        this branch's turn 12          B2:t7   branch B2's turn 7
+      t12        this branch's turn 12 (or, in a directive, the addressed
+                 branch's)                      B2:t7   branch B2's turn 7
       a#3 / p#3  an artifact of this run        s#2     a shared one
       sz-…       a task                         k-…     a memory
 
@@ -42,10 +43,17 @@
 (defn- check
   "Why reference `r` does not resolve for the branch `ctx` names, as a
   keyword, or nil when it does."
-  [{:keys [conn run-id branch]} r]
+  [{:keys [conn run-id branch addressed]} r]
   (let [r (str r)]
     (if-let [[_ bid n] (re-matches #"(?:([A-Za-z0-9._~-]+):)?t(\d+)" r)]
-      (when-not (journal/branch-turn conn run-id (or bid (:id branch)) (parse-long n))
+      ;; A bare turn is the caller's, or, for a directive, the addressed
+      ;; branch's: a steer rests on what that branch did.
+      ;; The supervisor watches the whole run, so its bare turn may be any
+      ;; branch's (its `remember` cites the implementer's turns).
+      (when-not (if (and (nil? bid) (= "supervisor" (some-> (:role branch) name)))
+                  (journal/run-turn conn run-id (parse-long n))
+                  (some #(journal/branch-turn conn run-id % (parse-long n))
+                        (if bid [bid] (distinct (remove nil? [(:id branch) addressed])))))
         :no-such-turn)
       (if-let [[_ space n] (re-matches #"([aps])#(\d+)" r)]
         (when-not (if (= "s" space)
@@ -69,10 +77,20 @@
   "A tool argument as a list of references: a vector, or one string of them
   separated by commas or whitespace."
   [v]
+  ;; A list may arrive JSON-encoded as one string ("[\"t3\", \"t4\"]"), so
+  ;; brackets and quotes around a reference are punctuation, not part of it.
+  ;; And a branch-qualified turn written either way round ("t122/B1",
+  ;; "B1/t122") is the canonical "B1:t122".
   (vec (remove #(= "" %)
-               (cond (sequential? v) (map str v)
-                     (some? v) (clojure.string/split (str v) #"[\s,]+")
-                     :else []))))
+               (map #(let [r (clojure.string/replace % #"^[\[\"']+|[\]\"']+$" "")]
+                       (if-let [[_ t b] (re-matches #"(t\d+)/([A-Za-z0-9._~-]+)" r)]
+                         (str b ":" t)
+                         (if-let [[_ b t] (re-matches #"([A-Za-z0-9._~-]+)/(t\d+)" r)]
+                           (str b ":" t)
+                           r)))
+                    (cond (sequential? v) (map str v)
+                          (some? v) (clojure.string/split (str v) #"[\s,]+")
+                          :else [])))))
 
 (defn refusal
   "The refusal text for `bad` (from `unresolved`)."

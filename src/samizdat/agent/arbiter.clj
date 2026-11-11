@@ -40,7 +40,8 @@
   budget key each spends against. This namespace filters on those, sorts on
   those, and takes the first. So a project retunes what the harness says to a
   branch, and when, by editing gates.edn — not by editing this."
-  (:require [samizdat.agent.gates :as gates]
+  (:require [clojure.string :as str]
+            [samizdat.agent.gates :as gates]
             [samizdat.agent.state :as state]
             [samizdat.util :as util]))
 
@@ -50,6 +51,8 @@
   not only what it chose."
   [ctx]
   (->> (gates/gates)
+       ;; A style names the gates it keeps (:style-gates); without one, all may speak.
+       (filter (fn [g] (or (nil? (:style-gates ctx)) (contains? (:style-gates ctx) (:gate g)))))
        (filter (fn [g] (and ((:when g) ctx)
                             (not (gates/budget-exceeded? g (:branch ctx))))))
        (sort-by :priority)))
@@ -77,13 +80,24 @@
   :priority :passed-over}. `:passed-over` names the gates that also held, which
   is what makes the gate tally's co-occurrence column readable — a gate that
   only ever fires alone tells you something different from one that is
-  perpetually outranked."
+  perpetually outranked.
+
+  A gate marked `:ride-along` in gates.edn does not compete for the boundary:
+  its message is appended to the steer that wins, and it is the steer only
+  when nothing else holds. A report the branch should read is not a reason to
+  silence the gate that would have steered it (karamazov-oi16.6). A gate
+  marked `:carries-directive` puts the queued directive's `:expect` on the
+  decision, for settle to judge the steer by (karamazov-oi16.7)."
   [ctx]
-  (let [candidates (eligible ctx)]
-    (when-let [chosen (first candidates)]
+  (let [candidates (eligible ctx)
+        {riders true steers false} (group-by (comp boolean :ride-along) candidates)
+        chosen (or (first steers) (first riders))
+        riders (remove #(= (:gate %) (:gate chosen)) riders)]
+    (when chosen
        {:gate (:gate chosen)
         :priority (:priority chosen)
-        :message ((:message chosen) ctx)
+        :message (apply str ((:message chosen) ctx)
+                        (map #(str "\n\n" ((:message %) ctx)) riders))
         :prediction ((:prediction chosen) ctx)
         ;; The tool this gate's prediction names, when it names exactly one.
         ;; Carried so the steer can be prefilled instead of merely asked for.
@@ -92,7 +106,10 @@
         ;; gate's own data, applied by loop/apply-effects.
         :effect (:effect chosen)
         :window (:window chosen)
-        :passed-over (mapv :gate (rest candidates))})))
+        :expect (when (:carries-directive chosen)
+                  (some-> (:directive ctx) :expect str not-empty))
+        :riders (mapv :gate riders)
+        :passed-over (mapv :gate (rest steers))})))
 
 (defn prefill-for
   "The partial assistant text that forecloses a prose answer on the steered
@@ -113,7 +130,13 @@
   [decision]
   (when decision
     (if-let [t (:tool decision)]
-      (str "```tool-call\n{\"name\": \"" t "\"")
+      (str "```tool-call\n{\"name\": \"" t "\""
+           ;; Opened as far as the argument the tool cannot do without
+           ;; (gates.edn :prefill-args): a bare name let a forced done close at
+           ;; once, with no answer, be refused, and be forced again until the
+           ;; clock ran out — 39 times on tb21-code's torch-pipeline-parallelism.
+           (when-let [arg (get (gates/threshold :prefill-args) t)]
+             (str ", \"args\": {\"" arg "\": \"")))
       "```tool-call\n")))
 
 (def ^:private forceable
@@ -190,7 +213,8 @@
   :settle-called vocabulary. Kept beside the `case` below and asserted
   against it by the coherence test, so a gate that falls out of both is
   caught at test time rather than by settling :unmet forever."
-  #{:stuck :prologue-cap :progress-stalled :file-thrash :human-directive :refused-again})
+  #{:stuck :prologue-cap :progress-stalled :file-thrash :human-directive :directive-notice
+    :refused-again})
 
 (defn settle
   "Decide whether an open prediction came true, given what the branch did.
@@ -209,7 +233,8 @@
   on the third turn of a two-turn window used to settle :unmet and read
   exactly like advice ignored. The window is now the promptness bar and the
   grace (gates.edn :prediction-grace-turns) is the did-it-happen-at-all bar."
-  [{:keys [gate turn window]} {:keys [current-turn tools-called branch-before branch-after]}]
+  [{:keys [gate turn window expect addressed]}
+   {:keys [current-turn tools-called branch-before branch-after action-text]}]
   (let [settle-called (gates/tool-vocab :settle-called)
         elapsed (- current-turn turn)
         late? (> elapsed window)
@@ -276,7 +301,19 @@
         ;; the refused call and the one that replaces it are both `shell`
         ;; (karamazov-q1tt).
         :refused-again (nil? (:last-refused branch-after))
-        :human-directive true
+        ;; Judged on what it asked for (karamazov-oi16.7): its `expect`, a
+        ;; tool name or a fragment of the call, when the issuer gave one;
+        ;; otherwise not repeating the action the branch was taking when it
+        ;; arrived. It used to be `true`, so every directive was "acted on".
+        :human-directive (let [e (some-> expect str str/trim str/lower-case not-empty)
+                               act (str/lower-case (str action-text))]
+                           (cond
+                             e (boolean (or (some #(= e (str/lower-case (str %))) tools-called)
+                                            (str/includes? act e)))
+                             (some? addressed) (not= (str addressed) (str action-text))
+                             :else true))
+        ;; A notice asks for nothing, so there is nothing to miss.
+        :directive-notice true
         (tools-met? gate))
       (if late? :met-late :met)
 

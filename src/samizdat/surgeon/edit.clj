@@ -12,7 +12,7 @@
             [rewrite-clj.parser :as parser]
             [rewrite-clj.zip :as z]
             [samizdat.resource.workspace :as workspace]
-            [samizdat.surgeon.outline :as outline]))
+            [jolt-lsp.surgeon.outline :as outline]))
 
 (defn- refuse!
   [error data]

@@ -35,6 +35,8 @@
             [samizdat.agent.tools.manifest]
             [samizdat.store.db :as db]
             [samizdat.agent.state :as state]
+            [samizdat.store.journal :as journal]
+            [samizdat.store.runs :as runs]
             [samizdat.store.userspace :as us]
             [samizdat.userspace :as userspace]
             [samizdat.workflow :as wf]))
@@ -181,7 +183,7 @@
   ;; turn-manifest's throw: `repl`'s four cells are pure functions of an
   ;; unchanging branch, so :declare's :empty edge back to :start is an
   ;; infinite pure cycle with no model call to break it and no step cap
-  ;; anywhere. Under workflow/run! `:run :loop "repl"` did not fail, it HUNG,
+  ;; anywhere. Under wf/run! `:run :loop "repl"` did not fail, it HUNG,
   ;; which is worse than the beam's throw.
   (let [conn (db/open! ":memory:")]
     (doseq [nm ["beam"]]
@@ -487,7 +489,7 @@
 
 (deftest the-beam-driver-runs-a-whole-run-manifest-end-to-end
   ;; THE STRUCTURAL BLIND SPOT karamazov-emw names: every other test of these
-  ;; flows drives workflow/run!, which carries data across a back edge, while
+  ;; flows drives wf/run!, which carries data across a back edge, while
   ;; POST /v1/runs drives beam/run!, which turn-slices. That is how the :start
   ;; back edge shipped — no behavioural test could see it.
   (with-redefs [judge/deterministic-block (constantly nil)
@@ -646,7 +648,7 @@
   ;; karamazov-ioo.20's leftover, and the same shape its own commit message
   ;; describes: the two drivers were unified for what a TURN is and left
   ;; apart for how a BRANCH OPENS. `workflow-prompt` had exactly one caller,
-  ;; the single-branch workflow/run!, so `:run :loop "review"` through
+  ;; the single-branch wf/run!, so `:run :loop "review"` through
   ;; POST /v1/runs — which drives beam/run! — ran the review GRAPH under the
   ;; build-a-feature system prompt. review.edn's own comment says "the
   ;; manifest declares the ROLE"; in production it declared the routing and
@@ -961,3 +963,39 @@
                                                  :rationale "r"})))
                              "No v9")))
         (finally (userspace/unbind!))))))
+
+(deftest an-edit-reaches-the-run-that-is-going
+  ;; karamazov-i692. The turn loop was compiled once at run start, so a supervisor
+  ;; could only fix the run after the one in front of it.
+  (let [conn (db/open! ":memory:")
+        known (wf/compile-turn-loop conn "loop")]
+    (testing "nothing changed: nothing to recompile"
+      (is (nil? (wf/refresh-turn-loop conn "loop" known nil))))
+    (testing "a new manifest version comes back compiled"
+      (us/save! conn :manifest "loop" (str (:body (us/load-latest conn :manifest "loop")) "\n;; tuned\n")
+                "project" "tuned")
+      (let [fresh (wf/refresh-turn-loop conn "loop" known nil)]
+        (is (> (:version fresh) (:version known)))
+        (is (some? (:compiled fresh)))
+        (is (nil? (wf/refresh-turn-loop conn "loop" fresh nil)) "and is then what is known")))
+    (testing "a reloaded cell set recompiles too, because a compile binds handlers"
+      (is (some? (wf/refresh-turn-loop conn "loop" (assoc known :version (:version (us/load-latest conn :manifest "loop"))
+                                                          :cells {:older :set})
+                                       nil))))))
+
+(deftest the-beam-keeps-the-running-loop-when-an-edit-will-not-compile
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        known (wf/compile-turn-loop conn "loop")
+        ctx {:conn conn :run-id rid :loop-name "loop" :turn-workflow (:compiled known)
+             :live-loop (atom known)}]
+    (with-redefs [wf/refresh-turn-loop (fn [& _] (throw (ex-info "will not compile" {})))]
+      (is (identical? (:compiled known) (:turn-workflow (beam/with-live-loop ctx)))))
+    (is (= "will not compile" (:error (journal/last-note conn rid :loop-refresh-failed))))
+    (testing "a fresh compile becomes the round's loop, and is noted"
+      (with-redefs [wf/refresh-turn-loop (fn [& _] {:version 99 :compiled :new-loop :iterating? true})]
+        (is (= :new-loop (:turn-workflow (beam/with-live-loop ctx))))
+        (is (= 99 (:version (journal/last-note conn rid :loop-refreshed))))))
+    (testing "an edit that stops being a per-turn loop is not swapped in"
+      (with-redefs [wf/refresh-turn-loop (fn [& _] {:version 100 :compiled :whole-run :iterating? false})]
+        (is (= :new-loop (:turn-workflow (beam/with-live-loop ctx))))))))

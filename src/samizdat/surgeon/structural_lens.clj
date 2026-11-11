@@ -12,9 +12,9 @@
             [clojure.string :as str]
             [rewrite-clj.zip :as z]
             [samizdat.resource.workspace :as workspace]
-            [samizdat.surgeon.cljc.walk :as cwalk]
-            [samizdat.surgeon.forms :as forms]
-            [samizdat.surgeon.outline :as outline]))
+            [jolt-lsp.surgeon.cljc.walk :as cwalk]
+            [jolt-lsp.surgeon.forms :as forms]
+            [jolt-lsp.surgeon.outline :as outline]))
 
 (defn- one-complete-form
   [value error-type label]

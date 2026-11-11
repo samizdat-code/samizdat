@@ -13,6 +13,7 @@
             [samizdat.agent.gates :as gates]
             [samizdat.agent.loop :as aloop]
             [samizdat.agent.orient :as orient]
+            [samizdat.engine.proc :as proc]
             [samizdat.store.db :as db]
             [samizdat.store.runs :as runs]))
 
@@ -104,3 +105,28 @@
         (is (= "THE BLOCK" (:opening_context (runs/get-run c rid))))
         (is (nil? (:opening_context (runs/get-run c bare)))))
       (finally (db/close c)))))
+
+(deftest a-symlink-out-of-the-project-is-not-read
+  ;; Found by jolt-metrics listing under-root as unused: the walk followed a file symlink
+  ;; out of the root, and what it reads can go into the prompt and on to the provider.
+  (let [base (str "/tmp/samizdat-orient-" (System/nanoTime))
+        root (str base "/proj")
+        secret (str base "/secret.clj")
+        tree @#'orient/read-tree
+        policy {:max-files 100 :max-file-chars 100000 :max-total-chars 1000000 :skip-dirs []}]
+    (.mkdirs (java.io.File. (str root "/src")))
+    (spit secret "(defn leaked [] :secret)\n")
+    (spit (str root "/src/a.clj") "(defn kept [] 1)\n")
+    (spit (str root "/src/real.clj") "(defn real [] 2)\n")
+    (proc/run {:dir root} "ln" "-s" secret "src/out.clj")
+    (proc/run {:dir root} "ln" "-s" (str root "/src/real.clj") "src/in.clj")
+    (try
+      (let [read (tree root policy)
+            rels (set (map first read))]
+        (is (contains? rels "src/a.clj"))
+        (is (not-any? #(str/includes? % "secret") rels) (pr-str rels))
+        (is (not (str/includes? (pr-str read) "leaked")))
+        (testing "a link to something inside the project still counts, once"
+          (is (contains? rels "src/real.clj"))
+          (is (= 2 (count rels)) (pr-str rels))))
+      (finally (fs/delete-tree base)))))

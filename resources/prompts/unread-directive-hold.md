@@ -1,0 +1,1 @@
+`done` refused for now: a directive from the {{issuers}} is on its way to you and has not been delivered yet. It arrives at your next turn. Read it, act on what it says, and call `done` again once you have.

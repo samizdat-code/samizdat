@@ -129,3 +129,28 @@
           (is (= "partial answer"
                  (get-in (json/read-str (:partial-body (ex-data e)) :key-fn keyword)
                          [:choices 0 :message :content]))))))))
+
+(deftest a-stream-that-stalls-after-it-started-is-cut-at-the-idle-bound
+  ;; tb21-paced configure-git-webserver: one DeepSeek stream went quiet after
+  ;; it had started and held the turn ten and a half minutes of a fifteen-
+  ;; minute task, because the only bounds were a per-read socket timeout sized
+  ;; for a whole generation and a total deadline checked between chunks. A
+  ;; started stream that sends nothing for :idle-ms is closed, so the read
+  ;; fails and the client's retry takes over.
+  (with-server (fn [_]
+                 (let [ch (async/chan 2)]
+                   (future
+                     (rsse/send! ch {:data (json/write-str (chunk {:content "partial"}))})
+                     (Thread/sleep 20000)
+                     (async/close! ch))
+                   {:status 200 :headers {"Content-Type" "text/event-stream"} :body ch}))
+    (fn [port]
+      (let [t0 (System/currentTimeMillis)
+            r (try (stream/post (str "http://127.0.0.1:" port "/v1/chat/completions")
+                                {:headers {} :body "{}" :socket-timeout 30000 :conn-timeout 2000
+                                 :idle-ms 1000}
+                                (fn [_]))
+                   (catch Throwable e e))
+            took (- (System/currentTimeMillis) t0)]
+        (is (instance? Throwable r) "a stall is a failure, not an answer")
+        (is (< took 8000) (str "cut near the idle bound, not the socket timeout: " took "ms"))))))

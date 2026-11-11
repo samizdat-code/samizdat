@@ -78,6 +78,7 @@
             [samizdat.agent.tools.findings]
             [samizdat.agent.tools.mcp]
             [samizdat.agent.tools.wait]
+            [samizdat.agent.tools.check]
             [samizdat.agent.tools.papercuts]
             [samizdat.agent.tools.battery]
             [samizdat.agent.tools.policy]
@@ -383,3 +384,35 @@
 (def tool-names base/tool-names)
 (def answer-tokens ship/answer-tokens)
 (def uncovered-tokens ship/uncovered-tokens)
+
+;; --- several calls from one reply --------------------------------------------
+
+(defn batchable?
+  "Whether a call a reply sent before its last may run too: anything but what ends a turn
+  or reshapes the harness, gates.edn :call-batch :never."
+  [{:keys [name args]}]
+  (boolean (and (map? args)
+                (not (contains? (:never (gates/threshold :call-batch)) name)))))
+
+(defn run-batched
+  "Run a reply's earlier calls in the order sent, up to :max-extra, each on the branch the
+  one before left, as the lean harnesses do. Returns {:text :ran-names :still-dropped
+  :branch}; a refused call counts as not run."
+  [ctx {:keys [dropped dropped-calls]}]
+  (let [{:keys [max-extra result-chars]} (gates/threshold :call-batch)
+        step (fn [{:keys [ran still branch] :as acc} call]
+               (let [call-ctx (assoc ctx :branch branch :tool-name (:name call) :args (:args call))]
+                 (if (and (< (count ran) max-extra) (batchable? call) (not (phase-refusal call-ctx)))
+                   (let [r (run-tool call-ctx)
+                         out (str (:result r))]
+                     (assoc acc
+                            :branch (or (:branch r) branch)
+                            :ran (conj ran {:name (:name call)
+                                            :result (subs out 0 (min result-chars (count out)))})))
+                   (assoc acc :still (conj still (:name call))))))
+        {:keys [ran still branch]} (reduce step {:ran [] :still [] :branch (:branch ctx)} dropped-calls)]
+    {:text (if (seq ran) (prompt/render "calls-batched" {:calls ran}) "")
+     :ran-names (mapv :name ran)
+     :branch branch
+     :still-dropped (if dropped-calls still (vec dropped))}))
+

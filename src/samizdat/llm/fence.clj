@@ -578,7 +578,65 @@
                    :args (reduce (fn [acc [_ k attrs v]] (assoc acc (keyword k) (xml-value attrs v)))
                                  {} (re-seq parameter-re (or body "")))}
             dsml (assoc :dsml? true)))))))
+;; WHAT IS LEFT OF A CALL WHEN THE OPENER IS GONE. deepseek-flash's DSML reaches
+;; the text damaged: the `<invoke name=...>` missing with the parameters intact,
+;; the tool's name written as an empty parameter, or as `name` and `args`
+;; parameters, the last parameter or the invoke never closed. 43 no-call turns
+;; in Terminal-Bench next-30, some of them after thousands of tokens of thought.
+;; Which tool a set of parameters means is policy: gates.edn :orphan-call, handed
+;; in by the seam below so this namespace stays free of the workflow layer.
+(def ^:private orphan-tools (atom nil))
 
+(defn install-orphan-tools!
+  "Install the ordered [[parameter-names tool] ...] a nameless call is read by."
+  [table]
+  (reset! orphan-tools table))
+
+(def ^:private open-invoke-re #"(?s)<invoke\s+name=\"([^\"]+)\"[^>]*>(.*)\z")
+(def ^:private empty-param-re #"<parameter\s+name=\"([^\"]+)\"[^>]*>\s*(?=<parameter\b)")
+(def ^:private open-param-re #"(?s)<parameter\s+name=\"([^\"]+)\"([^>]*)>(.*)\z")
+
+(defn- loose-params
+  "Every parameter in `body` as a map, the last allowed to run to the end of
+  the text. An `</invoke>` left in the last value is not part of it."
+  [body]
+  (let [closed (re-seq parameter-re body)
+        tail (str/replace body parameter-re "")
+        tail (when-let [[_ k attrs v] (re-find open-param-re tail)] [k attrs v])
+        args (reduce (fn [acc [_ k attrs v]] (assoc acc (keyword k) (xml-value attrs v))) {} closed)]
+    (if-let [[k attrs v] tail]
+      (assoc args (keyword k) (xml-value attrs (str/replace v #"(?s)\s*(?:</invoke[^>]*>|</function_calls>|```)\s*\z" "")))
+      args)))
+
+(defn- tool-for-params
+  "The tool the policy table names for exactly these parameter names."
+  [args]
+  (let [have (set (map name (keys args)))]
+    (some (fn [[needs tool]] (when (every? have needs) tool)) @orphan-tools)))
+
+(defn- orphan-call
+  "A call whose opener or closers were lost, as {:name :args}, or nil when the
+  text cannot be read as one. Only reached where the harness was about to answer
+  `no tool-call block`, so it can lose nothing that was not already lost."
+  [response]
+  (let [s (undsml response)]
+    (if-let [[_ nm body] (re-find open-invoke-re s)]
+      (let [args (loose-params body)]
+        (when (seq args) {:name nm :args args}))
+      (when (str/includes? s "<parameter")
+        (let [empty-name (second (re-find empty-param-re s))
+              s' (str/replace s empty-param-re "")
+              args (loose-params s')]
+          (cond
+            (and (string? (:name args)) (map? (:args args)))
+            {:name (:name args) :args (:args args)}
+
+            (and empty-name (seq args))
+            {:name empty-name :args args}
+
+            :else
+            (when-let [tool (tool-for-params args)]
+              {:name tool :args args})))))))
 
 ;; Qwen's chat template wraps its native calls in <tool_call> tags around
 ;; plain JSON. Under a prefilled fence the model emits prose then its native
@@ -785,7 +843,9 @@
       (or (when-let [x (xml-call response)]
             (assoc x :fences 0 :xml-call? true))
           (when-let [x (tagged-call response)]
-            (assoc x :fences 0 :tagged-call? true)))
+            (assoc x :fences 0 :tagged-call? true))
+          (when-let [x (orphan-call response)]
+            (assoc x :fences 0 :xml-call? true :auto-repaired? true)))
       (when (seq bodies)
       (let [body (peek bodies)
             n (count fenced)
@@ -807,7 +867,15 @@
                    ;; the turn can say so rather than leave the model waiting
                    ;; on a result that is never coming (run de04432c).
                    (> n 1) (assoc :dropped (mapv #(or (second (re-find #"\"name\"\s*:\s*\"([^\"]+)\"" %)) "?")
-                                                 (pop fenced))))
+                                                 (pop fenced))
+                                  ;; The same calls whole, for the ones that may
+                                  ;; still run. Position for position with :dropped.
+                                  :dropped-calls (mapv (fn [b]
+                                                         (let [{:keys [ok value]} (read-json (repair-json b))]
+                                                           (if (and ok (map? value) (string? (:name value)))
+                                                             (select-keys value [:name :args])
+                                                             {:name (or (second (re-find #"\"name\"\s*:\s*\"([^\"]+)\"" b)) "?")})))
+                                                       (pop fenced))))
             first-try (read-json body)]
         (if (:ok first-try)
           (let [parsed (:value first-try)]
@@ -854,7 +922,9 @@
                        (if-let [x (or (some-> (tagged-call body)
                                               (assoc :tagged-call? true))
                                       (some-> (xml-call body)
-                                              (assoc :xml-call? true)))]
+                                              (assoc :xml-call? true))
+                                      (some-> (orphan-call body)
+                                              (assoc :xml-call? true :auto-repaired? true)))]
                          (merge base x)
                          (parse-error msg (cond-> base
                                             where (assoc :position where)))))]

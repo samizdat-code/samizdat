@@ -1321,7 +1321,7 @@
     (testing "GLM drops to low, the least it will think"
       (let [b (body :glm)]
         (is (= "low" (:reasoning_effort b)))
-        (is (not (contains? b :thinking)))))
+        (is (= {:type "enabled"} (:thinking b)))))
     (testing "a plain OpenAI-compatible endpoint keeps the literal value"
       (let [b (body :openai)]
         (is (= "none" (:reasoning_effort b)))
@@ -2543,3 +2543,50 @@
         (is (= "fitted" (get-in (second @calls) [:messages 3 :content])))
         (is (= :continuation (get-in (second @calls) [:accounting-estimate])))
         (is (= [:continuation] (:wire response)))))))
+
+(deftest compaction-measures-the-conversation-not-the-system-prompt
+  ;; karamazov-0wvc.1: the threshold counted the frame. A system prompt longer
+  ;; than :compaction-chars had every branch compacting from its first turn past
+  ;; :keep-pairs, however little it had done, and on Terminal-Bench the agent
+  ;; forgot its own finished work.
+  (let [pair (fn [i] [{:role "assistant" :turn i :content (str "call " i)}
+                      {:role "user" :turn i :content (str "result " i)}])
+        frame [{:role "system" :content (apply str (repeat 60000 "s"))}
+               {:role "user" :content "the problem"}]
+        msgs (into frame (mapcat pair (range 1 21)))
+        turns (mapv (fn [i] {:turn i :tool "shell" :category :success}) (range 1 21))]
+    (testing "a large frame and a short conversation stay verbatim"
+      (is (= msgs (message/compact msgs turns {:keep-pairs 4 :threshold-chars 50000 :batch 1}))))
+    (testing "a conversation over the threshold still compacts"
+      (let [long-msgs (into frame (mapcat (fn [i]
+                                            [{:role "assistant" :turn i :content (str "call " i)}
+                                             {:role "user" :turn i
+                                              :content (apply str (repeat 5000 "r"))}])
+                                          (range 1 21)))
+            out (message/compact long-msgs turns {:keep-pairs 4 :threshold-chars 50000 :batch 1})]
+        (is (= (first long-msgs) (first out)))
+        (is (not= long-msgs out))))))
+
+(deftest compaction-measures-what-goes-over-the-wire
+  ;; karamazov-0wvc.1: thinking is stripped before a request, so counting it
+  ;; compacted a branch for text the provider never saw.
+  (let [thought (apply str (repeat 2000 "t"))
+        msgs (into [{:role "system" :content "s"} {:role "user" :content "p"}]
+                   (mapcat (fn [i] [{:role "assistant" :turn i
+                                     :content (str "<think>" thought "</think>call " i)}
+                                    {:role "user" :turn i :content (str "result " i)}])
+                           (range 1 21)))
+        turns (mapv (fn [i] {:turn i :tool "shell" :category :success}) (range 1 21))]
+    (is (= msgs (message/compact msgs turns {:keep-pairs 4 :threshold-chars 5000 :batch 1})))))
+
+(deftest a-rate-limit-says-so-when-its-retries-run-out
+  (let [a (registry/adapter-for :glm)
+        cfg {:model "m" :max-retries 0}
+        reason (fn [status body]
+                 (with-redefs [http/post (fn [& _] {:status status :body (json/write-str body)})]
+                   (try (client/chat a cfg [{:role "user" :content "x"}]) nil
+                        (catch Exception e (:reason (ex-data e))))))]
+    (is (= :rate-limited (reason 429 {:error {:code "1302" :message "rate limit"}})))
+    (is (= :rate-limited (reason 400 {:error {:code "1302" :message "rate limit"}})) "GLM's code under another status")
+    (is (= :usage-cap (reason 429 {:error {:code "1308" :message "达到使用上限"}})) "a cap is not a window")
+    (is (= :call-failed (reason 500 {:error {:message "boom"}})))))

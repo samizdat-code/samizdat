@@ -16,6 +16,8 @@
 ;; :tools  the tool surface. :all means every registered tool.
 ;; :core-tools optional opening presentation only; never changes authorization.
 ;; :prompt the role prompt appended to the (scoped) system prompt, or nil.
+;; :frame  optional prompt that replaces the shared system prompt for this role;
+;;         it can place the same sections with {{turn}}, {{tools}}, {{honesty}}.
 ;; :sees   what its opening context is built from — documentation for the
 ;;         reader and for the supervisor deciding what to tune; the cells that
 ;;         assemble each role's context name the same keys.
@@ -79,18 +81,39 @@
   :doc "The meta process. Does not care how the feature is implemented; cares
         whether the implementer is moving through its steps and what to tune
         when it is not. Reads the run's health, investigates the record, and
-        changes the harness — manifests, cells, prompts, policy — so the next
-        run does better. It does not write project code: that is the
+        changes the harness — manifests, cells, prompts, policy — so this run
+        and the next do better. It does not write project code: that is the
         implementer's job and doing it here hides the loop problem behind a
         patch."
   ;; `websearch` is investigation: a supervisor diagnosing an endpoint or a
   ;; library's behaviour has the same need an implementor does.
   :tools #{"intervene" "read_file" "read_digest" "inspect_clojure" "grep" "lsp" "resource" "inference" "diagnosis" "execution" "skill" "doc" "complete" "manual"
-           "introspect" "cells" "cell" "manifest" "prompt" "policy" "adopt"
+           "introspect" "cells" "cell" "reload_cells" "manifest" "prompt" "policy" "adopt"
            "fetch_turn" "fetch_artifact" "recall" "remember" "forget" "retire" "outcome"
            "experiment" "verdict" "papercut" "battery" "message" "eval" "shell" "websearch" "done" "give_up"}
   :prompt "roles/supervisor"
+  ;; Its own frame, so a run's style cannot replace it with the implementer's
+  ;; (karamazov-oi16.4): under :lean the supervisor took system-lean, which
+  ;; opens "a developer ... make the change the request asks for" and lists the
+  ;; implementer's habits, against a 27 KB suffix arguing it back out of the
+  ;; work — 32 TB 2.1 passes, 0 workflow changes.
+  :frame "supervisor-frame"
   :sees #{:run-health :gate-health :failures}}
+
+ :tester
+ {:doc "Writes the tests a hidden grader would write, from the task statement
+        alone, and runs them against the deliverable. It never reads the
+        implementation, the run's turns or its notes: its value is that it does
+        not share the implementer's blind spots (karamazov-galq)."
+  ;; No write_file or edit_file: they are confined to the project root, so the
+  ;; tester's harnesses landed in the deliverable (ctb-r6 react-lead-form). It
+  ;; writes its tests under /tmp/blind-tests with the shell.
+  :tools #{"shell" "eval" "read_file" "glob" "done" "give_up"}
+  :prompt "roles/tester"
+  :output [:map
+           [:ran :int]
+           [:failing [:vector :string]]]
+  :sees #{:requirement}}
 
  :reviewer
  {:doc "Reads the work against what was asked and returns PASS or REVISE. It
@@ -124,6 +147,48 @@
            "fetch_turn" "fetch_artifact" "mcp" "done" "give_up"}
   :prompt "roles/answerer"
   :sees #{:problem :skills}}
+
+ :planner
+ {:doc "One call: reads the problem, writes the plan and the first task list. Holds
+        no tools, and neither do the ideator, manager and summarizer: each is the
+        method's fresh context, reading only what the ledger hands it."
+  :tools #{}
+  :prompt nil
+  :sees #{:problem}}
+
+ :ideator
+ {:doc "One call: proposes an approach from the technique family its directive
+        names, in prose. Never sees the other ideator. Code is stripped from its
+        reply, because a later worker implements."
+  :tools #{}
+  :prompt nil
+  :sees #{:problem :plan}}
+
+ :manager
+ {:doc "One call per round: reads the ledger and the captured check, curates the
+        task list, names the one next task. Mechanical rules bound what it can
+        decide: it cannot ship a failing check or send back passing work without
+        a counterexample that survives being run."
+  :tools #{}
+  :prompt nil
+  :sees #{:problem :current-work :notes :tasks :latest-result :proposals}}
+
+ :summarizer
+ {:doc "One call when a worker is cut off: what it tried and how far it got, for the
+        manager to judge."
+  :tools #{}
+  :prompt nil
+  :sees #{:task :attempt}}
+
+ :solver
+ {:doc "One worker on one task in a fresh context. Writes the work, runs it, and
+        ends with RESULT, NOTES, NEXT and STATUS sections in done's answer. No board,
+        plan, memory or harness tools: the manager owns the tasks and the ledger."
+  :tools #{"read_file" "read_digest" "grep" "glob" "write_file" "edit_file" "patch"
+           "shell" "run_check" "done" "give_up"}
+  :prompt "roles/solver"
+  :frame "solver-frame"
+  :sees #{:problem :plan :notes :current-work :task}}
 
  :critic
  {:doc "One call, not a loop: the requirement, the diff, and the deterministic

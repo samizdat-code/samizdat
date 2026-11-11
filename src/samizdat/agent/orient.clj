@@ -72,7 +72,10 @@
         rels (->> (concat (fs/glob root* "*") (fs/glob root* "**/*"))
                   (map str)
                   (filter fs/regular-file?)
-                  (map #(str (fs/relativize root* (fs/canonicalize %))))
+                  ;; A file symlink is a regular file here, and what is read can reach
+                  ;; the provider, so one that leads out of the root is left alone.
+                  (keep #(under-root root* %))
+                  (map #(str (fs/relativize root* %)))
                   (remove #(skipped? % (or skip-dirs [])))
                   distinct
                   sort

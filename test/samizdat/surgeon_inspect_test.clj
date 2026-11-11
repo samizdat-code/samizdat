@@ -24,7 +24,7 @@
             [clojure.test :refer [deftest is testing]]
             [rewrite-clj.zip :as z]
             [samizdat.surgeon.edit-dsl :as edit-dsl]
-            [samizdat.surgeon.forms :as forms]
+            [jolt-lsp.surgeon.forms :as forms]
             [samizdat.surgeon.inspect :as inspect]))
 
 (def basic-source

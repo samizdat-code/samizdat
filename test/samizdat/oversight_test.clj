@@ -15,13 +15,19 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
             [ebb.core :as ebb]
+            [samizdat.agent.arbiter :as arbiter]
             [samizdat.agent.gates :as gates]
+            [samizdat.agent.roles :as roles]
+            [samizdat.agent.state :as state]
+            [samizdat.agent.tools :as tools]
             [samizdat.cells :as cells]
             [samizdat.events :as events]
+            [samizdat.prompt :as prompt]
             [mycelium.cell :as cell]
             [mycelium.core :as myc]
             [samizdat.session :as session]
             [samizdat.store.db :as db]
+            [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
             [samizdat.store.runs :as runs]
             [samizdat.userspace :as userspace]
@@ -390,6 +396,43 @@
       ((:handler (cell/get-cell! :oversight/apply)) ctx (assoc r :oversight/verdict :done))
       (is (= 1 (:errors (:signals (journal/last-note conn rid :oversight)))))
       (is (false? (:oversight/worth-a-look? (gather-now conn rid)))))))
+
+(deftest a-worker-that-cannot-land-its-answer-wakes-the-supervisor
+  ;; karamazov-i692: 12 quiet passes while done was refused three times on a
+  ;; verified program. The first look came at worker turn 39.
+  (let [floors {:unmet-floor 2 :idle-floor 25 :done-refused-floor 2}]
+    (is (not (worth-a-look? {:done-refused 1} floors)) "one refusal is the gate working")
+    (is (worth-a-look? {:done-refused 2} floors))
+    (let [since @(cells/cell-var 'cells.oversight 'since-last-look)]
+      (testing "counted from the last look"
+        (is (= 2 (:done-refused (since {:done-refused 2} nil {:idle-floor 25}))))
+        (is (= 1 (:done-refused (since {:done-refused 3} {:done-refused 2} {:idle-floor 25}))))))))
+
+(deftest nearing-the-turn-cap-is-the-supervisors-call
+  ;; How long a run may go is a decision, and `extend` is how it is made, but
+  ;; nothing asked anyone before the cap ended the run.
+  (let [floors {:unmet-floor 2 :idle-floor 25}
+        since @(cells/cell-var 'cells.oversight 'since-last-look)]
+    (is (worth-a-look? {:near-cap? true} floors))
+    (testing "once per cap"
+      (is (:near-cap? (since {:near-cap-at 300} nil {:idle-floor 25})))
+      (is (not (:near-cap? (since {:near-cap-at 300} {:near-cap-at 300} {:idle-floor 25}))))
+      (is (not (:near-cap? (since {:near-cap-at nil} nil {:idle-floor 25})))))
+    (testing "an extended cap can be asked about again"
+      (is (:near-cap? (since {:near-cap-at 400} {:near-cap-at 300} {:idle-floor 25}))))))
+
+(deftest gather-reads-refused-dones-and-the-cap-from-the-record
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p" :max-turns 10})
+        near (:near-cap-fraction (gates/threshold :oversight-limits))]
+    (is (number? near))
+    (cells/load-cells!)
+    (runs/open-branch! conn rid {:branch-id "B1" :problem "p"})
+    (doseq [t (range 1 (inc (long (* near 10))))]
+      (journal/record-turn! conn rid {:branch-id "B1" :turn t :tool-name "read_file" :category :neutral}))
+    (let [g ((:handler (cell/get-cell! :oversight/gather)) {:conn conn :run-id rid :config {}} {})]
+      (is (= 10 (get-in g [:oversight/signals :near-cap-at])))
+      (is (true? (:oversight/worth-a-look? g))))))
 
 (deftest unmet-and-idle-count-from-the-last-look
   (let [since @(cells/cell-var 'cells.oversight 'since-last-look)
@@ -1051,8 +1094,8 @@
       ((:handler (cell/get-cell! :oversight/reason))
        ctx {:oversight/idle 30 :oversight/unmet 2 :oversight/turns [] :oversight/firings []}))
     (is (= 4 (:turn @seen)) "after SUP's own last turn, not another branch's")
-    (is (= 43 (:max-turns @seen)) "the cap moves with the start, so the pass still gets 40")
-    (testing "a branch with no turns yet starts at 1 under the run's cap"
+    (is (= 23 (:max-turns @seen)) "the cap moves with the start, so the pass still gets its :pass-max-turns")
+    (testing "a branch with no turns yet starts at 1 under a pass's cap"
       (let [rid2 (runs/start-run! conn {:problem "q"})]
         (with-redefs [myc/run-compiled (fn [_ rctx data]
                                          (reset! seen {:turn (:turn data) :max-turns (:max-turns rctx)})
@@ -1060,7 +1103,7 @@
           ((:handler (cell/get-cell! :oversight/reason))
            (assoc ctx :run-id rid2)
            {:oversight/idle 30 :oversight/unmet 2 :oversight/turns [] :oversight/firings []}))
-        (is (= {:turn 1 :max-turns 40} @seen))))))
+        (is (= {:turn 1 :max-turns 20} @seen))))))
 
 (deftest the-measurement-in-a-notice-reads-as-words-not-edn
   ;; Run 0f4b9b55's notice said `Measured over this session: {:turns 1,
@@ -1256,3 +1299,455 @@
     (testing "the supervisor works under its own, smaller window"
       (is (= (get-in (gates/threshold :oversight) [:context-window])
              (get-in @seen [:rctx :llm-config :context-window]))))))
+
+;; --- a workflow that asks, and a run that goes silent ------------------------
+
+(deftest an-urgent-look-skips-the-spacing-but-not-the-budget
+  (let [st {:last-at 1000 :passes 0}]
+    (is (not (ov/due? st {:now 1001 :every-ms 120000 :budget 3 :boundary? true})))
+    (is (ov/due? st {:now 1001 :every-ms 120000 :budget 3 :urgent? true}))
+    (is (not (ov/due? (assoc st :passes 3) {:now 1001 :every-ms 120000 :budget 3 :urgent? true}))
+        "a bound a signal can lift is not a bound")))
+
+(deftest silence-counts-from-the-later-of-the-last-event-and-the-last-look
+  (is (ov/silent? {:last-event-at 0 :last-at 0} 100 100))
+  (is (not (ov/silent? {:last-event-at 50 :last-at 0} 100 100)))
+  (is (not (ov/silent? {:last-event-at 0 :last-at 50} 100 100)) "looked already: once per silence")
+  (is (not (ov/silent? {:last-event-at 0 :last-at 0} 100 nil)) "off when not configured"))
+
+(deftest a-workflow-signal-buys-a-look-with-no-turn-ending
+  ;; A side-call stage ends no turns, so a stream that only woke on :turn saw a
+  ;; whole run die without a single pass.
+  (let [ch (events/subscribe)
+        passes (atom 0)
+        stop (ov/start! {:enabled? true :poll-ms 5 :every-ms 100000 :budget 10
+                         :run-id "R-signal" :event-ch ch}
+                        (fn [_] (swap! passes inc) {:carry nil :spent? false}))]
+    (try
+      (Thread/sleep 80)
+      (is (= 1 @passes) "the first look")
+      (events/publish! {:kind :progress :run-id "R-signal" :branch-id "B1"})
+      (Thread/sleep 80)
+      (is (= 1 @passes) "ordinary progress waits for its boundary")
+      (events/publish! {:kind :workflow-signal :run-id "R-signal"})
+      (Thread/sleep 80)
+      (is (= 2 @passes) "the workflow asked, so the spacing does not apply")
+      (finally (stop) (events/unsubscribe! ch)))))
+
+(deftest a-silent-run-gets-a-look-and-the-pass-is-told
+  (let [ch (events/subscribe)
+        seen (atom [])
+        clock (atom 0)
+        stop (ov/start! {:enabled? true :poll-ms 5 :every-ms 100000 :budget 10 :silent-ms 1000
+                         :run-id "R-silent" :event-ch ch :now-fn (fn [] @clock)}
+                        (fn [ctx] (swap! seen conj (:silent-for-ms ctx)) {:carry nil :spent? false}))]
+    (try
+      (Thread/sleep 60)
+      (is (= 1 (count @seen)))
+      (is (nil? (first @seen)) "the opening look is not about silence")
+      (reset! clock 5000)
+      (Thread/sleep 60)
+      (is (= 2 (count @seen)))
+      (is (= 5000 (second @seen)))
+      (Thread/sleep 60)
+      (is (= 2 (count @seen)) "one look per silence")
+      (finally (stop) (events/unsubscribe! ch)))))
+
+(deftest the-streams-own-turns-are-not-a-boundary
+  (let [ch (events/subscribe)
+        passes (atom 0)
+        stop (ov/start! {:enabled? true :poll-ms 5 :every-ms 0 :budget 10
+                         :run-id "R-own" :event-ch ch}
+                        (fn [_] (swap! passes inc) {:carry nil :spent? false}))]
+    (try
+      (Thread/sleep 60)
+      (events/publish! {:kind :turn :run-id "R-own" :branch-id "SUP" :turn 1})
+      (Thread/sleep 60)
+      (is (= 1 @passes))
+      (finally (stop) (events/unsubscribe! ch)))))
+
+(deftest a-workflow-signal-is-worth-a-look-once
+  (let [floors {:unmet-floor 2 :idle-floor 25}
+        since @(cells/cell-var 'cells.oversight 'since-last-look)
+        signal {:kind "stuck"}]
+    (is (worth-a-look? {:workflow-signals [signal]} floors))
+    (is (worth-a-look? {:silent? true} floors))
+    (testing "read already: not news"
+      (let [news (since {:workflow-signals [signal]} {:workflow-signals 1} {:idle-floor 25})]
+        (is (not (worth-a-look? news floors)))))
+    (testing "a new one after it is"
+      (let [news (since {:workflow-signals [signal signal]} {:workflow-signals 1} {:idle-floor 25})]
+        (is (worth-a-look? news floors))))))
+
+(deftest the-brief-says-where-the-workflow-is-and-what-reaches-it
+  ;; A template error here ended the pass exactly when a stuck team asked for it.
+  (let [brief (prompt/render "oversight-pass"
+                             {:digest "D"
+                              :workflow-signals [{:workflow "team-solve" :stage "unstick"
+                                                  :kind "stuck" :detail "same task twice"}]
+                              :silent-minutes 11
+                              :position {:workflow "team-solve" :stage "unstick" :round 2 :max-rounds 10
+                                         :gate "samples 1/2" :task "fix it"
+                                         :attempts [{:round 1 :worker "done" :gate "samples 1/2" :task "write it"}]}})]
+    (is (str/includes? brief "stuck: same task twice"))
+    (is (str/includes? brief "silent for 11 minute"))
+    (is (str/includes? brief "round 2 of 10"))
+    (is (str/includes? brief "round 1, worker done, samples 1/2: write it"))
+    (is (str/includes? brief "\"kind\": \"retask\""))))
+
+(deftest a-cancelled-pass-is-not-a-failed-one
+  ;; The run ending cancels a pass in flight, which recorded as a supervisor failure.
+  (with-redefs [journal/note! (fn [& _] (throw (ex-info "must not journal" {})))]
+    (let [state (atom {:passes 0})]
+      (is (nil? (ov/pass! {:conn :c :run-id "r"} state
+                          (fn [_] (throw (InterruptedException.))))))
+      (is (= 1 (:passes @state))))))
+
+(deftest a-command-that-keeps-failing-wakes-the-supervisor
+  ;; karamazov-oi16.4. The supervisor woke on turns since a write, which a
+  ;; branch retrying the same failing command while editing files never
+  ;; crosses; on TB its steers arrived after the run had ended. A command that
+  ;; has failed :failing-action-floor times and never worked is the stall.
+  (let [floors {:unmet-floor 2 :idle-floor 25}
+        since @(cells/cell-var 'cells.oversight 'since-last-look)]
+    (is (not (worth-a-look? {:failing-actions 0} floors)))
+    (is (worth-a-look? {:failing-actions 1} floors))
+    (testing "counted from the last look"
+      (is (= 2 (:failing-actions (since {:failing-actions 2} nil {:idle-floor 25}))))
+      (is (= 0 (:failing-actions (since {:failing-actions 2} {:failing-actions 2} {:idle-floor 25}))))
+      (is (= 1 (:failing-actions (since {:failing-actions 3} {:failing-actions 2} {:idle-floor 25})))))))
+
+(deftest the-supervisor-sees-what-became-of-its-directives
+  ;; karamazov-oi16.8. Its brief carried branch positions, failures and gate
+  ;; health, and nothing about its own steers: whether one landed, was
+  ;; refused, came too late, or was acted on.
+  (cells/load-cells!)
+  (let [outcomes interventions/outcomes
+        news @(cells/cell-var 'cells.oversight 'directive-news)
+        ivs [{:id 1 :branch_id "B1" :kind "message" :issued_by "supervisor" :status "applied"
+              :applied_at_turn 10 :payload "{\"text\":\"run pytest\",\"expect\":\"pytest\"}"}
+             {:id 2 :branch_id "B1" :kind "budget" :issued_by "supervisor" :status "rejected"
+              :disposition "refused: no workflow boundary" :payload "{\"text\":\"60\"}"}
+             {:id 3 :branch_id "B1" :kind "message" :issued_by "watch" :status "applied"
+              :applied_at_turn 4 :payload "x"}
+             {:id 4 :branch_id "B1" :kind "message" :issued_by "supervisor" :status "pending"
+              :payload "later"}]
+        firings [{:branch_id "B1" :turn 10 :gate "human-directive" :outcome "unmet"}]
+        turns [{:branch_id "B1" :turn 10 :tool_name "shell" :args "{\"command\":\"make\"}"}
+               {:branch_id "B1" :turn 11 :tool_name "shell" :args "{\"command\":\"make\"}"}]
+        os (outcomes ivs firings turns)]
+    (testing "only the supervisor's own"
+      (is (= [1 2 4] (mapv :id os))))
+    (testing "each says how it ended and what the branch did next"
+      (let [o (first os)]
+        (is (= "unmet" (:outcome o)))
+        (is (= "pytest" (:expect o)))
+        (is (= "run pytest" (:text o)))
+        (is (str/includes? (:next o) "make"))))
+    (testing "a refusal carries its reason"
+      (is (str/includes? (:disposition (second os)) "no workflow boundary")))
+    (testing "a pass is told only what changed since the last one"
+      (let [states (into {} (map (juxt :id :state)) os)]
+        (is (= [1 2 4] (mapv :id (news os nil))))
+        (is (empty? (news os states)))
+        (is (= [1] (mapv :id (news (assoc-in (vec os) [0 :state] "applied/met")
+                                   states))))))))
+
+(deftest a-branch-asking-to-ship-wakes-the-supervisor
+  ;; karamazov-oi16.11: the ship review is the supervisor's highest-leverage
+  ;; moment, and it is asked for by a :ship-review-requested note.
+  (let [floors {:unmet-floor 2 :idle-floor 25}
+        since @(cells/cell-var 'cells.oversight 'since-last-look)]
+    (is (worth-a-look? {:review-requested 1} floors))
+    (is (= 1 (:review-requested (since {:review-requested 1} nil {:idle-floor 25}))))
+    (is (= 0 (:review-requested (since {:review-requested 1} {:review-requested 1} {:idle-floor 25}))))))
+
+(deftest a-long-run-gets-a-look-after-the-check-in-interval
+  ;; ctb-r1 interleaved-vigenere: an hour and 164 turns into a two-hour task,
+  ;; on its 63rd analysis script at 16% accuracy, and the supervisor had not
+  ;; looked once: every file write reset idle, every command succeeded, and
+  ;; nothing else fires on a run that churns without progress.
+  (let [since @(cells/cell-var 'cells.oversight 'since-last-look)
+        floors {:unmet-floor 2 :idle-floor 25 :checkin-minutes 20}]
+    (is (worth-a-look? {:checkin? true} floors))
+    (testing "it is due when the interval has passed since the last spent pass"
+      (is (:checkin? (since {:minutes-since-look 21} nil floors)))
+      (is (not (:checkin? (since {:minutes-since-look 19} nil floors)))))
+    (testing "every pass shows the run's clock (ctb-r2 kv-live-surgery: ENDGAME at 30 of 120 minutes)"
+      (let [t (prompt/render "oversight-pass" {:clock {:used 30 :limit 120 :left 90}})]
+        (is (str/includes? t "30 of 120 minutes"))
+        (is (str/includes? t "90"))))
+    (testing "and the pass is told why it was woken"
+      (is (str/includes? (prompt/render "oversight-pass" {:checkin 21}) "converging")))
+    (testing "and off when the policy has no interval"
+      (is (not (:checkin? (since {:minutes-since-look 500} nil (dissoc floors :checkin-minutes))))))))
+
+(deftest tests-that-stop-improving-wake-the-supervisor
+  ;; The owner's heuristic (2026-11-09): a branch running its tests again and
+  ;; again with the pass count not moving is stuck, however busy it looks.
+  (let [since @(cells/cell-var 'cells.oversight 'since-last-look)
+        floors {:unmet-floor 2 :idle-floor 25 :plateau-runs 4}]
+    (is (worth-a-look? {:test-plateau 4} floors))
+    (is (not (worth-a-look? {:test-plateau 3} floors)))
+    (testing "a plateau the last pass saw wakes the next only after as many runs more"
+      (is (= 4 (:test-plateau (since {:test-plateau 4} nil floors))))
+      (is (= 1 (:test-plateau (since {:test-plateau 5} {:test-plateau 4} floors))))
+      (is (= 4 (:test-plateau (since {:test-plateau 8} {:test-plateau 4} floors)))))
+    (testing "the brief says what the runs reported"
+      (is (str/includes? (prompt/render "test-plateau" {:runs 4 :passed 5 :failed 2}) "5 passed")))))
+
+(deftest minutes-since-a-pass-counts-from-the-run-when-there-is-none
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})]
+    (journal/note! conn rid :run-started {:data {}})
+    (is (< (journal/minutes-since conn rid :oversight) 1) "from the run's first note")
+    (journal/note! conn rid :oversight {:data {}})
+    (is (< (journal/minutes-since conn rid :oversight) 1))))
+
+(deftest a-ship-review-is-pending-until-the-supervisor-answers
+  ;; tb21-review dna-assembly: the review was asked for mid-pass, the pass ran
+  ;; on for minutes and its answer was a directive, not the pass ending, so
+  ;; the hold ran out first. A supervisor directive after the request answers
+  ;; it, and the wait is wall-clock seconds, since a turn is 20 s or 50 s.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        state (fn [wait] (journal/review-state conn rid wait))]
+    (is (not (:supervised? (state 600))) "no supervisor stream has run yet")
+    (journal/note! conn rid :oversight-quiet {:data {}})
+    (is (:supervised? (state 600)))
+    (is (not (:pending? (state 600))) "nothing asked for")
+    (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 10 :data {}})
+    (is (:pending? (state 600)))
+    (is (not (:pending? (state 0))) "a review that never comes stops holding after the wait")
+    (testing "a directive from someone else does not answer it"
+      (interventions/submit! conn rid {:kind "message" :issued-by "watch" :payload "x"})
+      (is (:pending? (state 600))))
+    (testing "nor does a supervisor's message: it steers mid-review"
+      ;; tb21-unread make-mips: a mid-review steer released the hold, the
+      ;; done shipped, and the review itself landed after the run ended.
+      (Thread/sleep 5)
+      (interventions/submit! conn rid {:kind "message" :issued-by "supervisor" :payload "check the path"})
+      (is (:pending? (state 600))))
+    (testing "the supervisor's review does"
+      ;; Timestamps are milliseconds; keep the order unambiguous.
+      (Thread/sleep 5)
+      (interventions/submit! conn rid {:kind "review" :issued-by "supervisor" :payload "approved"})
+      (is (not (:pending? (state 600)))))
+    (testing "as does a pass ending"
+      (Thread/sleep 5)
+      (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 20 :data {}})
+      (is (:pending? (state 600)))
+      (journal/note! conn rid :oversight {:data {:verdict "done"}})
+      (is (not (:pending? (state 600)))))))
+
+(deftest a-pending-review-presses-the-supervisor-on-every-turn
+  ;; ctb-r1 interleaved-vigenere: the supervisor spent its twelve review turns
+  ;; doing the cryptanalysis itself, found the key's offsets and never sent
+  ;; anything; the hold lapsed and a 19%-correct cracker shipped. raman-fitting
+  ;; before it, the same. The prose said "send each gap as soon as you can name
+  ;; it"; a gate says it on every turn, with the seconds left.
+  (let [sup (merge (state/new-branch {:id "SUP" :problem "p"}) {:role :supervisor :turns [{:tool "shell"}]})
+        decide #(arbiter/decide (merge {:branch sup :max-turns 300
+                                        :style-gates (:gates (gates/style {:run {:style :lean}}))}
+                                       %))]
+    (let [d (decide {:review-left-seconds 200})]
+      (is (= :review-deadline (:gate d)) "fires on the supervisor while a review is out")
+      (is (str/includes? (:message d) "200")))
+    (let [d (decide {:review-left-seconds 200 :time-left-seconds 4800})]
+      (is (str/includes? (:message d) "80 minutes")
+          "and says the run's own clock, so the review's is not read as it (ctb-r2 interleaved-vigenere)"))
+    (is (not= :review-deadline (:gate (decide {}))) "and not without one")
+    (is (not= :review-deadline
+              (:gate (arbiter/decide {:branch (assoc sup :role :implementer) :max-turns 300
+                                      :style-gates (:gates (gates/style {:run {:style :lean}}))
+                                      :review-left-seconds 200})))
+        "nor on the implementer"))
+  (testing "review-state says how long the hold has left"
+    (let [conn (db/open! ":memory:")
+          rid (runs/start-run! conn {:problem "p"})]
+      (journal/note! conn rid :oversight-quiet {:data {}})
+      (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 1 :data {}})
+      (is (<= 590 (:left-seconds (journal/review-state conn rid 600)) 600)))))
+
+(deftest where-the-tester-runs-a-review-waits-for-its-report
+  ;; ctb-r5 bun-sourcemap-leak: a pass that began before the request ended
+  ;; after it, which read as the answer; the hold lifted, the done shipped,
+  ;; and the tester the next pass started was cancelled at run end.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        state (fn [] (journal/review-state conn rid 600 {:tester? true}))]
+    (journal/note! conn rid :oversight-quiet {:data {}})
+    (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 10 :data {}})
+    (Thread/sleep 5)
+    (journal/note! conn rid :oversight {:data {}})
+    (is (:pending? (state)) "a pass ending is not the answer while the tester has not reported")
+    (is (not (:pending? (journal/review-state conn rid 600))) "without the tester it is, as before")
+    (Thread/sleep 5)
+    (journal/note! conn rid :tester-report {:data {:ran 3 :failing []}})
+    (is (:pending? (state)) "the report alone is not the answer either")
+    (Thread/sleep 5)
+    (journal/note! conn rid :oversight {:data {}})
+    (is (not (:pending? (state))) "the pass that read the report is")
+    (testing "a later review, the tester having run already, is answered as before"
+      (Thread/sleep 5)
+      (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 20 :data {}})
+      (Thread/sleep 5)
+      (journal/note! conn rid :oversight {:data {}})
+      (is (not (:pending? (state)))))
+    (testing "whether the tester applies, from the run's clock"
+      (is (gates/tester-applies? {:run {:time-limit-seconds 7200}}))
+      (is (not (gates/tester-applies? {:run {:time-limit-seconds 900}}))))))
+
+(deftest failures-the-tester-found-hold-until-the-supervisor-approves
+  ;; session-window-debug rerun: the tester reported six failures, a pass that
+  ;; ended after the report read as the review's answer, and the branch shipped
+  ;; at 30 of 120 minutes with three still failing, though the supervisor had
+  ;; just told it they were fixable. With failures on record only a review
+  ;; releases the hold, and its wait counts from the report.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        state (fn [] (journal/review-state conn rid 600 {:tester? true}))]
+    (journal/note! conn rid :oversight-quiet {:data {}})
+    (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 10 :data {}})
+    (Thread/sleep 5)
+    (journal/note! conn rid :tester-report {:data {:ran 14 :failing ["t05 merge"]}})
+    (Thread/sleep 5)
+    (journal/note! conn rid :oversight {:data {}})
+    (is (:pending? (state)) "a pass ending does not release failures the tester found")
+    (Thread/sleep 5)
+    (interventions/submit! conn rid {:kind "review" :issued-by "supervisor" :payload "fixed and approved"})
+    (is (not (:pending? (state))) "the supervisor's review does")))
+
+(deftest a-done-is-held-while-the-tester-s-failing-commands-still-fail
+  ;; vf2-speedup-networkx rerun: the tester reported 130x against the 5000x
+  ;; the task states, and the supervisor approved anyway, asking only that the
+  ;; answer say so; the grader measured 164x. Its failures are commands: the
+  ;; harness reruns them before a done ships, whatever the review said.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "make it fast"})
+        failing? (atom true)
+        ran (atom [])
+        done! (fn [b turn]
+                (with-redefs [samizdat.security.policy/run-shell
+                              (fn [ctx] (swap! ran conj (get-in ctx [:args :command]))
+                                {:category (if @failing? :failure :success) :result "x"})]
+                  (tools/run-tool {:branch b :tool-name "done" :turn turn :conn conn :run-id rid
+                                   :started-ms (System/currentTimeMillis)
+                                   :config {:run {:style :lean :time-limit-seconds 7200}}
+                                   :args {:answer "Done, and fast."}})))
+        b (assoc (state/new-branch {:id "B1" :problem "make it fast"}) :ship-refused {:supervisor-review 1 :time-left 1})]
+    (journal/note! conn rid :oversight-quiet {:data {}})
+    (journal/note! conn rid :ship-review-requested {:branch-id "B1" :turn 1 :data {}})
+    (Thread/sleep 5)
+    (journal/note! conn rid :tester-report {:data {:ran 3 :failing ["cd /tmp/blind-tests && python t_speed.py — expected >= 5000x, got 130x"]}})
+    (Thread/sleep 5)
+    (let [id (interventions/submit! conn rid {:kind "review" :issued-by "supervisor" :payload "approved, say it is 42x"})]
+      (interventions/resolve! conn rid id :applied "delivered" 9))
+    (let [r (done! b 10)]
+      (is (str/includes? (str (:result r)) "t_speed.py") "held, naming what still fails")
+      (is (= ["cd /tmp/blind-tests && python t_speed.py"] @ran) "the command, not the description"))
+    (reset! failing? false)
+    (is (str/includes? (str (:result (done! b 12))) "accepted") "once it passes, the done ships")))
+
+(deftest a-blind-tester-checks-the-deliverable-from-the-task-alone
+  ;; karamazov-galq. ctb-r1..r4: most failures were hidden edge cases the
+  ;; supervisor approved after reading the code, sharing the implementer's
+  ;; blind spots. A tester that sees only the task writes the grader's tests.
+  (testing "its role can run and write tests, and cannot steer or read the run"
+    (is (roles/may-use? :tester "shell"))
+    ;; ctb-r6 react-lead-form: write_file is confined to the project, so the
+    ;; tester wrote its harnesses into /app/.blind-tests and ran the deliverable
+    ;; in place, changing its output; it writes under /tmp with the shell.
+    (is (not (roles/may-use? :tester "write_file")))
+    (is (not (roles/may-use? :tester "edit_file")))
+    (is (not (roles/may-use? :tester "intervene")))
+    (is (not (roles/may-use? :tester "fetch_turn")))
+    (is (not (roles/may-use? :tester "introspect"))))
+  (let [due? @(cells/cell-var 'cells.oversight 'tester-due?)
+        p {:enabled? true :min-clock-seconds 3600}]
+    (testing "it runs at the first review on a long clock, once"
+      (is (due? {:review-new? true :limit 7200 :ran? false} p))
+      (is (not (due? {:review-new? true :limit 900 :ran? false} p)) "not on a short clock")
+      (is (not (due? {:review-new? true :limit 7200 :ran? true} p)) "once per run")
+      (is (not (due? {:review-new? false :limit 7200 :ran? false} p)) "only when asked to ship")
+      (is (not (due? {:review-new? true :limit 7200 :ran? false} (assoc p :enabled? false))))))
+  (testing "its failures reach the supervisor's brief"
+    (let [t (prompt/render "blind-tests" {:ran 12 :failing ["python3 t.py::srcdoc — expected no <script>, got one"]})]
+      (is (str/includes? t "12"))
+      (is (str/includes? t "srcdoc"))))
+  (testing "a long clock holds the done long enough for it"
+    (let [{:keys [max-wait-seconds max-wait-long-seconds]} (gates/threshold :ship-review)]
+      (is (= max-wait-long-seconds (gates/review-max-wait {:run {:time-limit-seconds 7200}})))
+      (is (= max-wait-seconds (gates/review-max-wait {:run {:time-limit-seconds 900}})))
+      (is (= max-wait-seconds (gates/review-max-wait {}))))))
+
+(deftest a-ship-review-request-skips-the-spacing
+  ;; karamazov-oi16.11: the done is held only :ship-review :max-wait-seconds, and
+  ;; the spacing between passes is two minutes.
+  (is (contains? (ov/urgent-kinds) :ship-review-requested))
+  (is (contains? (ov/urgent-kinds) :workflow-signal)))
+
+(deftest a-done-waits-for-a-directive-the-branch-has-not-read
+  ;; tb21-review protein-assembly: the supervisor approved, then found the
+  ;; provenance claim unsupported and sent a correction; the branch's done
+  ;; landed five seconds later, before a boundary delivered it, and shipped the
+  ;; wrong answer. A queued directive holds the done until the branch reads it.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "write /app/out.txt"})
+        done! (fn [b turn]
+                (tools/run-tool {:branch b :tool-name "done" :turn turn :conn conn :run-id rid
+                                 :started-ms (System/currentTimeMillis)
+                                 :config {:run {:style :lean}}
+                                 :args {:answer "Wrote /app/out.txt and checked it."}}))
+        b (state/new-branch {:id "B1" :problem "write /app/out.txt"})
+        id (interventions/submit! conn rid {:branch-id "B1" :kind "message" :issued-by "supervisor"
+                                            :payload {:text "the lookup returned nil"}})
+        r (done! b 10)]
+    (is (str/includes? (str (:result r)) "refused") "held while the directive waits")
+    (is (str/includes? (str (:result r)) "supervisor") "and says who is waiting")
+    (interventions/resolve! conn rid id :applied "delivered" 11)
+    (is (str/includes? (str (:result (done! (:branch r) 12))) "accepted")
+        "once delivered, the done goes through")
+    (testing "a directive to another branch does not hold this one"
+      (let [b2 (state/new-branch {:id "B2" :problem "write /app/out.txt"})]
+        (interventions/submit! conn rid {:branch-id "SUP" :kind "message" :issued-by "ship-review"
+                                         :payload {:text "review"}})
+        (is (str/includes? (str (:result (done! b2 13))) "accepted"))))))
+
+(deftest a-lean-done-with-time-left-is-held-for-review
+  ;; tb21-review, first three trials: no review was ever asked for. Under :lean
+  ;; the implementer is held to the advisory rungs (:lenient-done?), and the
+  ;; review read was skipped for any advisory branch, so it never ran where it
+  ;; was meant to. Through the real done tool, lean style, a supervised run.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "write /app/out.txt"})
+        done! (fn [b turn]
+                (tools/run-tool {:branch b :tool-name "done" :turn turn :conn conn :run-id rid
+                                 :started-ms (System/currentTimeMillis)
+                                 :config {:run {:style :lean :time-limit-seconds 3600}}
+                                 :args {:answer "Wrote /app/out.txt and checked it."}}))
+        b (state/new-branch {:id "B1" :problem "write /app/out.txt"})]
+    (journal/note! conn rid :oversight-quiet {:data {}})
+    (let [r (done! b 10)]
+      (is (str/includes? (str (:result r)) "supervisor") "the done is held for the review")
+      (is (= 1 (count (journal/notes conn rid :ship-review-requested))) "and the review is asked for")
+      (is (= "B1" (:branch (first (journal/notes conn rid :ship-review-requested))))
+          "naming the branch: tb21-unread filter-js spent four minutes of its review looking for it")
+      (is (str/includes? (prompt/render "ship-review" {:branch "B1" :problem "p" :answer "a" :evidence []})
+                         "\"branch\": \"B1\"")
+          "and the brief puts it in the intervene call it shows")
+      (is (str/includes? (prompt/render "oversight-pass" {:branches ["B1" "B2"]}) "`B1`, `B2`")
+          "and every pass names the branches it can steer")
+      (is (str/includes? (prompt/render "ship-review" {:branch "B1" :wait 360 :problem "p" :answer "a" :evidence []})
+                         "360 seconds")
+          "and the review says when the hold lapses (tb21-unread raman: twelve turns, no answer sent)")
+      (is (str/includes? (str (:payload (first (filter #(= "ship-review" (:issued_by %)) (interventions/history conn rid)))))
+                         "seconds")
+          "as does the notice to a pass already running")
+      (let [told (filter #(= "ship-review" (:issued_by %)) (interventions/history conn rid))]
+        (is (= ["SUP"] (mapv :branch_id told))
+            "and a pass already running is told, at its next turn (tb21-review dna-assembly)")
+        (is (str/includes? (str (:payload (first told))) "out.txt") "with the answer it is reviewing"))
+      (let [r2 (done! (:branch r) 12)]
+        (is (str/includes? (str (:result r2)) "has not landed") "held while it is out")
+        (is (= 1 (count (journal/notes conn rid :ship-review-requested))) "asked for once")))))

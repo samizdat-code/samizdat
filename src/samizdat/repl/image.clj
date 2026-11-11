@@ -87,7 +87,7 @@
   (RFC-013). A bare `jolt nrepl-server` answers the interrupt op with
   unknown-op. base-test holds this equal to deps.edn's pin, so the two cannot
   drift."
-  "aad8baef0dfe56d288792017841f37321d8160b1")
+  "8ada4beeb100a391045ec2d93eb566b476fb46f7")
 
 (def nrepl-sdeps
   "The -Sdeps map the image is started with: nrepl, its middleware, and the
@@ -95,7 +95,7 @@
   (pr-str {:deps {'jolt-lang/nrepl {:git/url "https://github.com/jolt-lang/nrepl"
                                     :git/sha nrepl-sha}
                   'yogthos/sci {:git/url "https://github.com/yogthos/sci.git"
-                                :git/sha "1295142fc29f206dd2747963548ba038077d9205"}}
+                                :git/sha "0784dfcbe81a9469413f6aea7e6c1b9eb12a3cec"}}
            :nrepl/middleware ['nrepl.middleware/default-middleware]}))
 
 (defn spawn-argv
@@ -228,7 +228,9 @@
              ;; timed-out eval poison every later one.
              :sessions (atom #{})
              ;; What the eval bridge was last installed with (install-bridge!).
-             :bridge (atom nil)})
+             :bridge (atom nil)
+             ;; The installed code-mode helper namespace, for sessions made later.
+             :helper-ns (atom nil)})
         (let [exit (when-not (process/alive? proc)
                      (try (.exitValue ^java.lang.Process (:proc proc)) (catch Exception _ nil)))]
           (try (process/destroy-tree proc) (catch Exception _ nil))
@@ -368,14 +370,20 @@
   namespace and each callable cell id in `cells` from its own
   (samizdat.bridge/install-source). Installed again only when that set
   changed since the last install — a cell adopted mid-run reaches the next
-  eval. Returns the eval result."
-  [{:keys [bridge] :as im} tools cells config]
-  (let [sig [(set tools) (set cells)]]
-    (if (and bridge (= sig @bridge))
-      {:ok true}
-      (let [r (eval-in im (bridge/install-source tools cells 'tool config))]
-        (when (and bridge (:ok r)) (reset! bridge sig))
-        r))))
+  eval. `helpers` is the code-mode helper source (karamazov-6p51.4), or nil;
+  an edit to it installs again too. Returns the eval result."
+  ([im tools cells config] (install-bridge! im tools cells config nil))
+  ([{:keys [bridge sessions] :as im} tools cells config helpers]
+   (let [sig [(set tools) (set cells) (hash helpers)]]
+     (if (and bridge (= sig @bridge))
+       {:ok true}
+       (let [r (eval-in im (bridge/install-source tools cells 'tool config helpers
+                                                  (some-> sessions deref)))]
+         (when (and bridge (:ok r))
+           (reset! bridge sig)
+           (when-let [h (bridge/helper-ns helpers)]
+             (reset! (:helper-ns im (atom nil)) h)))
+         r)))))
 
 (defn- ensure-session!
   "Make `ns-sym` exist in the image, once, with clojure.core referred into it.
@@ -386,12 +394,14 @@
   are competing approaches and a def one makes after a fork must not appear in
   the other (`repl/fork-session` exists for exactly that), so isolation here is
   a namespace per session, which the eval op's `ns` key does honour."
-  [{:keys [transport sessions]} ns-sym]
+  [{:keys [transport sessions helper-ns]} ns-sym]
   (when (and ns-sym sessions (not (contains? @sessions ns-sym)))
     (transport/send transport
                     {"op" "eval"
                      "code" (str "(do (create-ns '" ns-sym ")"
                                  " (binding [*ns* (the-ns '" ns-sym ")] (refer-clojure))"
+                                 ;; The code-mode helpers, once installed.
+                                 " " (bridge/refer-source (some-> helper-ns deref) ns-sym)
                                  " :ok)")})
     (loop [] (when-not (some #{"done"} (get (transport/recv transport) "status")) (recur)))
     (swap! sessions conj ns-sym)))
@@ -476,7 +486,8 @@
   ([im code] (eval-in im code nil))
   ([im code session] (eval-in im code session nil))
   ([{:keys [port] :as im} code session {:keys [timeout-ms grace-ms on-request bridge-eval
-                                                poll-ms call-timeout-ms recv-timeout-ms]}]
+                                                poll-ms call-timeout-ms recv-timeout-ms
+                                                on-interrupt]}]
    (let [grace-ms (or grace-ms (gates/threshold :image-interrupt-grace-ms))
          ;; `recv-timeout-ms` alone bounds the read without the interrupt
          ;; machinery: the bridge's own polls, which must not outlive an
@@ -493,6 +504,9 @@
        (try
          (ensure-session! (assoc im :transport t) session)
          (let [sid (when timeout-ms (clone! im))
+               ;; How someone else stops this eval: an eval handed back to the
+               ;; branch while it runs on can be aborted later (karamazov-6p51.5).
+               _ (when (and on-interrupt sid) (on-interrupt #(interrupt! im sid)))
                ;; The bridge is served for exactly as long as this eval runs.
                policy (when on-request (gates/threshold :eval-bridge))
                stop-bridge (when on-request

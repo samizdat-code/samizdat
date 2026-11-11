@@ -704,12 +704,7 @@
               row (captures/capture c id)]
           (is (= :success (:category r)) (pr-str r))
           (is (str/includes? (get-in r [:captures :stdout :uri]) "shell-log:"))
-          (is (str/includes? (:result r) (get-in r [:captures :stdout :uri]))
-              "the model-facing result and its journal retain the reference")
           (is (= :complete (get-in r [:captures :stdout :status])))
-          (is (str/includes? (:result r) ":status :complete"))
-          (is (str/includes? (:result r) ":observed-bytes 4"))
-          (is (str/includes? (:result r) ":complete? true"))
           (is (= 4 (get-in r [:captures :stdout :observed-bytes])))
           (is (= 4 (get-in r [:captures :stderr :observed-bytes])))
           (is (= "complete" (:status row)))
@@ -750,6 +745,61 @@
                                    :args {:command "echo 123456789FINAL"}})]
           (is (str/includes? (:result r) "FINAL") (:result r))))
       (jolt.fs/delete-tree root))))
+
+(defn- shell-with-preview [command preview]
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "preview split"})
+          root (str (jolt.fs/create-temp-dir))
+          original gates/threshold]
+      (runs/open-branch! c rid {:branch-id "B1"})
+      (try
+        (with-redefs [samizdat.security.confine/backend (constantly :none)
+                      samizdat.approval/policy (constantly {:mode :yolo :wait-ms 1 :on-timeout :deny})
+                      gates/threshold (fn [k]
+                                        (if (= :shell-logs k)
+                                          (merge (original k) preview)
+                                          (original k)))]
+          (let [r (policy/run-shell {:conn c :run-id rid :root root :branch {:id "B1"}
+                                     :env {"PATH" (System/getenv "PATH")}
+                                     :args {:command command}})]
+            {:result (:result r)
+             :pending (executions/pending-receipts c rid "B1")}))
+        (finally (jolt.fs/delete-tree root))))))
+
+(deftest a-stream-gets-the-preview-the-other-did-not-use
+  ;; karamazov-0wvc.2: the split was fixed, so with stderr empty stdout got half
+  ;; the preview. `cat` of a 7 KB file showed 2 KB, every time, however it asked.
+  (let [preview {:preview-chars 4000 :preview-stdout-fraction 0.5}]
+    (testing "stdout has all of it when stderr is empty"
+      (let [{:keys [result]} (shell-with-preview "printf 'a%.0s' $(seq 1 3500); echo FINAL" preview)]
+        (is (str/includes? result (apply str (repeat 3500 "a"))))
+        (is (str/includes? result "FINAL"))))
+    (testing "stderr has all of it when stdout is empty"
+      (let [{:keys [result]} (shell-with-preview "printf 'e%.0s' $(seq 1 3500) >&2" preview)]
+        (is (str/includes? result (apply str (repeat 3500 "e"))))))
+    (testing "both long, the fraction still decides and the total holds"
+      (let [{:keys [result]} (shell-with-preview
+                              "printf 'a%.0s' $(seq 1 6000); printf 'e%.0s' $(seq 1 6000) >&2"
+                              preview)
+            count-of (fn [ch] (count (filter #{ch} result)))]
+        (is (<= (count-of \a) 2100))
+        (is (<= (count-of \e) 2100))
+        (is (> (count-of \a) 1500))
+        (is (> (count-of \e) 1500))))))
+
+(deftest a-foreground-shell-result-is-its-own-delivery
+  ;; karamazov-0wvc.4: the caller is holding the result, so queuing a completion
+  ;; receipt as well put a "Completed executions" directive before every turn.
+  (let [{:keys [result pending]} (shell-with-preview "echo hello" {})]
+    (is (str/includes? result "hello"))
+    (is (empty? pending)))
+  (testing "nothing was cut, so there is nothing to go and fetch"
+    (let [{:keys [result]} (shell-with-preview "echo hello" {})]
+      (is (not (str/includes? result "Captures:")))))
+  (testing "cut output says where the rest is"
+    (let [{:keys [result]} (shell-with-preview "printf 'a%.0s' $(seq 1 5000)"
+                                               {:preview-chars 100 :preview-stdout-fraction 1.0})]
+      (is (str/includes? result "Captures:")))))
 
 (deftest finalization-failure-is-publicly-and-durably-incomplete
   (with-db [c]

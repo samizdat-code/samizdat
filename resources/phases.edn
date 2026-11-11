@@ -206,7 +206,11 @@
    :message-file "outside-role-surface"}
 
   {:rule :plan-not-landed
-   :when (seq (samizdat.agent.state/unwritten branch))
+   ;; Bounded like the checklist rung: a plan can name files the work no longer
+   ;; needs, and a model that keeps calling done is not going to re-plan.
+   :when (and (seq (samizdat.agent.state/unwritten branch))
+              (< (samizdat.agent.state/done-streak branch)
+                 (samizdat.agent.gates/threshold :max-paperwork-refusals)))
    :tools #{"done"}
    :message-file "plan-not-landed"}]
 

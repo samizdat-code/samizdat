@@ -9,7 +9,7 @@
             [samizdat.agent.gates :as gates]
             [samizdat.agent.tools :as tools]
             [samizdat.agent.tools.resource :as resource-tool]
-            [samizdat.lsp.client :as client]
+            [samizdat.lsp.index :as client]
             [samizdat.resource.workspace :as workspace]
             [samizdat.security.flow :as flow]
             [samizdat.store.db :as db]

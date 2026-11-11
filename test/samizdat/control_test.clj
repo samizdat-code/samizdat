@@ -537,7 +537,9 @@
                     "resume" {}
                     "switch" {:strategy "decompose"}
                     "budget" {:turns 30}
-                    "stop" {:text "a dead end"}}]
+                    "stop" {:text "a dead end"}
+                    "retask" {:text "try a fold"}
+                    "finish" {:text "the check holds"}}]
       (cells/load-cells!)
       (doseq [k interventions/kinds]
         (interventions/submit! c rid {:kind k :payload (payloads k)})
@@ -551,6 +553,93 @@
               (str k " reached a boundary and was left pending"))
           (is (not (str/includes? (str (:disposition d)) "not wired"))
               (str k " is advertised to a human and rejected as unwired")))))))
+
+;; karamazov-i692. A supervisor could say a finished run should ship, and only a
+;; worker's `done` could make it so. On two hard problems the steer landed and the
+;; worker still never called it, so `stop`, which ends a run unsolved, was its one
+;; decisive act. `finish` ends it solved, and only on a check still true of the
+;; files on disk.
+(defn- passing-program [text]
+  (let [root (str (java.nio.file.Files/createTempDirectory
+                   "finish" (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (spit (str root "/solution.py") text)
+    {:root root
+     :green (verify/green-check root "solution.py" 3)}))
+
+(deftest finish-ships-a-branch-whose-check-still-holds
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          {:keys [root green]} (passing-program "print(1)")]
+      (interventions/submit! c rid {:kind "finish" :branch-id "B1" :issued-by "supervisor"
+                                    :payload {:text "solution.py passes every sample"}})
+      (let [r (beam/drain-directives! {:conn c :run-id rid :root root}
+                                      [(assoc (branch "B1") :green-check green)]
+                                      (interventions/pending c rid) 4)
+            b (first (:branches r))]
+        (is (= :done (:status b)))
+        (is (= "solution.py passes every sample" (:final-answer b)))
+        (is (= "supervisor" (:finished-by b)) "the record says who ended it, and how")
+        (is (= "applied" (:status (first (interventions/history c rid)))))))))
+
+(deftest finish-is-refused-without-a-check-that-still-holds
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          {:keys [root green]} (passing-program "print(1)")
+          refused! (fn [why b]
+                     (interventions/submit! c rid {:kind "finish" :branch-id "B1"
+                                                   :payload {:text "ship it"}})
+                     (let [r (beam/drain-directives! {:conn c :run-id rid :root root} [b]
+                                                     (interventions/pending c rid) 4)
+                           d (first (filter #(= "finish" (:kind %))
+                                            (reverse (interventions/history c rid))))]
+                       (is (state/active? (first (:branches r))) why)
+                       (is (= "rejected" (:status d)) why)
+                       (is (str/includes? (str (:disposition d)) "run_check") why)))]
+      (refused! "no check at all" (branch "B1"))
+      (spit (str root "/solution.py") "print(2)")
+      (refused! "the program changed after the check" (assoc (branch "B1") :green-check green)))))
+
+(deftest finish-with-no-target-takes-the-branch-whose-check-holds
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          {:keys [root green]} (passing-program "print(1)")]
+      (interventions/submit! c rid {:kind "finish" :payload {:text "done"}})
+      (let [r (beam/drain-directives! {:conn c :run-id rid :root root}
+                                      [(branch "B1") (assoc (branch "B2") :green-check green)]
+                                      (interventions/pending c rid) 4)]
+        (is (= [:active :done] (mapv :status (:branches r))))))))
+
+(deftest finish-waits-for-a-whole-run-workflows-own-boundary
+  ;; team-solve runs as one long turn with a verify stage that judges the work,
+  ;; so finish lands there, and the scheduler must not eat or refuse it.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})]
+      (interventions/submit! c rid {:kind "finish" :payload {:text "done"}})
+      (beam/drain-directives! {:conn c :run-id rid :iterating-loop? false} [(branch "B1")]
+                              (interventions/pending c rid) 4)
+      (is (= "pending" (:status (first (interventions/history c rid))))))))
+
+(deftest the-per-turn-drain-leaves-finish-for-the-round-top
+  ;; A width-1 run is not `:beam?`, and that drain refuses other scheduler kinds.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})]
+      (interventions/submit! c rid {:kind "finish" :payload {:text "done"}})
+      (#'aloop/drain-directives! {:conn c :run-id rid :beam? false :max-turns 40} (branch "B1") 2)
+      (is (= "pending" (:status (first (interventions/history c rid))))))))
+
+(deftest a-workflow-kind-is-refused-where-no-boundary-would-apply-it
+  ;; A turn-at-a-time workflow has no round boundary, so these sat queued for the
+  ;; whole run while the supervisor believed they were on their way.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          b (branch "B1")]
+      (doseq [k ["switch" "budget" "stop" "retask"]]
+        (interventions/submit! c rid {:kind k :payload {:text "x"}}))
+      (#'aloop/drain-directives! {:conn c :run-id rid :iterating-loop? false} b 1)
+      (is (= 4 (count (interventions/pending c rid))) "a whole-run workflow's boundary owns them")
+      (#'aloop/drain-directives! {:conn c :run-id rid :iterating-loop? true} b 1)
+      (is (empty? (interventions/pending c rid)))
+      (is (every? #(= "rejected" (:status %)) (interventions/history c rid))))))
 
 (deftest every-kind-has-words-and-every-word-a-kind
   ;; The names are mechanism and live in the store; what each does is prose
@@ -1025,6 +1114,57 @@
         (let [r (call {:kind "obliterate" :branch "T0"})]
           (is (every? #(str/includes? (str (:result r)) %)
                       ["message" "review" "cull" "extend"])))))))
+
+(deftest intervene-carries-what-the-steer-expects
+  ;; karamazov-oi16.7: the steer is settled against what it asked for, so the
+  ;; supervisor can say what that is.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})]
+      (base/run-tool {:conn c :run-id rid :tool-name "intervene" :branch {:id "SUP"}
+                      :args {:kind "message" :branch "B1" :text "run the tests"
+                             :expect "pytest"}})
+      (let [[d] (interventions/pending c rid)]
+        (is (= "run the tests" (interventions/text-of d)))
+        (is (= "pytest" (interventions/expect-of d)))))))
+
+(deftest intervene-refuses-a-branch-the-run-does-not-have
+  ;; tb21-paced dna-assembly: the supervisor steered `DESIGN`, a name the run
+  ;; never had; it was queued, reported sent, and never reached B1.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          _ (runs/open-branch! c rid {:branch-id "B1"})
+          r (base/run-tool {:conn c :run-id rid :tool-name "intervene" :branch {:id "SUP"}
+                            :args {:kind "message" :branch "DESIGN" :text "re-verify the primers"}})]
+      (is (empty? (interventions/pending c rid)) "nothing queued")
+      (is (str/includes? (str (:result r)) "DESIGN"))
+      (is (str/includes? (str (:result r)) "`B1`") "and it names the branch it can steer"))))
+
+(deftest intervene-refuses-a-steer-nobody-will-read
+  ;; karamazov-oi16.9: 9 of 159 supervisor steers on TB were submitted after
+  ;; the branch's last turn, reported "submitted", and never read.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          call (fn [args] (base/run-tool {:conn c :run-id rid :tool-name "intervene"
+                                          :branch {:id "SUP"} :args args}))]
+      (runs/open-branch! c rid {:branch-id "B1"})
+      (runs/open-branch! c rid {:branch-id "SUP" :role :supervisor})
+      (testing "a live branch takes the steer"
+        (call {:kind "message" :branch "B1" :text "a"})
+        (is (= 1 (count (interventions/pending c rid)))))
+      (runs/close-branch! c rid "B1" :done nil)
+      (testing "a finished branch refuses it, and says why"
+        (let [r (call {:kind "message" :branch "B1" :text "b"})]
+          (is (not (:progress? r)))
+          (is (str/includes? (str (:result r)) "B1"))
+          (is (str/includes? (str (:result r)) "done")))
+        (is (= 1 (count (interventions/pending c rid)))))
+      (testing "so does an unaddressed one when no implementer is left running"
+        (let [r (call {:kind "message" :text "c"})]
+          (is (not (:progress? r))))
+        (is (= 1 (count (interventions/pending c rid)))))
+      (testing "extend still goes through: an ended run may be resumed"
+        (call {:kind "extend" :text "20"})
+        (is (= 2 (count (interventions/pending c rid))))))))
 
 (deftest intervene-is-not-on-the-implementor-surface
   ;; A branch that could cull its siblings or raise its own turn cap is not an

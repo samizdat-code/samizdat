@@ -1,0 +1,8 @@
+FROM --platform=linux/amd64 {image}
+USER root
+RUN mkdir -p /opt/jolt && curl -fsSL https://github.com/jolt-lang/jolt/releases/download/{jolt}/jolt-{jolt}-x86_64-linux.tar.gz | tar -xz -C /opt/jolt --strip-components=1
+COPY llms.txt /opt/jolt/llms.txt
+RUN sha256sum /workspace/executable > /opt/gold.sha256 && python3 -m pip install -q pytest pytest-xdist pytest-timeout --break-system-packages || python3 -m pip install -q pytest pytest-xdist pytest-timeout
+ENV PATH=/opt/jolt/bin:/opt/jolt:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN jolt -e '(println :jolt-ok)'
+WORKDIR /workspace

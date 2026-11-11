@@ -87,6 +87,24 @@
   (let [l (str/lower-case (str claim))]
     (boolean (some #(str/includes? l (str % " ")) (lexicon/wordlist :negation-markers)))))
 
+(defn denies-tool?
+  "Whether `sentence` says `tool` itself does not work: the tool's whole name,
+  then at most a few words with no punctuation between, then a denial from
+  wordlists.edn :tool-denials.
+
+  A shared sentence is not enough (karamazov-i692). Many tools are named with
+  English words, so `task`, `done`, `plan` and `check` sit beside a `not` in
+  ordinary steering: 132 of 290 supervisor steers in the eval journals were
+  refused that way, including `required by the task ..., not as an unattributed
+  figure`. A check that blocks the supervisor's only way of acting on a run has
+  to be right when it fires."
+  [sentence tool]
+  (let [denials (str/join "|" (map #(java.util.regex.Pattern/quote (str %))
+                                   (lexicon/wordlist :tool-denials)))
+        pattern (str "(?i)(?<![\\w-])" (java.util.regex.Pattern/quote (str tool))
+                     "(?![\\w-])[`'\"]?(?:\\s+[\\w./-]+){0,2}?\\s+(?:" denials ")(?![\\w-])")]
+    (boolean (re-find (re-pattern pattern) (str sentence)))))
+
 (defn contradicted-by-record
   "Every way the run's own turns contradict `claim`, as data.
 
@@ -105,14 +123,12 @@
   drive it with three names and what keeps a store-level check from dragging
   in the agent's whole capability surface."
   [claim turns tools]
-  ;; PER SENTENCE. The denial and the tool it denies have to share one: a
-  ;; steer that said "run the suite via shell" and, two clauses on, "no
-  ;; test_runner change needed" was refused as saying shell does not work
-  ;; (run 390dcd17, karamazov-na2k.17). A period only ends a sentence when
-  ;; a space follows it, so flight.render stays one word.
+  ;; PER SENTENCE, so a denial cannot bind across two of them. A period only
+  ;; ends a sentence when a space follows it, so flight.render stays one word.
   (let [denials (->> (str/split (str claim) #"(?<=[.!?])\s+|[;\n]+")
-                     (filter denial?)
-                     (mapcat #(map vector (subject-tools % (map str tools)) (repeat %)))
+                     (mapcat (fn [sentence]
+                               (for [t (map str tools) :when (denies-tool? sentence t)]
+                                 [t sentence])))
                      (reduce (fn [m [t sentence]] (if (contains? m t) m (assoc m t sentence))) {}))]
   (if (empty? denials)
     []

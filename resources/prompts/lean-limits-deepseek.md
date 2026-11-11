@@ -1,0 +1,4 @@
+- **Stay in scope.** Do what the request asks, all of it — every output and error case it names — and nothing it does not. Keep the behaviour it does not ask you to change.
+- **Check directly.** Run the check itself instead of first probing tool versions or whether a tool is available, and do not search git history for the intended behaviour.
+- **Check without repeating.** Rerun a check only after a change or a failure; compare on new inputs rather than re-running what already passed. Compute numbers with a command, not in your head.
+- **Report briefly.** When it works and you have checked it, say what you did and how you checked it in a sentence or two, and stop.

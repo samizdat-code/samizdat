@@ -11,7 +11,7 @@
             [rewrite-clj.node :as node]
             [rewrite-clj.zip :as z]
             [samizdat.resource.workspace :as workspace]
-            [samizdat.surgeon.outline :as outline]))
+            [jolt-lsp.surgeon.outline :as outline]))
 
 (defn- refusal [error-type data]
   (merge {:ok false :error-type error-type :source-unchanged true} data))

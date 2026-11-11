@@ -11,13 +11,13 @@ Pick the closest and call again. To tell a branch something, that is
 `message`.
 {% endif %}{% if submitted %}Directive queued: **{{kind}}**{% if target %} against `{{target}}`{% endif %}.
 
-It is applied at the next round boundary, not this instant — a directive that
-landed mid-turn would rewrite state under a branch that had already read it.
-The branch sees it at the top of its next turn, above every machine gate.
+{% ifequal kind "message" %}The branch reads it at the top of its next turn, above every machine gate.{% else %}{% ifequal kind "review" %}The branch reads it at the top of its next turn, above every machine gate.{% else %}It is applied at the boundary that owns `{{kind}}`, not this instant.{% endifequal %}{% endifequal %}
 
 {% if text %}What it will read: {{text}}
 
-{% endif %}You are steering a run that is still going. Watch what it does with
+{% endif %}{% if expect %}It is judged on whether the branch's next turns do `{{expect}}`.{% else %}With no `expect`, it is judged on whether the branch stops doing what it was doing when this arrived; name an `expect` (a tool, a command, a file) when you know what the right next move is.{% endif %} Your next look says whether it was acted on and what the branch did next.
+
+You are steering a run that is still going. Watch what it does with
 this before sending another: a second directive on top of an unread first one
 is noise, and a branch that gets a new instruction every turn never finishes
 any of them.
@@ -42,4 +42,7 @@ observed and why it contradicts the journal — that is a finding worth having,
 and it is not this directive.
 
 What you tried to send: {{text}}
+{% endif %}
+{% if unknown-branch %}Not sent: this run has no branch `{{unknown-branch}}`. Its implementer branches: {% for b in branches %}`{{b.id}}` ({{b.status}}){% if not forloop.last %}, {% endif %}{% endfor %}. Address the `{{kind}}` to one of those.
+{% endif %}{% if nobody-to-read %}Not sent: no implementer branch is still running to read a `{{kind}}`{% for e in ended %}{% if forloop.first %} ({% else %}, {% endif %}`{{e.id}}` ended {{e.status}}{% if forloop.last %}){% endif %}{% endfor %}. The run is finishing; what you saw belongs in `remember`, or a change to the loop, so the next run starts from it.
 {% endif %}

@@ -117,9 +117,8 @@ flowchart LR
     propose --> offers
     offers -->|adopt take: supervisor, needs trust| cells[Workflow cells]
 
-    lsp[lsp tool: clojure-lsp subprocess]
+    lsp[lsp tool: jolt-lsp index, in process]
     toolcall --> lsp
-    scrub --> lsp
     lsp --> redact
 
     mcpsrv[mcp tool: a configured MCP server subprocess]
@@ -235,7 +234,8 @@ own), and its file argument resolved with a bare `io/file`, outside the root
 confinement every file tool enforces. Both fixed in the 2026-08 audit
 (karamazov-blt.27, blt.28): it spawns through `scrub` and its paths go
 through `resolve-under-root`; its replies were already inside the envelope
-redaction.
+redaction. Since 2026-11 the tool spawns nothing: jolt-lsp answers in
+process, so only the root confinement and the redaction remain.
 
 `split` reads the tree to verify a delegation — the stubs the parent wrote and
 the tests it sketched — so it is a read tool for confinement purposes even

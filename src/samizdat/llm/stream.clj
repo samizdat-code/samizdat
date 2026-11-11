@@ -137,13 +137,32 @@
   `:socket-timeout` bounds each read; `:max-response-ms` the whole response,
   as jolt.http.platform's cap does for an unstreamed call. `on-delta`
   throwing does not fail the call: a watcher's trouble is not the model's."
-  [url {:keys [headers body socket-timeout conn-timeout max-response-ms]} on-delta]
+  [url {:keys [headers body socket-timeout conn-timeout max-response-ms idle-ms]} on-delta]
   (let [t (sse/parse-url url)
         started (System/currentTimeMillis)
         deadline (when (and max-response-ms (pos? max-response-ms)) (+ started max-response-ms))
         conn (open t socket-timeout conn-timeout)
         latest (atom nil)
-        hand-on (fn [d] (try (on-delta d) (catch Throwable _ nil)))]
+        hand-on (fn [d] (try (on-delta d) (catch Throwable _ nil)))
+        ;; A read blocks for the whole socket timeout, so neither the deadline
+        ;; nor a stall is noticed while one is pending. A watchdog closes the
+        ;; connection when a STARTED stream has sent nothing for `idle-ms`, or
+        ;; the deadline passes; the pending read then fails and the caller's
+        ;; retry decides (tb21-paced configure-git-webserver lost ten minutes).
+        last-at (atom started)
+        done (atom false)
+        ;; It looks a few times per bound, whichever bound is tighter.
+        poll-ms (some-> (if (and idle-ms (pos? idle-ms)) idle-ms max-response-ms) (quot 4))
+        _ (when (and poll-ms (pos? poll-ms))
+            (future
+              (loop []
+                (Thread/sleep (long poll-ms))
+                (when-not @done
+                  (let [now (System/currentTimeMillis)]
+                    (if (or (and deadline (> now deadline))
+                            (and idle-ms (pos? idle-ms) @latest (> (- now @last-at) idle-ms)))
+                      (try ((:close! conn)) (catch Throwable _ nil))
+                      (recur)))))))]
     (try
       ((:send! conn) (request-bytes t headers (str body)))
       (loop [st (sse/reader {:keep-body? true}) acc nil]
@@ -153,6 +172,7 @@
                                            max-response-ms "ms"))))
         (reset! latest acc)
         (let [got ((:recv! conn))
+              _ (reset! last-at (System/currentTimeMillis))
               {:keys [state events]} (if got (sse/feed st got) {:state st :events []})
               [acc done?] (reduce (fn [[acc done?] {:keys [data]}]
                                     (if (= "[DONE]" (str/trim (str data)))
@@ -187,4 +207,6 @@
           (throw (ex-info "provider stream interrupted"
                           {:partial-body (json/write-str (completion acc))} e))
           (throw e)))
-      (finally ((:close! conn))))))
+      (finally (reset! done true)
+               ;; The watchdog may have closed it already.
+               (try ((:close! conn)) (catch Throwable _ nil))))))

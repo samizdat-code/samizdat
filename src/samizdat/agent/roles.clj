@@ -254,10 +254,13 @@
        (catalogue-with text allowed)))))
 
 (defn core-tools
-  "The role's presentation-only core surface, as strings. Authorization stays
+  "The role's presentation-only core surface, as strings, confined the way
+  `surface` is so a turned-off REPL leaves neither. Authorization stays
   `surface`; an absent core surface means static presentation."
-  [role]
-  (set (map str (:core-tools (spec role)))))
+  ([role]
+   (core-tools role (config/eval-mode (userspace/project-root))))
+  ([role mode]
+   (confine (set (map str (:core-tools (spec role)))) mode)))
 
 (defn catalogue-entries
   "Ordered canonical entries parsed from the same signature and section grammar

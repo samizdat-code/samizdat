@@ -130,6 +130,43 @@
                        "**The harness's reflex has intervened"))
     (is (not (str/includes? (msg {:payload "ship it" :issued_by "supervisor"}) "human")))))
 
+(deftest a-receipt-is-not-an-order
+  ;; karamazov-oi16.6. Execution completion receipts and held-out verdicts go
+  ;; through the same queue, and the steer gate named every issuer it did not
+  ;; know "A human" and told the branch to obey it this turn, at priority 0 —
+  ;; pilot-10-loop fired that 2328 times, nearly every turn, over every
+  ;; machine gate including last-call.
+  (let [receipt {:payload-text "Completed executions: [\"e1\"]." :issued_by "execution"}
+        heldout {:payload-text "The held-out check passed." :issued_by "heldout"}]
+    (testing "a receipt alone is a notice, never a human's directive"
+      (doseq [d [receipt heldout]]
+        (let [dec (arbiter/decide {:branch (branch-with) :max-turns 40 :directive d})]
+          (is (= :directive-notice (:gate dec)) (str (:issued_by d)))
+          (is (str/includes? (:message dec) (:payload-text d)))
+          (is (not (str/includes? (str/lower-case (:message dec)) "human")))
+          (is (not (str/includes? (:message dec) "takes precedence"))))))
+    (testing "a receipt rides along with the steer that fires instead of displacing it"
+      (let [b (branch-with :turns (vec (repeat 39 {})))
+            dec (arbiter/decide {:branch b :max-turns 40 :directive receipt})]
+        (is (= :last-call (:gate dec)) "last-call still fires")
+        (is (str/includes? (:message dec) "Completed executions"))
+        (is (not-any? #{:directive-notice} (:passed-over dec)))))
+    (testing "the steering issuers still steer"
+      (doseq [who ["supervisor" "watch" "human" "repl" nil]]
+        (is (= :human-directive
+               (:gate (arbiter/decide {:branch (branch-with) :max-turns 40
+                                       :directive {:payload-text "x" :issued_by who}})))
+            (str who))))
+    (testing "a directive's expectation travels with the steer"
+      (is (= "pytest" (:expect (arbiter/decide {:branch (branch-with) :max-turns 40
+                                                :directive {:payload-text "run the tests"
+                                                            :issued_by "supervisor"
+                                                            :expect "pytest"}})))))
+    (testing "a REPL directive is a person's"
+      (is (str/includes? ((:message (gates/by-name :human-directive))
+                          {:directive {:payload-text "x" :issued_by "repl"}})
+                         "A human")))))
+
 (deftest a-role-that-cannot-write-is-not-told-to
   ;; progress-stalled, orienting and prologue-cap all say the same thing in
   ;; the end: write the next file, declare a plan, produce an artifact. To an
@@ -240,8 +277,9 @@
           d (arbiter/decide {:branch b :max-turns 40})]
       (is (= :last-call (:gate d)) "the forced ship beats the soft wind-down")
       (is (some #{:wind-down} (:passed-over d)))
-      (is (= "```tool-call\n{\"name\": \"done\"" (arbiter/prefill-for d))
-          "it prefills a done call, so the model cannot explore its last turns away")))
+      (is (= "```tool-call\n{\"name\": \"done\", \"args\": {\"answer\": \"" (arbiter/prefill-for d))
+          "it prefills a done call open at its answer, so the model cannot explore its last
+           turns away, nor close it with nothing to say")))
   (testing "silent before the window — wind-down still handles the earlier stretch"
     (let [b (branch-with :turns (vec (repeat 34 {})))]  ; 34/40 — past 0.85, not last-2
       (is (not-any? #{:last-call}
@@ -309,6 +347,29 @@
     (doseq [[k v] (gates/config) :when (= :cost-ceiling (:kind v))]
       (is (false? (:capability-tunable? v)) (str k " is a cost ceiling")))))
 
+(deftest a-directive-is-settled-on-what-it-asked-for
+  ;; karamazov-oi16.7. `:human-directive true` settled every directive met on
+  ;; the next turn, whatever the branch did: 133 of 140 supervisor steers
+  ;; "met", none unmet, so neither role could learn whether a steer worked.
+  (let [b (branch-with)
+        settle (fn [p action & [current]]
+                 (arbiter/settle (merge {:gate :human-directive :turn 5 :window 1} p)
+                                 {:current-turn (or current 6) :tools-called [(first (str/split action #" "))]
+                                  :action-text action :branch-before b :branch-after b}))]
+    (testing "with an expectation: met when the branch does it"
+      (is (= :met (settle {:expect "pytest"} "shell {:command \"python -m pytest -x\"}")))
+      (is (= :met (settle {:expect "write_file"} "write_file {:path \"a.py\"}"))
+          "a tool name counts")
+      (is (nil? (settle {:expect "pytest"} "shell {:command \"ls\"}"))
+          "not yet, inside the window")
+      (is (= :unmet (settle {:expect "pytest"} "shell {:command \"ls\"}" 20))
+          "and unmet once the grace has run out"))
+    (testing "without one: met when the branch stops repeating what it was doing"
+      (is (= :met (settle {:addressed "shell {:command \"make\"}"} "shell {:command \"cat build.log\"}")))
+      (is (nil? (settle {:addressed "shell {:command \"make\"}"} "shell {:command \"make\"}"))
+          "the same call again is not acting on it")
+      (is (= :unmet (settle {:addressed "shell {:command \"make\"}"} "shell {:command \"make\"}" 20))))))
+
 (deftest every-gate-that-fires-can-actually-be-met
   ;; vf-9bo. settle dispatches on gate in a case whose fallthrough is false, so
   ;; a gate missing from that case is not merely unhandled — its prediction can
@@ -362,7 +423,7 @@
   ;; resources/gates.edn, so a vocabulary changes at runtime without a
   ;; rebuild. Pin the move: the keys exist, carry the live vocabulary, and
   ;; settle's table still keys by gate.
-  (is (= #{"eval" "shell"} (gates/tool-vocab :verification)))
+  (is (= #{"eval" "shell" "run_check"} (gates/tool-vocab :verification)))
   (is (contains? (gates/tool-vocab :shipping) "write_file"))
   ;; EVERY tool that writes a file must be in both, or a branch using it
   ;; scores as having shipped nothing and gets nudged for work it is doing.
@@ -778,7 +839,13 @@
       (testing "the default stays own-branch"
         (let [r (tools/run-tool {:branch sup :conn c :run-id rid
                                  :tool-name "fetch_turn" :args {:turn 3}})]
-          (is (= :mechanics (:category r)) "S0 has no turn 3 of its own"))))))
+          (is (= :mechanics (:category r)) "S0 has no turn 3 of its own")))
+      (testing "but the supervisor watches the run: its bare turn falls back to the one branch that has it"
+        ;; tb21-unread raman-fitting: the review spent a turn on `t62`, B1's done.
+        (let [r (tools/run-tool {:branch (assoc sup :role :supervisor) :conn c :run-id rid
+                                 :tool-name "fetch_turn" :args {:turn 3}})]
+          (is (= :neutral (:category r)))
+          (is (str/includes? (str (:result r)) "[T0]")))))))
 
 (deftest fetch-turn-searches-literal-text-without-opening-the-firehose
   (with-db [c]
@@ -813,6 +880,28 @@
             "a zero-sized page does not claim that more rows exist")))))
 
 ;; --- the ship gate's test rung: done is not terminal until tests pass --------
+
+(deftest paired-samples-that-passed-are-the-test-a-program-needs
+  ;; 13 of the hard corpus's refusals: a Python program whose samples passed
+  ;; was told "You added no test", and the branch wrote Clojure cross-checks.
+  (let [root (str "/tmp/samizdat-pinned-" (System/nanoTime))
+        file (str root "/solution.py")
+        _ (.mkdirs (java.io.File. root))
+        _ (spit file "print(1)\n")
+        green (verify/green-check root "solution.py" 3)
+        ship (fn [b]
+               (tools/run-tool {:branch (merge (state/new-branch {:id "B1" :problem "write solution.py"}) b)
+                                :tool-name "done" :turn 4 :root root :git-baseline "HEAD"
+                                :config {:run {:verify-focused? true :require-test? true}}
+                                :args {:answer "wrote solution.py"}}))]
+    (with-redefs [gitdiff/changed-files (fn [_ _] ["solution.py"])]
+      (testing "no pass on record: refused, as before"
+        (is (str/includes? (:result (ship nil)) "You added no test")))
+      (testing "a pass on this program: shipped"
+        (is (not (str/includes? (:result (ship {:green-check green})) "You added no test"))))
+      (testing "the program changed since: refused"
+        (spit file "print(2)\n")
+        (is (str/includes? (:result (ship {:green-check green})) "You added no test"))))))
 
 (deftest done-is-a-hard-gate-on-a-green-test-run
   (let [answer "gated the remember tool so a done with an empty diff is refused"
@@ -2149,8 +2238,8 @@
   ;; predicate/message closures fired on the computed evidence. Adding a rung
   ;; is a data edit; the evidence computation stays in src.
   (let [rungs (gates/threshold :ship-gates)]
-    (is (= 7 (count rungs)))
-    (is (= [:answer-exists :checklist :exam-ratchet :figure-coverage :engages-problem :asks-the-reader :completeness]
+    (is (= 13 (count rungs)))
+    (is (= [:unread-directive :tester-failures :supervisor-review :time-left :check-after-last-write :unusual-change :answer-exists :checklist :exam-ratchet :figure-coverage :engages-problem :asks-the-reader :completeness]
            (mapv :name rungs))))
   ;; Asserts the SKELETON, not the sentence: two live runs did the work,
   ;; passed their tests, closed their task, then spent every remaining turn
@@ -2933,7 +3022,7 @@
                                               {:parsed {:name "read_file" :args {:path "x"}}
                                                :result {:result "x" :category :neutral}})]
                      (:content (peek (:messages b')))))
-            none (samizdat.prompt/prompt "task-none")]
+            none (samizdat.prompt/render "task-none" {})]
         (is (not (str/includes? (step :answerer) none)) "an answerer is not sent for a tool it lacks")
         (is (str/includes? (step :implementor) none) "an implementor still is"))
       (finally (db/close c)))))
@@ -2987,7 +3076,7 @@
             "the injected harness line is inside the frame")
         (is (str/includes? (subs m 0 close) "<\\/tool_result>")
             "the forged close is escaped, so it could not end the frame early")
-        (is (str/includes? (subs m close) (samizdat.prompt/prompt "task-none"))
+        (is (str/includes? (subs m close) (samizdat.prompt/render "task-none" {}))
             "the harness's own block follows the frame"))
       (testing "the done path frames too"
         (let [b (state/new-branch {:id "B1" :problem "p"})
@@ -2998,3 +3087,16 @@
           (is (= "<tool_result tool=\"done\">\nshipped\n</tool_result>"
                  (:content (peek (:messages b')))))))
       (finally (db/close c)))))
+
+(deftest lines-written-is-the-held-tasks
+  ;; karamazov-0wvc.8: counted from the run's start, a task split as over-budget
+  ;; asks still read as over it, so the split could never clear the gate.
+  (let [b (assoc (branch-with) :task {:id "T1"})
+        b1 (state/note-lines b 600)]
+    (is (= 600 (:lines-written b1)))
+    (is (= 650 (:lines-written (state/note-lines b1 650))) "same task, it accumulates")
+    (let [b2 (state/note-lines (assoc b1 :task {:id "T2"}) 640)]
+      (is (= 40 (:lines-written b2)) "a new task starts from what was already there")
+      (is (= 90 (:lines-written (state/note-lines b2 690)))))
+    (is (nil? (:lines-written (state/note-lines b nil))) "git could not answer")))
+

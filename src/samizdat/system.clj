@@ -56,7 +56,6 @@
             [mycelium.core :as myc]
             [samizdat.session :as session]
             [samizdat.steps :as steps]
-            [samizdat.lsp.client :as lsp-client]
             [samizdat.mcp.client :as mcp-client]
             [samizdat.store.db :as db]
             [samizdat.store.runs :as runs]
@@ -269,6 +268,7 @@
          ;; per call through compiled-manifest, so a manifest or cell edit
          ;; takes effect on the very next malformed call; fence's repair-json
          ;; fails open to its built-in chain if the manifest is broken.
+         _ (fence/install-orphan-tools! (gates/threshold :orphan-call))
          _ (fence/install-repair!
             (fn [body]
               (:body (myc/run-compiled (manifests/compiled-manifest "repair")
@@ -357,7 +357,6 @@
                        ;; built-in chain instead of resolving manifests against
                        ;; an unbound store.
                        ["repair seam" #(fence/install-repair! nil)]
-                       ["lsp clients" #(lsp-client/shutdown-all!)]
                        ["mcp servers" #(mcp-client/shutdown-all!)]
                        ["debug adapters" #((requiring-resolve 'samizdat.debug.sessions/close-all!))]
                        ;; Unbind BEFORE the connection closes: a userspace read

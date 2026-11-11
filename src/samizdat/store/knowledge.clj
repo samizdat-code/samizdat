@@ -41,6 +41,7 @@
             [samizdat.prompt :as prompt]
             [samizdat.security.flow :as flow]
             [samizdat.store.db :as db]
+            [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
             [samizdat.store.outcomes :as outcomes]))
 
@@ -101,14 +102,22 @@
   (let [t (str/lower-case (str content))]
     (boolean (some #(str/includes? t (str %)) vocab))))
 
+(declare retire! standing preview)
+
+(defn- quarantine-prefix [] (:quarantine-prefix (:admission (memory/policy))))
+
 (defn remember!
   "Insert a fact and return its id. Kind defaults to 'note' — the column
   exists so later kinds (decisions, gotchas, references) need no migration."
   [conn {:keys [content kind salience confidence run-id pinned pattern-key
-                cause supersedes lineage-id flow source]}]
+                cause supersedes lineage-id flow source origin evidence?]}]
   (when (str/blank? (str content))
     (throw (ex-info "a memory needs content" {})))
-  (let [kind (or kind "note")
+  (let [{:keys [quarantine] :as admitted}
+        (memory/admit {:content content :origin origin :confidence confidence :evidence? evidence?})
+        content (:content admitted)
+        confidence (:confidence admitted)
+        kind (or kind "note")
         p (memory/policy)
         ;; Kind decides the starting importance unless the caller overrides it.
         ;; A memory arrives with a standing, not at zero: what it is worth is
@@ -142,22 +151,26 @@
                                              salience, confidence, run_id, pinned,
                                              last_run_id, pattern_key,
                                              lineage_id, current, cause, supersedes, flow,
-                                             source_branch, source_turn_from, source_turn_to)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)"
+                                             source_branch, source_turn_from, source_turn_to, origin)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)"
                                 id (str content) kind now
                                 salience confidence run-id (if pinned 1 0)
                                 run-id pattern-key
                                 (or lineage-id id) cause supersedes flow
                                 ;; Where it came from (v40): the branch and
                                 ;; the turns it was written from.
-                                (some-> (:branch source) str) (:from source) (:to source)]))
+                                (some-> (:branch source) str) (:from source) (:to source)
+                                (name (or origin :harness))]))
                 1
                 (catch Exception e
                   ;; Only a UNIQUE collision is an id problem; anything else
                   ;; (disk, lock) must surface as itself (provenance R2-15).
                   (if (db/id-collision? e) 0 (throw e))))]
         (if (pos? n)
-          (do (index! conn id content) id)
+          (do (index! conn id content)
+              (when quarantine
+                (retire! conn id {:reason (str (quarantine-prefix) quarantine)}))
+              id)
           (if (< attempt 5)
             (recur (inc attempt))
             (throw (ex-info "could not allocate a knowledge id" {}))))))))
@@ -865,8 +878,9 @@
                              (cond
                                (= "success" (:category r))
                                (let [cmd (or (not-empty (normalise-command cmd)) cmd)]
-                                 {:key (str "cmd-works:" cmd) :content (fact :cmd-works cmd)
-                                  :source {:branch (:branch_id r) :from (:turn r) :to (:turn r)}})
+                                 (when (memory/durable-command? cmd)
+                                   {:key (str "cmd-works:" cmd) :content (fact :cmd-works cmd)
+                                    :source {:branch (:branch_id r) :from (:turn r) :to (:turn r)}}))
 
                                (re-find (re-pattern (lexicon/wordlist :shell-refusal))
                                         (str (:result r)))
@@ -883,6 +897,81 @@
          {:id (remember! conn {:content content :kind "semantic" :run-id run-id
                                :pattern-key key :confidence 0.8 :source source})
           :fact key :repeat? false})))))
+
+(defn- fill
+  "`{{k}}` substitution over a map, for the store's derived-memory wording:
+  the store sits below the prompt layer (see `fact`)."
+  [template m]
+  (reduce-kv (fn [t k v] (str/replace t (str "{{" (name k) "}}") (str v))) (str template) m))
+
+(defn- clip-to [s n]
+  (let [s (str/replace (str s) #"\s+" " ")]
+    (if (and n (> (count s) n)) (str (subs s 0 n) "…") s)))
+
+(defn distil-steers!
+  "Write each of this run's SUPERVISOR directives, with what came of it, into
+  long-term memory (karamazov-oi16.10): acted on, not acted on, refused and
+  why, or never delivered, and the branch's next move. A steer and its outcome
+  used to die with the run, so a supervisor could not learn from its own past
+  actions. Episodic and keyed per directive (`steer:<run>:<id>`), so a re-run
+  of the distillation corroborates instead of duplicating. Wording is gates.edn
+  :steer-facts."
+  [conn {:keys [run-id]}]
+  (let [p (lexicon/policy :steer-facts)
+        os (interventions/outcomes
+            (db/fetch conn ["SELECT * FROM interventions WHERE run_id = ? ORDER BY id" run-id])
+            (db/fetch conn ["SELECT branch_id, turn, gate, outcome FROM gate_firings WHERE run_id = ?" run-id])
+            (db/fetch conn ["SELECT branch_id, turn, tool_name, args FROM turns WHERE run_id = ?" run-id]))]
+    (vec
+     (for [o os
+           :let [k (str "steer:" run-id ":" (:id o))
+                 how (or (:outcome o) (:status o))
+                 content (fill (:line p)
+                               {:kind (:kind o)
+                                :branch (or (:branch o) "the run")
+                                :text (clip-to (:text o) (:text-chars p))
+                                :expect (if (:expect o) (fill (:expect p) {:expect (:expect o)}) "")
+                                :outcome (fill (get (:outcomes p) how how)
+                                               {:disposition (clip-to (:disposition o) (:text-chars p))})
+                                :next (if (:next o)
+                                        (fill (:next p) {:next (clip-to (:next o) (:next-chars p))})
+                                        "")})
+                 existing (by-pattern conn k)]]
+       (if existing
+         (do (corroborate! conn (:id existing) run-id)
+             {:id (:id existing) :steer (:id o) :repeat? true})
+         {:id (remember! conn {:content content :kind "episodic" :run-id run-id
+                               :pattern-key k
+                               :source {:branch (:branch o) :from (:turn o) :to (:turn o)}})
+          :steer (:id o) :repeat? false})))))
+
+(defn distil-patterns!
+  "Write each failing-and-working pair a run found (agent.actions/patterns:
+  {:key :instead}) as a project fact — this command keeps failing here, that
+  one works instead (karamazov-oi16.12). Semantic and keyed on the failing
+  command, so a later run that finds the same corroborates it. Wording is
+  gates.edn :project-facts :cmd-instead."
+  [conn {:keys [run-id patterns]}]
+  (vec
+   (for [{k :key :keys [instead]} patterns
+         :when (and k (seq instead))
+         :let [pk (str "cmd-instead:" k)
+               existing (by-pattern conn pk)]]
+     (if existing
+       (do (corroborate! conn (:id existing) run-id)
+           {:id (:id existing) :fact pk :repeat? true})
+       {:id (remember! conn {:content (fill (get (lexicon/policy :project-facts) :cmd-instead)
+                                            {:cmd k :instead (str/join "`, `" instead)})
+                             :kind "semantic" :run-id run-id :pattern-key pk :confidence 0.8})
+        :fact pk :repeat? false}))))
+
+(defn past-steers
+  "The newest `n` remembered supervisor steers (distil-steers!), for the next
+  run's supervisor to read what its earlier steers did."
+  [conn n]
+  (db/fetch conn ["SELECT id, content, run_id, created_at FROM knowledge
+                    WHERE pattern_key LIKE 'steer:%' AND current = 1
+                    ORDER BY created_at DESC, id DESC LIMIT ?" n]))
 
 (defn record-workflow-outcome!
   "Note that `workflow` drove a run on this project and whether it shipped.
@@ -954,6 +1043,88 @@
        (sort-by (juxt (comp - :shipped) :failed))
        vec))
 
+(defn quarantined?
+  "Whether this row was parked at admission rather than retired later."
+  [row]
+  (str/starts-with? (str (:retired_reason row)) (quarantine-prefix)))
+
+(defn quarantine-reason
+  "Why this parked row was parked."
+  [row]
+  (subs (str (:retired_reason row)) (count (quarantine-prefix))))
+
+(defn quarantine
+  "What admission has parked, newest first: for a person or the supervisor to read."
+  [conn]
+  (vec (db/fetch conn ["SELECT * FROM knowledge WHERE retired_reason LIKE ?
+                         ORDER BY created_at DESC" (str (quarantine-prefix) "%")])))
+
+(defn- consolidation-prompt
+  "The material for the pass: the run's inferred notes, and what is already known."
+  [candidates known {:keys [max-input-chars heading-notes heading-known]}]
+  (let [text (str heading-notes "\n"
+                  (str/join "\n" (map #(str (:id %) " [" (:kind %) "] " (:content %)) candidates))
+                  "\n\n" heading-known "\n"
+                  (str/join "\n" (map #(str "- " (preview (:content %) 120)) known)))]
+    (subs text 0 (min (count text) max-input-chars))))
+
+(defn- parse-consolidation
+  "{:keep #{id} :new [{:kind :content}]}, or nil when the reply says neither: a reply
+  nobody can read must not be taken for a decision to keep nothing."
+  [reply {:keys [keep-regex new-regex none-word]}]
+  (let [ls (map str/trim (str/split-lines (str reply)))
+        keeps (keep #(second (re-find (re-pattern keep-regex) %)) ls)
+        news (keep #(when-let [[_ k t] (re-find (re-pattern new-regex) %)]
+                      {:kind k :content t})
+                   ls)]
+    (when (or (seq keeps) (seq news) (some #(= none-word %) ls))
+      {:keep (set keeps) :new (vec news)})))
+
+(defn consolidate!
+  "Decide what a finished run's inferred notes leave behind (karamazov-4wky).
+
+  Only notes automatic writers inferred during this run are up for review. A
+  deliberate `remember`, a person's word, a pinned row and any with evidence keep
+  their place, and so do facts derived from exit codes, which need to stay current
+  for later runs to corroborate. `ask` is the model, injected.
+
+  Nothing changes until a reply parses: a failed call or an unreadable answer
+  leaves every note as it was. Those not kept are retired, so they stay readable."
+  [conn {:keys [run-id ask]}]
+  (let [{:keys [min-records max-known max-new] :as p} (:consolidation (memory/policy))
+        candidates (when run-id
+                     (db/fetch conn ["SELECT * FROM knowledge
+                                       WHERE run_id = ? AND current = 1 AND pinned = 0
+                                         AND origin = 'inferred' AND kind != 'overview'
+                                         AND id NOT IN (SELECT claim_id FROM knowledge_evidence)
+                                       ORDER BY created_at" run-id]))
+        skipped (fn [why] {:skipped why :kept 0 :retired 0 :added 0})]
+    (cond
+      (nil? ask) (skipped "no model")
+      (< (count candidates) min-records) (skipped (str (count candidates) " note(s), needs " min-records))
+      :else
+      (let [known (remove #(= run-id (:run_id %)) (standing conn max-known))
+            decided (try (parse-consolidation
+                          (ask (consolidation-prompt candidates known p)) p)
+                         (catch Throwable e
+                           (log/warn "consolidating the run failed:" (ex-message e))
+                           nil))]
+        (if-not decided
+          (skipped "no usable answer")
+          (let [ids (set (map :id candidates))
+                kept (filter ids (:keep decided))
+                retired (remove (set kept) ids)]
+            (doseq [id retired]
+              (retire! conn id {:reason (str/replace (:retired-reason p) "{{run}}" (str run-id))}))
+            {:kept (count kept)
+             :retired (count retired)
+             :added (->> (take max-new (:new decided))
+                         (map (fn [{:keys [kind content]}]
+                                (remember! conn {:content content :kind kind :run-id run-id :origin :inferred})))
+                         (filter #(= 1 (:current (get-by-id conn %))))
+                         doall
+                         count)}))))))
+
 (defn distil-session!
   "Write everything this session concluded into long-term memory: the patterns
   it measured, and the verdicts on the changes the supervisor made.
@@ -984,7 +1155,7 @@
   What reads the note: the next run's opening block (loop/learned-block), so
   a branch can tell an empty head start from a lost one; and the run detail
   the front ends show."
-  [conn {:keys [run-id findings experiments]}]
+  [conn {:keys [run-id findings experiments ask patterns]}]
   (let [errors (atom [])
         ;; One half, guarded: the value on success, `absent` on a throw, and
         ;; the throw recorded under the half's name. `log/warn` as well,
@@ -1012,6 +1183,13 @@
         ;; was missing entirely: everything else here is the harness watching
         ;; itself.
         project (half :project [] #(distil-project! conn {:run-id run-id}))
+        ;; And what the supervisor's own steers came to, so the next run's
+        ;; supervisor can learn from them (karamazov-oi16.10).
+        steers (half :steers [] #(distil-steers! conn {:run-id run-id}))
+        ;; And what to run instead of what kept failing (karamazov-oi16.12).
+        pats (half :patterns [] #(distil-patterns! conn {:run-id run-id :patterns patterns}))
+        ;; What the model's notes leave behind, judged once the whole run is in.
+        consolidated (half :consolidate nil #(consolidate! conn {:run-id run-id :ask ask}))
         ;; And curation, so the store does not become a ranking in which
         ;; everything has risen.
         decayed (half :curate 0 #(curate! conn))
@@ -1019,6 +1197,9 @@
         ;; about who is lowest.
         evicted (half :evict [] #(evict! conn))
         result {:findings (vec written) :verdicts (vec verdicts) :project (vec project)
+                :steers (vec steers)
+                :patterns (vec pats)
+                :consolidated consolidated
                 :aged aged :decayed decayed :evicted (vec evicted)
                 :errors @errors}]
     ;; Best effort like every note; a journal that cannot be written is not a
@@ -1029,10 +1210,27 @@
                                 (update :findings count)
                                 (update :verdicts count)
                                 (update :project count)
+                                (update :steers count)
+                                (update :patterns count)
                                 (update :evicted count))})
       (catch Throwable e
         (log/warn "journaling the distillation failed:" (ex-message e))))
     result))
+
+(defn with-provenance
+  "Each memory row with who wrote it and whether it still rests on one run,
+  for a reader: `:written-by` (a model, the harness, the person) and
+  `:unverified`. The memory trap (2611.07554v1): self-written notes did more
+  harm than raw transcripts, read as instructions rather than as evidence, so
+  what reads a memory back says whose word it is and how often it held."
+  [rows]
+  (for [r rows]
+    (assoc r
+           :written-by (case (str (:origin r))
+                         ("agent" "inferred") "a model"
+                         "user" "the person"
+                         "the harness")
+           :unverified (memory/provisional? r))))
 
 (defn learned-since
   "What was written to memory after `since`, most worth reading first.
@@ -1152,8 +1350,9 @@
 (defn- index-line
   "id, kind in brackets, preview — everything needed to decide whether
   to dereference this id, and nothing more."
-  [{:keys [id kind content]}]
-  (str id " [" (or kind "note") "] " (preview content 70)))
+  [{:keys [id kind content] :as row}]
+  (str id " [" (or kind "note") "] " (preview content 70)
+       (when (memory/provisional? row) " (unverified)")))
 
 (defn- fit-lines
   "Keep as many whole lines as fit beside the preamble under cap. A line

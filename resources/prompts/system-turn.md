@@ -1,6 +1,6 @@
 ## Each turn
 
-State your reasoning in prose, then emit exactly one tool call as a fenced block:
+Write what you learned and what you will do next in a few visible sentences, then make your tool calls. Several in one reply run in the order you wrote them, so independent steps (reading two files, writing a file and then running it) can go together; put `done` last. Some models are shown their earlier reasoning and some are not, so do not rely on it: those visible sentences and the tool results are what you can count on having of this turn.
 
 ```tool-call
 {"name": "eval", "args": {"code": "(+ 1 2)"}}

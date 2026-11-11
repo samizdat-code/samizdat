@@ -207,6 +207,20 @@
    {:threshold {:all "HTTP status codes and the response-body cap of a
                       transport. Protocol constants, not policy."}}
 
+   "src/samizdat/agent/sections.clj"
+   {:vocabulary {"</?think>"
+                 "The providers' reasoning tag on the wire, as in llm/message.clj: a
+                  reply that is only reasoning keeps its text with the tags off."
+                 "(?s)<think>.*?</think>"
+                 "A reasoning block's syntax, as GVS5H's _strip_think reads it. Pinned
+                  by team-solve-parity-test: reading it differently is no longer
+                  their method, so it is not a project's to tune."
+                 "(?s)```(?:python)?\\s*\\n(.*?)```"
+                 "A fenced program's syntax, as GVS5H's _extract_py reads it. Pinned
+                  the same way."}
+    :threshold {32 "The first printable code point, where Python's repr starts
+                    writing control characters as escapes. A fact of repr."}}
+
    "src/samizdat/agent/judge.clj"
    {:vocabulary {"(?i)</material"
                  "The closing tag of the material envelope judge/seal writes
@@ -221,31 +235,6 @@
    {:threshold {8 "How many seeded tries before a text with nowhere to jitter
                    comes back as it was: a bound on a loop, not a decision
                    (karamazov-0e2c.11)."}}
-
-   "src/samizdat/sdiff/group.clj"
-   {:vocabulary {"(^|/)test/|_test\\.clj"
-                 "Which files are tests, so calling from many of them does not
-                  make a hub: ported from sdiff (karamazov-0e2c.17)."}}
-
-   "src/samizdat/sdiff/names.clj"
-   {:vocabulary {"(^|/)test/|_test\\.clj"
-                 "Which files are tests, so their aliases (SUT) do not name
-                  namespaces: ported from sdiff (karamazov-0e2c.16)."}
-    :threshold {3 "sdiff's namespaces of three or more segments are the ones
-                   worth shortening; ported as written (karamazov-0e2c.16)."}}
-
-   "src/samizdat/sdiff/core.clj"
-   {:vocabulary {"\\.(clj|cljs|cljc|edn|bb)$"
-                 "Which files are Clojure source: the language's extensions,
-                  ported from sdiff (karamazov-0e2c)."
-                 ":private"
-                 "Clojure's own metadata key, read to tell a private def."}
-    :threshold {60 "sdiff's display cut for a form's source in a change line;
-                    ported as written (karamazov-0e2c)."
-                0.5 "sdiff's pair-threshold: a removed and an added form pair
-                     when half their structure and tokens agree. Its author
-                     tuned it on 25 merges; used for reporting only, never
-                     for a decision (karamazov-0e2c.1)."}}
 
    "src/samizdat/sandbox/sci.clj"
    {:vocabulary {"Could not find namespace ([\\w.\\-]+)"
@@ -468,16 +457,6 @@
    {:vocabulary {"(?i)Content-Length:\\s*(\\d+)"
                  "The DAP base protocol header. Fixed by the specification;
                   nobody may retune it."}}
-
-   "src/samizdat/lsp/client.clj"
-   {:threshold {5000 "LSP request timeout."
-                20000 "LSP read timeout."}
-    :vocabulary {"(?i)Content-Length:\\s*(\\d+)"
-                 "The LSP base protocol header. Fixed by the specification;
-                  nobody may retune it."}}
-
-   "src/samizdat/lisp.clj"
-   {:threshold {256 "Reader recursion bound."}}
 
    "src/samizdat/agent/state.clj"
    {:threshold
@@ -706,14 +685,12 @@
     " applies to the beam scheduler,"
     " different encoding of the same one."
     " different tool, a smaller claim, or a"
-    " emitted a tool call. Think less and call a tool."
     " failed this exact way more than once."
     " the call, or change technique — a"
     "The explore prologue is over: "
     "Your re-planning budget is spent: "
     "[harness] No ```tool-call block in your response."
     "[harness] The provider call failed: "
-    "[harness] Your response hit the token limit before you"
     "[harness] Your tool-call block did not parse: "
     }
    "src/samizdat/agent/skills.clj"
@@ -768,8 +745,6 @@
     }
    "src/samizdat/agent/tools/lsp.clj"
    #{
-    "clojure-lsp is not installed; install it to use the lsp tool"
-    "could not start clojure-lsp for root"
     "line and col must be integers. "
     }
    "src/samizdat/agent/tools/messages.clj"
@@ -835,9 +810,6 @@
    #{
     "Review what you have and ship it."
     }
-   ;; samizdat/lisp.clj is off the backlog entirely: `balance` answers in DATA
-   ;; (a reason plus line/col plus the reader's own words) and every sentence
-   ;; around it moved to resources/prompts/file-tool.md, keyed by reason.
    "src/samizdat/llm/client.clj"
    #{
     " :max-tokens or shorten the context."
@@ -866,11 +838,6 @@
     "(an infinite loop or a heavy computation?). If it genuinely "
     "(no docstring — jolt strips core-var metadata)"
     "ms — the code ran too long "
-    }
-   ;; Ported verbatim from sdiff (karamazov-0e2c); its report's own label.
-   "src/samizdat/sdiff/core.clj"
-   #{
-    "signature only: parameters changed, body did not"
     }
    "src/samizdat/smoke.clj"
    #{
@@ -1098,7 +1065,7 @@
     :storm-enabled :storm-error-digest-chars :storm-min-cycles
     :storm-strikes-to-force :storm-threshold :storm-timeout-floor
     :storm-verify-exempt :storm-window-size :supervisor-digest :thinking-budget
-    :timeout-failure-weight :tool-clip :tool-retry :turn-deadline-ms
+    :timeout-failure-weight :tool-retry :turn-deadline-ms
     :verify-timeout-ms :verify-unknown :wind-down-fraction})
 
 (def steers-that-predate-provenance

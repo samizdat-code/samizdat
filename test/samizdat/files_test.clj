@@ -25,7 +25,8 @@
             [jolt.fs :as fs]
             [samizdat.agent.files :as files]
             [samizdat.agent.tools]
-            [samizdat.approval :as approval]))
+            [samizdat.approval :as approval]
+            [samizdat.engine.proc :as proc]))
 
 (defn- ctx [root tool args]
   {:tool-name tool :args args :branch {:id "B1"} :root root})
@@ -165,6 +166,74 @@
         (is (not (:repaired? r))))
       (finally (fs/delete-tree root)))))
 
+(deftest a-patch-to-a-file-that-already-will-not-load-is-kept
+  (let [root (str "/tmp/samizdat-files-" (random-uuid))]
+    (fs/create-dirs root)
+    (try
+      (spit (str root "/a.clj") "(defn f [] (+ 1 2])\n(defn g [] (+ 3 4])\n")
+      (let [read-back (:result (files/read-file (ctx root "read_file" {:path "a.clj" :anchors true})))
+            anchor (re-find #"2:[0-9a-f]+" read-back)
+            r (files/patch-file (ctx root "patch" {:path "a.clj"
+                                                   :edits [{:from anchor :replace "(defn g [] (+ 3 4))"}]}))]
+        (is (= :success (:category r)) (:result r))
+        (is (str/includes? (:result r) "still does not load"))
+        (is (str/includes? (slurp (str root "/a.clj")) "(+ 3 4)")))
+      (finally (fs/delete-tree root)))))
+
+(deftest near-the-limit-a-write-that-will-not-load-keeps-the-version-that-does
+  ;; With 100 s left a yj rewrite broke a parser that loaded, and the build failed for good.
+  (let [root (str "/tmp/samizdat-files-" (random-uuid))
+        good "(ns a)\n(defn f [] 1)\n"
+        bad "(ns a)\n(defn f [] 2]\n"
+        now (System/currentTimeMillis)
+        clock (fn [used] {:config {:run {:time-limit-seconds 1000}} :started-ms (- now (long (* used 1000 1000)))})
+        write! (fn [m args] (files/write-file (merge (ctx root "write_file" args) m)))
+        path (str root "/a.clj")]
+    (fs/create-dirs root)
+    (try
+      (testing "in the last stretch it is refused and the file stays"
+        (spit path good)
+        (let [r (write! (clock 0.9) {:path "a.clj" :content bad})]
+          (is (= good (slurp path)))
+          (is (not (:progress? r)))
+          (is (str/includes? (:result r) "Nothing was written"))))
+      (testing "earlier it is written, since a next turn can fix it"
+        (spit path good)
+        (write! (clock 0.5) {:path "a.clj" :content bad})
+        (is (= bad (slurp path))))
+      (testing "and with no limit"
+        (spit path good)
+        (write! {} {:path "a.clj" :content bad})
+        (is (= bad (slurp path))))
+      (testing "a file that already does not load has nothing to protect"
+        (spit path bad)
+        (write! (clock 0.9) {:path "a.clj" :content "(ns a)\n(defn f [] 3]\n"})
+        (is (str/includes? (slurp path) "3")))
+      (testing "nor does a new file"
+        (write! (clock 0.9) {:path "b.clj" :content bad})
+        (is (= bad (slurp (str root "/b.clj")))))
+      (testing "a write that loads goes through"
+        (spit path good)
+        (write! (clock 0.9) {:path "a.clj" :content "(ns a)\n(defn f [] 4)\n"})
+        (is (str/includes? (slurp path) "4")))
+      (finally (fs/delete-tree root)))))
+
+(deftest a-symlink-out-of-the-project-is-not-searched
+  ;; grep handed back the lines of a file outside the root, through a link inside it.
+  (let [base (str "/tmp/samizdat-files-" (random-uuid))
+        root (str base "/proj")
+        secret (str base "/creds.clj")]
+    (fs/create-dirs (str root "/src"))
+    (spit secret "(def token \"TOP-SECRET\")\n")
+    (spit (str root "/src/a.clj") "(def token \"mine\")\n")
+    (proc/run {:dir root} "ln" "-s" secret "src/creds.clj")
+    (try
+      (let [hits (files/grep-project root "token")]
+        (is (= ["src/a.clj"] (mapv :path hits)))
+        (is (not (str/includes? (pr-str hits) "TOP-SECRET"))))
+      (is (= ["src/a.clj"] (files/glob-project root "**/*.clj")))
+      (finally (fs/delete-tree base)))))
+
 (deftest anchored-read-and-patch-round-trip
   ;; karamazov-0kk: the model spends a coordinate it was HANDED instead of
   ;; reproducing the text it is replacing.
@@ -256,7 +325,8 @@
   ;; `eval` — ten turns of forty to read the file it was told to start from.
   (let [dir (str (fs/create-temp-dir))
         big (str/join "\n" (map #(str "line " % " " (apply str (repeat 60 \x)))
-                                (range 400)))
+                                (range 1200)))
+        ;; Larger than one page at :tool-result-chars, which is now 40,000.
         _ (spit (str dir "/big.txt") big)
         read #(files/read-file {:branch {:id "B1"} :root dir :args %})
         p1 (:result (read {:path "big.txt"}))]
@@ -271,8 +341,8 @@
         (is (str/includes? p2 (str "line " next-line " ")))
         (is (not (str/includes? p2 "line 0 ")))))
     (testing "paging reaches the end, where nothing more is offered"
-      (let [last-page (:result (read {:path "big.txt" :offset 395}))]
-        (is (str/includes? last-page "line 399"))
+      (let [last-page (:result (read {:path "big.txt" :offset 1195}))]
+        (is (str/includes? last-page "line 1199"))
         (is (not (str/includes? last-page "Continue with")))))
     (testing "limit bounds the page in lines"
       (let [r (:result (read {:path "big.txt" :offset 10 :limit 3}))]

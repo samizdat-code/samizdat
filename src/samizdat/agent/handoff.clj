@@ -149,6 +149,28 @@
     (messages {:why :deadline :seconds seconds :turn turn
                :row row :dispatch dispatch :read-only read-only})))
 
+(defn stage-error
+  "The messages a branch gets when its turn threw inside the harness: what was
+  in flight, as a crash reports it, and what broke. Reads like `forfeit!` and
+  for the same reason must never throw, the beam is mid-round."
+  [conn run-id branch turn why]
+  (let [{:keys [row dispatch]}
+        (try
+          (when (and conn run-id)
+            (let [row (journal/turn-row conn run-id (:id branch) turn)]
+              {:row row
+               :dispatch (when-not row
+                           (journal/dispatch-at conn run-id (:id branch) turn))}))
+          (catch Throwable _ nil))
+        said (try (messages {:why :crash :turn turn :row row :dispatch dispatch
+                             :read-only (lexicon/wordlist :retry-safe-tools)})
+                  (catch Throwable _ []))
+        text (try (prompt/render "turn-stage-error" {:why why})
+                  (catch Throwable _ (str why)))]
+    (if (= "user" (:role (peek (vec said))))
+      (update (vec said) (dec (count said)) update :content str "\n\n" text)
+      (conj (vec said) {:role "user" :content text :turn turn}))))
+
 (defn after-crash
   "The messages a resumed branch gets for the call in flight when the
   process died: the dispatch note no turn row settled, or nil. One the beam
