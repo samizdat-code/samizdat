@@ -32,6 +32,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The runner image now ships bubblewrap, so `:sandbox :auto` picks bwrap
+      # here; Ubuntu 24.04's AppArmor blocks the unprivileged user namespace it
+      # needs, and every confined shell command failed (red since 2026-11-09).
+      # Lift it, as linux-sandbox.yml does: the runner is ours for the job.
+      - name: Allow user namespaces for bwrap
+        run: |
+          if command -v bwrap >/dev/null; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+            bwrap --version
+          fi
+
       # Building jolt from source needs Chez and a C toolchain; the release
       # binary is self-contained, so the install script is the cheap path.
       - name: Install jolt

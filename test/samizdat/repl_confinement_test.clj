@@ -71,7 +71,8 @@
   that quietly passes on the platform where the protection does not exist
   would hide exactly the gap zrq.8 is open about."
   []
-  (not= :none (sandbox/backend-for :auto (System/getProperty "os.name"))))
+  (not= :none (sandbox/backend-for :auto (System/getProperty "os.name")
+                                   (some? (fs/which "bwrap")))))
 
 ;; --- the door to the unconfined image ---------------------------------------
 

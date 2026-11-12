@@ -115,7 +115,8 @@
     (run "rm -rf /")
     (let [ns (journal/notes c rid :action)]
       (is (= 3 (count ns)))
-      (is (= [0 1 nil] (map :exit ns)))
+      ;; ls on a missing path exits 1 on BSD and 2 on GNU.
+      (is (= [0 :failed nil] (map #(some-> (:exit %) (as-> e (if (pos? e) :failed e))) ns)))
       (is (= "eval" (:via (second ns))))
       (is (true? (:refused? (nth ns 2))))
       (is (= {"echo hi" [1 0] "ls /nonexistent-oi16" [0 1]}
