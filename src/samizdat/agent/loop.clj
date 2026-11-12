@@ -687,7 +687,11 @@
     ;; (samizdat.replay) needs it as a first-class seam rather than a test
     ;; hack, because the validation gate runs it in production
     ;; (karamazov-ylte.4). Absent from ctx, nothing changes.
-    (let [r ((or (:complete ctx) (infer/complete-fn ctx)) (infer/of-branch branch))]
+    (let [r (if-let [complete (:complete ctx)]
+              ;; With the window the live call renders against, so a replay's
+              ;; digest is of the request that was sent (karamazov-z5sj).
+              (complete (infer/with-window ctx (infer/of-branch branch)))
+              ((infer/complete-fn ctx) (infer/of-branch branch)))]
       ;; A REPLAY THAT DIVERGED (karamazov-luqc.2). samizdat.replay serves a
       ;; recorded reply whatever the tape now says — that is what lets an
       ;; edit be measured on a fixed conversation — and reports, once per
