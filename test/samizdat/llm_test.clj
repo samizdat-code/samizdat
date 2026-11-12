@@ -2682,3 +2682,34 @@
              (try (client/chat a {:model "m" :max-retries 0} [{:role "user" :content "x"}]) nil
                   (catch Exception e (:reason (ex-data e)))))))))
 
+
+(deftest a-reply-says-how-the-call-went
+  ;; karamazov-uqmg: a stalled call looked like a slow turn. The reply carries
+  ;; the attempts it took and how long until the first content, and the stream
+  ;; is given a first-content limit so one that sends only keep-alives is cut.
+  (let [sent (atom nil)
+        calls (atom 0)
+        whole "{\"choices\":[{\"message\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}"]
+    (with-redefs [samizdat.llm.stream/post (fn [_ opts _]
+                                             (reset! sent opts)
+                                             (when (= 1 (swap! calls inc))
+                                               (throw (ex-info "provider stream ended before [DONE]: no content within 5 ms of the request" {})))
+                                             {:status 200 :headers {} :body whole :first-content-ms 42})
+                  samizdat.cancel/sleep! (fn [& _] nil)]
+      (let [r (client/chat (registry/adapter-for :local)
+                           {:base-url "http://h/v1" :model "m" :features #{:stream} :max-retries 2}
+                           [{:role "user" :content "x"}]
+                           {:max-tokens 5 :on-delta identity})]
+        (is (= "ok" (:content r)))
+        (is (= 2 (:attempts r)) "the stalled attempt is counted")
+        (is (= 42 (:first-content-ms r)))
+        (is (pos? (:first-content-ms @sent)) "the stream is given a first-content limit")))
+    (testing "a provider's config sets the limit, and 0 turns it off"
+      (with-redefs [samizdat.llm.stream/post (fn [_ opts _] (reset! sent opts)
+                                               {:status 200 :headers {} :body whole})]
+        (client/chat (registry/adapter-for :local)
+                     {:base-url "http://h/v1" :model "m" :features #{:stream}
+                      :stream-first-content-ms 0}
+                     [{:role "user" :content "x"}]
+                     {:max-tokens 5 :on-delta identity})
+        (is (= 0 (:first-content-ms @sent)))))))

@@ -290,6 +290,11 @@
                        line, the chunked transfer-encoding header, the URL
                        form. Protocol, not a vocabulary a project chooses."}}
 
+   "src/samizdat/llm/stream.clj"
+   {:threshold {50 "The watchdog's shortest wake-up, so a tiny idle bound
+                    cannot spin a thread. Scheduling, not a policy: the bounds
+                    it polls for come from the provider config."}}
+
    "src/samizdat/api/stream.clj"
    {:vocabulary {:all "The query syntax of the stream's own cursor parameter
                        (?since=). The API's shape, not policy."}}

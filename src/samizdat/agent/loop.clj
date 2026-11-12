@@ -997,6 +997,8 @@
                            ;; tokens, and those are the ones worth counting.
                            :usage (:usage response)
                            :elapsed-ms (:elapsed-ms response)
+                           :first-content-ms (:first-content-ms response)
+                           :attempts (:attempts response)
                            :model-change (:model-change branch)
                            :prefix (:last-prefix branch)
                            :forced-tool (:forced-tool (:last-prefix branch))
@@ -1383,6 +1385,8 @@
                          ;; How long the call took, beside what it produced
                          ;; (karamazov-a28w): tokens per second is a query.
                          :elapsed-ms (:elapsed-ms response)
+                         :first-content-ms (:first-content-ms response)
+                         :attempts (:attempts response)
                          ;; The model this branch learned it is running on,
                          ;; only on the turn it learned it; absorb-response
                          ;; wrote it.

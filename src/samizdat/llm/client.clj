@@ -95,6 +95,15 @@
   overrides it, and 0 turns it off."
   120000)
 
+(def default-stream-first-content-ms
+  "How long a streamed request may go without its first content — reasoning
+  or text — before it is cut and retried. Keep-alives are not content
+  (karamazov-uqmg: music-harmony lost 14 minutes on one call that sent none).
+  Sized well past a hosted model's prefill of a long prompt; a slow local
+  server's provider config raises it with :stream-first-content-ms, and 0
+  turns it off."
+  300000)
+
 (def default-read-timeout-overhead-ms
   "Fixed headroom added to the budget-derived read timeout: connect, prefill of
   a long prompt, and first-token latency, none of which scale with the output
@@ -373,7 +382,9 @@
         resp (try
                (if streamed?
                  (stream/post url (assoc opts :max-response-ms (:max-response-ms config)
-                                         :idle-ms (:stream-idle-ms config default-stream-idle-ms))
+                                         :idle-ms (:stream-idle-ms config default-stream-idle-ms)
+                                         :first-content-ms (:stream-first-content-ms config
+                                                                                      default-stream-first-content-ms))
                               (:on-delta request))
                  (http/post url (assoc opts :throw-exceptions false)))
                (catch Throwable e
@@ -466,6 +477,7 @@
                                         (get-in body [:tool_choice :function :name]) :native
                                         (:grammar body) :grammar
                                         use-prefill? :prefill)
+                          :first-content-ms (:first-content-ms resp)
                           :elapsed-ms elapsed}}))
           {:outcome :fatal
            :error (str (adapter/display-name adapter)
@@ -644,9 +656,12 @@
                            :provider (:provider config) :model (:model config))
                     (:usage response)))
                  (catch Throwable _ nil)))
-             (if-let [seed continuation-seed]
-               (merge-continuation seed response)
-               response))
+             ;; How the call went, for the turn's record (karamazov-uqmg): the
+             ;; attempts it took and how long until the first content came.
+             (cond-> (if-let [seed continuation-seed]
+                       (merge-continuation seed response)
+                       response)
+               true (assoc :attempts (inc attempt))))
 
            (or (= :fatal (:outcome result)) (>= attempt retries))
            (let [partial (:partial-response result)

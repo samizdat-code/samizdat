@@ -570,7 +570,7 @@
    {:name samizdat.store.journal/artifacts
     :summary "Every artifact this run banked, across all branches."}
    {:name samizdat.store.journal/branch-turns
-    :summary "One branch's turns as light rows — tool, args, category, result, the token counts and elapsed_ms — the query to reach for when a failure report names a branch and you want its whole trajectory, not one turn. completion_tokens over elapsed_ms is that turn's generation rate, which is how a slow endpoint or a contended local server shows up turn by turn."}
+    :summary "One branch's turns as light rows — tool, args, category, result, the token counts, elapsed_ms, first_content_ms and call_attempts — the query to reach for when a failure report names a branch and you want its whole trajectory, not one turn. completion_tokens over elapsed_ms is that turn's generation rate, which is how a slow endpoint or a contended local server shows up turn by turn; a large first_content_ms or call_attempts above 1 is a stalled call, not slow decode."}
    {:name samizdat.store.journal/run-usage
     :summary "What the run has spent: turns, side calls, tokens, and the share of prompt tokens the cache served. The token total covers BOTH the committed turns and the side models (the reader behind read_digest, the critic, the reflection, the trajectory scorer) — it is what the beam ends a run :exhausted against. :cache-hit-rate is nil rather than 0 when no provider on the run reported a cache lane."}
    {:name samizdat.store.journal/cache-misses
