@@ -65,12 +65,19 @@
     (is (= :timeout
            (try (dap/request! client "threads" {}) nil
                 (catch clojure.lang.ExceptionInfo e (:debug/error (ex-data e))))))
-    (let [waiting (future
+    ;; Cancel only once the request is pending, under a timeout it cannot
+    ;; reach first: a 5 ms sleep against a 20 ms timeout lost the race on the
+    ;; macOS release runner, which cancelled nothing and then timed out.
+    (let [client (assoc client :policy (assoc policy :timeout-ms 30000))
+          waiting (future
                     (try (dap/request! client "threads" {}) nil
                          (catch clojure.lang.ExceptionInfo e (:debug/error (ex-data e)))))]
-      (Thread/sleep 5)
+      (loop [n 0]
+        (when (and (empty? @(:pending client)) (< n 500))
+          (Thread/sleep 10)
+          (recur (inc n))))
       (dap/cancel! client)
-      (is (= :cancelled (deref waiting 1000 ::not-cancelled))))))
+      (is (= :cancelled (deref waiting 5000 ::not-cancelled))))))
 
 (deftest semantic-debug-lifecycle-is-exact-owner
   (let [{:keys [conn] :as ctx} (fixture)
