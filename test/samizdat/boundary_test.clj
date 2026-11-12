@@ -145,7 +145,11 @@
    ;; the rule above says output redaction alone is not enough for a tool that
    ;; spawns.
    "eval"        {:reach :in-process     :also "tools/repl scrubbed wrapper; repl.image/start! scrub-env before spawn (project image); a bridge call (tool/<name>, a callable cell) runs through tools/run-tool like a turn's"}
-   "shell"       {:reach :spawns-process :also "policy/run-shell: scrub-env before spawn"}
+   "shell"       {:reach :spawns-process :also "policy/run-shell, or policy/start-shell for background: scrub-env before spawn"}
+   ;; Reads the buffered output of jobs `shell {background: true}` started
+   ;; (redacted with that command's known values) and signals them. Spawns
+   ;; nothing and reaches no process outside its own run's registry.
+   "jobs"        {:reach :harness-only}
 
    ;; The two READ tools. Wider than the write tools by one deliberate step:
    ;; resolve-for-read admits the project root plus the reference roots the
