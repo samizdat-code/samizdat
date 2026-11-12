@@ -445,6 +445,15 @@
    {:name samizdat.store.captures/prune!
     :summary "Prune only delivered captures outside gates.edn :shell-logs age, count, or capacity policy; active and undelivered evidence is protected."}]}
 
+ {:group "Background jobs"
+  :entries
+  [{:name samizdat.security.policy/start-shell
+    :summary "shell {command, background: true}: the same gate as any command (rules, grants, outside reads, flow label, approval, scrubbed env, root, OS sandbox), then the confined argv is started as a job of the run instead of being waited for. The sandbox wraps the job's own process, so it outlives the call and dies with the run. Prose in prompts/background-job.md."}
+   {:name samizdat.engine.jobs/start!
+    :summary "The job registry, per run (after ECA's background tasks): at most gates.edn :background-jobs :max-jobs running, each keeping its last :buffer-lines lines with a read cursor, and a kill the exit monitor cannot overwrite. `jobs`, `read!`, `peek-lines`, `kill!`; run-state/run-ended! calls `forget-run!`, which kills them all."}
+   {:name samizdat.agent.tools.jobs/exit-notice
+    :summary "The `jobs` tool (list, output since the last read, kill; prompts/jobs-tool.md), and the notice a branch gets at its next call when one of its jobs exits on its own, with its last :notice-tail-lines lines (prompts/job-exited.md)."}]}
+
  {:group "Evidence and diagnosis"
   :entries
   [{:name samizdat.store.evidence/status

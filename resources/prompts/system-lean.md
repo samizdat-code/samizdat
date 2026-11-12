@@ -36,8 +36,10 @@ write_file({path, content})
     Write a whole file.
 edit_file({path, old_text, new_text, replace_all?})
     Replace text in a file; old_text must match exactly once unless replace_all.
-{% if not no-shell %}shell({command})
-    Run a shell command in the project and get its output and exit code.
+{% if not no-shell %}shell({command, background?})
+    Run a shell command in the project and get its output and exit code. With `background: true` it keeps running after the call (a server you test against) and returns its first output and a job id; it is stopped when the run ends.
+jobs({action, id?})
+    Background jobs: "list"; "output" with `id`, what it wrote since the last read; "kill" with `id`.
 {% endif %}grep({pattern, paths?, offset?})
     Search file contents.
 glob({pattern, paths?, offset?})
