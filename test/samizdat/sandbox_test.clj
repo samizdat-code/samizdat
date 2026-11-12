@@ -437,3 +437,19 @@
       (is (not (.exists (java.io.File. (str prot "/new.clj")))))
       (is (str/includes? (:out (sh "cat .samizdat/gates.edn && echo ok > f && cat f")) "ok")
           "readable, and the rest of the project still writable"))))
+
+(deftest bwrap-binds-only-absolute-paths
+  ;; CI's Linux job, once the runner image shipped bwrap: a shell run with no
+  ;; :root has "." for its project root, and `--bind . .` mounts the working
+  ;; directory over the sandbox's / — bash vanished ("bwrap: execvp bash: No
+  ;; such file or directory"). Seatbelt resolves every path; bwrap now does too.
+  (let [argv (sandbox/bwrap-shell-argv {:project-root "." :scratch-paths ["tmp-scratch"]
+                                        :deny-dirs ["rel-secrets"] :deny-files ["rel.key"]})
+        mount-args (->> (partition 2 1 argv)
+                        (filter (fn [[flag _]] (#{"--bind" "--ro-bind" "--tmpfs"} flag)))
+                        (map second))]
+    (is (seq mount-args))
+    (is (every? #(clojure.string/starts-with? % "/") mount-args)
+        (pr-str argv))
+    (is (not-any? #{"."} argv) "no relative root reaches bwrap")))
+
