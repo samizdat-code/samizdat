@@ -216,10 +216,15 @@
                   (dissoc t :id :run_id :created_at)))
         run-row (fn [c rid]
                   (dissoc (runs/get-run c rid) :id :created_at :started_at :ended_at :finished_at :updated_at))
+        ;; No supervisor stream, as a replay runs (karamazov-x0dx): only the
+        ;; beam has one, and its passes fire on a clock, so on a slow machine
+        ;; one landed mid-run and journaled an :oversight-quiet row the other
+        ;; driver has no counterpart to (macOS CI, 14 times by 2026-11-12).
         drive (fn [driver c]
                 (driver {:conn c :config {:run {:beam-width 1}} :beam-width 1
                          :llm-adapter :a :llm-config {:max-tokens 16384}
                          :problem "solve the problem" :max-turns 10
+                         :oversight? false
                          :complete (replay/case-complete-fn case-)}))]
     (with-redefs [llm/chat (fn [& _] (throw (ex-info "the provider must not be called" {})))]
       (with-db [c1]
