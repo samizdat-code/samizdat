@@ -20,7 +20,8 @@
   "The repair ladder as a composition: rungs are core fns, cells wrap them,
   the `repair` manifest wires them, and fence's seam runs the installed
   composition with the built-in chain as the fail-open fallback."
-  (:require [clojure.test :refer [deftest testing is]]
+  (:require [clojure.data.json]
+            [clojure.test :refer [deftest testing is]]
             [mycelium.cell :as cell]
             [mycelium.core :as myc]
             [samizdat.cells :as cells]
@@ -81,3 +82,28 @@
              (fence/repair-json "{\"a\": 1,}"))))
     (finally
       (fence/install-repair! nil))))
+
+(deftest a-regex-escape-keeps-its-backslash
+  ;; karamazov-0wvc.12, next-30: 8 of 19 parse errors were shell commands
+  ;; with grep's \| (or \d, \.) written straight into the JSON string. The
+  ;; backslash was meant literally, so it is doubled for the characters
+  ;; gates.edn :literal-escapes lists. \& is not listed: 2>\&1 meant 2>&1,
+  ;; and keeping the backslash would redirect to a file, so it stays an error
+  ;; that names the escape (karamazov-na2k.20).
+  (when (nil? (cell/get-cell :repair/literal-escapes))
+    (cells/load-cells!))
+  (is (= "{\"command\": \"grep 'a\\\\|b' f\"}"
+         (fence/escape-literal-backslashes "{\"command\": \"grep 'a\\|b' f\"}" "|")))
+  (is (= "{\"a\": \"x\\\\&1\"}" (fence/escape-literal-backslashes "{\"a\": \"x\\&1\"}" "&")))
+  (is (= "{\"a\": \"x\\&1\"}" (fence/escape-literal-backslashes "{\"a\": \"x\\&1\"}" "|"))
+      "an unlisted character is left for the error")
+  (is (= "{\"a\": \"\\n\\\\\\\"\"}" (fence/escape-literal-backslashes "{\"a\": \"\\n\\\\\\\"\"}" "|n\\\""))
+      "valid escapes are never touched, whatever the list says")
+  (is (= "{\"a\\|\": 1}" (fence/escape-literal-backslashes "{\"a\\|\": 1}" ""))
+      "an empty list repairs nothing")
+  (testing "through the manifest, a shell call with grep's alternation parses"
+    (let [body "{\"name\": \"shell\", \"args\": {\"command\": \"grep -E 'a\\|b\\.c\\d' f\"}}"]
+      (is (= "grep -E 'a\\|b\\.c\\d' f"
+             (get-in (clojure.data.json/read-str (manifest-repair body) :key-fn keyword)
+                     [:args :command])))))
+  (is (:pure (cell/get-cell :repair/literal-escapes))))

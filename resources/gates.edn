@@ -1032,6 +1032,18 @@
         lifetime count, read in the gate's :when: a budget resets on a met settlement,
         and this gate is met by any ordinary call."}
 
+ :literal-escapes
+ {:value "|.()[]{}+*?^$<>-dDsSwWB0123456789"
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-0wvc.12" "karamazov-na2k.20"]
+  :doc "Characters after which a backslash in a tool-call string that is not a
+        valid JSON escape is kept literally (the repair manifest's
+        :repair/literal-escapes rung doubles it). Regex and grep escapes: in
+        TB next-30, 8 of 19 parse errors were grep's \\| written into a shell
+        command. & and ' are left out on purpose: 2>\\&1 meant 2>&1, and
+        keeping the backslash would redirect to a file named &1, so those
+        stay a parse error that names the escape."}
+
  :orphan-call
  {:value [[["command"] "shell"]
           [["path" "old_text"] "edit_file"]

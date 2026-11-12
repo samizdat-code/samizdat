@@ -288,7 +288,7 @@
 
     ;; String repair. Pure.
     samizdat.llm.fence
-    {:vars [close-unbalanced fill-dangling-key repair-control-chars strip-trailing-commas]}
+    {:vars [close-unbalanced escape-literal-backslashes fill-dangling-key repair-control-chars strip-trailing-commas]}
 
     ;; The adapter for a provider config. Constructs, calls nothing.
     samizdat.llm.registry

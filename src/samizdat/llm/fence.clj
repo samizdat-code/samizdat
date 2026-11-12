@@ -165,6 +165,37 @@
             :else
             (do (.append sb ch) (recur (inc i) in-string? false))))))))
 
+(defn escape-literal-backslashes
+  "Double a backslash inside a JSON string when it starts no valid escape and
+  the character after it is one of `chars` — a model writing grep's `\\|` or
+  a regex's `\\d` straight into a string meant the backslash literally
+  (karamazov-0wvc.12). Which characters is policy, handed in: for some (`&`
+  in `2>\\&1`) the backslash was a slip, and keeping it changes what the
+  command does, so those stay a parse error that names the escape. Valid
+  escapes and everything outside strings are copied through."
+  [^String input chars]
+  (let [n (count input)
+        listed (set (str chars))
+        valid #{\" \\ \/ \b \f \n \r \t \u}
+        sb (StringBuilder.)]
+    (loop [i 0, in-string? false]
+      (if (>= i n)
+        (.toString sb)
+        (let [ch (.charAt input i)]
+          (cond
+            (and in-string? (= \\ ch) (< (inc i) n))
+            (let [nx (.charAt input (inc i))]
+              (if (and (not (valid nx)) (listed nx))
+                (do (.append sb "\\\\") (.append sb nx))
+                (do (.append sb ch) (.append sb nx)))
+              (recur (+ i 2) true))
+
+            (= \" ch)
+            (do (.append sb ch) (recur (inc i) (not in-string?)))
+
+            :else
+            (do (.append sb ch) (recur (inc i) in-string?))))))))
+
 (defn strip-trailing-commas
   "Remove commas that sit directly before a `}` or `]`, outside strings —
   `{\"a\": 1,}` is how a model writes an object it assembled incrementally,

@@ -326,6 +326,8 @@
     :summary "Share of a run's wall-clock limit spent, nil when the run has none. A limit comes from config.edn :run :time-limit-seconds; the :time-wind-down and :time-last-call gates read this against gates.edn :time-budget, at most :max-time-steers times a run."}
    {:name samizdat.agent.gates/time-left-seconds
     :summary "Seconds left of a run's wall-clock limit, nil when the run has none; a gate's prose gets it as {{time-left-seconds}}."}
+   {:name samizdat.llm.fence/escape-literal-backslashes
+    :summary "Repair rung: double a backslash inside a JSON string that starts no valid escape, for the characters handed in. The repair manifest's :repair/literal-escapes cell hands it gates.edn :literal-escapes, so grep's \\| in a shell command parses while 2>\\&1 stays an error."}
    {:name samizdat.llm.fence/install-orphan-tools!
     :summary "Set the table that names the tool for a damaged tool call whose invoke line was lost, by which parameters it carries. Order matters: first match wins. The table is gates.edn :orphan-call."}
    {:name samizdat.userspace/save!
