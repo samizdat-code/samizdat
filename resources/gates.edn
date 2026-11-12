@@ -85,6 +85,21 @@
         than every :poll-floor-ms, so a branch waiting on a build costs one
         turn and a handful of check runs rather than a turn a look."}
 
+ :background-jobs
+ {:value {:max-jobs 10 :buffer-lines 2000 :max-line-chars 4000
+          :initial-wait-ms 1500 :poll-ms 50 :notice-tail-lines 20}
+  :kind :threshold :capability-tunable? false
+  :provenance ["ECA src/eca/features/background_tasks.clj"]
+  :doc "`shell {background: true}` and the `jobs` tool (samizdat.engine.jobs).
+        A run has at most :max-jobs running at once, and a start past that is
+        refused before it is decided. Each keeps its last :buffer-lines lines
+        of output, a line cut at :max-line-chars. A start waits up to
+        :initial-wait-ms, looking every :poll-ms, so a command that dies at once
+        is reported failed with its output and a server's first lines come
+        back with the start. The notice of a job that ended on its own shows
+        its last :notice-tail-lines lines. Limits after ECA's (10 jobs, 2000
+        lines)."}
+
  :mcp
  {:value {:timeout-ms 30000}
   :kind :threshold :capability-tunable? false
@@ -4911,13 +4926,14 @@
   ;; business, not a storm — plus done/give_up, whose repetition belongs to
   ;; the done-blocked and last-call rungs: storm withholding a done that
   ;; last-call is simultaneously forcing would be one guard punishing what
-  ;; another demands (dirge hit that conflict three separate times).
+  ;; another demands (dirge hit that conflict three separate times). `jobs`
+  ;; too: polling a background job's output is the same call with a new answer.
   ;; :storm-mutating tools clear the window's non-mutating entries when they
   ;; fire, and still count amongst themselves. Everything in neither set is
   ;; counted normally.
   :storm-exempt #{"read_file" "read_digest" "grep" "doc" "manual" "introspect" "cells"
                   "recall" "fetch_artifact" "fetch_turn" "branch_theses"
-                  "lsp" "skill" "policy" "complete" "done" "give_up"}
+                  "lsp" "skill" "policy" "complete" "done" "give_up" "jobs"}
   :storm-mutating #{"write_file" "edit_file" "shell" "eval" "reload_cells"
                     "cell" "prompt" "manifest" "adopt" "experiment" "remember"
                     "forget" "retire"}
