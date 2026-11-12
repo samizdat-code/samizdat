@@ -120,13 +120,27 @@
 
 ;; --- the eval bridge (karamazov-xn0h.7) --------------------------------------
 
+;; with-redefs swaps a var's ROOT, so it must never run on two threads at
+;; once: each saves what it finds and puts that back, and when they overlap
+;; the later one saves the earlier one's stub and restores it for good. The
+;; concurrent test below did exactly that from its two futures, and left
+;; bridge-policy and callable/cells stubbed for every namespace after it —
+;; actions-test's bridge then refused write_file and callable-test saw no
+;; callable cells (karamazov-6ci8, karamazov-92y3, karamazov-bmce). So the
+;; stubs are set once, on the test's own thread, around whatever it starts.
+(defn- with-bridge [cells f]
+  (with-redefs [route/bridge-policy (constantly {:enabled? true :tools #{"read_file" "grep"}
+                                                 :cells? true :call-timeout-ms 5000})
+                samizdat.callable/cells (constantly (mapv (fn [id] {:id id}) cells))]
+    (f)))
+
+(defn- eval-bridged [session handler code]
+  (route/eval-for (assoc (ctx session) :bridge handler) code session 15000))
+
 (defn- bridged
   ([session handler code] (bridged session handler code []))
   ([session handler code cells]
-   (with-redefs [route/bridge-policy (constantly {:enabled? true :tools #{"read_file" "grep"}
-                                                  :cells? true :call-timeout-ms 5000})
-                 samizdat.callable/cells (constantly (mapv (fn [id] {:id id}) cells))]
-     (route/eval-for (assoc (ctx session) :bridge handler) code session 15000))))
+   (with-bridge cells #(eval-bridged session handler code))))
 
 (deftest a-tool-called-from-eval-comes-back-as-a-value
   (let [s (repl/new-session)
@@ -156,10 +170,17 @@
   ;; requests its own eval queued, or a call runs with the wrong branch.
   (let [a (repl/new-session) b (repl/new-session)
         code "(do (Thread/sleep 200) (tool/grep {:pattern \"x\"}))"
-        fa (future (bridged a (fn [_] (Thread/sleep 100) {:value "from-a"}) code))
-        fb (future (bridged b (fn [_] {:value "from-b"}) code))]
-    (is (= "\"from-a\"" (:value @fa)) (pr-str @fa))
-    (is (= "\"from-b\"" (:value @fb)) (pr-str @fb))))
+        policy @#'route/bridge-policy
+        cells @#'samizdat.callable/cells
+        [ra rb] (with-bridge []
+                  #(let [fa (future (eval-bridged a (fn [_] (Thread/sleep 100) {:value "from-a"}) code))
+                         fb (future (eval-bridged b (fn [_] {:value "from-b"}) code))]
+                     [@fa @fb]))]
+    (is (= "\"from-a\"" (:value ra)) (pr-str ra))
+    (is (= "\"from-b\"" (:value rb)) (pr-str rb))
+    (is (and (identical? policy @#'route/bridge-policy)
+             (identical? cells @#'samizdat.callable/cells))
+        "the stubs are gone once the test is done")))
 
 (deftest a-poll-the-image-cannot-answer-does-not-outlive-the-eval
   ;; karamazov-xn0h.9: an eval wedged in a foreign call left the image unable
