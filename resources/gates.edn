@@ -1982,6 +1982,10 @@
           ;; it could fix it, twice (karamazov-i692). A pass with nothing to do
           ;; ends itself, so this bounds the ones that are doing something.
           :pass-max-turns 20
+          ;; Turns a CHECK-IN may spend: a pass nothing woke but
+          ;; :oversight-limits :checkin-minutes. One used 19 of its 20 re-reading
+          ;; a run that was fine. A glance; nil gives it :pass-max-turns.
+          :checkin-max-turns 6
           ;; Journal events that skip the spacing: a workflow asking for help,
           ;; a stage that crashed, and a done held for its ship review
           ;; (karamazov-oi16.11), whose hold would outlast a two-minute wait.
