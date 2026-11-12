@@ -23,7 +23,8 @@
   the scrubbed environment, and output redaction. See
   samizdat.agent.tools.base for the shared result helpers and the run-tool
   multimethod."
-  (:require [samizdat.agent.actions :as actions]
+  (:require [clojure.string :as str]
+            [samizdat.agent.actions :as actions]
             [samizdat.agent.files :as files]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
@@ -79,6 +80,10 @@
     ;; harness's own among them, readable though not writable (karamazov-1gbh).
     (let [home (System/getenv "HOME")
           began (System/currentTimeMillis)
+          ;; The call's own timeout, capped (policy/shell-timeout).
+          asked (some-> (base/arg ctx :timeout_ms) str str/trim parse-long)
+          {:keys [default-ms max-ms]} policy/shell-timeout
+          ctx (assoc ctx :timeout-ms (min (or max-ms default-ms) (or asked default-ms)))
           r (policy/run-shell (assoc ctx :read-roots
                                      (concat [(or (:root ctx) ".")]
                                              (files/ctx-reference-roots ctx)

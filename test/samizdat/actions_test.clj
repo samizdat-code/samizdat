@@ -71,6 +71,33 @@
   (is (true? (:refused? (actions/note {:command "x" :ms 1 :command-chars 99}
                                       {:category :mechanics :policy-refusal? true})))))
 
+(deftest the-shell-result-says-how-the-command-ended
+  ;; eca starts every shell result with its exit code; samizdat sent only the
+  ;; output, so a failed command with no output read like a success, and 929
+  ;; of 3,206 shell calls in the programbench runs echoed $? by hand.
+  (let [c (db/open! ":memory:")
+        rid (runs/start-run! c {:problem "p"})
+        root (str (fs/create-temp-dir))
+        b (state/new-branch {:id "B1" :problem "p"})
+        run (fn [args] (tools-base/run-tool {:tool-name "shell" :branch b :root root :conn c
+                                             :run-id rid :turn 4 :args args}))]
+    (is (str/starts-with? (:result (run {:command "ls"})) "[exit 0]"))
+    (is (str/starts-with? (:result (run {:command "ls /nonexistent-1fai"})) "[exit 1]"))
+    (testing "eca takes a timeout argument; samizdat ignored the 36 timeout_ms it was sent"
+      (let [asked (atom nil)
+            r (with-redefs [samizdat.engine.proc/run (fn [opts & _] (reset! asked (:timeout-ms opts))
+                                                       {:timeout true :ms (:timeout-ms opts) :out ""})]
+                (run {:command "ls" :timeout_ms 300}))]
+        (is (= 300 @asked) "the command's own timeout applies")
+        (is (true? (:timeout? r)))
+        (is (str/includes? (:result r) "timeout_ms") "and the result says how to ask for longer"))
+      (let [seen (atom nil)
+            {:keys [max-ms]} samizdat.security.policy/shell-timeout]
+        (with-redefs [samizdat.security.policy/run-shell (fn [ctx] (reset! seen (:timeout-ms ctx))
+                                                           {:category :success :result "ok"})]
+          (run {:command "true" :timeout_ms (* 10 max-ms)}))
+        (is (= max-ms @seen) "capped by policy/shell-timeout")))))
+
 (deftest the-shell-tool-journals-each-command-it-runs
   (let [c (db/open! ":memory:")
         rid (runs/start-run! c {:problem "p"})

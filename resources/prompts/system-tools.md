@@ -348,7 +348,10 @@ ask_human({questions})
     problem says to ask, or names a decision as the person's: ask before you
     build on it, not after. Decide anything else yourself and say which way
     you went. Asking costs a turn and establishes nothing.
-shell({command})
+shell({command, timeout_ms})
+    The result starts with how the command ended, `[exit N]`; you do not need
+    to echo $?. timeout_ms gives a long build or test run more time than the
+    default (it is capped; the timeout message says the cap).
     Run one or MORE shell commands. A command may be several statements —
     separated by newlines, `;`, `&&` or a pipe — and they run in one call, in
     order, as one turn. Prefer that to a turn per command: five separate calls

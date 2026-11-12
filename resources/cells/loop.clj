@@ -363,6 +363,11 @@
                         (:limit (gates/threshold :rate-limit)))
                     :abandoned
 
+                    ;; So do transient outages (karamazov-1fai).
+                    (>= (or (:consecutive-outages branch) 0)
+                        (or (:limit (gates/threshold :provider-outage)) 0))
+                    :abandoned
+
                     ;; The run has spent its token budget (the arbiter read
                     ;; it): every loop's branch ends, nested ones included.
                     (:over-budget? data) :exhausted
@@ -379,7 +384,8 @@
                   (str/trim (prompt/render "abandoned-reason"
                                            (if (state/active? branch)
                                              {:provider-errors (+ (or (:consecutive-provider-errors branch) 0)
-                                                                  (or (:consecutive-rate-limits branch) 0))}
+                                                                  (or (:consecutive-rate-limits branch) 0)
+                                                                  (or (:consecutive-outages branch) 0))}
                                              {:status (some-> (:status branch) name)}))))
 
         (= verdict :continue)

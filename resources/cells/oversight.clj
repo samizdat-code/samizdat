@@ -561,7 +561,8 @@
   ;; a pass is not charged for how the one before it ended.
   (cond-> (-> b
               (dissoc :final-answer :verdict :done? :inactive-reason
-                      :consecutive-mechanics-failures :consecutive-provider-errors :consecutive-rate-limits)
+                      :consecutive-mechanics-failures :consecutive-provider-errors :consecutive-rate-limits
+                      :consecutive-outages)
               (assoc :status :active :advisory? true))
     brief (update :messages (fnil conj []) {:role "user" :content brief})))
 

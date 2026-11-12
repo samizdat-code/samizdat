@@ -36,7 +36,7 @@ write_file({path, content})
     Write a whole file.
 edit_file({path, old_text, new_text, replace_all?})
     Replace text in a file; old_text must match exactly once unless replace_all.
-{% if not no-shell %}shell({command})
+{% if not no-shell %}shell({command, timeout_ms})
     Run a shell command in the project and get its output and exit code.
 {% endif %}grep({pattern, paths?, offset?})
     Search file contents.

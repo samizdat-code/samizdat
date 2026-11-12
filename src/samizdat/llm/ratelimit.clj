@@ -35,6 +35,25 @@
 
 (defonce ^:private latches (atom {}))
 
+(def ^:private unit-ms
+  ;; Go's duration units, which OpenAI's x-ratelimit-reset-* headers use.
+  {"ms" 1 "s" 1000 "m" 60000 "h" 3600000})
+
+(defn duration-ms
+  "A reset header's value in ms, or nil: a bare number is seconds, and a Go
+  duration (\"6m0s\", \"1.5s\", \"12ms\", \"1h2m3s\") is summed by unit, after
+  eca's reset-header parser. Stripping a trailing s or m and reading what was
+  left gave nil for \"6m0s\" and six SECONDS for \"6m\"."
+  [v]
+  (let [s (str/trim (str v))]
+    (cond
+      (str/blank? s) nil
+      (re-matches #"\d+(?:\.\d+)?" s) (long (* 1000 (parse-double s)))
+      :else
+      (let [parts (re-seq #"(\d+(?:\.\d+)?)(ms|h|m|s)" s)]
+        (when (and (seq parts) (= s (apply str (map first parts))))
+          (long (reduce + 0 (map (fn [[_ n u]] (* (parse-double n) (unit-ms u))) parts))))))))
+
 (defn host-of
   "The host a URL addresses, or the URL itself when it does not parse — the
   key only has to be stable and per-endpoint, not correct as a URL."
@@ -58,11 +77,10 @@
                             parse-long)
           reset (some-> (or (h "x-ratelimit-reset-requests")
                             (h "x-ratelimit-reset-tokens"))
-                        (str/replace #"[sm]$" "")
-                        parse-long)]
+                        duration-ms)]
       (cond
         secs (* 1000 (max 0 secs))
-        (and remaining (zero? remaining) reset) (* 1000 (max 0 reset))
+        (and remaining (zero? remaining) reset) (max 0 reset)
         :else nil))))
 
 (defn latched-for

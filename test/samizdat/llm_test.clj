@@ -1234,6 +1234,21 @@
     (is (= 3000 (client/retry-after-ms {"x-ratelimit-reset-requests" "3s"})))
     (is (= 2000 (client/retry-after-ms {"x-ratelimit-reset-tokens" "2"}))))
 
+  (testing "OpenAI's Go-style durations (eca's reset-header parser)"
+    ;; "6m0s", "12ms" and "1.5s" parsed to nil, and "6m" to six SECONDS.
+    (is (= 360000 (client/retry-after-ms {"x-ratelimit-reset-requests" "6m0s"})))
+    (is (= 360000 (client/retry-after-ms {"x-ratelimit-reset-requests" "6m"})))
+    (is (= 1500 (client/retry-after-ms {"x-ratelimit-reset-tokens" "1.5s"})))
+    (is (= 12 (client/retry-after-ms {"x-ratelimit-reset-tokens" "12ms"})))
+    (is (= 3723000 (client/retry-after-ms {"x-ratelimit-reset-requests" "1h2m3s"}))))
+
+  (testing "a reset header on a failure that is not a rate limit does not set the wait"
+    ;; A healthy x-ratelimit-reset-requests: 1s on a 500 cut the backoff to 1s.
+    (is (> (#'client/backoff-ms 1 {"x-ratelimit-reset-requests" "1s"} false) 1000))
+    (is (= 1000 (#'client/backoff-ms 1 {"x-ratelimit-reset-requests" "1s"} true)))
+    (is (= 5000 (#'client/backoff-ms 1 {"retry-after" "5"} false))
+        "retry-after is the server's ask whatever the status"))
+
   (testing "the ask is unclamped — the ceiling lives at the sleep"
     ;; The clamp used to sit in retry-after-ms, which made the in-run cap
     ;; check compare a 60s-bounded number against a 300s threshold and so
@@ -2589,4 +2604,81 @@
     (is (= :rate-limited (reason 429 {:error {:code "1302" :message "rate limit"}})))
     (is (= :rate-limited (reason 400 {:error {:code "1302" :message "rate limit"}})) "GLM's code under another status")
     (is (= :usage-cap (reason 429 {:error {:code "1308" :message "达到使用上限"}})) "a cap is not a window")
-    (is (= :call-failed (reason 500 {:error {:message "boom"}})))))
+    (is (= :outage (reason 500 {:error {:message "boom"}}))
+        "a server error that outlasts the retries is an outage, which the loop waits out")
+    (testing "a server error that says insufficient is an outage, not a billing wall"
+      ;; eca reads quota wording only on a client error; samizdat read it on any
+      ;; status, so a 503 "insufficient capacity" ended the run as a usage cap.
+      (is (not= :usage-cap (reason 503 {:error {:message "insufficient capacity, try again later"}})))
+      (is (not= :usage-cap (reason 500 {:error {:message "quota service unavailable"}})))
+      (is (= :usage-cap (reason 400 {:error {:code "1308" :message "达到使用上限"}}))
+          "a cap in a client error still counts"))))
+
+(deftest a-stalled-stream-is-retried-and-ends-as-an-outage
+  ;; eca walks the cause chain and keeps the watchdog's reason; samizdat called
+  ;; every non-IOException stream failure with no partial a fatal harness error,
+  ;; which included the watchdog's own close of a stalled DeepSeek stream.
+  (let [a (registry/adapter-for :glm)
+        calls (atom 0)
+        run (fn [thrown]
+              (reset! calls 0)
+              (with-redefs [http/post (fn [& _] (swap! calls inc) (throw thrown))
+                            samizdat.cancel/sleep! (fn [& _] nil)]
+                (try (client/chat a {:model "m" :max-retries 1} [{:role "user" :content "x"}]) nil
+                     (catch Exception e (ex-data e)))))]
+    (let [d (run (ex-info "provider stream ended before [DONE]" {}))]
+      (is (= 2 @calls) "retried")
+      (is (= :outage (:reason d))))
+    (let [d (run (ex-info "wrapped" {} (java.net.SocketException. "Connection reset")))]
+      (is (= 2 @calls) "a transport failure deeper in the cause chain is retried too")
+      (is (= :outage (:reason d))))
+    (let [d (run (ex-info "a bug in the harness" {}))]
+      (is (= 1 @calls) "anything else is still not retried")
+      (is (= :harness-error (:reason d))))))
+
+(deftest a-transient-error-inside-a-200-is-retried
+  ;; A 200 stream that carries an error frame read as a fatal failure.
+  (let [a (registry/adapter-for :deepseek)
+        calls (atom 0)]
+    (with-redefs [http/post (fn [& _] (swap! calls inc)
+                              {:status 200 :body (json/write-str {:error {:message "Internal server error"}})})
+                  samizdat.cancel/sleep! (fn [& _] nil)]
+      (let [d (try (client/chat a {:model "m" :max-retries 1} [{:role "user" :content "x"}]) nil
+                   (catch Exception e (ex-data e)))]
+        (is (= 2 @calls))
+        (is (= :outage (:reason d)))))))
+
+(deftest an-empty-reply-is-retried-unless-it-hit-the-budget
+  ;; eca retries a premature empty stop on a small budget of its own; samizdat
+  ;; made every empty reply fatal at the client, spending a loop turn and a
+  ;; strike. One that ran out of tokens (finish_reason length) would be empty
+  ;; again, so it stays fatal.
+  (let [a (registry/adapter-for :deepseek)
+        calls (atom 0)
+        run (fn [finish]
+              (reset! calls 0)
+              (with-redefs [http/post (fn [& _] (swap! calls inc)
+                                        {:status 200
+                                         :body (json/write-str {:choices [{:message {:role "assistant" :content ""}
+                                                                           :finish_reason finish}]})})
+                            samizdat.cancel/sleep! (fn [& _] nil)]
+                (try (client/chat a {:model "m" :max-retries 1} [{:role "user" :content "x"}]) nil
+                     (catch Exception e (:reason (ex-data e))))))]
+    (is (= :empty-reply (run "stop")))
+    (is (= 2 @calls) "retried")
+    (is (= :empty-reply (run "length")))
+    (is (= 1 @calls) "out of budget is not retried")))
+
+(deftest more-overflow-phrasings-and-a-413
+  ;; eca's overflow detection covers wordings and a status samizdat missed.
+  (is (client/context-overflow? "{\"error\":{\"message\":\"prompt is too long: 210000 tokens\"}}"))
+  (is (client/context-overflow? "Input is too long for requested model"))
+  (is (client/context-overflow? "request too large: too many tokens"))
+  (is (client/context-overflow? "exceed_context_size_error"))
+  (is (not (client/context-overflow? "rate limit exceeded")))
+  (let [a (registry/adapter-for :deepseek)]
+    (with-redefs [http/post (fn [& _] {:status 413 :body "Payload Too Large"})]
+      (is (= :context-overflow
+             (try (client/chat a {:model "m" :max-retries 0} [{:role "user" :content "x"}]) nil
+                  (catch Exception e (:reason (ex-data e)))))))))
+

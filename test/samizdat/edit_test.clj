@@ -149,3 +149,38 @@
                                         :new_text "\"\\\\u2014\""}))]
       (is (= :success (:category r)))
       (is (str/includes? (read* root "b.clj") "\\\\u2014")))))
+
+(deftest crlf-files-keep-their-line-endings
+  ;; eca restores CRLF after matching; samizdat wrote the whole file back
+  ;; with LF, so a one-line edit rewrote every line of a CRLF file.
+  (with-root [root]
+    (write root "a.txt" "one\r\ntwo\r\nthree\r\n")
+    (is (= :success (:category (files/edit-file (ctx root {:path "a.txt" :old_text "two" :new_text "TWO"})))))
+    (is (= "one\r\nTWO\r\nthree\r\n" (read* root "a.txt")))))
+
+(deftest the-whitespace-fallback-keeps-the-file-s-indentation
+  ;; eca re-indents on its whitespace-tolerant match; samizdat pasted new_text
+  ;; as given, so an old_text quoted two spaces short wrote the replacement two
+  ;; spaces short. Shifted by the difference, not by the file's indent, so a
+  ;; new_text that already carries its indent is not indented twice.
+  (with-root [root]
+    (write root "a.py" "def f():\n    if x:\n        return 1\n")
+    (let [r (files/edit-file (ctx root {:path "a.py"
+                                        :old_text "  if x:\n      return 1"
+                                        :new_text "  if x:\n      return 2\n  return 3"}))]
+      (is (= "line-trimmed" (:fallback r)))
+      (is (= "def f():\n    if x:\n        return 2\n    return 3\n" (read* root "a.py"))))))
+
+(deftest two-edits-to-one-file-at-once-both-land
+  ;; eca holds a lock per path around read-modify-write; samizdat's team
+  ;; workers share one tree, and an edit that landed between another's read
+  ;; and write was lost.
+  (with-root [root]
+    (write root "a.txt" "alpha\nbeta\n")
+    (let [orig @#'files/vet-edit]
+      (with-redefs [files/vet-edit (fn [& args] (Thread/sleep 100) (apply orig args))]
+        (let [a (future (files/edit-file (ctx root {:path "a.txt" :old_text "alpha" :new_text "ALPHA"})))
+              b (future (files/edit-file (ctx root {:path "a.txt" :old_text "beta" :new_text "BETA"})))]
+          @a @b)))
+    (is (= "ALPHA\nBETA\n" (read* root "a.txt")))))
+

@@ -1205,6 +1205,30 @@
       (is (= 1 (:consecutive-provider-errors (step b :call-failed))))
       (is (empty? @slept)))))
 
+(deftest a-provider-outage-is-waited-out-on-its-own-limit
+  ;; eca waits out roughly six minutes of 5xx and transport failures; samizdat
+  ;; said "Try again" at once and abandoned the branch after five, so a minute
+  ;; of DeepSeek 503s could end a two-hour run.
+  (cells/load-cells!)
+  (let [b (state/new-branch {:id "B" :problem "p"})
+        slept (atom [])
+        step (fn [branch reason]
+               (with-redefs [journal/record-turn! (fn [& _] nil)
+                             samizdat.cancel/sleep! (fn [ms] (swap! slept conj ms))]
+                 (aloop/provider-error-step {} branch 1 "503" reason)))
+        b' (step b :outage)
+        {:keys [pause-ms limit]} (gates/threshold :provider-outage)]
+    (is (nil? (:consecutive-provider-errors b')) "not one of the five strikes")
+    (is (= 1 (:consecutive-outages b')))
+    (is (= [pause-ms] @slept) "it waits")
+    (is (= (:messages b) (:messages b')) "and adds nothing to the model's context")
+    (is (> limit (gates/threshold :provider-error-limit)))
+    (let [route (:handler (cell/get-cell! :loop/route))
+          at (assoc b :consecutive-outages limit)]
+      (is (= :abandoned (:verdict (route {:max-turns 1000} {:branch at :turn 3}))))
+      (is (= :continue (:verdict (route {:max-turns 1000}
+                                        {:branch (update at :consecutive-outages dec) :turn 3})))))))
+
 (deftest a-rate-limit-that-never-lifts-still-ends-the-branch
   (cells/load-cells!)
   (let [route (:handler (cell/get-cell! :loop/route))

@@ -483,6 +483,54 @@
         (miss branch (msg {:outside-root true :path path :verb "read"
                            :refs (when (seq refs) (str/join ", " refs))}))))))
 
+(defonce ^:private path-locks
+  ;; canonical path -> the monitor its read-modify-write holds
+  (atom {}))
+
+(defn- with-path-lock
+  "Run `f` holding the lock for file `abs`, so two edits of one file
+  serialize: the second reads what the first wrote. Team workers share one
+  tree, and an edit that landed between another's read and write was lost
+  (eca holds a lock per canonical path the same way)."
+  [abs f]
+  (let [k (try (.getCanonicalPath (java.io.File. (str abs))) (catch Throwable _ (str abs)))
+        lock (get (swap! path-locks update k #(or % (Object.))) k)]
+    (locking lock (f))))
+
+(defn- crlf?
+  "Whether `raw` uses CRLF line endings."
+  [raw]
+  (str/includes? (str raw) "\r\n"))
+
+(defn- restore-line-endings
+  "`text` (normalised to LF for matching) written back the way `raw` was: a
+  one-line edit to a CRLF file used to rewrite every line as LF."
+  [raw text]
+  (if (crlf? raw) (str/replace text "\n" "\r\n") text))
+
+(defn- leading-ws [line] (re-find #"^[ \t]*" (str line)))
+
+(defn- reindent
+  "`new-text` shifted by how far the file's matched first line is indented
+  past (or short of) `old-text`'s first line: the line-trimmed fallback
+  matched despite the drift, and pasting new_text as given wrote the drift
+  into the file. By the DIFFERENCE, so a new_text already carrying the file's
+  indent is not indented twice. Unchanged when the two indents disagree in
+  kind (tabs against spaces)."
+  [new-text old-text file-line]
+  (let [want (leading-ws file-line)
+        had (leading-ws (first (str/split-lines old-text)))]
+    (cond
+      (= want had) new-text
+      (str/starts-with? want had)
+      (let [add (subs want (count had))]
+        (str/join "\n" (map #(if (str/blank? %) % (str add %)) (str/split new-text #"\n" -1))))
+      (str/starts-with? had want)
+      (let [cut (subs had (count want))]
+        (str/join "\n" (map #(if (str/starts-with? % cut) (subs % (count cut)) %)
+                            (str/split new-text #"\n" -1))))
+      :else new-text)))
+
 (defn patch-file
   "Apply anchored `edits` to a file under the root, as ONE atomic batch.
 
@@ -508,7 +556,9 @@
           (run-config? root abs) (miss branch (msg {:protected true :path path}))
           (not (fs/exists? abs)) (miss branch (msg {:no-file true :path path}))
           :else
-          (let [content (str/replace (slurp abs) "\r\n" "\n")
+          (with-path-lock abs (fn []
+          (let [raw (slurp abs)
+                content (str/replace raw "\r\n" "\n")
                 edits (mapv (fn [e]
                               {:from (str (or (:from e) (get e "from")))
                                :to (some-> (or (:to e) (get e "to")) str)
@@ -532,13 +582,13 @@
                   (workflow-refused? ctx root abs)
                   (miss branch (msg {:workflow true :path path}))
                   :else
-                  (let [exam-msg (exam-note! ctx path (slurp abs) result)]
-                    (spit abs result)
+                  (let [exam-msg (exam-note! ctx path raw result)]
+                    (spit abs (restore-line-endings raw result))
                     {:result (str (msg {:patched true :path path :edits (count edits)
                                         :plural (when (> (count edits) 1) "s")
                                         :still-broken still-broken})
                                   exam-msg)
-                     :category :success :progress? true :branch branch}))))))
+                     :category :success :progress? true :branch branch}))))))))
         (miss branch (msg {:outside-root true :path path :verb "patched"}))))))
 
 (defn grep-limit
@@ -802,7 +852,9 @@
           (miss branch (msg {:no-file true :path path}))
 
           :else
-          (let [content (str/replace (slurp abs) "\r\n" "\n")
+          (with-path-lock abs (fn []
+          (let [raw (slurp abs)
+                content (str/replace raw "\r\n" "\n")
                 old-text (str/replace old-text "\r\n" "\n")
                 new-text (str/replace new-text "\r\n" "\n")
                 [ranges fallback] (if-let [ex (seq (exact-ranges content old-text))]
@@ -831,8 +883,13 @@
 
               :else
               ;; Splice in reverse so earlier offsets stay valid.
-              (let [edited (reduce (fn [s [start end]]
-                                     (str (subs s 0 start) new-text (subs s end)))
+              (let [line-at (fn [start] (first (str/split (subs content start) #"\n" 2)))
+                    edited (reduce (fn [s [start end]]
+                                     (str (subs s 0 start)
+                                          (if fallback
+                                            (reindent new-text old-text (line-at start))
+                                            new-text)
+                                          (subs s end)))
                                    content
                                    (sort-by first > (if replace-all? ranges [(first ranges)])))
                     {:keys [refuse still-broken]} (vet-edit path content edited)]
@@ -848,8 +905,8 @@
                   ;; vis: "a syntax-breaking batch is refused whole and the
                   ;; file is left untouched."
                   (miss branch (msg {:refused true :path path :syntax refuse}))
-                  (let [exam-msg (exam-note! ctx path (slurp abs) edited)]
-                    (spit abs edited)
+                  (let [exam-msg (exam-note! ctx path raw edited)]
+                    (spit abs (restore-line-endings raw edited))
                     {:result (str (let [n (if replace-all? (count ranges) 1)]
                                     (msg {:edited true :path path :replacements n
                                           :plural (when (> n 1) "s")
@@ -857,7 +914,7 @@
                                           :still-broken still-broken}))
                                   exam-msg)
                      :category :success :progress? true :branch branch
-                     :fallback fallback}))))))
+                     :fallback fallback}))))))))
         (miss branch (msg {:outside-root true :path path :verb "edited"}))))))
 
 (defn stale-note

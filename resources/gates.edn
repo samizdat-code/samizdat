@@ -196,6 +196,16 @@
         cap. Run 3020cbca's supervisor made 2810 calls to a server that was not
         running, and 74ddebb8's 1002 that all failed the same way."}
 
+ :provider-outage
+ {:value {:pause-ms 30000 :limit 12} :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-1fai"]
+  :doc "A model call whose retries ran out on a transient failure (a 5xx, a dropped
+        connection, a stalled stream) is an outage, which passes: the branch waits
+        :pause-ms and tries again, and gives up after :limit in a row, about eight
+        minutes with the client's own retries. Counted apart from :provider-error-limit,
+        whose five immediate strikes let a minute of DeepSeek 503s end a two-hour run
+        (eca waits out about six minutes)."}
+
  :rate-limit
  {:value {:pause-ms 20000 :limit 30} :kind :threshold :capability-tunable? false
   :provenance ["fix6 team-solve yj"]

@@ -809,15 +809,21 @@
    ;; limit is counted apart, against its own wider limit: it lifts by itself, and
    ;; five in a row took under a minute.
    (let [rate-limited? (contains? #{:rate-limited :rate-limit-latch} reason)
-         branch (update branch (if rate-limited? :consecutive-rate-limits :consecutive-provider-errors)
+         ;; A transient failure that outlasted the client's retries: waited
+         ;; out on its own wider limit, like a rate limit (karamazov-1fai).
+         outage? (= :outage reason)
+         branch (update branch (cond rate-limited? :consecutive-rate-limits
+                                     outage? :consecutive-outages
+                                     :else :consecutive-provider-errors)
                         (fnil inc 0))]
    (journal/record-turn! conn run-id
                          {:branch-id (:id branch) :turn turn
                           :tool-name "__provider_error__" :result error
                           :category "neutral" :task-id (:id (:task branch))})
    (when rate-limited? (cancel/sleep! (:pause-ms (gates/threshold :rate-limit))))
+   (when outage? (cancel/sleep! (:pause-ms (gates/threshold :provider-outage))))
    (cond
-     rate-limited? branch
+     (or rate-limited? outage?) branch
      (#{:context-overflow :context-window-exceeded} reason)
      ;; The prompt outgrew the window, or local fitting exhausted its rewrites.
      ;; 'Try again' is exactly wrong here — the failure is upstream of the model
@@ -903,7 +909,8 @@
                           (state/record-mechanics signals)
                           ;; The provider answered: whatever outage the
                           ;; count measured is over (karamazov-e8iw).
-                          (dissoc :last-prefix :model-change :consecutive-provider-errors :consecutive-rate-limits))
+                          (dissoc :last-prefix :model-change :consecutive-provider-errors :consecutive-rate-limits
+                                  :consecutive-outages))
                 (contains? #{:urgent :over} pressure) state/squeeze-context
                 wire (assoc :last-wire wire :last-prefix prefix)
                 model-change (assoc :model-reported reported

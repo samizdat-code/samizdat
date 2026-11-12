@@ -774,6 +774,14 @@
     [(max stdout-share (- total (min stderr-chars stderr-share)))
      (max stderr-share (- total (min stdout-chars stdout-share)))]))
 
+(def shell-timeout
+  "How long one shell command may run: :default-ms unless the call asks for
+  more (shell's timeout_ms), capped at :max-ms (eca: 60 s default, 10 min
+  cap). A security bound, so not in agent-editable gates.edn: a limit the
+  agent could raise is not a limit. In the programbench runs 36 calls passed
+  timeout_ms and had it ignored, and 34 were killed at the fixed 120 s."
+  {:default-ms 120000 :max-ms 600000})
+
 (defn run-shell
   "Run a shell command through the full gate: decide, then (on allow) resolve
   symbolic refs, spawn with a scrubbed environment, and redact the output
@@ -945,7 +953,8 @@
             allocation (allocate-capture (assoc ctx :execution-recovery
                                                 (:execution-recovery decided)))
             r (try
-                (apply proc/run (cond-> {:timeout-ms (or (:timeout-ms ctx) 120000)
+                (apply proc/run (cond-> {:timeout-ms (or (:timeout-ms ctx)
+                                                         (:default-ms shell-timeout))
                                          :env env :dir dir}
                                   allocation (assoc :capture (:options allocation)))
                        argv)
@@ -1041,7 +1050,14 @@
                               (zero? (or (:exit r) 1)))
                        :success :failure)
            :progress? true
-           :result (str redacted reference-note)
+           ;; How it ended, first: a failure with no output read like a
+           ;; success, and the model echoed $? by hand (karamazov-1fai).
+           :result (str (str/trim (prompt/render "shell-status"
+                                                 {:exit (:exit r)
+                                                  :timeout (boolean (:timeout r))
+                                                  :seconds (some-> (:ms r) (quot 1000))
+                                                  :max-seconds (quot (:max-ms shell-timeout) 1000)}))
+                        "\n" redacted reference-note)
            ;; Carried as a flag rather than left to string-matching the output:
            ;; the loop weights a timeout heavier on the failure streak and drops
            ;; the storm window's retry allowance for the call that hung.
