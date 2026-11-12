@@ -71,6 +71,37 @@
   (is (true? (:refused? (actions/note {:command "x" :ms 1 :command-chars 99}
                                       {:category :mechanics :policy-refusal? true})))))
 
+(deftest the-shell-result-says-how-the-command-ended
+  ;; eca starts every shell result with its exit code; samizdat sent only the
+  ;; output, so a failed command with no output read like a success, and 929
+  ;; of 3,206 shell calls in the programbench runs echoed $? by hand.
+  (let [c (db/open! ":memory:")
+        rid (runs/start-run! c {:problem "p"})
+        root (str (fs/create-temp-dir))
+        b (state/new-branch {:id "B1" :problem "p"})
+        run (fn [args] (tools-base/run-tool {:tool-name "shell" :branch b :root root :conn c
+                                             :run-id rid :turn 4 :args args}))]
+    (is (str/starts-with? (:result (run {:command "ls"})) "[exit 0]"))
+    ;; BSD ls exits 1 on a missing path, GNU ls 2.
+    (is (re-find #"^\[exit [12]\]" (:result (run {:command "ls /nonexistent-1fai"}))))
+    (testing "eca takes a timeout argument; samizdat ignored the 36 timeout_ms it was sent"
+      (let [asked (atom nil)
+            group (atom nil)
+            r (with-redefs [samizdat.engine.proc/run (fn [opts & _] (reset! asked (:timeout-ms opts))
+                                                       (reset! group (:own-group? opts))
+                                                       {:timeout true :ms (:timeout-ms opts) :out ""})]
+                (run {:command "ls" :timeout_ms 300}))]
+        (is (= 300 @asked) "the command's own timeout applies")
+        (is (true? @group) "and it runs in its own process group, so nothing it leaves outlives it")
+        (is (true? (:timeout? r)))
+        (is (str/includes? (:result r) "timeout_ms") "and the result says how to ask for longer"))
+      (let [seen (atom nil)
+            {:keys [max-ms]} samizdat.security.policy/shell-timeout]
+        (with-redefs [samizdat.security.policy/run-shell (fn [ctx] (reset! seen (:timeout-ms ctx))
+                                                           {:category :success :result "ok"})]
+          (run {:command "true" :timeout_ms (* 10 max-ms)}))
+        (is (= max-ms @seen) "capped by policy/shell-timeout")))))
+
 (deftest the-shell-tool-journals-each-command-it-runs
   (let [c (db/open! ":memory:")
         rid (runs/start-run! c {:problem "p"})
@@ -85,7 +116,8 @@
     (run "rm -rf /")
     (let [ns (journal/notes c rid :action)]
       (is (= 3 (count ns)))
-      (is (= [0 1 nil] (map :exit ns)))
+      ;; ls on a missing path exits 1 on BSD and 2 on GNU.
+      (is (= [0 :failed nil] (map #(some-> (:exit %) (as-> e (if (pos? e) :failed e))) ns)))
       (is (= "eval" (:via (second ns))))
       (is (true? (:refused? (nth ns 2))))
       (is (= {"echo hi" [1 0] "ls /nonexistent-oi16" [0 1]}
@@ -191,6 +223,38 @@
         (is (not= :progress-stalled (decide (assoc stalled :role :tester :turns [{:tool "eval"}])))
             "nor on the tester")))))
 
+(deftest wind-down-speaks-only-to-a-branch-that-ships-a-deliverable
+  ;; one-vf2-4 and one-kv-1: the supervisor's check-in pass ran to turn 17 of
+  ;; 20 and :wind-down told it to `review` with a different encoding and
+  ;; `audit` the answer it meant to ship. A supervisor or tester pass is bounded
+  ;; by its own turn cap and ends through :last-call's forced done.
+  (let [at (fn [role] (merge (state/new-branch {:id "X" :problem "p"})
+                             {:role role :turns (vec (repeat 17 {:tool "shell"}))}))
+        fired (fn [b] (set (map :gate (arbiter/eligible {:branch b :max-turns 20}))))]
+    (is (contains? (fired (at :implementer)) :wind-down))
+    (is (not (contains? (fired (at :supervisor)) :wind-down)))
+    (is (not (contains? (fired (at :tester)) :wind-down)))))
+
+(deftest a-gate-waits-for-its-own-prediction-before-firing-again
+  ;; kv-live-surgery one-kv-1: :progress-stalled fired at turns 47 and 48, the
+  ;; second before the branch had answered the first, and spent both nudges of
+  ;; the episode's :max-stall-nudges on one stall. A gate whose last firing's
+  ;; prediction is still open (inside its window) does not fire again.
+  (let [base (merge (state/new-branch {:id "B1" :problem "p"})
+                    {:role :implementer :any-progress? true :turns-since-progress 20
+                     :turns [{:tool "eval"}]})
+        decide (fn [b] (:gate (arbiter/decide {:branch b :max-turns 300
+                                               :style-gates (:gates (gates/style {:run {:style :lean}}))})))]
+    (is (= :progress-stalled (decide base)))
+    (is (not= :progress-stalled
+              (decide (assoc base :open-predictions [{:id 1 :gate :progress-stalled :turn 47 :window 3}]
+                                  :gate-history [{:gate :progress-stalled :turn 47}])))
+        "the branch has not had its window to answer")
+    (is (= :progress-stalled
+           (decide (assoc base :open-predictions [{:id 2 :gate :stuck :turn 47 :window 3}]
+                               :gate-history [{:gate :progress-stalled :turn 30 :settled :unmet}])))
+        "another gate's open prediction does not hold this one")))
+
 (deftest a-write-inside-an-eval-is-progress
   ;; ctb-r10 bun-sourcemap-leak: :progress-stalled fired six times on a branch
   ;; editing release.ts with (edit ...) inside eval, which lean steers work
@@ -203,5 +267,7 @@
     (is (some? handler) "the bridge is on")
     (handler {:op "read_file" :args {:path "nothing.txt"}})
     (is (false? @wrote) "a read is not progress")
-    (handler {:op "write_file" :args {:path "a.txt" :content "x"}})
-    (is (true? @wrote) "a write through the bridge is")))
+    (let [answer (handler {:op "write_file" :args {:path "a.txt" :content "x"}})]
+      ;; Flaky under the full suite only (karamazov-6ci8): the answer
+      ;; says what refused the write when it fails.
+      (is (true? @wrote) (str "a write through the bridge is; the bridge answered " (pr-str answer))))))

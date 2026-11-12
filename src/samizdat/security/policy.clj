@@ -774,21 +774,14 @@
     [(max stdout-share (- total (min stderr-chars stderr-share)))
      (max stderr-share (- total (min stdout-chars stdout-share)))]))
 
-(defn run-shell
-  "Run a shell command through the full gate: decide, then (on allow) resolve
-  symbolic refs, spawn with a scrubbed environment, and redact the output
-  before it returns. Returns a tool-result map.
+(defn- shell-gate
+  "The decision half of the shell path, shared by `run-shell` and
+  `start-shell`: the rules, the session's grants, outside reads, refused env
+  refs, the branch's flow label and a person's answer to an :ask.
 
-  `ctx` carries :conn :run-id :root and :args {:command …}; :env defaults to
-  the process environment. This is the one place the perm, scrub, and redact
-  nodes of the security model meet.
-
-  The command runs in the run's `:root`, like every other tool. It used to run
-  wherever the harness process happened to be: the file tools resolve paths
-  under the root and the ship gate's verify `cd`s into it, so a run targeting
-  another checkout had `shell` reading and building a different tree than
-  `read_file` and `done` — with the same relative paths naming different
-  files. Absent root, the process cwd, which is what it always did."
+  {:effect :deny|:ask :result <the refusal's tool result>} — or
+  {:effect :allow :command :env :settings :known :decided :outside-all}, what
+  the spawn needs."
   [{:keys [conn run-id args root] :as ctx}]
   (let [command (str (:command args))
         env (or (:env ctx) (into {} (System/getenv)))
@@ -844,20 +837,22 @@
       ;; charging it to the cull counter was karamazov-blt.15. The shell tool
       ;; stamps :policy-refusal? on top, which is what routes it to the
       ;; refusal counter.
-      {:category :mechanics :progress? false
-       :result (prompt/render "shell-refused"
-                              (cond
-                                (:env-refs decided)
-                                {:envrefs (str/join ", " (map #(str "`{{env/" % "}}`")
-                                                              (sort (:env-refs decided))))
-                                 :rule rule-text}
-                                protected-path
-                                {:protected true :path protected-path :rule rule-text}
-                                :else
-                                {:denied true :head head :rule rule-text}))
-       ;; :refused names what was refused, so a branch can count a head it
-       ;; keeps being refused across varied commands (karamazov-q1tt).
-       :policy {:effect :deny :refused (or (some-> blocked-segment command-head) head)}}
+      {:effect :deny
+       :result
+       {:category :mechanics :progress? false
+        :result (prompt/render "shell-refused"
+                               (cond
+                                 (:env-refs decided)
+                                 {:envrefs (str/join ", " (map #(str "`{{env/" % "}}`")
+                                                               (sort (:env-refs decided))))
+                                  :rule rule-text}
+                                 protected-path
+                                 {:protected true :path protected-path :rule rule-text}
+                                 :else
+                                 {:denied true :head head :rule rule-text}))
+        ;; :refused names what was refused, so a branch can count a head it
+        ;; keeps being refused across varied commands (karamazov-q1tt).
+        :policy {:effect :deny :refused (or (some-> blocked-segment command-head) head)}}}
 
       :ask
       ;; The refusal has to teach the fix, or it is just a wall. Observed live
@@ -866,199 +861,279 @@
       ;; `find . -type f | head -50 && echo --- && …` — the same shape, because
       ;; nothing in the first refusal said that being COMPOUND was the reason.
       ;; It reads as "the shell is closed" rather than "issue these separately".
-      {:category :neutral :progress? false :needs-approval true
-       :result (if (:flow? decided)
-                 (prompt/render "flow-blocked"
-                                {:command command
-                                 :gaps (mapv (fn [{:keys [gap because]}]
-                                               {:trust (= :trust gap) :audience (= :audience gap)
-                                                :tool (:tool because) :via (:via because) :turn (:turn because)})
-                                             (:gaps decided))
-                                 :asking (= :block (:mode (approval/policy run-id)))
-                                 :narrow (some #(= :narrow (:plan %)) (:remedies decided))
-                                 :configured (some->> (acceptance/configured-commands
-                                                       (config/file-config root))
-                                                      sort (map #(str "`" % "`"))
-                                                      (str/join ", ") not-empty)
-                                 :note note :unanswered timed-out})
-                 (prompt/render "shell-refused"
-                              {:command command :head head :complex? complex?
-                               :outside (some->> (:outside decided)
-                                                 (map #(str "`" % "`"))
-                                                 (str/join ", "))
-                               :promoted promoted? :rule rule-text
-                               :malformed (:index malformed)
-                               ;; Named when the command DID decompose and one
-                               ;; statement is the whole reason: pointing at
-                               ;; that part beats telling a model to re-split a
-                               ;; command whose other parts were never refused.
-                               :blocked blocked-segment
-                               :blockedhead (some-> blocked-segment command-head)
-                               :blockedform (head-has-allow? (some-> blocked-segment command-head))
-                               :headform (head-has-allow? head)
-                               :markers (when complex?
-                                          (str/join " or "
-                                                    (map #(str "`" % "`")
-                                                         (complex-markers-in command))))
-                               ;; What a person said when they denied it, and
-                               ;; whether the refusal is a rule or simply
-                               ;; nobody being there. Both are absent under
-                               ;; the default :refuse mode, where the
-                               ;; template renders exactly as before.
-                               :note note
-                               :unanswered timed-out}))
-       :policy {:effect :ask
-                :gaps (:gaps decided)
-                :remedies (:remedies decided)
-                :refused (or (some-> blocked-segment command-head) head)
-                ;; No grant unlocks a COMPLEX command (invariant 5 downgrades
-                ;; it to :ask even over a grant), so suggesting `head *` for
-                ;; one taught a fix that could not work — the observed
-                ;; same-wall-twice loop through the grant path (blt.38). The
-                ;; refusal text already teaches "issue these separately".
-                :suggest (when-not complex? (approval/grant-pattern head command))}}
+      {:effect :ask
+       :result
+       {:category :neutral :progress? false :needs-approval true
+        :result (if (:flow? decided)
+                  (prompt/render "flow-blocked"
+                                 {:command command
+                                  :gaps (mapv (fn [{:keys [gap because]}]
+                                                {:trust (= :trust gap) :audience (= :audience gap)
+                                                 :tool (:tool because) :via (:via because) :turn (:turn because)})
+                                              (:gaps decided))
+                                  :asking (= :block (:mode (approval/policy run-id)))
+                                  :narrow (some #(= :narrow (:plan %)) (:remedies decided))
+                                  :configured (some->> (acceptance/configured-commands
+                                                        (config/file-config root))
+                                                       sort (map #(str "`" % "`"))
+                                                       (str/join ", ") not-empty)
+                                  :note note :unanswered timed-out})
+                  (prompt/render "shell-refused"
+                               {:command command :head head :complex? complex?
+                                :outside (some->> (:outside decided)
+                                                  (map #(str "`" % "`"))
+                                                  (str/join ", "))
+                                :promoted promoted? :rule rule-text
+                                :malformed (:index malformed)
+                                ;; Named when the command DID decompose and one
+                                ;; statement is the whole reason: pointing at
+                                ;; that part beats telling a model to re-split a
+                                ;; command whose other parts were never refused.
+                                :blocked blocked-segment
+                                :blockedhead (some-> blocked-segment command-head)
+                                :blockedform (head-has-allow? (some-> blocked-segment command-head))
+                                :headform (head-has-allow? head)
+                                :markers (when complex?
+                                           (str/join " or "
+                                                     (map #(str "`" % "`")
+                                                          (complex-markers-in command))))
+                                ;; What a person said when they denied it, and
+                                ;; whether the refusal is a rule or simply
+                                ;; nobody being there. Both are absent under
+                                ;; the default :refuse mode, where the
+                                ;; template renders exactly as before.
+                                :note note
+                                :unanswered timed-out}))
+        :policy {:effect :ask
+                 :gaps (:gaps decided)
+                 :remedies (:remedies decided)
+                 :refused (or (some-> blocked-segment command-head) head)
+                 ;; No grant unlocks a COMPLEX command (invariant 5 downgrades
+                 ;; it to :ask even over a grant), so suggesting `head *` for
+                 ;; one taught a fix that could not work — the observed
+                 ;; same-wall-twice loop through the grant path (blt.38). The
+                 ;; refusal text already teaches "issue these separately".
+                 :suggest (when-not complex? (approval/grant-pattern head command))}}}
 
       :allow
-      (let [resolved (secrets/resolve-refs command env)
-            ;; The child sees ONLY the scrubbed environment — name-sensitive
-            ;; vars removed, value-shaped credentials redacted — so a
-            ;; subprocess cannot read a secret the parent holds even by
-            ;; expanding $VAR itself. env -i semantics (see proc/run :env).
-            child-env (secrets/scrub-env env (:pass-env settings))
-            ;; UNDER THE OS SANDBOX (karamazov-3vu1.5): writes only in the
-            ;; project, its scratch and the build caches, the secret regions
-            ;; unreadable, the harness's own ports unreachable. The allow
-            ;; table admits heads that run code the agent wrote (make,
-            ;; jolt -e), so the table alone never confined anything.
-            ;; The child starts in the root (:dir) and `cd root &&` is
-            ;; prefixed as well; the root is quoted, `resolved` is the model's
-            ;; own command and deliberately NOT — running it as written is the
-            ;; tool.
-            {:keys [argv env dir]} (confine/shell-command
-                                ;; NOT overridable from ctx: a cell builds the ctx
-                                ;; it hands tool-step, and a knob here would be a
-                                ;; cell's way out of the sandbox.
-                                {:backend (confine/backend (:sandbox settings))
-                                 :root (or root ".") :command resolved
-                                 :env child-env :ports (listen/ports)
-                                 :settings settings})
-            allocation (allocate-capture (assoc ctx :execution-recovery
-                                                (:execution-recovery decided)))
-            r (try
-                (apply proc/run (cond-> {:timeout-ms (or (:timeout-ms ctx) 120000)
-                                         :env env :dir dir}
-                                  allocation (assoc :capture (:options allocation)))
-                       argv)
-                (catch Throwable e
-                  {:error true :message (ex-message e) :out "" :err ""
-                   :capture {:stdout {:observed-bytes 0 :retained-bytes 0
-                                      :complete? false :error (ex-message e)}
-                             :stderr {:observed-bytes 0 :retained-bytes 0
-                                      :complete? false :error (ex-message e)}}}))
-            finalization-error
-            (when allocation
-              (try
-                (redact-capture-file (:stdout-path allocation) (:stdout-read-path allocation) known)
-                (redact-capture-file (:stderr-path allocation) (:stderr-read-path allocation) known)
-                (captures/finish! conn (:id allocation)
-                                  (cond
-                                    (:error r) :error
-                                    (:cancelled r) :cancelled
-                                    (some :error (vals (:capture r))) :capture-error
-                                    (:timeout r) :timeout
-                                    :else :complete)
-                                  (:capture r)
-                                  (select-keys allocation [:stdout-read-path :stderr-read-path]))
-                nil
-                (catch Throwable e
-                  (captures/finish! conn (:id allocation) :error (:capture r)
-                                    (select-keys allocation [:stdout-read-path :stderr-read-path]))
-                  e)))
-            out (if allocation
-                  (let [policy (:policy allocation)
-                        stdout-text (str (:out r) (:out-tail r)
-                                         (when (:timeout r)
-                                           (str "\n[timed out after " (:ms r) "ms]"))
-                                         (when (:cancelled r) "\n[cancelled]")
-                                         (when (:message r) (str "\n" (:message r)))
-                                         (when finalization-error
-                                           (str "\n" (ex-message finalization-error))))
-                        stderr-text (str (:err r) (:err-tail r))
-                        [stdout-cap stderr-cap] (preview-caps (count stdout-text) (count stderr-text)
-                                                              (:preview-chars policy)
-                                                              (:preview-stdout-fraction policy))
-                        stdout (preview-stream stdout-text stdout-cap known)
-                        stderr (preview-stream stderr-text stderr-cap known)]
-                    (str stdout (when (seq stderr) (str "\n" stderr))))
-                  (cond
-                    (:message r) (str (:message r))
-                    (:timeout r) (str "[timed out after " (:ms r) "ms]")
-                    :else (str (:out r) (when (seq (:err r)) (str "\n" (:err r))))))
-            redacted (if allocation
-                       out
-                       (util/truncate-middle (secrets/redact out known)
-                                             (max-output-chars)))
-            public-capture (capture-public allocation
-                                           (cond-> r
-                                             finalization-error
-                                             (assoc :error (ex-message finalization-error))))
-            _ (when allocation
-                ((requiring-resolve 'samizdat.store.executions/complete!)
-                 conn (:id allocation)
-                 {:status (cond
-                            finalization-error :error
-                            (:cancelled r) :cancelled
-                            (:timeout r) :timeout
-                            (:error r) :error
-                            :else :complete)
-                  :artifacts (mapv :uri (vals (select-keys public-capture [:stdout :stderr])))
-                  ;; The caller is holding the result, so it needs no message
-                  ;; saying the command finished (karamazov-0wvc.4).
-                  :delivered? true}))
-            ;; Only when there is more to fetch than was shown.
-            streams (vals (select-keys public-capture [:stdout :stderr]))
-            reference-note (when (and public-capture
-                                      (or (not-every? #(= :complete (:status %)) streams)
-                                          (some #(false? (:complete? %)) streams)
-                                          (> (reduce + 0 (map #(long (or (:observed-bytes %) 0)) streams))
-                                             (long (:preview-chars (:policy allocation))))))
-                             (str "\nCaptures: " (pr-str public-capture)))]
-        ;; What ran read outside the project: the branch holds it now.
-        (when outside-all
-          (flow/observe! ctx (:outside-read flow/table) "shell"))
-        ;; And a project file it printed carries what its writer had read —
-        ;; looked for only when some file carries a label.
-        (try (when (flow/any-labelled-file? (:conn ctx))
-               (flow/read! ctx (read-paths command) "shell"))
-             (catch Throwable _
-               (flow/observe! ctx flow/uncertain-label "shell")))
-        ;; A missing exit code is a spawn that did not report one, which is
-        ;; not evidence the command succeeded. `(or (:exit r) 0)` read it as
-        ;; success, the opposite of what run-verify does with the same shape;
-        ;; both now fail closed.
-        (cond->
-          {:category (if (and (not finalization-error) (not (:timeout r))
-                              (zero? (or (:exit r) 1)))
-                       :success :failure)
-           :progress? true
-           :result (str redacted reference-note)
-           ;; Carried as a flag rather than left to string-matching the output:
-           ;; the loop weights a timeout heavier on the failure streak and drops
-           ;; the storm window's retry allowance for the call that hung.
-           :timeout? (boolean (:timeout r))
-           ;; The same run as data, for a script calling the tool through
-           ;; the eval bridge: it composes on the exit code and the streams
-           ;; rather than parsing the text written for the model.
-           :data (let [cap (:data-chars (gates/threshold :eval-bridge))]
-                   {:exit (:exit r) :timeout? (boolean (:timeout r))
-                    :out (stream-text (when (and allocation (not finalization-error))
-                                        (:stdout-read-path allocation))
-                                      (str (:out r) (:out-tail r)) known cap)
-                    :err (stream-text (when (and allocation (not finalization-error))
-                                        (:stderr-read-path allocation))
-                                      (str (:err r) (:err-tail r)) known cap)})
-           :policy {:effect :allow}}
-          public-capture (assoc :captures public-capture))))))
+      {:effect :allow :command command :env env :settings settings :known known
+       :decided decided :outside-all outside-all})))
+
+(defn- confined-spawn
+  "The argv, environment and directory `command` runs with once allowed."
+  [root command env settings]
+  (let [resolved (secrets/resolve-refs command env)
+        ;; The child sees ONLY the scrubbed environment — name-sensitive
+        ;; vars removed, value-shaped credentials redacted — so a
+        ;; subprocess cannot read a secret the parent holds even by
+        ;; expanding $VAR itself. env -i semantics (see proc/run :env).
+        child-env (secrets/scrub-env env (:pass-env settings))]
+    ;; UNDER THE OS SANDBOX (karamazov-3vu1.5): writes only in the
+    ;; project, its scratch and the build caches, the secret regions
+    ;; unreadable, the harness's own ports unreachable. The allow
+    ;; table admits heads that run code the agent wrote (make,
+    ;; jolt -e), so the table alone never confined anything.
+    ;; The child starts in the root (:dir) and `cd root &&` is
+    ;; prefixed as well; the root is quoted, `resolved` is the model's
+    ;; own command and deliberately NOT — running it as written is the
+    ;; tool.
+    (confine/shell-command
+     ;; NOT overridable from ctx: a cell builds the ctx
+     ;; it hands tool-step, and a knob here would be a
+     ;; cell's way out of the sandbox.
+     {:backend (confine/backend (:sandbox settings))
+      :root (or root ".") :command resolved
+      :env child-env :ports (listen/ports)
+      :settings settings})))
+
+(defn- observe-reads!
+  "What an allowed command read, into the branch's flow label."
+  [ctx command outside-all]
+  ;; What ran read outside the project: the branch holds it now.
+  (when outside-all
+    (flow/observe! ctx (:outside-read flow/table) "shell"))
+  ;; And a project file it printed carries what its writer had read —
+  ;; looked for only when some file carries a label.
+  (try (when (flow/any-labelled-file? (:conn ctx))
+         (flow/read! ctx (read-paths command) "shell"))
+       (catch Throwable _
+         (flow/observe! ctx flow/uncertain-label "shell"))))
+
+(def shell-timeout
+  "How long one shell command may run: :default-ms unless the call asks for
+  more (shell's timeout_ms), capped at :max-ms (eca: 60 s default, 10 min
+  cap). A security bound, so not in agent-editable gates.edn: a limit the
+  agent could raise is not a limit. In the programbench runs 36 calls passed
+  timeout_ms and had it ignored, and 34 were killed at the fixed 120 s."
+  {:default-ms 120000 :max-ms 600000})
+
+(defn- run-allowed
+  [{:keys [conn root] :as ctx} {:keys [command env settings known decided outside-all]}]
+  (let [{:keys [argv env dir]} (confined-spawn root command env settings)
+        allocation (allocate-capture (assoc ctx :execution-recovery
+                                            (:execution-recovery decided)))
+        r (try
+            (apply proc/run (cond-> {:timeout-ms (or (:timeout-ms ctx)
+                                                     (:default-ms shell-timeout))
+                                     :env env :dir dir
+                                     ;; Killed by group when it ends: an orphan
+                                     ;; it left filled html-js-filter's 8 GiB.
+                                     ;; A process meant to outlive the call is
+                                     ;; a background job (shell background).
+                                     :own-group? true}
+                              allocation (assoc :capture (:options allocation)))
+                   argv)
+            (catch Throwable e
+              {:error true :message (ex-message e) :out "" :err ""
+               :capture {:stdout {:observed-bytes 0 :retained-bytes 0
+                                  :complete? false :error (ex-message e)}
+                         :stderr {:observed-bytes 0 :retained-bytes 0
+                                  :complete? false :error (ex-message e)}}}))
+        finalization-error
+        (when allocation
+          (try
+            (redact-capture-file (:stdout-path allocation) (:stdout-read-path allocation) known)
+            (redact-capture-file (:stderr-path allocation) (:stderr-read-path allocation) known)
+            (captures/finish! conn (:id allocation)
+                              (cond
+                                (:error r) :error
+                                (:cancelled r) :cancelled
+                                (some :error (vals (:capture r))) :capture-error
+                                (:timeout r) :timeout
+                                :else :complete)
+                              (:capture r)
+                              (select-keys allocation [:stdout-read-path :stderr-read-path]))
+            nil
+            (catch Throwable e
+              (captures/finish! conn (:id allocation) :error (:capture r)
+                                (select-keys allocation [:stdout-read-path :stderr-read-path]))
+              e)))
+        out (if allocation
+              (let [policy (:policy allocation)
+                    stdout-text (str (:out r) (:out-tail r)
+                                     (when (:timeout r)
+                                       (str "\n[timed out after " (:ms r) "ms]"))
+                                     (when (:cancelled r) "\n[cancelled]")
+                                     (when (:message r) (str "\n" (:message r)))
+                                     (when finalization-error
+                                       (str "\n" (ex-message finalization-error))))
+                    stderr-text (str (:err r) (:err-tail r))
+                    [stdout-cap stderr-cap] (preview-caps (count stdout-text) (count stderr-text)
+                                                          (:preview-chars policy)
+                                                          (:preview-stdout-fraction policy))
+                    stdout (preview-stream stdout-text stdout-cap known)
+                    stderr (preview-stream stderr-text stderr-cap known)]
+                (str stdout (when (seq stderr) (str "\n" stderr))))
+              (cond
+                (:message r) (str (:message r))
+                (:timeout r) (str "[timed out after " (:ms r) "ms]")
+                :else (str (:out r) (when (seq (:err r)) (str "\n" (:err r))))))
+        redacted (if allocation
+                   out
+                   (util/truncate-middle (secrets/redact out known)
+                                         (max-output-chars)))
+        public-capture (capture-public allocation
+                                       (cond-> r
+                                         finalization-error
+                                         (assoc :error (ex-message finalization-error))))
+        _ (when allocation
+            ((requiring-resolve 'samizdat.store.executions/complete!)
+             conn (:id allocation)
+             {:status (cond
+                        finalization-error :error
+                        (:cancelled r) :cancelled
+                        (:timeout r) :timeout
+                        (:error r) :error
+                        :else :complete)
+              :artifacts (mapv :uri (vals (select-keys public-capture [:stdout :stderr])))
+              ;; The caller is holding the result, so it needs no message
+              ;; saying the command finished (karamazov-0wvc.4).
+              :delivered? true}))
+        ;; Only when there is more to fetch than was shown.
+        streams (vals (select-keys public-capture [:stdout :stderr]))
+        reference-note (when (and public-capture
+                                  (or (not-every? #(= :complete (:status %)) streams)
+                                      (some #(false? (:complete? %)) streams)
+                                      (> (reduce + 0 (map #(long (or (:observed-bytes %) 0)) streams))
+                                         (long (:preview-chars (:policy allocation))))))
+                         (str "\nCaptures: " (pr-str public-capture)))]
+    (observe-reads! ctx command outside-all)
+    ;; A missing exit code is a spawn that did not report one, which is
+    ;; not evidence the command succeeded. `(or (:exit r) 0)` read it as
+    ;; success, the opposite of what run-verify does with the same shape;
+    ;; both now fail closed.
+    (cond->
+      {:category (if (and (not finalization-error) (not (:timeout r))
+                          (zero? (or (:exit r) 1)))
+                   :success :failure)
+       :progress? true
+       ;; How it ended, first: a failure with no output read like a
+       ;; success, and the model echoed $? by hand (karamazov-1fai).
+       :result (str (str/trim (prompt/render "shell-status"
+                                             {:exit (:exit r)
+                                              :timeout (boolean (:timeout r))
+                                              :seconds (some-> (:ms r) (quot 1000))
+                                              :max-seconds (quot (:max-ms shell-timeout) 1000)}))
+                    "\n" redacted reference-note)
+       ;; Carried as a flag rather than left to string-matching the output:
+       ;; the loop weights a timeout heavier on the failure streak and drops
+       ;; the storm window's retry allowance for the call that hung.
+       :timeout? (boolean (:timeout r))
+       ;; The same run as data, for a script calling the tool through
+       ;; the eval bridge: it composes on the exit code and the streams
+       ;; rather than parsing the text written for the model.
+       :data (let [cap (:data-chars (gates/threshold :eval-bridge))]
+               {:exit (:exit r) :timeout? (boolean (:timeout r))
+                :out (stream-text (when (and allocation (not finalization-error))
+                                    (:stdout-read-path allocation))
+                                  (str (:out r) (:out-tail r)) known cap)
+                :err (stream-text (when (and allocation (not finalization-error))
+                                    (:stderr-read-path allocation))
+                                  (str (:err r) (:err-tail r)) known cap)})
+       :policy {:effect :allow}}
+      public-capture (assoc :captures public-capture))))
+
+(defn run-shell
+  "Run a shell command through the full gate: decide, then (on allow) resolve
+  symbolic refs, spawn with a scrubbed environment, and redact the output
+  before it returns. Returns a tool-result map.
+
+  `ctx` carries :conn :run-id :root and :args {:command …}; :env defaults to
+  the process environment. This is the one place the perm, scrub, and redact
+  nodes of the security model meet.
+
+  The command runs in the run's `:root`, like every other tool. It used to run
+  wherever the harness process happened to be: the file tools resolve paths
+  under the root and the ship gate's verify `cd`s into it, so a run targeting
+  another checkout had `shell` reading and building a different tree than
+  `read_file` and `done` — with the same relative paths naming different
+  files. Absent root, the process cwd, which is what it always did."
+  [ctx]
+  (let [gate (shell-gate ctx)]
+    (if (= :allow (:effect gate))
+      (run-allowed ctx gate)
+      (:result gate))))
+
+(defn start-shell
+  "A shell command that is NOT waited for: the same gate as `run-shell` — the
+  decision, the scrubbed environment, the root and the OS sandbox are built
+  exactly as for a command — and then, instead of running it, `launch` is
+  handed {:argv :env :dir :command :known} and its tool result is returned.
+  Who owns the process from there (samizdat.engine.jobs, for the shell
+  tool's background mode) is the launcher's business; the argv is what keeps
+  it confined, because a sandbox wraps the process it starts, and that
+  process is the job's own rather than a child of a call that returns.
+
+  A refusal comes back exactly as `run-shell` returns it, never launched."
+  [{:keys [root] :as ctx} launch]
+  (let [{:keys [effect command env settings known outside-all] :as gate} (shell-gate ctx)]
+    (if (not= :allow effect)
+      (:result gate)
+      (let [spawn (confined-spawn root command env settings)
+            r (launch (assoc (select-keys spawn [:argv :env :dir])
+                             :command command :known known))]
+        (observe-reads! ctx command outside-all)
+        (assoc r :policy {:effect :allow})))))
 
 ;; --- reads through the shell (karamazov-d5wo.9) -------------------------------
 ;;

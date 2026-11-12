@@ -54,6 +54,29 @@
     (is (= 13 (get-in c [:usage :total_tokens])))
     (is (= "m" (:model c)))))
 
+(deftest tool-call-fragments-from-sloppier-streams-still-merge
+  ;; eca's openai_chat merge: an empty id in a later chunk (Qwen/DashScope)
+  ;; overwrote the real one, a provider that repeats the whole name on every
+  ;; chunk produced read_fileread_file, and a missing index merged parallel
+  ;; calls into one unparseable argument string.
+  (let [calls (fn [cs] (get-in (stream/completion (reduce stream/accumulate nil cs))
+                               [:choices 0 :message :tool_calls]))]
+    (is (= [{:id "call_1" :type "function" :function {:name "read_file" :arguments "{\"path\":\"a\"}"}}]
+           (calls [(chunk {:tool_calls [{:index 0 :id "call_1" :type "function"
+                                         :function {:name "read_file" :arguments "{\"pa"}}]})
+                   (chunk {:tool_calls [{:index 0 :id "" :function {:name "read_file" :arguments "th\":\"a\"}"}}]})]))
+        "an empty id does not erase the real one, and a repeated name is not doubled")
+    (is (= ["a" "b"]
+           (map #(get-in % [:function :name])
+                (calls [(chunk {:tool_calls [{:id "c1" :type "function" :function {:name "a" :arguments "{}"}}]})
+                        (chunk {:tool_calls [{:id "c2" :type "function" :function {:name "b" :arguments "{}"}}]})])))
+        "with no index, calls are told apart by id")
+    (is (= "{\"x\":1}"
+           (get-in (first (calls [(chunk {:tool_calls [{:id "c1" :type "function" :function {:name "a" :arguments "{\"x\""}}]})
+                                  (chunk {:tool_calls [{:function {:arguments ":1}"}}]})]))
+                   [:function :arguments]))
+        "and a fragment with neither continues the last call")))
+
 (deftest a-delta-is-the-text-and-the-reasoning-it-adds
   (is (= {:text "Hel"} (stream/delta (chunk {:content "Hel"}))))
   (is (= {:reasoning "think"} (stream/delta (chunk {:reasoning_content "think"}))))

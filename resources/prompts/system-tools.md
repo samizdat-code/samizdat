@@ -348,7 +348,10 @@ ask_human({questions})
     problem says to ask, or names a decision as the person's: ask before you
     build on it, not after. Decide anything else yourself and say which way
     you went. Asking costs a turn and establishes nothing.
-shell({command})
+shell({command, timeout_ms, background?})
+    The result starts with how the command ended, `[exit N]`; you do not need
+    to echo $?. timeout_ms gives a long build or test run more time than the
+    default (it is capped; the timeout message says the cap).
     Run one or MORE shell commands. A command may be several statements —
     separated by newlines, `;`, `&&` or a pipe — and they run in one call, in
     order, as one turn. Prefer that to a turn per command: five separate calls
@@ -383,6 +386,18 @@ shell({command})
     The shell runs in a sandbox: it writes only inside the project (not its
     .samizdat/ workflow directory), the temp directory and the build caches,
     and a read outside the project needs a person to allow it.
+
+    `background: true` is for a process that has to keep running while you
+    work — a server you test against, a watcher. The call returns once the
+    process is up, with its first output and a job id; a command that dies at
+    once comes back as a failure with its exit code. It is checked exactly
+    like any other command. Background jobs are stopped when the run ends,
+    and you are told when one exits on its own. Do not use `&` or `nohup`
+    instead: a process left behind that way does not reliably outlive the call.
+jobs({action, id?})
+    Your background jobs. "list" shows each with its status and command;
+    "output" with an `id` returns what that job wrote since you last read it
+    (stderr lines marked); "kill" with an `id` stops it.
 ```
 
 ### Discovering deferred tools

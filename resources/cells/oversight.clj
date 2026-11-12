@@ -561,7 +561,8 @@
   ;; a pass is not charged for how the one before it ended.
   (cond-> (-> b
               (dissoc :final-answer :verdict :done? :inactive-reason
-                      :consecutive-mechanics-failures :consecutive-provider-errors :consecutive-rate-limits)
+                      :consecutive-mechanics-failures :consecutive-provider-errors :consecutive-rate-limits
+                      :consecutive-outages)
               (assoc :status :active :advisory? true))
     brief (update :messages (fnil conj []) {:role "user" :content brief})))
 
@@ -628,12 +629,17 @@
         (update :brief-shown #(select-keys (assoc % id hashes) live)))))
 
 (defn tester-due?
-  "Whether this pass should first run the blind tester (karamazov-galq): a
-  ship review newly asked for, on a run whose clock is at least gates.edn
-  :tester :min-clock-seconds, the tester enabled, and not yet run this run."
-  [{:keys [review-new? limit ran?]} {:keys [enabled? min-clock-seconds]}]
-  (boolean (and enabled? review-new? (not ran?) limit min-clock-seconds
-                (>= limit min-clock-seconds))))
+  "Whether this pass should first run the blind tester (karamazov-galq): on a
+  run whose clock is at least gates.edn :tester :min-clock-seconds, the tester
+  enabled and not yet run this run, when a ship review is newly asked for or
+  the run has used :early-share of its clock. The second is karamazov-s9qi:
+  vf2 one-vf2-4's first done came at 96 of 118 minutes, and a tester that
+  waits for it has no time left to report."
+  [{:keys [review-new? limit ran? time-used]} {:keys [enabled? min-clock-seconds early-share]}]
+  (boolean (and enabled? (not ran?) limit min-clock-seconds
+                (>= limit min-clock-seconds)
+                (or review-new?
+                    (and early-share time-used (>= time-used early-share))))))
 
 (defn- run-tester!
   "Run the blind tester on a fresh `TST` branch: role :tester, whose problem is
@@ -718,14 +724,22 @@
      (fn []
        (let [round (:oversight/round data)
              ;; THE BLIND TESTER (karamazov-galq), before anything is shown: at
-             ;; the first review of a long-clock run, a branch that never saw
-             ;; the code tests the deliverable from the task alone.
-             tester (when (tester-due? {:review-new? (> (count (:oversight/reviews data))
-                                                        (or (:review-requested (:signals (journal/last-note conn run-id :oversight))) 0))
+             ;; the first review of a long-clock run, or once the run is past
+             ;; :tester :early-share of its clock, a branch that never saw the
+             ;; code tests the deliverable from the task alone.
+             review-new? (> (count (:oversight/reviews data))
+                            (or (:review-requested (:signals (journal/last-note conn run-id :oversight))) 0))
+             tester (when (tester-due? {:review-new? review-new?
                                         :limit (get-in ctx [:config :run :time-limit-seconds])
+                                        :time-used (let [limit (get-in ctx [:config :run :time-limit-seconds])
+                                                         left (gates/run-time-left ctx)]
+                                                     (when (and limit left (pos? limit))
+                                                       (- 1.0 (/ (double left) limit))))
                                         :ran? (some? (journal/last-note conn run-id :tester-report))}
                                        (gates/threshold :tester))
-                      (run-tester! ctx conn run-id))
+                      ;; Whether it answers a ship request or ran early on
+                      ;; the clock (karamazov-s9qi): the brief says which.
+                      (assoc (run-tester! ctx conn run-id) :review-requested? review-new?))
              ;; The mark the supervisor's deltas are measured from, stamped
              ;; BEFORE it is shown anything, so `since` covers the interval
              ;; from its last look to now — the interval its last change was
@@ -817,7 +831,9 @@
                                   ;; The commands that keep failing and what
                                   ;; worked instead (karamazov-oi16.4).
                                   ;; What the blind tester found, this pass.
-                                  :blind-tests (when tester (prompt/render "blind-tests" tester))
+                                  :blind-tests (when tester
+                                                 (prompt/render "blind-tests"
+                                                                (assoc tester :early (not (:review-requested? tester)))))
                                   ;; The tests stopped improving (owner, 2026-11-09).
                                   :plateau (let [p (:oversight/plateau data)]
                                              (when-let [f (:plateau-runs (gates/threshold :test-progress))]

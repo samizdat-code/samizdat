@@ -420,10 +420,7 @@
                        not a control (see policy.clj below)."}}
 
    "src/samizdat/security/policy.clj"
-   {:threshold {120000 "Shell command timeout. A security bound, and see the
-                        note on secrets.clj below: a control the agent could
-                        retune is not a control."}
-    :vocabulary {"(?:>&[0-9]+|>>?[ \\t]*/dev/null)(?![A-Za-z0-9_./-])"
+   {:vocabulary {"(?:>&[0-9]+|>>?[ \\t]*/dev/null)(?![A-Za-z0-9_./-])"
                  "What a benign redirection IS — `2>&1`, `2>/dev/null` — is
                   POSIX shell structure the grammar must recognize, like the
                   statement separators beside it. Not a vocabulary a project

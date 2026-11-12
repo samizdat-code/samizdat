@@ -143,7 +143,8 @@
                   :llm-adapter :a :llm-config {:max-tokens 16384}
                   :problem "Write a." :max-turns 8 :beam-width 1 :oversight? false}))
     (is (seq (db/fetch conn ["SELECT id FROM gate_firings WHERE gate = 'metrics-worse'"]))
-        (pr-str (db/fetch conn ["SELECT gate FROM gate_firings"])))
+        (pr-str [(db/fetch conn ["SELECT gate FROM gate_firings"])
+                 (db/fetch conn ["SELECT tool_name, substr(result, 1, 300) AS r FROM turns ORDER BY id LIMIT 6"])]))
     
     (let [msg (:message (first (db/fetch conn ["SELECT message FROM gate_firings WHERE gate = 'metrics-worse'"])))]
       (is (str/includes? (str msg) "cyclomatic") (pr-str msg)))

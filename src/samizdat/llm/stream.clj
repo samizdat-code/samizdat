@@ -39,14 +39,33 @@
 
 (defn- merge-call
   "One streamed tool-call fragment into the call at its index: the id, type
-  and name as they first come, the arguments concatenated."
+  and name as they first come, the arguments concatenated. After eca's
+  openai_chat merge: an empty id never replaces a real one (Qwen/DashScope
+  send `id: \"\"` in later chunks), and a name repeated whole on every chunk
+  is not appended to itself."
   [call frag]
-  (let [f (:function frag)]
+  (let [f (:function frag)
+        nm (:name f)
+        had (get-in call [:function :name])]
     (cond-> (or call {})
-      (:id frag) (assoc :id (:id frag))
+      (and (not (str/blank? (str (:id frag)))) (str/blank? (str (:id call)))) (assoc :id (:id frag))
       (:type frag) (assoc :type (:type frag))
-      (:name f) (update-in [:function :name] str (:name f))
+      (and (not (str/blank? (str nm))) (not= nm had)) (update-in [:function :name] str nm)
       (:arguments f) (update-in [:function :arguments] str (:arguments f)))))
+
+(defn- call-slot
+  "Where a fragment goes in `calls` ({slot call}): its :index; with none, the
+  call already carrying its id, or a new slot for a new id; with neither, the
+  last call, which it continues. A missing index used to put every call in
+  slot 0 and merge parallel calls into one argument string."
+  [calls frag]
+  (let [id (when-not (str/blank? (str (:id frag))) (:id frag))]
+    (cond
+      (some? (:index frag)) (:index frag)
+      id (or (some (fn [[k c]] (when (= id (:id c)) k)) calls)
+             (if (seq calls) (inc (apply max (keys calls))) 0))
+      (seq calls) (apply max (keys calls))
+      :else 0)))
 
 (defn accumulate
   "Fold one chunk into `acc`. Every string a delta carries is appended to the
@@ -67,7 +86,7 @@
                 (reduce-kv (fn [m k v]
                              (cond
                                (= :tool_calls k)
-                               (reduce #(update-in %1 [:calls (:index %2 0)] merge-call %2) m v)
+                               (reduce #(update-in %1 [:calls (call-slot (:calls %1) %2)] merge-call %2) m v)
                                (string? v) (update m k str v)
                                (some? v) (assoc m k v)
                                :else m))

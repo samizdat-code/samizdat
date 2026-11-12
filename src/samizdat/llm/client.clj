@@ -128,6 +128,9 @@
 
 (defn retry-after-ms
   "How long the provider asked us to wait, from the response headers, or nil.
+  With `rate-limited?` false, only `retry-after` counts: a reset header names
+  when a healthy window rolls over, and on a 500 it cut the backoff to 1 s
+  (eca reads reset times only for a rate limit).
 
   Handles `retry-after` in seconds and the `x-ratelimit-reset-*` family that
   several OpenAI-compatible providers send instead. UNCLAMPED: the in-run cap
@@ -135,16 +138,16 @@
   cap wearing a rate-limit's headers under a 60s ceiling that could never
   cross the 300s window (provenance CR1-2). The ceiling on what we
   actually sleep is applied in backoff-ms."
-  [headers]
-  (let [h (fn [k] (get headers k))
-        secs (some-> (or (h "retry-after") (h "Retry-After")) str/trim parse-long)
-        reset (some-> (or (h "x-ratelimit-reset-requests")
-                          (h "x-ratelimit-reset-tokens"))
-                      str/trim
-                      (str/replace #"[sm]$" "")
-                      parse-long)]
-    (when-let [s (or secs reset)]
-      (* 1000 (max 0 s)))))
+  ([headers] (retry-after-ms headers true))
+  ([headers rate-limited?]
+   (let [h (fn [k] (get headers k))
+         secs (some-> (or (h "retry-after") (h "Retry-After")) str/trim parse-long)
+         reset (when rate-limited?
+                 (some-> (or (h "x-ratelimit-reset-requests")
+                             (h "x-ratelimit-reset-tokens"))
+                         ratelimit/duration-ms))]
+     (cond secs (* 1000 (max 0 secs))
+           reset (max 0 reset)))))
 
 (def ^:private context-overflow-re
   ;; wordlists.edn :context-overflow — how endpoints word a window overflow.
@@ -152,6 +155,26 @@
   ;; track (karamazov-d41).
   (util/generation-cache lexicon/gen
                          #(re-pattern (lexicon/wordlist :context-overflow))))
+
+(def ^:private transient-error-re
+  ;; wordlists.edn :transient-error-signals — how a passing failure words
+  ;; itself when no status or type says so.
+  (util/generation-cache lexicon/gen
+                         #(some-> (lexicon/wordlist :transient-error-signals) re-pattern)))
+
+(defn- transient-text?
+  [s]
+  (boolean (when-let [re (transient-error-re)] (re-find re (str s)))))
+
+(defn- transient-failure?
+  "Whether an exception from one attempt is a passing transport failure: an
+  IOException anywhere in its cause chain, or a message in that chain that
+  :transient-error-signals recognises (the watchdog's close of a stalled
+  stream, a stream that ended before [DONE])."
+  [e]
+  (boolean (some (fn [x] (or (instance? java.io.IOException x)
+                             (transient-text? (ex-message x))))
+                 (take-while some? (iterate ex-cause e)))))
 
 (defn context-overflow?
   "Whether this response body says the prompt outgrew the context window.
@@ -224,13 +247,14 @@
   "2s, 8s, 32s, with up to +25% jitter. Overridden by whatever the provider
   asked for. The jitter is what keeps a beam of branches that all hit the same
   429 from retrying in lockstep and re-colliding on the next window."
-  [attempt headers]
-  ;; The clamp lives HERE, on what we actually sleep — not on the provider's
-  ;; ask, which the cap check in `chat` needs unclamped (same review).
-  (min max-backoff-ms
-       (or (retry-after-ms headers)
-           (long (* (+ 1.0 (rand 0.25))
-                    (* 2000 (Math/pow 4 attempt)))))))
+  ([attempt headers] (backoff-ms attempt headers true))
+  ([attempt headers rate-limited?]
+   ;; The clamp lives HERE, on what we actually sleep — not on the provider's
+   ;; ask, which the cap check in `chat` needs unclamped (same review).
+   (min max-backoff-ms
+        (or (retry-after-ms headers rate-limited?)
+            (long (* (+ 1.0 (rand 0.25))
+                     (* 2000 (Math/pow 4 attempt))))))))
 
 ;; --- one call ---------------------------------------------------------------
 
@@ -275,6 +299,11 @@
         (cancel/after-blocking!)
         r))))
 
+(defn- client-error?
+  "Whether an HTTP status is a 4xx."
+  [status]
+  (and (integer? status) (<= 400 status 499)))
+
 (defn- failure
   "The outcome of a response that failed — a non-2xx, or a 2xx whose body is
   an error: the retry decision, the error text, and the reason when there is
@@ -284,18 +313,28 @@
   ;; 5xx that is deterministic, and the reason travels from where it is
   ;; detected so the loop can respond by compacting rather than retrying
   ;; (karamazov-d41).
-  (let [overflow? (context-overflow? (:body resp))
+  (let [overflow? (or (= 413 status) (context-overflow? (:body resp)))
         ;; A wall, not a window: DeepSeek answers 402 "Insufficient
-        ;; Balance", and any status can carry the usage-cap wording the
+        ;; Balance", and a client error can carry the usage-cap wording the
         ;; adapter knows. Retrying spends the run's budget against
         ;; something that will not move (dirge PR 689), so it is fatal and
         ;; the reason travels so a supervisor tells a wall from a bug.
+        ;; Only a CLIENT error: a 5xx saying "insufficient capacity" is an
+        ;; outage, and reading it as a cap ended the run (eca reads quota
+        ;; wording only on a 429).
         cap? (and (not overflow?)
                   (or (= 402 status)
-                      (adapter/usage-cap? adapter status decoded)))]
-    (cond-> {:outcome (if (or overflow? cap?)
-                        :fatal
-                        (classify adapter status decoded))
+                      (and (client-error? status)
+                           (adapter/usage-cap? adapter status decoded))))]
+    (cond-> {:outcome (cond
+                        (or overflow? cap?) :fatal
+                        ;; An error frame inside a 2xx that names a server
+                        ;; hiccup passes like a 5xx would.
+                        (and (integer? status) (< status 300)
+                             (transient-text? (or (adapter/error-message adapter decoded)
+                                                  (:body resp))))
+                        :retry
+                        :else (classify adapter status decoded))
              :headers (:headers resp)
              :error (str (adapter/display-name adapter) " error " status
                          (when-let [m (or (adapter/error-message adapter decoded)
@@ -375,7 +414,10 @@
               ;; downstream by matching this sentence would make the counter a
               ;; measurement of the wording — reword the message and the
               ;; provider-trouble finding silently stops firing.
-              {:outcome :fatal
+              ;; Retried in the client unless the budget ran out (eca retries
+              ;; a premature empty stop): a reply cut at :max-tokens would
+              ;; come back as empty again.
+              {:outcome (if (= "length" (str (:finish-reason parsed))) :fatal :retry)
                :reason :empty-reply
                :error (str (adapter/display-name adapter)
                            " returned neither content nor reasoning. This usually means"
@@ -580,7 +622,7 @@
                                  :error (str "read timeout: " m)}
                                 (cond
                                   (cancel/control-signal? e) (throw e)
-                                  (instance? java.io.IOException e)
+                                  (transient-failure? e)
                                   {:outcome :retry :error (str "transport: " m)}
                                   :else
                                   {:outcome :fatal :reason :harness-error
@@ -626,7 +668,11 @@
                                     (last errors))
                                (cond-> {:provider (adapter/id adapter)
                                         :attempts (inc attempt)
-                                        :reason (or (:reason result) :call-failed)
+                                        ;; A transient failure that outlasted the
+                                        ;; ladder is an outage the loop waits out.
+                                        :reason (or (:reason result)
+                                                    (when (= :retry (:outcome result)) :outage)
+                                                    :call-failed)
                                         :errors errors}
                                  seed (assoc :partial-response seed))))))
 
@@ -646,7 +692,8 @@
                             :errors errors}))
 
            :else
-           (let [wait (backoff-ms attempt (:headers result))]
+           (let [wait (backoff-ms attempt (:headers result)
+                                  (= :rate-limited (:reason result)))]
              ;; Retries are counted even when the call eventually succeeds. A
              ;; run that got there on the third attempt every time is a run in
              ;; trouble, and the outcome alone cannot say so.

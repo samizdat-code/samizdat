@@ -64,6 +64,8 @@
             [samizdat.agent.tools.ship]
             [samizdat.agent.tools.split]
             [samizdat.agent.tools.tool-search]
+            [samizdat.agent.tools.jobs]
+            [samizdat.engine.jobs]
             [samizdat.agent.tournament]
             [samizdat.agent.trajectory]
             [samizdat.agent.webfetch]

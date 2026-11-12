@@ -23,10 +23,12 @@
   the scrubbed environment, and output redaction. See
   samizdat.agent.tools.base for the shared result helpers and the run-tool
   multimethod."
-  (:require [samizdat.agent.actions :as actions]
+  (:require [clojure.string :as str]
+            [samizdat.agent.actions :as actions]
             [samizdat.agent.files :as files]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
+            [samizdat.agent.tools.jobs :as jobs]
             [samizdat.prompt :as prompt]
             [samizdat.repl.route :as route]
             [samizdat.security.confine :as confine]
@@ -79,11 +81,18 @@
     ;; harness's own among them, readable though not writable (karamazov-1gbh).
     (let [home (System/getenv "HOME")
           began (System/currentTimeMillis)
-          r (policy/run-shell (assoc ctx :read-roots
-                                     (concat [(or (:root ctx) ".")]
-                                             (files/ctx-reference-roots ctx)
-                                             (confine/build-caches home)
-                                             (confine/harness-caches home))))
+          ;; The call's own timeout, capped (policy/shell-timeout).
+          asked (some-> (base/arg ctx :timeout_ms) str str/trim parse-long)
+          {:keys [default-ms max-ms]} policy/shell-timeout
+          ctx (assoc ctx
+                     :timeout-ms (min (or max-ms default-ms) (or asked default-ms))
+                     :read-roots (concat [(or (:root ctx) ".")]
+                                         (files/ctx-reference-roots ctx)
+                                         (confine/build-caches home)
+                                         (confine/harness-caches home)))
+          ;; `background` starts it as a job of the run instead of waiting
+          ;; for it — through the same gate (samizdat.agent.tools.jobs).
+          r (if (jobs/background? ctx) (jobs/start! ctx) (policy/run-shell ctx))
           refused? (contains? #{:deny :ask} (get-in r [:policy :effect]))]
       ;; What the command led to, for the run's record of actions
       ;; (karamazov-oi16): a turn's own call and an eval's bridged `sh` alike.
@@ -102,4 +111,4 @@
              ;; A policy refusal is journalled as declined, like a phase
              ;; refusal, so the record can tell it from a command that ran
              ;; and failed.
-             :policy-refusal? refused?))))
+             :policy-refusal? (or refused? (boolean (:policy-refusal? r)))))))

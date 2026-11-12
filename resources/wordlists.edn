@@ -254,7 +254,19 @@
  ;; GLM/Zhipu answers a 400 with code 1261 and 'Prompt exceeds max length'
  ;; (measured live 2026-09-06) — which matches none of the above, so a GLM
  ;; overflow was retried on backoff instead of squeezing the branch.
- "(?i)context (size|length|window)|context_length_exceeded|maximum context|prompt exceeds max length|\"?1261\"?"
+ ;; eca adds the wordings Anthropic, Gemini and others use: "prompt is too
+ ;; long", "input is too long", "too many tokens", "request too large",
+ ;; exceed_context_size_error (karamazov-1fai).
+ "(?i)context (size|length|window)|context_length_exceeded|maximum context|prompt exceeds max length|prompt is too long|input is too long|too many (input )?tokens|request too large|exceed_context_size|\"?1261\"?"
+
+ :transient-error-signals
+ ;; How a failure says "this will pass" when nothing else classifies it: a
+ ;; stream cut short (the idle watchdog closing a stalled stream ends it
+ ;; before [DONE]), a connection dropped, or an error frame inside a 200
+ ;; that names a server-side hiccup. Matched against every message in the
+ ;; exception's cause chain and against a 2xx error body (eca does the same
+ ;; from message patterns when there is no status). A regex pattern string.
+ "(?i)stream ended before|stream interrupted|connection (closed|reset|refused|aborted)|broken pipe|internal server error|server error|overloaded|temporarily unavailable|service unavailable|bad gateway|gateway time-?out|try again later"
 
  :failure-layers
  ;; How a failure names the layer it belongs to (karamazov-i1u). The

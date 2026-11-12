@@ -250,7 +250,7 @@
                                             :args {:command cmd}}))]
       (testing "an allowed command runs and returns output"
         (let [r (call "echo hello-from-shell")]
-          (is (= :success (:category r)))
+          (is (= :success (:category r)) (pr-str r))
           (is (str/includes? (:result r) "hello-from-shell"))))
       (testing "a denied command never runs"
         (let [r (call "rm -rf /")]

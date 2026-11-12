@@ -282,6 +282,35 @@
       ((:handler (cell/get-cell! :oversight/reason)) ctx g))
     {:gather g :prob @prob}))
 
+(deftest past-the-early-share-the-tester-runs-before-any-done
+  ;; karamazov-s9qi: vf2 one-vf2-4's first done came at 96 of 118 minutes; the
+  ;; tester it started was cancelled at run end with no report. Past :tester
+  ;; :early-share of the clock, a pass runs it without a ship request.
+  (cells/load-cells!)
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "make it 5000x faster"})
+        limit 7200
+        ctx {:conn conn :run-id rid :config {:run {:time-limit-seconds limit}}
+             :started-ms (- (System/currentTimeMillis) (long (* 0.65 limit 1000)))}
+        g ((:handler (cell/get-cell! :oversight/gather)) ctx {})
+        brief (atom nil)
+        tester-ran (atom 0)]
+    (with-redefs [myc/run-compiled (fn [_ _ data]
+                                     (if (= "TST" (get-in data [:branch :id]))
+                                       (do (swap! tester-ran inc)
+                                           {:branch (assoc (:branch data)
+                                                           :final-result {:ran 2 :failing ["python3 t_speed.py — expected 5000x, got 478x"]}
+                                                           :final-answer "slow")})
+                                       (do (reset! brief (get-in data [:branch :problem]))
+                                           {:branch (assoc (:branch data) :final-answer "ok")})))]
+      ((:handler (cell/get-cell! :oversight/reason)) ctx g)
+      (is (= 1 @tester-ran) "no done was asked for, and the tester ran")
+      (is (= ["python3 t_speed.py — expected 5000x, got 478x"]
+             (journal/tester-failing conn rid)) "its failures are what the done-time rerun reads")
+      (is (str/includes? (str @brief) "not asked to ship") "the brief says it ran early")
+      ((:handler (cell/get-cell! :oversight/reason)) ctx g)
+      (is (= 1 @tester-ran) "once per run"))))
+
 (deftest a-crashed-stage-reaches-the-one-supervisor
   ;; The feature loop's stages fail soft and note :stage-error; the stage
   ;; that used to show those to a supervisor of its own is gone. The stream's
@@ -1647,7 +1676,87 @@
       (is (str/includes? (str (:result r)) "t_speed.py") "held, naming what still fails")
       (is (= ["cd /tmp/blind-tests && python t_speed.py"] @ran) "the command, not the description"))
     (reset! failing? false)
-    (is (str/includes? (str (:result (done! b 12))) "accepted") "once it passes, the done ships")))
+    (is (str/includes? (str (:result (done! b 12))) "accepted") "once it passes, the done ships")
+    (testing "one script behind several failures runs once, and its output leads"
+      ;; vf2 one-vf2-5: both failures came from t3_graph.py; the hold ran it
+      ;; twice, printed the same output twice, and put the tester's first
+      ;; description ahead of output that showed a different failure.
+      (reset! failing? true)
+      (reset! ran [])
+      (journal/note! conn rid :tester-report
+                     {:data {:ran 4 :failing ["python3 t3.py — expected edges 0, got -1"
+                                              "python3 t3.py — expected degree to raise, got None"]}})
+      (let [r (str (:result (done! b 14)))]
+        (is (= ["python3 t3.py"] @ran) "the command once")
+        (is (str/includes? r "expected edges 0"))
+        (is (str/includes? r "expected degree to raise"))
+        (is (< (str/index-of r "x\n```") (str/index-of r "expected edges 0"))
+            "what it prints now comes before what the tester first saw")))))
+
+(deftest a-failure-entry-that-is-not-a-command-holds-nothing
+  ;; music-harmony one-music-3: an entry written " - expected" instead of " — "
+  ;; and an entry of prose ("NOT SETTLED ...") went to the shell whole; the
+  ;; prose exited 127 and would have held the done to wind-down.
+  (let [ran (atom [])
+        exits {"python3 v.py" 1 "NOT SETTLED (no automated pass/fail): melody fidelity" 127}]
+    (with-redefs [samizdat.security.policy/run-shell
+                  (fn [ctx] (let [c (get-in ctx [:args :command]) e (get exits c 0)]
+                              (swap! ran conj c)
+                              {:category (if (zero? e) :success :failure) :exit e :result (str "[exit " e "]")}))]
+      (let [{:keys [failing passing not-runnable]}
+            (samizdat.agent.tools.ship/rerun-checks {} ["python3 v.py - expected valid XML, got errors"
+                                   "NOT SETTLED (no automated pass/fail): melody fidelity"])]
+        (is (= ["python3 v.py" "NOT SETTLED (no automated pass/fail): melody fidelity"] @ran)
+            "a plain hyphen separates a command from its expectation too")
+        (is (= ["python3 v.py"] (map :command failing)) "only a real check holds")
+        (is (empty? passing))
+        (is (= ["NOT SETTLED (no automated pass/fail): melody fidelity"] not-runnable))))))
+
+(deftest a-tester-failure-must-be-a-command-that-fails
+  ;; music-harmony one-music-1: the tester reported three voice-leading
+  ;; defects as `... vl.py — expected ..., got ...`, but vl.py printed them and
+  ;; exited 0, so the done-time rerun saw a pass and the run shipped them. The
+  ;; tester's done is refused while a failure it reports exits 0.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "harmonise it"})
+        exit (atom 0)
+        t (assoc (state/new-branch {:id "TST" :problem "harmonise it"}) :role :tester :advisory? true)
+        done! (fn [b]
+                (with-redefs [samizdat.security.policy/run-shell
+                              (fn [_] {:category (if (zero? @exit) :success :failure) :result "[exit 0]\nm3: parallel fifth"})]
+                  (tools/run-tool {:branch b :tool-name "done" :turn 30 :conn conn :run-id rid
+                                   :config {:run {:style :lean :time-limit-seconds 7200}}
+                                   :args {:answer "Three voice-leading defects."
+                                          :result {"ran" 8 "failing" ["cd /tmp/blind-tests && python3 vl.py — expected no parallel fifths, got one"]}}})))
+        r (done! t)]
+    (is (not (:done? r)) "refused while the check exits 0")
+    (is (str/includes? (str (:result r)) "vl.py") "naming the command")
+    (reset! exit 1)
+    (is (:done? (done! t)) "accepted once it fails as it says")
+    (reset! exit 0)
+    (testing "never on the tester's last turn: refused there, it ends with no report at all"
+      ;; music-harmony one-music-2: the refusal landed on turn 30 of 30 and the
+      ;; tester's report came back {:ran 0 :failing []}, so nothing held the done.
+      (is (:done? (with-redefs [samizdat.security.policy/run-shell (fn [_] {:category :success :result "[exit 0]"})]
+                    (tools/run-tool {:branch t :tool-name "done" :turn 30 :max-turns 30 :conn conn :run-id rid
+                                     :config {:run {:style :lean :time-limit-seconds 7200}}
+                                     :args {:answer "Three voice-leading defects."
+                                            :result {"ran" 8 "failing" ["python3 vl.py — expected no fifths, got one"]}}})))))
+    (testing "a count sent as a string is read as the number it is"
+      ;; Nearly every tester's first done failed on {:ran [\"should be an integer\"]}.
+      (let [r (with-redefs [samizdat.security.policy/run-shell (fn [_] {:category :failure :result "[exit 1]"})]
+                (tools/run-tool {:branch t :tool-name "done" :turn 10 :max-turns 30 :conn conn :run-id rid
+                                 :config {:run {:style :lean :time-limit-seconds 7200}}
+                                 :args {:answer "One defect." :result {"ran" "8" "failing" ["python3 vl.py — x"]}}}))]
+        (is (:done? r))
+        (is (= 8 (get-in r [:branch :final-result :ran])))))
+    (testing "a list of what ran is read as its count"
+      ;; music-harmony one-music-3: `ran` came as the list of commands run.
+      (is (= 2 (:ran (samizdat.agent.roles/coerce-result [:map [:ran :int]] {"ran" ["a.py" "b.py"]})))))
+    (let [{:keys [check-refusals]} (gates/threshold :tester)
+          streaked (update t :turns (fnil into []) (repeat check-refusals {:tool "done" :category :mechanics}))]
+      (is (:done? (done! (assoc streaked :done-streak check-refusals)))
+          "after :check-refusals the report is taken as it is, not lost"))))
 
 (deftest a-blind-tester-checks-the-deliverable-from-the-task-alone
   ;; karamazov-galq. ctb-r1..r4: most failures were hidden edge cases the
@@ -1670,11 +1779,26 @@
       (is (not (due? {:review-new? true :limit 900 :ran? false} p)) "not on a short clock")
       (is (not (due? {:review-new? true :limit 7200 :ran? true} p)) "once per run")
       (is (not (due? {:review-new? false :limit 7200 :ran? false} p)) "only when asked to ship")
-      (is (not (due? {:review-new? true :limit 7200 :ran? false} (assoc p :enabled? false))))))
+      (is (not (due? {:review-new? true :limit 7200 :ran? false} (assoc p :enabled? false)))))
+    (testing "karamazov-s9qi: past :early-share of the clock it runs without waiting for a done"
+      ;; vf2 one-vf2-4: the first done came at 96 of 118 minutes, the tester
+      ;; started then and was cancelled at run end with no report; the grader
+      ;; failed the speed bar the tester exists to measure.
+      (let [p (assoc p :early-share 0.5)]
+        (is (due? {:review-new? false :limit 7200 :ran? false :time-used 0.55} p))
+        (is (not (due? {:review-new? false :limit 7200 :ran? false :time-used 0.3} p)) "not before the share")
+        (is (not (due? {:review-new? false :limit 7200 :ran? true :time-used 0.8} p)) "still once per run")
+        (is (not (due? {:review-new? false :limit 900 :ran? false :time-used 0.8} p)) "not on a short clock")
+        (is (not (due? {:review-new? false :limit 7200 :ran? false :time-used 0.8} (dissoc p :early-share)))
+            "only when a share is set"))))
   (testing "its failures reach the supervisor's brief"
     (let [t (prompt/render "blind-tests" {:ran 12 :failing ["python3 t.py::srcdoc — expected no <script>, got one"]})]
       (is (str/includes? t "12"))
-      (is (str/includes? t "srcdoc"))))
+      (is (str/includes? t "srcdoc")))
+    (testing "an early report is not an answer to a ship request"
+      (let [t (prompt/render "blind-tests" {:ran 3 :failing ["python3 t.py — expected 5000x, got 478x"] :early true})]
+        (is (str/includes? t "not asked to ship"))
+        (is (not (str/includes? t "stays held until you send"))))))
   (testing "a long clock holds the done long enough for it"
     (let [{:keys [max-wait-seconds max-wait-long-seconds]} (gates/threshold :ship-review)]
       (is (= max-wait-long-seconds (gates/review-max-wait {:run {:time-limit-seconds 7200}})))

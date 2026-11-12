@@ -333,7 +333,13 @@
   project. The seatbelt profile re-allows the project after its denies for
   the same reason, and it is what lets a self-hosting run read itself. Pure."
   [{:keys [project-root scratch-paths deny-dirs deny-files seccomp-fd protect]}]
-  (let [writable (clean (cons project-root scratch-paths))
+  ;; Every path made absolute: bwrap reads a relative mount destination
+  ;; against the sandbox's /, so a run with no :root — project root "." —
+  ;; bound the working directory over / and bash was gone ("bwrap: execvp
+  ;; bash: No such file or directory", CI's Linux job once the runner image
+  ;; shipped bwrap). An absolute path is left exactly as it was given.
+  (let [clean (fn [paths] (map #(.getAbsolutePath (io/file %)) (clean paths)))
+        writable (clean (cons project-root scratch-paths))
         hides-writable? (fn [d] (some #(under? d %) writable))]
     (-> ["bwrap" "--ro-bind" "/" "/" "--dev" "/dev" "--proc" "/proc"
          "--unshare-pid" "--die-with-parent" "--new-session"]

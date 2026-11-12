@@ -314,6 +314,7 @@ beyond the one escape.
 |---|---|
 | `(decide command grants)` | `:allow`, `:ask` or `:deny` with the matching rule. |
 | `(run-shell ctx command)` | **The chokepoint.** Permission, symbolic-ref resolution, scrubbed spawn, redacted output — the one place perm, scrub and redact meet. |
+| `(start-shell ctx launch)` | The same gate for `shell {background: true}`: `shell-gate` decides, the confined argv is built as for `run-shell`, and `launch` starts it as a run-owned job (`samizdat.engine.jobs`) instead of waiting. The job's output is redacted with the command's known values when the `jobs` tool reads it; `run-state/run-ended!` kills every job. |
 
 `(config/redacted m)` redacts a config map for the HTTP surface.
 
@@ -370,7 +371,7 @@ and the shell policy refuse to let a run write.
 | # | invariant | enforced by |
 |---|---|---|
 | 1 | Every path from `env` or `secrets` to `model`, `messages` or `journal` passes through `redact`. | `policy/run-shell` on the shell path, and the `scrubbed` wrapper in `tools/repl` on the eval path. Asserted by `secrets-test/spec-a-planted-canary-never-reaches-model-space` and `spec-eval-output-is-inside-the-redaction-boundary`. Covers accidental leakage only — see the threat model. |
-| 2 | Every path from `toolcall` to `sub` passes through both `perm` and `scrub`. | `policy/run-shell` is the only spawn seam. `policy-test/spec-the-shell-tool-gates-every-command`. |
+| 2 | Every path from `toolcall` to `sub` passes through both `perm` and `scrub`. | `policy/run-shell` and `policy/start-shell` (background jobs), which share `shell-gate` and `confined-spawn`, are the only spawn seams. `policy-test/spec-the-shell-tool-gates-every-command`. |
 | 3 | `resolve` reaches nothing except through `scrub → sub`, and `sub`'s only outlet is `redact`. | `run-shell`'s structure. |
 | 4 | `grants` are written only by a human. | The model has no edge into the grants table; the API's write path is human-only. The supervisor's `policy propose-grant` only ASKS: it drafts a narrow pattern (two literal words before any wildcard, matching a command this run was refused) and records it on a person's allow under `:block`; under `:refuse` it is journaled for the operator, never granted (karamazov-0e2c.20). |
 | 5 | A complex command never rides an `allow`. | `policy/decide` promotes it to a whole-command claim. `policy-test/complex-commands-never-ride-an-allow`. |

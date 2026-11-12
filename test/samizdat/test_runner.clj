@@ -80,6 +80,7 @@
             [samizdat.acp-test]
             [samizdat.corrections-test]
             [samizdat.wait-test]
+            [samizdat.jobs-test]
             [samizdat.tui-onboarding-test]
             [samizdat.mcp-test]
             [samizdat.role-output-test]
@@ -407,6 +408,7 @@
     samizdat.acp-test
     samizdat.corrections-test
     samizdat.wait-test
+    samizdat.jobs-test
     samizdat.tui-onboarding-test
     samizdat.mcp-test
     samizdat.role-output-test

@@ -78,6 +78,23 @@ jobs:
       - name: Build the TUI's shim
         run: jolt tui-native
 
+      # The suite drives binding rename through the real clj-kondo, as
+      # tests.yml does; without it that test refused with
+      # analyzer-authority-unverified and the release build failed.
+      - name: Install clj-kondo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "${{ matrix.target }}" in
+            aarch64-macos) pat='clj-kondo-*-macos-aarch64.zip' ;;
+            *) pat='clj-kondo-*-linux-amd64.zip' ;;
+          esac
+          mkdir -p "$HOME/.local/bin"
+          gh release download -R clj-kondo/clj-kondo --pattern "$pat" --dir /tmp --clobber
+          unzip -o /tmp/clj-kondo-*.zip -d "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/clj-kondo" --version
+
       - name: Test
         run: jolt test
 

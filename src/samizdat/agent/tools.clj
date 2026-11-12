@@ -65,6 +65,7 @@
             [samizdat.agent.tools.websearch]
             [samizdat.agent.tools.digest]
             [samizdat.agent.tools.shell]
+            [samizdat.agent.tools.jobs :as jobs]
             [samizdat.agent.tools.ship :as ship]
             [samizdat.agent.tools.split]
             [samizdat.agent.tools.tasks]
@@ -316,6 +317,17 @@
                                    :note note :unanswered timed-out})
            :policy {:effect :ask :gaps gaps :remedies (flow/remedies sink gaps)}})))))
 
+(defn- with-job-notice
+  "`r` with the notice of any background job of this branch that ended on its
+  own since its last call (samizdat.agent.tools.jobs), so the branch hears of
+  it at its next turn whatever that turn called."
+  [{:keys [run-id branch]} r]
+  (if-let [notice (when (string? (:result r))
+                    (try (jobs/exit-notice run-id (:id branch))
+                         (catch Throwable e (log/warn "jobs: no exit notice:" (ex-message e)))))]
+    (update r :result str "\n\n" notice)
+    r))
+
 (defn run-tool
   "Dispatch one tool call and return a result the loop can always use.
 
@@ -370,7 +382,7 @@
                      ". This is a harness fault, not yours — the call was fine."))
                known))
           (do (journal-refusal! ctx r)
-              (redact-result r known)))))))
+              (redact-result (with-job-notice ctx r) known)))))))
 
 ;; Re-exports: loop.clj and the tests reach the tool surface through this
 ;; namespace and keep working unchanged.

@@ -59,7 +59,7 @@
   :tools #{"thesis" "branch_theses" "done" "give_up"
            "plan" "eval" "doc" "complete" "manual" "propose_cell"
            "read_file" "read_digest" "inspect_clojure" "edit_clojure" "apply_clojure_changes" "transform_clojure" "grep" "glob" "lsp" "resource" "inference" "diagnosis" "execution" "structural" "debug" "write_file" "edit_file" "patch"
-           "shell" "websearch" "webfetch" "skill"
+           "shell" "jobs" "websearch" "webfetch" "skill"
            "task" "split"
            "remember" "recall" "outcome" "forget" "retire" "message"
            "fetch_artifact" "fetch_turn" "context_edit" "papercut" "finding" "mcp" "wait"
@@ -90,7 +90,7 @@
   :tools #{"intervene" "read_file" "read_digest" "inspect_clojure" "grep" "lsp" "resource" "inference" "diagnosis" "execution" "skill" "doc" "complete" "manual"
            "introspect" "cells" "cell" "reload_cells" "manifest" "prompt" "policy" "adopt"
            "fetch_turn" "fetch_artifact" "recall" "remember" "forget" "retire" "outcome"
-           "experiment" "verdict" "papercut" "battery" "message" "eval" "shell" "websearch" "done" "give_up"}
+           "experiment" "verdict" "papercut" "battery" "message" "eval" "shell" "jobs" "websearch" "done" "give_up"}
   :prompt "roles/supervisor"
   ;; Its own frame, so a run's style cannot replace it with the implementer's
   ;; (karamazov-oi16.4): under :lean the supervisor took system-lean, which
@@ -108,7 +108,7 @@
   ;; No write_file or edit_file: they are confined to the project root, so the
   ;; tester's harnesses landed in the deliverable (ctb-r6 react-lead-form). It
   ;; writes its tests under /tmp/blind-tests with the shell.
-  :tools #{"shell" "eval" "read_file" "glob" "done" "give_up"}
+  :tools #{"shell" "jobs" "eval" "read_file" "glob" "done" "give_up"}
   :prompt "roles/tester"
   :output [:map
            [:ran :int]
@@ -142,7 +142,7 @@
   ;; listing, a build file's dependency tree. It is still under the approval
   ;; policy like every other shell call. `eval` is left off: an answer is
   ;; read, not run, and loading a project into the image is its own risk.
-  :tools #{"read_file" "read_digest" "inspect_clojure" "grep" "glob" "lsp" "resource" "inference" "diagnosis" "execution" "doc" "shell"
+  :tools #{"read_file" "read_digest" "inspect_clojure" "grep" "glob" "lsp" "resource" "inference" "diagnosis" "execution" "doc" "shell" "jobs"
            "websearch" "webfetch" "skill" "manual" "recall" "remember"
            "fetch_turn" "fetch_artifact" "mcp" "done" "give_up"}
   :prompt "roles/answerer"
@@ -185,7 +185,7 @@
         ends with RESULT, NOTES, NEXT and STATUS sections in done's answer. No board,
         plan, memory or harness tools: the manager owns the tasks and the ledger."
   :tools #{"read_file" "read_digest" "grep" "glob" "write_file" "edit_file" "patch"
-           "shell" "run_check" "done" "give_up"}
+           "shell" "jobs" "run_check" "done" "give_up"}
   :prompt "roles/solver"
   :frame "solver-frame"
   :sees #{:problem :plan :notes :current-work :task}}
