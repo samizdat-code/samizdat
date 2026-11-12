@@ -94,30 +94,38 @@
       (is (= ["a" "b"] @calls)))))
 
 (deftest late-slow-start-deltas-are-suppressed-after-fallback
-  (let [primary-delta (atom nil)
+  ;; Under load the 1 ms slow-start fallback can answer before the primary's
+  ;; thread has even run, so the test waits until it has its on-delta.
+  (let [primary-delta (promise)
         seen (atom [])
         primary (assoc (cfg "a") :fallback-scope "R" :slow-start-ms 1
                        :fallbacks [{:adapter :b-adapter :config (cfg "b")}])]
     (with-redefs [client/chat-one
                   (fn [_ c _ opts]
                     (if (= "a" (:model c))
-                      (do (reset! primary-delta (:on-delta opts))
+                      (do (deliver primary-delta (:on-delta opts))
                           (Thread/sleep 30)
                           {:content "late"})
                       {:content "backup"}))]
       (is (= "backup" (:content (client/chat :a-adapter primary
                                              [{:role "user" :content "q"}]
                                              {:on-delta #(swap! seen conj %)}))))
-      (@primary-delta {:text "late"})
+      ((deref primary-delta 5000 (fn [_] (throw (ex-info "the primary never started" {}))))
+       {:text "late"})
       (is (empty? @seen) "the retired primary cannot publish into the accepted fallback"))))
 
 (deftest a-cancel-during-slow-start-starts-no-fallback
+  ;; Its own model names: with-redefs is global, and a primary left sleeping
+  ;; by an earlier test called this stub too under load, adding a second "a".
   (let [calls (atom [])
-        primary (assoc (cfg "a") :fallback-scope "R" :slow-start-ms 1
-                       :fallbacks [{:adapter :b-adapter :config (cfg "b")}])]
+        mine #{"cancel-a" "cancel-b"}
+        ;; A window the stub's cancel cannot miss: at 1 ms a loaded machine
+        ;; let the deadline pass first, and that is a slow start, not a cancel.
+        primary (assoc (cfg "cancel-a") :fallback-scope "R" :slow-start-ms 5000
+                       :fallbacks [{:adapter :b-adapter :config (cfg "cancel-b")}])]
     (with-redefs [client/chat-one (fn [_ c _ _]
-                                    (swap! calls conj (:model c))
+                                    (when (mine (:model c)) (swap! calls conj (:model c)))
                                     (throw (ex-info "cancelled" {:samizdat.cancel/signal true})))
                   samizdat.cancel/control-signal? (fn [e] (contains? (ex-data e) :samizdat.cancel/signal))]
       (is (thrown? Exception (client/chat :a-adapter primary [])))
-      (is (= ["a"] @calls)))))
+      (is (= ["cancel-a"] @calls)))))

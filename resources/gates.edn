@@ -5221,6 +5221,10 @@
    ;; thing it can deliver (karamazov-ee72).
    :when (and (state/active? branch)
               (not (state/planning? branch))
+              ;; Not on a supervisor or tester pass: bounded by its own turn
+              ;; cap, it has no deliverable to review and audit, and it ends
+              ;; through :last-call's forced done (one-vf2-4, one-kv-1).
+              (not (contains? #{:supervisor :tester} (:role branch)))
               (>= (state/turn-count branch)
                   (* (threshold :wind-down-fraction) (max 1 max-turns))))
    :message-file "wind-down"

@@ -45,16 +45,30 @@
             [samizdat.agent.state :as state]
             [samizdat.util :as util]))
 
+(defn- awaiting-answer?
+  "Whether `gate`'s last firing on this branch still has an open prediction:
+  the branch is inside the window it was given to act on that steer."
+  [gate branch]
+  (boolean (some #(= gate (:gate %)) (:open-predictions branch))))
+
 (defn eligible
-  "Every gate whose precondition holds and whose budget is not spent, in
-  priority order. Exposed so a test can assert what the arbiter passed over,
-  not only what it chose."
+  "Every gate whose precondition holds, whose budget is not spent, and whose
+  own last steer is not still waiting on the branch, in priority order.
+  Exposed so a test can assert what the arbiter passed over, not only what it
+  chose.
+
+  The last condition is kv-live-surgery one-kv-1: :progress-stalled fired at
+  turns 47 and 48, the second before the branch had a turn to answer the
+  first, and spent the episode's whole budget on one stall. A prediction
+  always closes by its window plus the grace, so this delays a gate, never
+  silences it."
   [ctx]
   (->> (gates/gates)
        ;; A style names the gates it keeps (:style-gates); without one, all may speak.
        (filter (fn [g] (or (nil? (:style-gates ctx)) (contains? (:style-gates ctx) (:gate g)))))
        (filter (fn [g] (and ((:when g) ctx)
-                            (not (gates/budget-exceeded? g (:branch ctx))))))
+                            (not (gates/budget-exceeded? g (:branch ctx)))
+                            (not (awaiting-answer? (:gate g) (:branch ctx))))))
        (sort-by :priority)))
 
 (defn measurements
