@@ -62,7 +62,12 @@
   on {:ran [\"should be an integer\"]}, and once on its last turn."
   [schema result]
   (let [v (walk/keywordize-keys result)]
-    (try (m/decode schema v (mt/string-transformer))
+    ;; A list given for a count is read as its length: testers sent `ran`
+    ;; as the commands they ran (music-harmony one-music-3).
+    (try (m/decode schema v (mt/transformer
+                             mt/string-transformer
+                             {:name ::count-of-list
+                              :decoders {:int (fn [x] (if (sequential? x) (count x) x))}}))
          (catch Throwable _ v))))
 
 (defn result-problems

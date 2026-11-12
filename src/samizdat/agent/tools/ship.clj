@@ -467,21 +467,30 @@
                               (:message rung))))
           (gates/threshold :ship-gates))))
 
+(defn- split-entry
+  "A failure entry as [command expectation]: split at the earliest of
+  `separators` that appears, or the whole entry as the command."
+  [s separators]
+  (let [hits (keep (fn [sep] (when-let [i (str/index-of s sep)] [i sep])) separators)]
+    (if-let [[i sep] (first (sort-by first hits))]
+      [(str/trim (subs s 0 i)) (str/trim (subs s (+ i (count sep))))]
+      [(str/trim s) nil])))
+
 (defn rerun-checks
   "Rerun the blind tester's failure `entries` (\"<command> — <what it expected>\")
   in the run's root, each distinct command once (gates.edn :tester), as
-  {:failing [{:command :expected [..] :output}] :passing [command]}. A command
-  the policy refuses or asks about cannot be judged here and is in neither."
+  {:failing [{:command :expected [..] :output}] :passing [command]
+   :not-runnable [command]}. An entry whose command the shell cannot find or
+  run (exit 126 or 127) is prose, not a check (\"NOT SETTLED: ...\"), and holds
+  nothing. A command the policy refuses or asks about is in none of them."
   [ctx entries]
-  (let [{:keys [command-separator rerun-timeout-seconds output-chars]} (gates/threshold :tester)]
-    (if-not command-separator
-      {:failing [] :passing []}
+  (let [{:keys [command-separators rerun-timeout-seconds output-chars]} (gates/threshold :tester)]
+    (if-not (seq command-separators)
+      {:failing [] :passing [] :not-runnable []}
       (let [parsed (for [entry entries
-                         :let [s (str entry)
-                               i (str/index-of s command-separator)
-                               command (str/trim (if i (subs s 0 i) s))]
+                         :let [[command expectation] (split-entry (str entry) command-separators)]
                          :when (not (str/blank? command))]
-                     [command (when i (str/trim (subs s (+ i (count command-separator)))))])
+                     [command expectation])
             commands (distinct (map first parsed))
             expected (reduce (fn [m [c e]] (cond-> m e (update c (fnil conj []) e))) {} parsed)
             runs (for [command commands
@@ -490,18 +499,20 @@
                                                    rerun-timeout-seconds
                                                    (assoc :timeout-ms (* 1000 rerun-timeout-seconds))))]
                        :when (not (contains? #{:deny :ask} (get-in r [:policy :effect])))]
-                   [command r])]
+                   [command r])
+            exit-of (fn [r] (or (:exit r) (get-in r [:data :exit])))
+            not-a-command? (fn [r] (contains? #{126 127} (exit-of r)))]
         {:failing (vec (for [[command r] runs
-                             :when (contains? #{:failure :timeout} (:category r))]
+                             :when (and (contains? #{:failure :timeout} (:category r))
+                                        (not (not-a-command? r)))]
                          {:command command
                           :expected (get expected command [])
                           :output (let [o (str (:result r))]
                                     (if (and output-chars (> (count o) output-chars))
                                       (subs o (- (count o) output-chars))
                                       o))}))
-         :passing (vec (for [[command r] runs
-                             :when (= :success (:category r))]
-                         command))}))))
+         :passing (vec (for [[command r] runs :when (= :success (:category r))] command))
+         :not-runnable (vec (for [[command r] runs :when (not-a-command? r)] command))}))))
 
 (defn tester-still-failing
   "The blind tester's latest reported failures whose command still fails when
@@ -613,11 +624,13 @@
         (let [failing (get result "failing" (get result :failing))
               {:keys [check-refusals]} (gates/threshold :tester)
               turns-left? (let [mt (:max-turns ctx)] (or (nil? mt) (< (or (:turn ctx) 0) mt)))
-              passing (when (and (= :tester (:role branch)) (seq failing) check-refusals turns-left?
+              checked (when (and (= :tester (:role branch)) (seq failing) check-refusals turns-left?
                                  (< (state/done-streak branch) check-refusals))
-                        (:passing (rerun-checks ctx failing)))]
-          (if (seq passing)
-            (base/malformed branch (prompt/render "tester-check-passes" {:commands passing}))
+                        (rerun-checks ctx failing))]
+          (if (or (seq (:passing checked)) (seq (:not-runnable checked)))
+            (base/malformed branch (prompt/render "tester-check-passes"
+                                                  {:commands (:passing checked)
+                                                   :not-runnable (:not-runnable checked)}))
             (let [r (done* ctx)]
               (cond-> r
                 (:done? r) (assoc-in [:branch :final-result] (walk/keywordize-keys result))))))))

@@ -1693,6 +1693,25 @@
         (is (< (str/index-of r "x\n```") (str/index-of r "expected edges 0"))
             "what it prints now comes before what the tester first saw")))))
 
+(deftest a-failure-entry-that-is-not-a-command-holds-nothing
+  ;; music-harmony one-music-3: an entry written " - expected" instead of " — "
+  ;; and an entry of prose ("NOT SETTLED ...") went to the shell whole; the
+  ;; prose exited 127 and would have held the done to wind-down.
+  (let [ran (atom [])
+        exits {"python3 v.py" 1 "NOT SETTLED (no automated pass/fail): melody fidelity" 127}]
+    (with-redefs [samizdat.security.policy/run-shell
+                  (fn [ctx] (let [c (get-in ctx [:args :command]) e (get exits c 0)]
+                              (swap! ran conj c)
+                              {:category (if (zero? e) :success :failure) :exit e :result (str "[exit " e "]")}))]
+      (let [{:keys [failing passing not-runnable]}
+            (samizdat.agent.tools.ship/rerun-checks {} ["python3 v.py - expected valid XML, got errors"
+                                   "NOT SETTLED (no automated pass/fail): melody fidelity"])]
+        (is (= ["python3 v.py" "NOT SETTLED (no automated pass/fail): melody fidelity"] @ran)
+            "a plain hyphen separates a command from its expectation too")
+        (is (= ["python3 v.py"] (map :command failing)) "only a real check holds")
+        (is (empty? passing))
+        (is (= ["NOT SETTLED (no automated pass/fail): melody fidelity"] not-runnable))))))
+
 (deftest a-tester-failure-must-be-a-command-that-fails
   ;; music-harmony one-music-1: the tester reported three voice-leading
   ;; defects as `... vl.py — expected ..., got ...`, but vl.py printed them and
@@ -1731,6 +1750,9 @@
                                  :args {:answer "One defect." :result {"ran" "8" "failing" ["python3 vl.py — x"]}}}))]
         (is (:done? r))
         (is (= 8 (get-in r [:branch :final-result :ran])))))
+    (testing "a list of what ran is read as its count"
+      ;; music-harmony one-music-3: `ran` came as the list of commands run.
+      (is (= 2 (:ran (samizdat.agent.roles/coerce-result [:map [:ran :int]] {"ran" ["a.py" "b.py"]})))))
     (let [{:keys [check-refusals]} (gates/threshold :tester)
           streaked (update t :turns (fnil into []) (repeat check-refusals {:tool "done" :category :mechanics}))]
       (is (:done? (done! (assoc streaked :done-streak check-refusals)))

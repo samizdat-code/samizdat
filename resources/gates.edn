@@ -316,9 +316,10 @@
  {:value {:enabled? true :min-clock-seconds 3600 :max-turns 30
           ;; A failure the tester reports is "<command> — expected …, got …";
           ;; at done time the harness reruns the command before the first
-          ;; :command-separator, each for up to :rerun-timeout-seconds, and a
+          ;; one of :command-separators (the earliest that appears: testers write a
+          ;; plain hyphen as often as the dash asked for), each for up to :rerun-timeout-seconds, and a
           ;; done is held while one still fails (the :tester-failures rung).
-          :command-separator " — " :rerun-timeout-seconds 300 :output-chars 1500
+          :command-separators [" — " " -- " " - "] :rerun-timeout-seconds 300 :output-chars 1500
           ;; It also starts at any oversight pass once the run has used this
           ;; share of its clock, without waiting for a done (karamazov-s9qi):
           ;; vf2 one-vf2-4's first done came at 96 of 118 minutes, and the
