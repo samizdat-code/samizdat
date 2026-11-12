@@ -442,3 +442,18 @@
         (let [b (tasks/create! c {:title "later"})]
           (is (str/includes? (:result (run-tool-as c r2 "B9" "task" {:action "show" :id b})) "later"))
           (is (str/includes? (:result (run-tool-as c r2 "B9" "task" {:action "list"})) "later")))))))
+
+(deftest creating-a-task-with-nothing-held-claims-it
+  ;; karamazov-0wvc.13: 32 refused task calls in TB next-30, mostly a claim
+  ;; with no id straight after create. With nothing held, create claims.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})
+          r (run-tool c rid "task" {:action "create" :title "fix the parser"})
+          id (re-find #"sz-[0-9a-f]+" (:result r))]
+      (is (str/includes? (:result r) (str "Claimed " id)))
+      (testing "a backlog task is not claimed"
+        (let [r (run-tool c rid "task" {:action "create" :title "later" :backlog true})]
+          (is (not (str/includes? (:result r) "Claimed")))))))
+  (testing "task-required names only actions the task tool has"
+    (let [text (slurp "resources/prompts/task-required.md")]
+      (is (not (re-find #"\"action\": \"board\"" text))))))
