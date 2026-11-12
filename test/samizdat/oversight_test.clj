@@ -1715,6 +1715,22 @@
     (reset! exit 1)
     (is (:done? (done! t)) "accepted once it fails as it says")
     (reset! exit 0)
+    (testing "never on the tester's last turn: refused there, it ends with no report at all"
+      ;; music-harmony one-music-2: the refusal landed on turn 30 of 30 and the
+      ;; tester's report came back {:ran 0 :failing []}, so nothing held the done.
+      (is (:done? (with-redefs [samizdat.security.policy/run-shell (fn [_] {:category :success :result "[exit 0]"})]
+                    (tools/run-tool {:branch t :tool-name "done" :turn 30 :max-turns 30 :conn conn :run-id rid
+                                     :config {:run {:style :lean :time-limit-seconds 7200}}
+                                     :args {:answer "Three voice-leading defects."
+                                            :result {"ran" 8 "failing" ["python3 vl.py — expected no fifths, got one"]}}})))))
+    (testing "a count sent as a string is read as the number it is"
+      ;; Nearly every tester's first done failed on {:ran [\"should be an integer\"]}.
+      (let [r (with-redefs [samizdat.security.policy/run-shell (fn [_] {:category :failure :result "[exit 1]"})]
+                (tools/run-tool {:branch t :tool-name "done" :turn 10 :max-turns 30 :conn conn :run-id rid
+                                 :config {:run {:style :lean :time-limit-seconds 7200}}
+                                 :args {:answer "One defect." :result {"ran" "8" "failing" ["python3 vl.py — x"]}}}))]
+        (is (:done? r))
+        (is (= 8 (get-in r [:branch :final-result :ran])))))
     (let [{:keys [check-refusals]} (gates/threshold :tester)
           streaked (update t :turns (fnil into []) (repeat check-refusals {:tool "done" :category :mechanics}))]
       (is (:done? (done! (assoc streaked :done-streak check-refusals)))

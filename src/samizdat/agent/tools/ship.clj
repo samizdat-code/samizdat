@@ -595,6 +595,7 @@
           result (if (string? result)
                    (try (json/read-str result) (catch Throwable _ result))
                    result)
+          result (if (map? result) (roles/coerce-result schema result) result)
           problem (if (map? result)
                     (roles/result-problems schema result)
                     :missing)]
@@ -607,9 +608,12 @@
         ;; reads its exit code, and a check that prints a defect and exits 0
         ;; reran as a pass and shipped it (music-harmony one-music-1). Refused
         ;; up to :tester :check-refusals times, then taken as it is.
+        ;; Never on the last turn: refused there, the tester ended with no
+        ;; report at all (music-harmony one-music-2).
         (let [failing (get result "failing" (get result :failing))
               {:keys [check-refusals]} (gates/threshold :tester)
-              passing (when (and (= :tester (:role branch)) (seq failing) check-refusals
+              turns-left? (let [mt (:max-turns ctx)] (or (nil? mt) (< (or (:turn ctx) 0) mt)))
+              passing (when (and (= :tester (:role branch)) (seq failing) check-refusals turns-left?
                                  (< (state/done-streak branch) check-refusals))
                         (:passing (rerun-checks ctx failing)))]
           (if (seq passing)

@@ -26,6 +26,7 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [malli.core :as m]
+            [malli.transform :as mt]
             [malli.error :as me]
             [samizdat.config :as config]
             [samizdat.userspace :as userspace]))
@@ -53,6 +54,16 @@
   [schema]
   (try (m/schema schema) nil
        (catch Throwable e (or (ex-message e) (str e)))))
+
+(defn coerce-result
+  "`result` with string keys read as keywords and values decoded towards
+  `schema` (a count sent as \"8\" read as 8), so a shape the model nearly got
+  right is not a refused turn: nearly every blind tester's first done failed
+  on {:ran [\"should be an integer\"]}, and once on its last turn."
+  [schema result]
+  (let [v (walk/keywordize-keys result)]
+    (try (m/decode schema v (mt/string-transformer))
+         (catch Throwable _ v))))
 
 (defn result-problems
   "Why `result` does not fit `schema` — malli's own explanation, humanised —
