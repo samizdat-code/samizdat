@@ -85,10 +85,13 @@
     (is (str/starts-with? (:result (run {:command "ls /nonexistent-1fai"})) "[exit 1]"))
     (testing "eca takes a timeout argument; samizdat ignored the 36 timeout_ms it was sent"
       (let [asked (atom nil)
+            group (atom nil)
             r (with-redefs [samizdat.engine.proc/run (fn [opts & _] (reset! asked (:timeout-ms opts))
+                                                       (reset! group (:own-group? opts))
                                                        {:timeout true :ms (:timeout-ms opts) :out ""})]
                 (run {:command "ls" :timeout_ms 300}))]
         (is (= 300 @asked) "the command's own timeout applies")
+        (is (true? @group) "and it runs in its own process group, so nothing it leaves outlives it")
         (is (true? (:timeout? r)))
         (is (str/includes? (:result r) "timeout_ms") "and the result says how to ask for longer"))
       (let [seen (atom nil)

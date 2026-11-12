@@ -55,6 +55,27 @@
           "a TERM-trapping child tree must not outlive the reap"))
     (finally (sweep!))))
 
+(deftest an-own-group-run-leaves-no-orphans
+  ;; html-js-filter one-html-1: 117 filter.py processes, orphaned by test
+  ;; scripts that killed only their direct child, ran on under init for ten
+  ;; minutes and filled the container's 8 GiB; the harness stalled with it.
+  ;; reap! walks the tree at kill time, and an orphan is no longer in it. A
+  ;; command run in its own process group is killed BY GROUP when it ends,
+  ;; however its descendants were reparented.
+  (sweep!)
+  (try
+    (let [r (proc/run {:timeout-ms 5000 :own-group? true} "sh" "-c"
+                      (str "(" needle " &) ; exit 0"))]
+      (is (= 0 (:exit r)) (pr-str r))
+      (Thread/sleep 300)
+      (is (empty? (survivors)) "an orphan left by a command that exited is killed"))
+    (let [r (proc/run {:timeout-ms 700 :own-group? true} "sh" "-c"
+                      (str "(" needle " &) ; sleep 30"))]
+      (is (:timeout r))
+      (Thread/sleep 300)
+      (is (empty? (survivors)) "and one left by a command that timed out"))
+    (finally (sweep!))))
+
 (defn- open-fds
   "How many descriptors this process holds, via /dev/fd. nil where that is
   not a directory, so the test can skip rather than fail on a platform that

@@ -975,7 +975,12 @@
         r (try
             (apply proc/run (cond-> {:timeout-ms (or (:timeout-ms ctx)
                                                      (:default-ms shell-timeout))
-                                     :env env :dir dir}
+                                     :env env :dir dir
+                                     ;; Killed by group when it ends: an orphan
+                                     ;; it left filled html-js-filter's 8 GiB.
+                                     ;; A process meant to outlive the call is
+                                     ;; a background job (shell background).
+                                     :own-group? true}
                               allocation (assoc :capture (:options allocation)))
                    argv)
             (catch Throwable e

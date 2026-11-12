@@ -24,6 +24,7 @@
   is the whole run. `run` kills the process tree on timeout rather than
   leaving an orphan holding a pipe."
   (:require [clojure.java.io :as io]
+            [clojure.string]
             [jolt.ffi :as ffi]
             [jolt.process :as p]))
 
@@ -98,6 +99,59 @@
       (try (.destroyForcibly p) (catch Throwable _ nil))
       (try (wait-for p sigterm-grace-ms) (catch Throwable _ nil)))))
 
+(defn- executable
+  "The first of `paths` that is an executable file, or nil."
+  [paths]
+  (some #(let [f (io/file %)] (when (and (.isFile f) (.canExecute f)) (str f))) paths))
+
+(def ^:private session-wrapper
+  ;; How a child is started as the leader of a new session and process
+  ;; group: setsid(1) where installed (Linux), else perl's POSIX::setsid
+  ;; (macOS ships perl, not setsid). Both exec the command, so its pid is the
+  ;; group id. nil where neither exists: the command runs as before.
+  (delay
+    (if-let [setsid (executable ["/usr/bin/setsid" "/bin/setsid" "/usr/local/bin/setsid"])]
+      [setsid]
+      (when-let [perl (executable ["/usr/bin/perl" "/bin/perl" "/usr/local/bin/perl" "/opt/homebrew/bin/perl"])]
+        ;; perl source, joined from its tokens: one line of code, not prose.
+        [perl "-e" (apply str (interpose " " ["use" "POSIX;" "POSIX::setsid();" "exec" "@ARGV" "or" "die" "$!"]))]))))
+
+(defn- resolvable?
+  "Whether `program` names an executable: a path to one, or a name on the
+  PATH the child will see (`env`'s, else this process's)."
+  [program env]
+  (let [program (str program)]
+    (if (clojure.string/includes? program "/")
+      (some? (executable [program]))
+      (let [path (or (get env "PATH") (System/getenv "PATH") "")]
+        (some? (executable (map #(str % "/" program) (clojure.string/split path #":"))))))))
+
+(defn- in-own-group
+  "`args` started in a new process group when `own-group?`, as
+  [argv group?]. Only for a program that resolves: one that does not must
+  still fail to SPAWN, with its own name in the error, not exit from inside
+  the wrapper."
+  [own-group? args env]
+  (if-let [w (and own-group? (seq args) (resolvable? (first args) env) @session-wrapper)]
+    [(into (vec w) (map str args)) true]
+    [(mapv str args) false]))
+
+(defn- kill-group!
+  "TERM then KILL every process in the group led by `pgid`: what the command
+  left behind, however it was reparented. reap! walks the tree at kill time,
+  and an orphan whose parent already exited is no longer in it
+  (html-js-filter: 117 orphaned filter.py processes filled the container)."
+  [pgid]
+  (when (and pgid (pos? pgid))
+    (when (zero? (kill! (- pgid) 0))
+      (kill! (- pgid) 15)
+      (let [deadline (+ (System/currentTimeMillis) sigterm-grace-ms)]
+        (loop []
+          (when (and (zero? (kill! (- pgid) 0)) (< (System/currentTimeMillis) deadline))
+            (Thread/sleep 20)
+            (recur))))
+      (kill! (- pgid) 9))))
+
 (defn- daemon-thread [f]
   (let [thread (Thread. f)]
     (.setDaemon thread true)
@@ -158,13 +212,14 @@
     (String. (.toByteArray ^java.io.ByteArrayOutputStream tail) "UTF-8")))
 
 (defn- run-captured
-  [{:keys [input timeout-ms env dir capture]} & args]
+  [{:keys [input timeout-ms env dir capture own-group?]} & args]
   (let [{:keys [stdout stderr retain-bytes tail-bytes join-timeout-ms]} capture
         cap (max 0 (long retain-bytes))
         tail-cap (max 0 (long (or tail-bytes cap)))
         join-ms (long (or join-timeout-ms sigterm-grace-ms))
         [stdout-stream stderr-stream] (capture-streams stdout stderr)
-        builder (ProcessBuilder. ^java.util.List (mapv str args))]
+        [argv group?] (in-own-group own-group? args env)
+        builder (ProcessBuilder. ^java.util.List argv)]
     (when dir (.directory builder (io/file (str dir))))
     (when env
       (let [environment (.environment builder)]
@@ -187,6 +242,9 @@
                           (catch Throwable _ :error))]
             (when-not (= :finished outcome)
               (reap! {:proc process}))
+            ;; Whatever it left running, before the pipes are drained: an
+            ;; orphan holding stdout would keep the read open.
+            (when group? (kill-group! (try (.pid process) (catch Throwable _ nil))))
             (try (.close (.getOutputStream process)) (catch Throwable _ nil))
             (let [deadline (+ (System/currentTimeMillis) join-ms)]
               (doseq [thread [stdin (:thread stdout-pump) (:thread stderr-pump)]]
@@ -235,7 +293,7 @@
   found on one dev machine, the oldest at seventeen hours, slowing everything
   else enough to make an unrelated Mathlib import look sixteen times more
   expensive than it is. Fixed upstream too, but this does not depend on that."
-  [{:keys [input timeout-ms env dir]} & args]
+  [{:keys [input timeout-ms env dir own-group?]} & args]
   ;; babashka.process/process takes the command vector FIRST and the options
   ;; map second. Passing them the other way round (which is what `sh` accepts)
   ;; stringifies the vector into an argv[0] of "[z3".
@@ -244,7 +302,8 @@
   ;; process shim runs it as `env -i K=V …`, so nothing from the parent leaks
   ;; in. The shell tool relies on this: it hands a scrubbed environment here so
   ;; a subprocess cannot read a secret the parent holds (samizdat.security).
-  (let [proc (p/process (vec args)
+  (let [[argv group?] (in-own-group own-group? args env)
+        proc (p/process argv
                         (cond-> {:in (or input "") :out :string :err :string}
                           env (assoc :env env)
                           ;; The child's working directory; the parent's when
@@ -255,9 +314,14 @@
         finished? (try
                     (wait-for p ms)
                     (catch Throwable _ false))]
+    ;; The group first: an orphan the command left holding stdout would keep
+    ;; the deref below waiting for as long as it lived.
+    (when (and group? finished?) (kill-group! (try (.pid p) (catch Throwable _ nil))))
     (try
       (if-not finished?
-        (do (reap! proc) {:timeout true :ms ms})
+        (do (reap! proc)
+            (when group? (kill-group! (try (.pid p) (catch Throwable _ nil))))
+            {:timeout true :ms ms})
         ;; Exited, so this deref returns immediately and only collects the
         ;; already-complete stdout/stderr.
         (let [done @proc]
