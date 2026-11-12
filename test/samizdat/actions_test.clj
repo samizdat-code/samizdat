@@ -82,7 +82,8 @@
         run (fn [args] (tools-base/run-tool {:tool-name "shell" :branch b :root root :conn c
                                              :run-id rid :turn 4 :args args}))]
     (is (str/starts-with? (:result (run {:command "ls"})) "[exit 0]"))
-    (is (str/starts-with? (:result (run {:command "ls /nonexistent-1fai"})) "[exit 1]"))
+    ;; BSD ls exits 1 on a missing path, GNU ls 2.
+    (is (re-find #"^\[exit [12]\]" (:result (run {:command "ls /nonexistent-1fai"}))))
     (testing "eca takes a timeout argument; samizdat ignored the 36 timeout_ms it was sent"
       (let [asked (atom nil)
             group (atom nil)
