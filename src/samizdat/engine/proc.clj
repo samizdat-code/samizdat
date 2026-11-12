@@ -126,7 +126,7 @@
       (let [path (or (get env "PATH") (System/getenv "PATH") "")]
         (some? (executable (map #(str % "/" program) (clojure.string/split path #":"))))))))
 
-(defn- in-own-group
+(defn in-own-group
   "`args` started in a new process group when `own-group?`, as
   [argv group?]. Only for a program that resolves: one that does not must
   still fail to SPAWN, with its own name in the error, not exit from inside
@@ -136,7 +136,7 @@
     [(into (vec w) (map str args)) true]
     [(mapv str args) false]))
 
-(defn- kill-group!
+(defn kill-group!
   "TERM then KILL every process in the group led by `pgid`: what the command
   left behind, however it was reparented. reap! walks the tree at kill time,
   and an orphan whose parent already exited is no longer in it

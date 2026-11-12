@@ -63,12 +63,13 @@
 (defn- launch
   "The launcher `policy/start-shell` calls once the command is allowed: start
   the job, give it the initial wait, and say how it is."
-  [{:keys [run-id branch]} {:keys [argv env dir command known]}]
+  [{:keys [run-id branch]} {:keys [argv env dir command known capture capture-id on-end]}]
   (let [{:keys [max-jobs buffer-lines max-line-chars initial-wait-ms poll-ms]} (policy-knobs)
         started (jobs/start! {:run-id run-id :branch-id (:id branch) :command command
                               :argv argv :env env :dir dir :known known
                               :max-jobs max-jobs :buffer-lines buffer-lines
-                              :max-line-chars max-line-chars})
+                              :max-line-chars max-line-chars
+                              :capture capture :capture-id capture-id :on-end on-end})
         say (fn [vars] (prompt/render "background-job" vars))]
     (cond
       (:refused started)
@@ -134,6 +135,7 @@
       (= "output" action)
       (let [{:keys [lines dropped status exit known]} (jobs/read! run-id id)]
         (base/ok branch (msg {:output true :id id :status (status-name status) :exit exit
+                              :log (:capture-id (jobs/job run-id id))
                               :dropped (when (pos? dropped) dropped)
                               :text (when (seq lines) (lines-text lines known))})
                  :progress? (boolean (seq lines))))
