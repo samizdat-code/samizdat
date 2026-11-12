@@ -323,7 +323,12 @@
           ;; share of its clock, without waiting for a done (karamazov-s9qi):
           ;; vf2 one-vf2-4's first done came at 96 of 118 minutes, and the
           ;; tester it started was cancelled at run end with no report.
-          :early-share 0.5}
+          :early-share 0.5
+          ;; The tester's done is refused while a failure it reports exits 0
+          ;; when rerun, up to this many times, then taken as it is
+          ;; (music-harmony one-music-1: vl.py printed three defects and
+          ;; exited 0, and the done-time rerun read that as a pass).
+          :check-refusals 2}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-galq"]
   :doc "The blind tester (karamazov-galq): at the first ship review of a run

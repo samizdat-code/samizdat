@@ -251,6 +251,7 @@
    :ship-review "prompts/ship-review.md"
    :ship-review-hold "prompts/ship-review-hold.md"
    :tester-failures-hold "prompts/tester-failures-hold.md"
+   :tester-check-passes "prompts/tester-check-passes.md"
    :shell-status "prompts/shell-status.md"
    :review-deadline "prompts/review-deadline.md"
    :unread-directive-hold "prompts/unread-directive-hold.md"

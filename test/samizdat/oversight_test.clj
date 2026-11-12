@@ -1693,6 +1693,33 @@
         (is (< (str/index-of r "x\n```") (str/index-of r "expected edges 0"))
             "what it prints now comes before what the tester first saw")))))
 
+(deftest a-tester-failure-must-be-a-command-that-fails
+  ;; music-harmony one-music-1: the tester reported three voice-leading
+  ;; defects as `... vl.py — expected ..., got ...`, but vl.py printed them and
+  ;; exited 0, so the done-time rerun saw a pass and the run shipped them. The
+  ;; tester's done is refused while a failure it reports exits 0.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "harmonise it"})
+        exit (atom 0)
+        t (assoc (state/new-branch {:id "TST" :problem "harmonise it"}) :role :tester :advisory? true)
+        done! (fn [b]
+                (with-redefs [samizdat.security.policy/run-shell
+                              (fn [_] {:category (if (zero? @exit) :success :failure) :result "[exit 0]\nm3: parallel fifth"})]
+                  (tools/run-tool {:branch b :tool-name "done" :turn 30 :conn conn :run-id rid
+                                   :config {:run {:style :lean :time-limit-seconds 7200}}
+                                   :args {:answer "Three voice-leading defects."
+                                          :result {"ran" 8 "failing" ["cd /tmp/blind-tests && python3 vl.py — expected no parallel fifths, got one"]}}})))
+        r (done! t)]
+    (is (not (:done? r)) "refused while the check exits 0")
+    (is (str/includes? (str (:result r)) "vl.py") "naming the command")
+    (reset! exit 1)
+    (is (:done? (done! t)) "accepted once it fails as it says")
+    (reset! exit 0)
+    (let [{:keys [check-refusals]} (gates/threshold :tester)
+          streaked (update t :turns (fnil into []) (repeat check-refusals {:tool "done" :category :mechanics}))]
+      (is (:done? (done! (assoc streaked :done-streak check-refusals)))
+          "after :check-refusals the report is taken as it is, not lost"))))
+
 (deftest a-blind-tester-checks-the-deliverable-from-the-task-alone
   ;; karamazov-galq. ctb-r1..r4: most failures were hidden edge cases the
   ;; supervisor approved after reading the code, sharing the implementer's

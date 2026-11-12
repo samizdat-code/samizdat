@@ -467,36 +467,47 @@
                               (:message rung))))
           (gates/threshold :ship-gates))))
 
-(defn tester-still-failing
-  "The blind tester's latest reported failures whose command still fails when
-  rerun now in the run's root, as {:command :expected [..] :output} (gates.edn
-  :tester). Each distinct command runs once, with every expectation the tester
-  hung on it: one script often holds several checks. A command the policy
-  refuses or asks about cannot be judged here and is left out."
-  [ctx]
+(defn rerun-checks
+  "Rerun the blind tester's failure `entries` (\"<command> — <what it expected>\")
+  in the run's root, each distinct command once (gates.edn :tester), as
+  {:failing [{:command :expected [..] :output}] :passing [command]}. A command
+  the policy refuses or asks about cannot be judged here and is in neither."
+  [ctx entries]
   (let [{:keys [command-separator rerun-timeout-seconds output-chars]} (gates/threshold :tester)]
-    (when command-separator
-      (let [parsed (for [entry (journal/tester-failing (:conn ctx) (:run-id ctx))
+    (if-not command-separator
+      {:failing [] :passing []}
+      (let [parsed (for [entry entries
                          :let [s (str entry)
                                i (str/index-of s command-separator)
                                command (str/trim (if i (subs s 0 i) s))]
                          :when (not (str/blank? command))]
                      [command (when i (str/trim (subs s (+ i (count command-separator)))))])
             commands (distinct (map first parsed))
-            expected (reduce (fn [m [c e]] (cond-> m e (update c (fnil conj []) e))) {} parsed)]
-        (vec (for [command commands
-                   :let [r (policy/run-shell (cond-> (assoc (select-keys ctx [:conn :run-id :root])
-                                                            :args {:command command})
-                                               rerun-timeout-seconds
-                                               (assoc :timeout-ms (* 1000 rerun-timeout-seconds))))]
-                   :when (and (not (contains? #{:deny :ask} (get-in r [:policy :effect])))
-                              (contains? #{:failure :timeout} (:category r)))]
-               {:command command
-                :expected (get expected command [])
-                :output (let [o (str (:result r))]
-                          (if (and output-chars (> (count o) output-chars))
-                            (subs o (- (count o) output-chars))
-                            o))}))))))
+            expected (reduce (fn [m [c e]] (cond-> m e (update c (fnil conj []) e))) {} parsed)
+            runs (for [command commands
+                       :let [r (policy/run-shell (cond-> (assoc (select-keys ctx [:conn :run-id :root])
+                                                                :args {:command command})
+                                                   rerun-timeout-seconds
+                                                   (assoc :timeout-ms (* 1000 rerun-timeout-seconds))))]
+                       :when (not (contains? #{:deny :ask} (get-in r [:policy :effect])))]
+                   [command r])]
+        {:failing (vec (for [[command r] runs
+                             :when (contains? #{:failure :timeout} (:category r))]
+                         {:command command
+                          :expected (get expected command [])
+                          :output (let [o (str (:result r))]
+                                    (if (and output-chars (> (count o) output-chars))
+                                      (subs o (- (count o) output-chars))
+                                      o))}))
+         :passing (vec (for [[command r] runs
+                             :when (= :success (:category r))]
+                         command))}))))
+
+(defn tester-still-failing
+  "The blind tester's latest reported failures whose command still fails when
+  rerun now, as {:command :expected [..] :output} (see rerun-checks)."
+  [ctx]
+  (:failing (rerun-checks ctx (journal/tester-failing (:conn ctx) (:run-id ctx)))))
 
 (defn ship-gate-rung
   "The first lexical ship rung that fires on this evidence, as `{:name :message}`,
@@ -592,9 +603,20 @@
                                               {:schema (pr-str schema)
                                                :missing (= :missing problem)
                                                :problem (when-not (= :missing problem) (pr-str problem))}))
-        (let [r (done* ctx)]
-          (cond-> r
-            (:done? r) (assoc-in [:branch :final-result] (walk/keywordize-keys result))))))
+        ;; A tester failure must be a command that FAILS: the done-time rerun
+        ;; reads its exit code, and a check that prints a defect and exits 0
+        ;; reran as a pass and shipped it (music-harmony one-music-1). Refused
+        ;; up to :tester :check-refusals times, then taken as it is.
+        (let [failing (get result "failing" (get result :failing))
+              {:keys [check-refusals]} (gates/threshold :tester)
+              passing (when (and (= :tester (:role branch)) (seq failing) check-refusals
+                                 (< (state/done-streak branch) check-refusals))
+                        (:passing (rerun-checks ctx failing)))]
+          (if (seq passing)
+            (base/malformed branch (prompt/render "tester-check-passes" {:commands passing}))
+            (let [r (done* ctx)]
+              (cond-> r
+                (:done? r) (assoc-in [:branch :final-result] (walk/keywordize-keys result))))))))
     (done* ctx)))
 
 (defn- done* [{:keys [branch] :as ctx}]
