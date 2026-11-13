@@ -737,7 +737,40 @@
   [scope]
   (swap! retired (fn [s] (into #{} (remove #(= scope (first %))) s))))
 
+(defonce ^:private delta-hook
+  ;; What a call with no :on-delta of its own streams through: a function of
+  ;; [run-id branch-id] answering {:on-delta :flush!}, registered by
+  ;; samizdat.agent.infer so this namespace never depends on the event bus.
+  (atom nil))
+
+(defn set-delta-hook!
+  "Register the per-call publisher `chat` streams through when a call brings
+  no :on-delta and its config names a run (:stream-run-id, :stream-branch)."
+  [f]
+  (reset! delta-hook f))
+
+(declare chat*)
+
 (defn chat
+  "`chat*`, streamed. A call that brings its own :on-delta (a branch turn,
+  which infer publishes under its branch) streams through that. Any other
+  call whose config names a run (:stream-run-id, set when the run starts)
+  streams through the registered hook under :stream-branch: the workflow
+  choice, a team-solve manager or planner call, a critic, a compaction
+  summary. They used to call the model with nothing watching, so the first
+  minute or two of a run showed `thinking…` with nothing under it while
+  every branch turn after streamed."
+  ([adapter config messages] (chat adapter config messages nil))
+  ([adapter config messages opts]
+   (let [sink (when (and (nil? (:on-delta opts)) (:stream-run-id config))
+                (when-let [h @delta-hook]
+                  (h (:stream-run-id config) (:stream-branch config))))]
+     (if sink
+       (try (chat* adapter config messages (assoc opts :on-delta (:on-delta sink)))
+            (finally ((:flush! sink))))
+       (chat* adapter config messages opts)))))
+
+(defn- chat*
   "`chat-one`, and when `config` names :fallbacks [{:adapter :config} …]
   (a role given a list of models, workflow/role-ctx), the next one when a
   model fails (karamazov-0e2c.9, after iFixAi's judge fallback chain).
