@@ -64,7 +64,7 @@
 
 (deftest the-adapter-sends-them-when-the-provider-has-them
   (let [glm (assoc (:glm config/providers-for-test) :model "glm-5.3")
-        ds (assoc (:deepseek config/providers-for-test) :model "deepseek-flash")
+        ds (assoc (:deepseek-chat config/providers-for-test) :model "deepseek-flash")
         roles #(mapv :role (:messages %))]
     (is (config/supports? glm :native-history))
     (is (config/supports? ds :native-history))

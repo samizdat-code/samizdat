@@ -760,10 +760,10 @@
     (testing "on DeepSeek /beta (prefill works) it prefixes and does NOT send tool_choice"
       ;; DeepSeek's thinking mode rejects tool_choice with a 400, so where the
       ;; prefill can force the call it must be preferred.
-      (let [ds (registry/adapter-for :deepseek)
+      (let [ds (registry/adapter-for :deepseek-chat)
             body (adapter/chat-body ds {:base-url "https://api.deepseek.com/beta"
                                         :model "deepseek-v4-flash" :api-key "k"
-                                        :features (config/features-of :deepseek)}
+                                        :features (config/features-of :deepseek-chat)}
                                     {:messages [{:role "user" :content "x"}]
                                      :prefill "```tool-call\n{\"name\": \"done\""
                                      :force-tool done-spec})]
@@ -809,7 +809,7 @@
     (testing "no cache key, no wire change"
       (is (nil? (:cache_prompt (adapter/chat-body local cfg (dissoc opts :cache-key))))))
     (testing "every hosted provider's body is byte-identical with or without the key"
-      (doseq [p [:deepseek :glm :openai]]
+      (doseq [p [:deepseek :deepseek-chat :glm :openai]]
         (let [a (registry/adapter-for p)
               hosted (assoc cfg :api-key "k" :features (config/features-of p))]
           (is (= (adapter/chat-body a hosted (dissoc opts :cache-key))
@@ -823,7 +823,7 @@
 (deftest adapters-differ-only-where-they-should
   (let [cfg {:base-url "https://api.example.com/v1" :model "m" :api-key "k"}]
     (testing "the OpenAI family"
-      (let [a (registry/adapter-for :deepseek)]
+      (let [a (registry/adapter-for :deepseek-chat)]
         (is (= "https://api.example.com/v1/chat/completions" (adapter/chat-url a cfg)))
         (is (= {"Authorization" "Bearer k"} (adapter/auth-headers a cfg)))
         (is (= {:model "m" :messages [] :max_tokens 10 :temperature 0.5}
@@ -841,7 +841,7 @@
     (testing "reasoning lives under a different key per provider"
       (let [reply {:choices [{:message {:content "c" :reasoning_content "r"}
                               :finish_reason "stop"}]}]
-        (is (= "r" (:reasoning (adapter/parse-chat (registry/adapter-for :deepseek) reply))))
+        (is (= "r" (:reasoning (adapter/parse-chat (registry/adapter-for :deepseek-chat) reply))))
         (is (nil? (:reasoning (adapter/parse-chat (registry/adapter-for :openai) reply))))))
 
     (testing "a local endpoint's reasoning is read, not dropped"
@@ -879,7 +879,7 @@
       (let [reply {:choices [{:message {:content "c"} :finish_reason "stop"}]
                    :usage {:prompt_tokens 100 :completion_tokens 20 :total_tokens 120
                            :prompt_cache_hit_tokens 80 :prompt_cache_miss_tokens 20}}
-            u (:usage (adapter/parse-chat (registry/adapter-for :deepseek) reply))]
+            u (:usage (adapter/parse-chat (registry/adapter-for :deepseek-chat) reply))]
         (is (= 100 (:prompt-tokens u)))
         (is (= 80 (:cache-hit-tokens u)))
         (is (= 20 (:cache-miss-tokens u)))))
@@ -893,7 +893,7 @@
       (let [reply {:model "deepseek-v4-flash"
                    :choices [{:message {:content "c"} :finish_reason "stop"}]}]
         (is (= "deepseek-v4-flash"
-               (:model (adapter/parse-chat (registry/adapter-for :deepseek) reply)))))
+               (:model (adapter/parse-chat (registry/adapter-for :deepseek-chat) reply)))))
       (let [reply {:model "qwen3:latest" :message {:content "c"} :done_reason "stop"}]
         (is (= "qwen3:latest"
                (:model (adapter/parse-chat (registry/adapter-for :ollama) reply)))
@@ -909,7 +909,7 @@
       ;; a fabricated zero would poison exactly that.
       (let [reply {:choices [{:message {:content "c"} :finish_reason "stop"}]
                    :usage {:prompt_tokens 100 :completion_tokens 20 :total_tokens 120}}
-            u (:usage (adapter/parse-chat (registry/adapter-for :deepseek) reply))]
+            u (:usage (adapter/parse-chat (registry/adapter-for :deepseek-chat) reply))]
         (is (= 100 (:prompt-tokens u)))
         (is (not (contains? u :cache-hit-tokens)))
         (is (not (contains? u :cache-miss-tokens)))))
@@ -926,19 +926,19 @@
       ;; REJECTS the request — "prefix is only available when using beta
       ;; api" — so load-config drops :prefill for a config pointed there
       ;; (features-test); the adapter simply reads what is left.
-      (let [beta (:llm (config/load-config {:roles {:default :deepseek}}))
-            v1   (:llm (config/load-config {:providers {:deepseek {:base-url "https://api.deepseek.com/v1"}}
-                                            :roles {:default :deepseek}}))]
-        (is (adapter/prefill-support? (registry/adapter-for :deepseek) beta))
-        (is (not (adapter/prefill-support? (registry/adapter-for :deepseek) v1)))
+      (let [beta (:llm (config/load-config {:roles {:default :deepseek-chat}}))
+            v1   (:llm (config/load-config {:providers {:deepseek-chat {:base-url "https://api.deepseek.com/v1"}}
+                                            :roles {:default :deepseek-chat}}))]
+        (is (adapter/prefill-support? (registry/adapter-for :deepseek-chat) beta))
+        (is (not (adapter/prefill-support? (registry/adapter-for :deepseek-chat) v1)))
         (is (not (adapter/prefill-support? (registry/adapter-for :openai)
                                            (:llm (config/load-config {:roles {:default :openai}})))))
         (is (not (adapter/prefill-support? (registry/adapter-for :ollama) beta)))))
 
     (testing "a supporting adapter appends the prefix as a trailing assistant turn"
-      (let [a (registry/adapter-for :deepseek)
+      (let [a (registry/adapter-for :deepseek-chat)
             body (adapter/chat-body a {:model "m" :base-url "https://api.deepseek.com/beta"
-                                       :features (config/features-of :deepseek)}
+                                       :features (config/features-of :deepseek-chat)}
                                     {:messages [{:role "user" :content "go"}]
                                      :prefill "```tool-call\n"})
             msgs (:messages body)]
@@ -957,7 +957,7 @@
       ;; The protocol method is the only gate now: overriding it must change
       ;; what chat-body sends, in BOTH directions, whatever the config says.
       (let [v1 {:model "m" :base-url "https://api.deepseek.com/v1"}
-            a (registry/adapter-for :deepseek)
+            a (registry/adapter-for :deepseek-chat)
             opts {:messages [{:role "user" :content "go"}] :prefill "```tool-call\n"}]
         (with-redefs [adapter/prefill-support? (fn [_ _] true)]
           (is (some #(and (= "assistant" (:role %)) (true? (:prefix %)))
@@ -973,7 +973,7 @@
       ;; returns 404 for /beta/models. Pointing the listing at it turned the
       ;; startup model check into "provider listed no models", downgrading a
       ;; real check to a warning on every start.
-      (let [a (registry/adapter-for :deepseek)]
+      (let [a (registry/adapter-for :deepseek-chat)]
         (is (= "https://api.deepseek.com/v1/models"
                (adapter/models-url a {:base-url "https://api.deepseek.com/beta"})))
         (is (= "https://api.deepseek.com/v1/models"
@@ -1030,7 +1030,7 @@
   ;; dropped it.
   (let [cfg {:base-url "https://api.example.com/v1" :model "deepseek-chat"
              :api-key "k" :max-retries 0}
-        a (registry/adapter-for :deepseek)
+        a (registry/adapter-for :deepseek-chat)
         answer (fn [body]
                  (with-redefs [http/post (fn [_ _] {:status 200 :body (json/write-str body)})]
                    (client/chat a cfg [{:role "user" :content "hi"}])))]
@@ -1053,7 +1053,7 @@
   ;; the boot-time reachability probe, was exactly that call.
   (let [cfg {:base-url "https://api.example.com/v1" :model "m" :api-key "k"
              :conn-timeout-ms 4321}
-        a (registry/adapter-for :deepseek)
+        a (registry/adapter-for :deepseek-chat)
         seen (atom nil)]
     (testing "the chat call"
       (with-redefs [http/post
@@ -1077,7 +1077,7 @@
         (is (pos? (:conn-timeout @seen)))))))
 
 (deftest error-classification
-  (let [a (registry/adapter-for :deepseek)]
+  (let [a (registry/adapter-for :deepseek-chat)]
     (testing "transient statuses retry"
       (are [status] (= :retry (client/classify a status nil))
         429 500 502 503 408))
@@ -1157,7 +1157,7 @@
   ;; credit — a wall, not a window. It must be fatal AND carry :usage-cap so a
   ;; supervisor tells it from an ordinary bug, rather than the run spending its
   ;; budget retrying (karamazov-6uyv).
-  (let [a (registry/adapter-for :deepseek)
+  (let [a (registry/adapter-for :deepseek-chat)
         calls (atom 0)]
     (with-redefs [http/post (fn [& _]
                               (swap! calls inc)
@@ -1185,7 +1185,7 @@
       (is (< 300000 (client/effective-read-timeout-ms cfg 16384) 600000)
           "the default budget lands between the floor and the ceiling")))
   (testing "a read timeout is fatal and not retried"
-    (let [a (registry/adapter-for :deepseek)
+    (let [a (registry/adapter-for :deepseek-chat)
           calls (atom 0)]
       (with-redefs [http/post (fn [& _]
                                 (swap! calls inc)
@@ -1206,7 +1206,7 @@
       (with-redefs [adapter/prefill-support? (fn [_ _] true)
                     http/post (fn [& _] {:status 200 :body reply})]
         (is (= "```tool-call\n"
-               (:prefilled (client/chat (registry/adapter-for :deepseek) {:model "m"}
+               (:prefilled (client/chat (registry/adapter-for :deepseek-chat) {:model "m"}
                                         [{:role "user" :content "go"}]
                                         {:prefill "```tool-call\n"}))))))
     (testing "a provider that drops it reports nil, even though a prefill was asked for"
@@ -1305,7 +1305,7 @@
   ;;
   ;; Omitted from the body entirely when unset, because a provider that has
   ;; never heard of the field rejects the request rather than ignoring it.
-  (let [a (registry/adapter-for :deepseek)
+  (let [a (registry/adapter-for :deepseek-chat)
         req {:messages [{:role "user" :content "go"}] :max-tokens 10}]
     (testing "no reasoning fields when the config says nothing"
       (let [b (adapter/chat-body a {:model "m"} req)]
@@ -1355,7 +1355,7 @@
                                        {:model "m" :reasoning-effort "max"}
                                        (req "low"))))))
     (testing "the request can force the off value even against a config effort"
-      (let [b (adapter/chat-body (registry/adapter-for :deepseek)
+      (let [b (adapter/chat-body (registry/adapter-for :deepseek-chat)
                                  {:model "m" :reasoning-effort "high"}
                                  (req "none"))]
         (is (= {:type "disabled"} (:thinking b)))
@@ -1371,7 +1371,7 @@
   ;; does not support this tool_choice", a 400 — measured live 2026-09-06). On
   ;; a /v1 base URL there is no prefill to force the call instead, so the
   ;; forced request must turn thinking off for that one call (karamazov-sj5i).
-  (let [ds (registry/adapter-for :deepseek)
+  (let [ds (registry/adapter-for :deepseek-chat)
         ;; /v1, so prefill-support? is false and the force-tool branch fires.
         cfg {:base-url "https://api.deepseek.com/v1" :model "deepseek-v4-flash"
              :api-key "k" :reasoning-effort "high"}
@@ -1923,7 +1923,7 @@
         "0 is a real value — no thinking — not an absence")
     (is (nil? (:reasoning_budget_tokens (adapter/chat-body local cfg (dissoc req :reasoning-budget))))
         "nil leaves the server's own default in force")
-    (doseq [p [:deepseek :glm :openai]]
+    (doseq [p [:deepseek :deepseek-chat :glm :openai]]
       (is (nil? (:reasoning_budget_tokens
                  (adapter/chat-body (registry/adapter-for p)
                                     (assoc cfg :api-key "k" :features (config/features-of p)) req)))
@@ -2011,7 +2011,7 @@
   ;; same way, and the run read it as an unreliable provider
   ;; (karamazov-q8dy). A socket failure is an IOException; anything else
   ;; is a bug here, and retrying a bug only reproduces it.
-  (let [a (registry/adapter-for :deepseek)]
+  (let [a (registry/adapter-for :deepseek-chat)]
     (testing "a harness error is fatal, not retried, and not called transport"
       (let [calls (atom 0)]
         (with-redefs [http/post (fn [& _]
@@ -2144,10 +2144,10 @@
   ;; none, deepseek-v4-flash wrote DSML into its content (karamazov-jl1f).
   (let [specs [{:name "done" :description "Finish." :parameters {:type "object" :properties {:answer {}}}}
                {:name "read_file" :description "Read." :parameters {:type "object" :properties {:path {}}}}]
-        ds (registry/adapter-for :deepseek)
+        ds (registry/adapter-for :deepseek-chat)
         glm (registry/adapter-for :glm)
         ds-cfg {:base-url "https://api.deepseek.com/beta" :model "deepseek-v4-flash"
-                :features (config/features-of :deepseek)}
+                :features (config/features-of :deepseek-chat)}
         glm-cfg {:base-url "https://open.bigmodel.cn/api/coding/paas/v4" :model "glm-5.3"
                  :features (config/features-of :glm)}
         msgs [{:role "user" :content "x"}]]
@@ -2221,7 +2221,7 @@
   (is (not (:truncated (fence/signals {:finish-reason "stop"} nil)))))
 
 (deftest a-partial-stream-body-is-parsed-at-the-adapter-boundary
-  (let [a (registry/adapter-for :deepseek)
+  (let [a (registry/adapter-for :deepseek-chat)
         body (json/write-str
               {:id "c1" :model "m" :object "chat.completion"
                :choices [{:index 0 :message {:role "assistant" :content "partial"}
@@ -2250,7 +2250,7 @@
                        :response {:content "finished" :finish-reason "stop"
                                   :usage {:prompt-tokens 7 :completion-tokens 3 :total-tokens 10}
                                   :elapsed-ms 20}}))]
-      (let [r (client/chat-one (registry/adapter-for :deepseek)
+      (let [r (client/chat-one (registry/adapter-for :deepseek-chat)
                                {:max-retries 0
                                 :continuation {:enabled? true :min-chars 1 :max-attempts 1}}
                                [{:role "user" :content "go"}])]
@@ -2271,12 +2271,12 @@
               (throw (ex-info "cut" {:partial-response {:content "partial"}})))]
     (with-redefs [client/post-once cut]
       (is (thrown? Exception
-                   (client/chat-one (registry/adapter-for :deepseek) {:max-retries 0
+                   (client/chat-one (registry/adapter-for :deepseek-chat) {:max-retries 0
                                               :continuation {:enabled? false :max-attempts 1}} [])))
       (is (= 1 @calls) "disabled continuation never re-asks")
       (reset! calls 0)
       (is (thrown? Exception
-                   (client/chat-one (registry/adapter-for :deepseek) {:max-retries 0
+                   (client/chat-one (registry/adapter-for :deepseek-chat) {:max-retries 0
                                               :continuation {:enabled? true :min-chars 1 :max-attempts 1}} [])))
       (is (= 2 @calls) "one continuation, not an unbounded ladder"))))
 
@@ -2288,7 +2288,7 @@
                     (throw (ex-info "cut" {:partial-response
                                            {:content "<think>reasoning only</think>"}})))]
       (is (thrown? Exception
-                   (client/chat-one (registry/adapter-for :deepseek) {:max-retries 0
+                   (client/chat-one (registry/adapter-for :deepseek-chat) {:max-retries 0
                                               :continuation {:enabled? true :min-chars 1 :max-attempts 1}} [])))
       (is (= 1 @calls) "reasoning alone cannot anchor a continuation"))))
 
@@ -2300,7 +2300,7 @@
                     (throw (ex-info "cut" {:partial-response
                                            {:content "<think>unfinished reasoning"}})))]
       (is (thrown? Exception
-                   (client/chat-one (registry/adapter-for :deepseek)
+                   (client/chat-one (registry/adapter-for :deepseek-chat)
                                     {:max-retries 0
                                      :continuation {:enabled? true :min-chars 1 :max-attempts 1}} [])))
       (is (= 1 @calls)))))
@@ -2313,7 +2313,7 @@
                       (if (< n 3)
                         (throw (ex-info "cut" {:partial-response {:content "a"}}))
                         {:outcome :ok :response {:content "c"}})))]
-      (is (= "ac" (:content (client/chat-one (registry/adapter-for :deepseek)
+      (is (= "ac" (:content (client/chat-one (registry/adapter-for :deepseek-chat)
                                              {:max-retries 1
                                               :continuation {:enabled? true :min-chars 1 :max-attempts 1}}
                                              []))))
@@ -2332,7 +2332,7 @@
                         {:outcome :ok :response {:content "c"
                                                  :usage {:prompt-tokens 1 :completion-tokens 1 :total-tokens 2}
                                                  :elapsed-ms 1}})))]
-      (let [r (client/chat-one (registry/adapter-for :deepseek)
+      (let [r (client/chat-one (registry/adapter-for :deepseek-chat)
                                {:max-retries 0
                                 :continuation {:enabled? true :min-chars 1 :max-attempts 2}} [])]
         (is (= "abc" (:content r)))
@@ -2341,7 +2341,7 @@
         (is (= 3 @calls))))))
 
 (deftest a-cancelled-stream-is-never-continued-or-retired
-  (let [a (registry/adapter-for :deepseek)
+  (let [a (registry/adapter-for :deepseek-chat)
         body (json/write-str
               {:id "c1" :model "m" :object "chat.completion"
                :choices [{:index 0 :message {:role "assistant" :content "partial"}
@@ -2366,7 +2366,7 @@
 
 (deftest successful-client-usage-updates-calibration-without-internal-wire-options
   (let [policy (gates/threshold :request-accounting)
-        a (registry/adapter-for :deepseek)]
+        a (registry/adapter-for :deepseek-chat)]
     (testing "normalized successful usage calibrates and accounting stays out of the HTTP body"
       (accounting/reset-calibration!)
       (let [request {:provider :deepseek :model "usage-success" :context-window 10000
@@ -2415,7 +2415,7 @@
 (deftest reconciliation-body-failure-cannot-invalidate-a-successful-response
   (accounting/reset-calibration!)
   (let [policy (gates/threshold :request-accounting)
-        a (registry/adapter-for :deepseek)
+        a (registry/adapter-for :deepseek-chat)
         request {:provider :deepseek :model "usage-second-body" :context-window 10000
                  :max-tokens 100 :messages [{:role "user" :content "hi"}]}
         before (accounting/estimate request policy)
@@ -2446,7 +2446,7 @@
 
 (deftest fallback-usage-is-not-recorded-under-a-different-request-shape
   (let [policy (gates/threshold :request-accounting)
-        a (registry/adapter-for :deepseek)
+        a (registry/adapter-for :deepseek-chat)
         tool {:name "read_file" :parameters {:type "object" :properties {}}}
         cases [{:label "prefill"
                 :request {:prefill "```tool-call\n"}
@@ -2543,7 +2543,7 @@
                        :response {:content "finished" :finish-reason "stop"
                                   :usage {:prompt-tokens 7 :completion-tokens 3 :total-tokens 10}}}))]
       (let [response (client/chat-one
-                      (registry/adapter-for :deepseek)
+                      (registry/adapter-for :deepseek-chat)
                       {:max-retries 0
                        :continuation {:enabled? true :min-chars 1 :max-attempts 1}}
                       [{:role "user" :content "go"}]
@@ -2638,7 +2638,7 @@
 
 (deftest a-transient-error-inside-a-200-is-retried
   ;; A 200 stream that carries an error frame read as a fatal failure.
-  (let [a (registry/adapter-for :deepseek)
+  (let [a (registry/adapter-for :deepseek-chat)
         calls (atom 0)]
     (with-redefs [http/post (fn [& _] (swap! calls inc)
                               {:status 200 :body (json/write-str {:error {:message "Internal server error"}})})
@@ -2653,7 +2653,7 @@
   ;; made every empty reply fatal at the client, spending a loop turn and a
   ;; strike. One that ran out of tokens (finish_reason length) would be empty
   ;; again, so it stays fatal.
-  (let [a (registry/adapter-for :deepseek)
+  (let [a (registry/adapter-for :deepseek-chat)
         calls (atom 0)
         run (fn [finish]
               (reset! calls 0)
@@ -2676,7 +2676,7 @@
   (is (client/context-overflow? "request too large: too many tokens"))
   (is (client/context-overflow? "exceed_context_size_error"))
   (is (not (client/context-overflow? "rate limit exceeded")))
-  (let [a (registry/adapter-for :deepseek)]
+  (let [a (registry/adapter-for :deepseek-chat)]
     (with-redefs [http/post (fn [& _] {:status 413 :body "Payload Too Large"})]
       (is (= :context-overflow
              (try (client/chat a {:model "m" :max-retries 0} [{:role "user" :content "x"}]) nil
