@@ -773,7 +773,10 @@
                        {:keys [done-wait-seconds done-poll-seconds]} (gates/threshold :ship-review)]
                    ;; Already told once that the review is out: wait for it here,
                    ;; in this call, instead of refusing again.
-                   (if (and done-wait-seconds done-poll-seconds
+                   ;; Only where a supervisor stream is running to answer it: a
+                   ;; run without one (a replay, a tool called on its own) would
+                   ;; sit out the whole wait for a review nobody writes.
+                   (if (and done-wait-seconds done-poll-seconds (:supervisor-live? ctx)
                             (get (:ship-refused branch) :supervisor-review))
                      (await-review read-review r {:wait-ms (* 1000 done-wait-seconds)
                                                   :poll-ms (* 1000 done-poll-seconds)

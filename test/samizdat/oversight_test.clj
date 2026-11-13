@@ -1914,3 +1914,30 @@
       (is (str/includes? p "TWO requirements"))
       (is (str/includes? p "separate client process"))
       (is (str/includes? p "\"untested\"")))))
+
+(deftest a-held-done-waits-only-where-a-supervisor-is-running
+  ;; The wait made the suite twice as long: tests calling done on their own
+  ;; sat out ten minutes for a review no stream would write.
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "write /app/out.txt"})
+        done! (fn [b turn extra]
+                (tools/run-tool (merge {:branch b :tool-name "done" :turn turn :conn conn :run-id rid
+                                        :started-ms (System/currentTimeMillis)
+                                        :config {:run {:style :lean :time-limit-seconds 3600}}
+                                        :args {:answer "Wrote /app/out.txt and checked it."}}
+                                       extra)))
+        b (state/new-branch {:id "B1" :problem "write /app/out.txt"})]
+    (journal/note! conn rid :oversight-quiet {:data {}})
+    (let [b2 (:branch (done! b 10 {}))
+          t0 (System/currentTimeMillis)
+          r (done! b2 12 {})]
+      (is (str/includes? (str (:result r)) "has not landed"))
+      (is (< (- (System/currentTimeMillis) t0) 5000) "no stream running: no wait"))
+    (let [orig gates/threshold]
+      (with-redefs [gates/threshold (fn [k] (cond-> (orig k)
+                                              (= k :ship-review) (assoc :done-wait-seconds 2 :done-poll-seconds 1)))]
+        (let [b2 (:branch (done! b 20 {}))
+              t0 (System/currentTimeMillis)
+              r (done! b2 22 {:supervisor-live? true})]
+          (is (>= (- (System/currentTimeMillis) t0) 1500) "a running stream: it waited")
+          (is (str/includes? (str (:result r)) "has not landed") "and, still unanswered, held as before"))))))
