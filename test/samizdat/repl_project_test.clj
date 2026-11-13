@@ -222,3 +222,34 @@
                    "(:lines (lex/line-count {:path \"a.clj\"}))" [:lex/line-count])]
     (is (= "2" (:value r)) (pr-str r))
     (is (= {:op "cell" :args {:id :lex/line-count :args {:path "a.clj"}}} @seen))))
+
+(def ^:private caps {:length 5 :level 2})
+
+(deftest the-shown-value-is-capped-and-the-forms-own-printing-is-not
+  (let [s (repl/new-session)
+        r (route/eval-for (assoc (ctx s) :print caps) "(range)" s 15000)]
+    (is (:ok r) (pr-str r))
+    (is (= "(0 1 2 3 4 ...)" (:value r)) "an infinite seq comes back"))
+  (let [s (repl/new-session)
+        r (route/eval-for (assoc (ctx s) :print caps) "(count (pr-str (vec (range 20))))" s 15000)]
+    (is (= "51" (:value r)) "a pr-str the code makes is whole"))
+  (testing "a string value reads back as the string it was"
+    (let [s (repl/new-session)]
+      (is (= "\"hi\"" (:value (route/eval-for (assoc (ctx s) :print caps) "\"hi\"" s 15000)))))))
+
+(deftest each-form-of-a-batch-keeps-its-value-and-output
+  (let [s (repl/new-session)
+        r (route/eval-for (assoc (ctx s) :print caps)
+                          "(def two 2)\n(do (println \"side\") (inc two))\n(* two 10)" s 15000)]
+    (is (= ["#'" "3" "20"] [(subs (:value (first (:forms r))) 0 2)
+                            (:value (second (:forms r)))
+                            (:value (last (:forms r)))]))
+    (is (= "side\n" (:out (second (:forms r)))))
+    (is (= "20" (:value r)))))
+
+(deftest doc-says-where-a-var-is-defined
+  (let [s (repl/new-session)]
+    (ev s "(require 'demo.core)")
+    (let [d (route/doc-for (ctx s) "demo.core/greet")]
+      (is (str/ends-with? (str (:file d)) "demo/core.clj") (pr-str d))
+      (is (= 2 (:line d))))))

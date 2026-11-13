@@ -311,8 +311,17 @@
   control returns to the harness regardless."
   ([code] (eval-code code @default-session nil))
   ([code session] (eval-code code session nil))
-  ([code session timeout-ms]
+  ([code session timeout-ms] (eval-code code session timeout-ms nil))
+  ([code session timeout-ms {:keys [print]}]
    (let [ns* (the-ns (or session @default-session))
+         ;; Each form's value printed within `print` ({:length :level}), so
+         ;; an infinite or huge value comes back instead of printing until
+         ;; the deadline; none is the caller asking for it whole.
+         show (fn [v] (if print
+                        (binding [*print-length* (:length print) *print-level* (:level print)]
+                          (pr-str v))
+                        (pr-str v)))
+         shown (volatile! [])
          out (java.io.StringWriter.)
          timeout (or timeout-ms default-eval-timeout-ms)
          ;; Run on its own thread and wait with a deadline. The eval catches its
@@ -358,13 +367,22 @@
                                  (reduce (fn [_ [i {:keys [text line]}]]
                                            (vreset! at {:index (inc i) :count n
                                                         :line line :completed i})
-                                           (let [form (read-string text)]
-                                             (when-let [e (refusal [form] :harness)]
-                                               (throw e))
-                                             (eval form)))
+                                           (let [form (read-string text)
+                                                 _ (when-let [e (refusal [form] :harness)]
+                                                     (throw e))
+                                                 before (count (str out))
+                                                 v (eval form)]
+                                             ;; WHAT EACH FORM GAVE, not only the
+                                             ;; last: `(f 1) (f 2)` checked two
+                                             ;; things and showed one.
+                                             (vswap! shown conj {:text text :line line
+                                                                 :out (subs (str out) before)
+                                                                 :value (show v)})
+                                             v))
                                          nil
                                          (map-indexed vector forms))))]
-                   {:ok true :value (pr-str value) :out (str out)})
+                   {:ok true :value (or (:value (peek @shown)) (show value)) :out (str out)
+                    :forms @shown})
                  (catch Throwable e
                    {:ok false
                     ;; EVERY RUNG, because each of the ones above it has been
@@ -442,7 +460,9 @@
      (let [m (meta v)]
        {:name (str (:ns m) "/" (:name m))
         :arglists (:arglists m)
-        :doc (or (:doc m) "(no docstring — jolt strips core-var metadata)")})
+        :doc (or (:doc m) "(no docstring — jolt strips core-var metadata)")
+        :file (some-> (:file m) str)
+        :line (:line m)})
      {:not-found true :symbol sym-str})))
 
 (defn complete

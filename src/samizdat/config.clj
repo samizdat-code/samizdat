@@ -327,7 +327,27 @@
    ;; not a trade: nothing else about the run changes. The adapter checks the
    ;; URL anyway and simply does not prefill against /v1, so overriding
    ;; HARNESS_BASE_URL back is safe.
-   :deepseek {;; The model's context window, which the compaction ladder reads:
+   ;; DeepSeek as its own harness drives it: the Anthropic-compatible
+   ;; Messages API (llm/adapter/deepseek_messages.clj; deepseek-harness
+   ;; llm-deepseek). Its defaults: 1M context, 256K output, thinking on at
+   ;; effort high, no temperature. Measured 2026-11-12: a forced tool_choice
+   ;; is refused in thinking mode and a trailing assistant message is not
+   ;; continued, so neither :prefill nor :native-tool-choice; past
+   ;; reasoning must go back (:replay-reasoning).
+   :deepseek {:context-window 1048576
+              :max-tokens 256000
+              :request-window 1048576
+              :reasoning-effort "high"
+              :temperature nil
+              :base-url "https://api.deepseek.com/anthropic"
+              :features #{:native-tools :native-history :reasoning-effort :stream
+                          :replay-reasoning :thinking-toggle}
+              :key-env  "DEEPSEEK_API_KEY"
+              :model    "deepseek-flash"}
+   ;; DeepSeek's OpenAI-compatible chat endpoint, which samizdat drove
+   ;; before :deepseek mirrored the official harness: prefix completion on
+   ;; /beta, native tool_choice with thinking off.
+   :deepseek-chat {;; The model's context window, which the compaction ladder reads:
               ;; every rung is a FRACTION of this, so without it the whole
               ;; ladder is inert and folds never happen. Per provider because
               ;; it is a property of the model, and overridable with
@@ -486,7 +506,7 @@
   URL; now it edits the declaration instead."
   [provider llm]
   (cond-> llm
-    (and (= :deepseek provider)
+    (and (= :deepseek-chat provider)
          (not (str/includes? (str (:base-url llm)) "/beta")))
     (update :features (fnil disj #{}) :prefill)))
 

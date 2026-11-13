@@ -31,8 +31,8 @@
   (doseq [[p preset] config/providers-for-test]
     (is (set? (:features preset)) (str (name p) " declares a feature set")))
   (testing "what each was measured to do"
-    (is (contains? (config/features-of :deepseek) :prefill) "DeepSeek /beta continues a prefix")
-    (is (contains? (config/features-of :deepseek) :thinking-toggle) "and turns thinking off on request")
+    (is (contains? (config/features-of :deepseek-chat) :prefill) "DeepSeek /beta continues a prefix")
+    (is (contains? (config/features-of :deepseek-chat) :thinking-toggle) "and turns thinking off on request")
     (is (not (contains? (config/features-of :glm) :prefill)) "GLM ignores a trailing assistant message")
     (is (not (contains? (config/features-of :glm) :thinking-toggle)) "and cannot be told not to think")
     (is (contains? (config/features-of :glm) :native-tool-choice))
@@ -45,8 +45,8 @@
   (testing "DeepSeek off its beta URL loses the prefill it would be refused for"
     ;; 'prefix is only available when using beta api' is a 400 on /v1, so a
     ;; misconfigured endpoint would fail every steered turn.
-    (let [c (config/load-config {:providers {:deepseek {:base-url "https://api.deepseek.com/v1"}}
-                                 :roles {:default :deepseek}})]
+    (let [c (config/load-config {:providers {:deepseek-chat {:base-url "https://api.deepseek.com/v1"}}
+                                 :roles {:default :deepseek-chat}})]
       (is (not (contains? (get-in c [:llm :features]) :prefill)))
       (is (contains? (get-in c [:llm :features]) :native-tool-choice) "the rest stays")))
   (testing "a declaration that names features names them all"
@@ -54,7 +54,7 @@
                                  :roles {:default :local}})]
       (is (= #{:grammar} (get-in c [:llm :features])))))
   (testing "a role model built for another provider carries that provider's features"
-    (is (= (config/features-of :deepseek) (:features (config/provider-llm nil :deepseek {}))))))
+    (is (= (config/features-of :deepseek-chat) (:features (config/provider-llm nil :deepseek-chat {}))))))
 
 ;; --- discovered ---------------------------------------------------------------
 
@@ -92,8 +92,8 @@
         (is (= 256 (:reasoning_budget_tokens (with #{:reasoning-budget}))))
         (is (some #(and (= "assistant" (:role %)) (:prefix %)) (:messages (with #{:prefill}))))))
     (testing "prefill-support? is the features, on any adapter of the family"
-      (is (adapter/prefill-support? (registry/adapter-for :deepseek) {:features #{:prefill}}))
-      (is (not (adapter/prefill-support? (registry/adapter-for :deepseek) {:base-url "https://api.deepseek.com/beta"})))
+      (is (adapter/prefill-support? (registry/adapter-for :deepseek-chat) {:features #{:prefill}}))
+      (is (not (adapter/prefill-support? (registry/adapter-for :deepseek-chat) {:base-url "https://api.deepseek.com/beta"})))
       (is (adapter/prefill-support? (registry/adapter-for :openai) {:features #{:prefill}})))))
 
 ;; --- the force mechanism is chosen once, from policy and features ------------

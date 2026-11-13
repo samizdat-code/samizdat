@@ -231,6 +231,27 @@
   (str "(binding [clojure.core/*allow-unresolved-vars* false] (eval (quote "
        text "\n)))"))
 
+(defn- capped
+  "Form text whose value comes back printed within `print` ({:length
+  :level}) as a string. The image's nREPL prints a value after the form's
+  bindings are gone, so the caps go around a pr-str here and `uncapped`
+  reads the string back out of the reply. Only the shown value is capped:
+  the form's own printing is whole."
+  [{:keys [length level]} text]
+  (str "(clojure.core/let [samizdat__v " text "\n]"
+       " (clojure.core/binding [clojure.core/*print-length* " (pr-str length)
+       " clojure.core/*print-level* " (pr-str level) "]"
+       " (clojure.core/pr-str samizdat__v)))"))
+
+(defn- uncapped
+  "Eval result `r` of a `capped` form with its value read back to the text
+  the image printed."
+  [r]
+  (if (and (:ok r) (string? (:value r)))
+    (update r :value #(let [v (try (read-string %) (catch Throwable _ ::unread))]
+                        (if (string? v) v %)))
+    r))
+
 (defn- ns-switch
   "The namespace form `text` moves evaluation into — `(ns x …)` or
   `(in-ns 'x)` — or nil. Sent whole, the image carried such a switch to the
@@ -292,6 +313,8 @@
   ([im root sandboxed? code session timeout bridge]
    (eval-project im root sandboxed? code session timeout bridge nil))
   ([im root sandboxed? code session timeout bridge interrupt]
+   (eval-project im root sandboxed? code session timeout bridge interrupt nil))
+  ([im root sandboxed? code session timeout bridge interrupt print]
   (let [forms (try (repl/top-level-forms code) (catch Throwable _ nil))
         refused (when forms (repl/refusal (repl/readable-ahead forms) :project))
         where (some-> session str)]
@@ -311,15 +334,19 @@
       :else
       (let [deadline (+ (System/currentTimeMillis) timeout)
             n (count forms)]
-        (loop [i 0 outs [] in session]
+        (loop [i 0 outs [] shown [] in session]
           (let [{:keys [text line]} (nth forms i)
                 left (max 1 (- deadline (System/currentTimeMillis)))
                 eval-id (when bridge (str (random-uuid)))
-                r (image/eval-in im (cond->> (strict text) bridge (bridge/wrap eval-id))
-                                 in (merge {:timeout-ms left}
-                                           (when interrupt {:on-interrupt #(reset! interrupt %)})
-                                           (when bridge (assoc bridge :bridge-eval eval-id))))
+                r (cond-> (image/eval-in im (cond->> (strict text)
+                                              print (capped print)
+                                              bridge (bridge/wrap eval-id))
+                                         in (merge {:timeout-ms left}
+                                                   (when interrupt {:on-interrupt #(reset! interrupt %)})
+                                                   (when bridge (assoc bridge :bridge-eval eval-id))))
+                    print uncapped)
                 outs (conj outs (str (:out r)))
+                shown (conj shown {:text text :line line :out (str (:out r)) :value (:value r)})
                 at {:index (inc i) :count n :line line :completed i}]
             (cond
               (:timeout? r)
@@ -330,9 +357,9 @@
                 where (assoc :where where))
 
               (= (inc i) n)
-              (assoc r :out (str/join outs))
+              (assoc r :out (str/join outs) :forms shown)
 
-              :else (recur (inc i) outs (or (ns-switch text) in))))))))))
+              :else (recur (inc i) outs shown (or (ns-switch text) in))))))))))
 
 (defn fork-session
   "A new eval session carrying `parent`'s defs, in whichever image holds them.
@@ -469,14 +496,14 @@
                  ;; that are checked.
                  (let [effs (guard/effects form)]
                    (if (empty? effs)
-                     (repl/eval-code code session timeout)
+                     (repl/eval-code code session timeout {:print (:print ctx)})
                      (let [listed (str/join "\n" (map #(str (name (:kind %)) ": " (:call %)
                                                             (some->> (:target %) (str " "))) effs))
                            d (approval/resolve-ask ctx {:effect :ask :head "eval" :complex? true
                                                         :input listed
                                                         :reason "harness eval with effects"})]
                        (if (= :allow (:effect d))
-                         (repl/eval-code code session timeout)
+                         (repl/eval-code code session timeout {:print (:print ctx)})
                          {:ok false :error-type "harness-effects" :policy-refusal? true
                           :error (prompt/render "harness-eval-effects"
                                                 {:effects listed
@@ -509,7 +536,7 @@
                     bridge (bridge-for im ctx)
                     run (fn [interrupt]
                           (eval-project im root (not= :none backend) code session timeout
-                                        bridge interrupt))]
+                                        bridge interrupt (:print ctx)))]
                 (cond-> (if (or (:wait? ctx) (:abort? ctx)
                                 (and stall-after-ms bridge (> timeout stall-after-ms)))
                           (stalling ctx [root session] code (or stall-after-ms timeout)
@@ -569,7 +596,7 @@
     (or (read-value ctx (str "(if-let [v (resolve (symbol " (pr-str (str sym)) "))]"
                              " (let [m (meta v)]"
                              "   {:name (str (:ns m) \"/\" (:name m)) :arglists (:arglists m)"
-                             "    :doc (str (:doc m))})"
+                             "    :doc (str (:doc m)) :file (some-> (:file m) str) :line (:line m)})"
                              " {:not-found true})"))
         {:not-found true})))
 
