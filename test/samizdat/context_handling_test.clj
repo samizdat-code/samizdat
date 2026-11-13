@@ -227,15 +227,18 @@
     (testing "a short result is untouched"
       (is (= "ok" (clip "ok" 3 1000000))))))
 
-(deftest history-is-kept-verbatim-longer-on-a-large-window
-  ;; Past 240,000 characters every exchange older than the last 30 became a one-line
-  ;; digest, which dropped the original program's probe outputs. Pi kept its whole
-  ;; history up to its window, 295K tokens on figlet.
+(deftest history-folds-at-the-same-size-on-any-window
+  ;; A share of the window kept history verbatim to ~1.26M characters on a 1M
+  ;; window, which no ctb run reached: builders ran to 165-516K tokens. The fold
+  ;; now starts at :compaction-chars whatever the window; the share remains for a
+  ;; project that wants it.
   (let [policy (gates/threshold :context-budget)
         squeeze (gates/threshold :context-squeeze)
-        budget (fn [w] (:threshold-chars (infer/squeezed-budget policy 0 squeeze w)))]
-    (is (= (:compaction-chars policy) (budget nil)) "no window, as before")
-    (is (= (:compaction-chars policy) (budget 32000)) "a small window never goes below it")
-    (is (> (budget 1000000) (* 4 (:compaction-chars policy))) "a 1M window keeps far more")
+        budget (fn [p w] (:threshold-chars (infer/squeezed-budget p 0 squeeze w)))]
+    (is (= (:compaction-chars policy) (budget policy nil)))
+    (is (= (:compaction-chars policy) (budget policy 32000)))
+    (is (= (:compaction-chars policy) (budget policy 1000000)) "a 1M window folds at the same size")
+    (testing "a project that sets a share still gets more on a large window"
+      (is (> (budget (assoc policy :compaction-window-share 0.3) 1000000) (* 4 (:compaction-chars policy)))))
     (testing "a squeeze still shrinks it"
-      (is (< (:threshold-chars (infer/squeezed-budget policy 2 squeeze 1000000)) (budget 1000000))))))
+      (is (< (:threshold-chars (infer/squeezed-budget policy 2 squeeze 1000000)) (budget policy 1000000))))))

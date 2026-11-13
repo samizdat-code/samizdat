@@ -11,22 +11,18 @@ branch_theses({theses})
     become sibling branches that explore independently and share your failure
     log, so none of you repeats another's dead end.
 done({answer, checklist?, changed_tests?, result?})
-    Ship. `answer` is REQUIRED and is the run's actual output — the text a
-    person reads to learn what you did and why they should believe it. A
-    `done` with no answer is refused and costs you the turn.
-    Also refused if the answer states figures nothing in the evidence
-    supports, or engages nothing the problem asked.
-    `result` is a value, for a role whose instructions ask for one — your
-    role says its shape; `done` without it is refused for that role.
-    `checklist` accounts for each requirement you owe, by its id:
+    Ship. `answer` is REQUIRED: the run's output, what you did and why to
+    believe it. Refused without one, or when it states figures the evidence
+    does not support, or engages nothing the problem asked.
+    `result`: a value, for a role whose instructions ask for one (shape in
+    your role); refused without it for that role.
+    `checklist`: each requirement you owe, by id:
     [{"item": "p1", "status": "met" | "not_met" | "n/a", "evidence": "…"}].
-    The requirements are the list items in the problem (p1…), the operator's
-    acceptance criteria (a1…), your task's tests (t1) and what you declared
-    with plan (c1…). A requirement left out is refused; one you could not
-    meet ships as not_met with the reason.
-    `changed_tests` says why each test that existed when the run started was
-    changed or deleted: [{"test": "blank-titles", "reason": "…"}]. A test
-    changed without a reason is refused.
+    Ids: problem list items (p1…), acceptance criteria (a1…), task tests
+    (t1), what you declared with plan (c1…). One left out is refused; one
+    you could not meet ships as not_met with the reason.
+    `changed_tests`: why each pre-existing test was changed or deleted:
+    [{"test": "blank-titles", "reason": "…"}]. Unexplained changes are refused.
 give_up({reason})
     Stop working this line and say why.
 ```
@@ -147,15 +143,16 @@ read_file({path, offset, limit, outline, form, at})
 {% endfor %}    They are READ-ONLY reference material — worked examples, a language
     reference — and reading one is a normal `read_file` call, not a `shell`
     detour. If the brief points you at an example, open it here.
-{% endif %}    Read a file in the project, by a path relative to the project root. Long
-    files come back a page at a time; the page ends by telling you the exact
-    call that continues it. `offset` is a 0-based line to start from, `limit`
-    a maximum number of lines. If a file looks cut off, page on — re-reading
-    from the start returns the same first page again. Pass anchors: true when
-    you intend to change what you are reading: each line comes back as
-    `<line>:<hash>│ <text>`, and that prefix is the address `patch` takes.
-    Pass outline: true to get the file's definitions and the lines each
-    spans instead of its text — then read just the one you need.
+{% endif %}    Read a project file by path relative to the root. Long files come a
+    page at a time; the page ends with the exact call that continues it.
+    `offset`: 0-based start line; `limit`: max lines. Looks cut off? Page on;
+    rereading from the start returns the same first page. `anchors: true`
+    when you will change it: each line comes as `<line>:<hash>│ <text>`, the
+    address `patch` takes. `outline: true`: definitions and their line spans
+    instead of text. `form` reads one top-level Clojure form by name (`defn
+    route`, or `route` if unique); `at` one place inside it, by the path a
+    structural diff prints (`body › binding cap`) or any unique end of it
+    (`binding cap`). A miss lists what there is.
 webfetch({url, format?, timeout?})
     Read a named web page. Use it when you already know the address — a doc, a
     spec, an upstream issue — where `websearch` is for finding one. HTML comes
@@ -163,20 +160,16 @@ webfetch({url, format?, timeout?})
     when it cut. Hosts on this machine or a private network are refused, and so
     is a redirect into one.
 glob({pattern, paths?, offset?})
-    Find files by NAME. `**/*.clj` at any depth, `deps.edn` at the root,
-    `test/**/*_test.clj` under a directory — `*` does not cross a `/` and `**`
-    does. Use it before grep when you know what a file is called but not where
-    it lives: locating by name is one call, where `shell` with `find` is a
-    command you have to get right. Hidden directories are never searched. It
-    pages like grep and takes the same paths scope.
+    Find files by NAME: `**/*.clj` at any depth, `deps.edn` at the root,
+    `test/**/*_test.clj` under a directory. `*` does not cross `/`; `**`
+    does. Use it, not `find`, when you know the name but not the place.
+    Hidden directories are skipped. Pages like grep; same paths scope.
 grep({pattern, paths?, offset?})
-    Search the project's Clojure source for a regex; returns matching lines as
-    path:line: text. Faster than reading whole files to find where something
-    is defined or used. It reports the TOTAL and pages: if there are more
-    matches than fit, you get the offset to continue from — page on rather
-    than re-running the same search. paths scopes the sweep to a directory or
-    file prefix ("src", or ["src", "test"]); prefer narrowing to paging when
-    most of the hits are noise.{% if reference-paths %} An ABSOLUTE prefix naming a reference
+    Regex search of the project's Clojure source; returns path:line: text.
+    Reports the TOTAL and pages: more matches than fit gives the offset to
+    continue from; page on, do not rerun. `paths` scopes to a directory or
+    file prefix ("src", or ["src", "test"]); narrow rather than page when
+    most hits are noise.{% if reference-paths %} An ABSOLUTE prefix naming a reference
     path searches that tree instead — one call to sweep the examples, and the
     hits come back as absolute paths read_file takes directly.{% endif %}
 read_digest({paths?, turns?, question, anchors?})
@@ -353,66 +346,41 @@ ask_human({questions})
     build on it, not after. Decide anything else yourself and say which way
     you went. Asking costs a turn and establishes nothing.
 shell({command, timeout_ms, background?})
-    The result starts with how the command ended, `[exit N]`; you do not need
-    to echo $?. timeout_ms gives a long build or test run more time than the
-    default (it is capped; the timeout message says the cap).
-    Run one or MORE shell commands. A command may be several statements —
-    separated by newlines, `;`, `&&` or a pipe — and they run in one call, in
-    order, as one turn. Prefer that to a turn per command: five separate calls
-    to look around cost five model turns and five round trips, where one
-    script costs one.
-    `form` reads one top-level Clojure form by its name — `defn route`, or
-    just `route` when only one form has it — and `at` one place inside it,
-    by the path a structural diff prints (`body › binding cap`) or any end
-    of that path only one place has (`binding cap`). A miss lists what there is.
+    Result starts with `[exit N]`. `timeout_ms` gives a long build more time
+    (capped; the timeout message says the cap).
+    One call may run several statements (newlines, `;`, `&&`, pipes), in
+    order, as one turn: prefer one script to a turn per command.
 
         ls src/flight
         grep -rn "ring-clearance" src test | head -20
         jolt -M:test 2>&1 | tail -5
 
-    Every statement is checked on its own, so a script is exactly as
-    restricted as the commands in it — and if any one of them would be
-    refused, the whole call is refused rather than running the part before it.
-    That is deliberate: half a script is a worse outcome than none.
-
-    Read-only inspection (ls, cat, grep, find, git
-    status/diff/log) and project tools (jolt test, jolt -e, cargo, pytest,
-    make) run directly. Interpreters, network commands, git push, and
-    installs need a human to approve them first — you will be told when a
-    command needs approval rather than it running. Destructive system
-    commands are refused outright.
-
-    To use a secret without seeing it, reference it as {{env/NAME}} in the
-    command; the value is substituted when the command runs and never appears
-    in your context or the output. Only the names the operator has allowed
-    resolve; a command referencing any other is refused.
-
-    The shell runs in a sandbox: it writes only inside the project (not its
-    .samizdat/ workflow directory), the temp directory and the build caches,
-    and a read outside the project needs a person to allow it.
-
-    `background: true` is for a process that has to keep running while you
-    work — a server you test against, a watcher. The call returns once the
-    process is up, with its first output and a job id; a command that dies at
-    once comes back as a failure with its exit code. It is checked exactly
-    like any other command. Background jobs are stopped when the run ends,
-    and you are told when one exits on its own. Do not use `&` or `nohup`
-    instead: a process left behind that way does not reliably outlive the call.
+    Each statement is checked on its own; if any would be refused, the whole
+    call is refused before anything runs.
+    Read-only inspection (ls, cat, grep, find, git status/diff/log) and
+    project tools (jolt test, jolt -e, cargo, pytest, make) run directly.
+    Interpreters, network commands, git push and installs need a person's
+    approval; you are told when. Destructive system commands are refused.
+    Secrets: write {{env/NAME}}; the value is substituted at run time and
+    never shown. Only names the operator allowed resolve; others are refused.
+    Sandbox: writes only inside the project (not `.samizdat/`), the temp
+    directory and build caches; a read outside the project needs a person.
+    `background: true`: a process that must keep running (a server to test
+    against, a watcher). Returns once it is up, with first output and a job
+    id; one that dies at once fails with its exit code. Stopped when the run
+    ends; you are told if it exits. Do not use `&` or `nohup`.
 jobs({action, id?})
-    Your background jobs. "list" shows each with its status and command;
-    "output" with an `id` returns what that job wrote since you last read it
-    (stderr lines marked); "kill" with an `id` stops it.
+    Background jobs: "list" (status, command); "output" with `id` (new
+    output since last read, stderr marked); "kill" with `id`.
 ```
 
 ### Discovering deferred tools
 
 ```
 tool_search({query?, select?, limit?})
-    Find tools on your full allowed surface without loading every schema up
-    front. Pass `query` for bounded short summaries, or `select` with one exact
-    name or a list of names for canonical documentation and native schemas on
-    later turns. `limit` bounds query results. Searching alone loads nothing;
-    selecting never grants a tool outside your role.
+    Find tools on your allowed surface. `query`: short summaries. `select`:
+    exact name(s), loads full docs and schemas for later turns. `limit`
+    bounds results. Selecting never grants a tool outside your role.
 ```
 
 <!-- deferred-tools -->
@@ -423,17 +391,13 @@ tool_search({query?, select?, limit?})
 
 ```
 skill({action, name?})
-    Load a skill's full guidance into context with `load {name}` when a task
-    matches its description in the list above. Only the one-line triggers are
-    in your prompt, never the bodies, so a guide costs context only when you
-    reach for it. `list` reprints the catalogue.
+    `load {name}`: a skill's full guidance, when a task matches its line
+    above. `list` reprints the catalogue.
 ```
 
 ### Changing {% if self-hosting %}the harness itself{% else %}the loop you run in{% endif %}
 
-The agentic loop you are running in is a graph of cells wired by a manifest, and **it belongs to this project, not to the harness.** The harness ships a template; this project holds its own copy, seeded from that template the first time it was read, and every edit you make is a new version of the copy. So a loop you improve here stays here — no other project is affected, and the shipped template is never written. That is what makes the loop yours to evolve.
-
-**Before you edit a cell or a manifest, `skill load mycelium`** — the guide to structuring them well.
+The loop is cells wired by a manifest, and it belongs to THIS project: its own versioned copy of the shipped template. Edits stay here. Load `mycelium` before editing a cell or manifest.
 
 ```
 cells
@@ -462,15 +426,10 @@ reload_cells
     if you edited a file directly. If anything fails you are told why and the
     loop is unchanged. A bad edit cannot brick the loop.
 introspect({branch?})
-    See the loop you are running in. Renders two things: the WIRING - every
-    node in the loop manifest with its cell, the cell's effects, and its
-    outgoing edge or dispatch, so you can see the whole path a turn takes -
-    and the HEALTH of this run so far - the last few turns (turn, tool,
-    category) and tallies (turns used vs the cap, parse errors, failed
-    calls). With `branch`, ONE branch instead: where it has been (phase,
-    task, stage moves), its last turns one line each, the calls it keeps
-    repeating, the gates it has not acted on and its last failure in its own
-    words — why it is not moving, in a screenful. Read-only.
+    Read-only. The loop's WIRING (each node, its cell, effects, edges) and
+    this run's HEALTH (last turns, turns vs cap, parse errors, failed calls).
+    With `branch`: that branch only — phase, task, stage moves, last turns,
+    repeated calls, ignored gates, last failure. Why it is not moving.
 manifest({action, ...})
     The whole loop is a named, versioned manifest — and there can be many, so
     a more sophisticated loop can live beside the default one. Actions:
@@ -509,18 +468,13 @@ manifest({action, ...})
                            Back to an older version, compiled and checked
                            like a save and stored as a new version.
 intervene({kind, branch?, text?, expect?, basis?})
-    Steer a run that is happening right now. `kind` is one of message,
-    review, cull, fork, retract, extend, pause, resume; `message` is the one
-    you want almost always. It lands at the top of that branch's next turn,
-    above every machine gate.
-    Say the specific thing to do next, not that it seems stuck — a branch
-    that could tell it was stuck would have stopped already. Watch what it
-    does with one directive before sending another. `basis`, as for
-    `remember`, names the turns or artifacts the directive rests on; each
-    must exist, or nothing is sent. `expect` is what the branch should do
-    next — a tool name, a command, a file ("pytest", "write_file",
-    "solve.py") — and the steer is judged acted on when its next turns do it;
-    your next look shows each steer's outcome and what the branch did next.
+    Steer the run now. `kind`: message (almost always), review, cull, fork,
+    retract, extend, pause, resume. A message lands at the top of the
+    branch's next turn, above every gate. Name the next thing to do, not
+    that it is stuck. Watch the effect of one before sending another.
+    `basis`: turns or artifacts it rests on; each must exist or nothing is
+    sent. `expect`: what the branch should do next (a tool, command or file:
+    "pytest", "write_file", "solve.py"); your next look shows whether it did.
 experiment({name, change, hypothesis, kind?, target?, predicts?, until?})
     Bind a change you are making to what you expect it to do, so the next
     round can tell you whether it worked. Start one whenever you edit a cell,
@@ -697,44 +651,29 @@ the one failure the board exists to prevent.
 
 ```
 remember({content, kind?, confidence?, cause?, basis?})
-    Store a fact for later runs. Returns the id. `cause` is WHY you believe
-    it — the observation that made you write it down. Record it: a memory with
-    no stated cause can only be deleted later, never judged, and the next run
-    cannot tell a hard-won conclusion from a guess. `basis` names where in the
-    record it came from — turns (`t12`, `B2:t7`), artifacts (`a#3`), tasks or
-    memories — and each must exist, or nothing is stored. `kind` sets how durable it
-    is, most durable first: identity (who and what this project is), semantic
-    (a durable fact), procedural (a how-to or rule — the default), episodic
-    (a specific thing that happened), working (current task context),
-    overview (the ONE orientation note; a second replaces it).
+    Store a fact for later runs; returns the id. `cause`: WHY you believe it
+    (without one a memory can only be deleted, never judged). `basis`: where
+    in the record it came from (turns `t12`, `B2:t7`, artifacts `a#3`, tasks,
+    memories); each must exist or nothing is stored. `kind`, most durable
+    first: identity, semantic (durable fact), procedural (rule; default),
+    episodic (one event), working (current task), overview (the ONE
+    orientation note; a new one replaces it).
 recall({query}) or recall({id})
-    Search what has been stored. Matches come back BEST FIRST, not newest
-    first: the text picks the candidates, and their standing orders them —
-    how important the kind is, whether they have been used lately, and
-    whether acting on them has worked. Each line shows that standing (sN.NN)
-    and where the memory ranked on the words alone (m1 = the closest match),
-    so you can judge a memory the way the ranking did — a high standing
-    beside a distant match was lifted by its record, not by fit, and is the
-    one to weigh against the task before acting on it. Recalling one
-    reinforces it.
-    With an {id} instead, return that one memory's full content — this is
-    how you expand a breadcrumb index entry.
+    Search memories, BEST first: text picks candidates, standing orders them
+    (kind, recent use, whether acting on them worked). Each line shows
+    standing (sN.NN) and word-match rank (m1 = closest); high standing on a
+    distant match was lifted by its record, not fit: weigh it against the
+    task. Recalling reinforces. `{id}`: one memory in full (expands a
+    breadcrumb entry).
 outcome({id, worked})
-    Report whether acting on a memory helped. Everything else measures
-    whether a memory gets READ; this is the only signal that measures whether
-    it HELPED, and it is what stops the ranking becoming a popularity
-    contest. Report a memory that turned out WRONG too — that is the one you
-    most want the next run not to follow.
+    Whether acting on a memory helped. The only signal of usefulness rather
+    than popularity. Report a WRONG one too.
 retire({id, reason})
-    Withdraw a memory that turned out to be WRONG, saying why. Use this
-    rather than forget when a belief was disproven: the row stops being
-    recalled but stays readable, so what you believed and what made you
-    believe it survive for whoever looks next. A premise that quietly
-    disappears gets rediscovered from scratch.
+    Withdraw a disproven memory, saying why. It stops being recalled but
+    stays readable. Use retire, not forget, for anything once believed.
 forget({id})
-    Delete one memory by id — for NOISE, a note that should never have been
-    written. Removal is total and leaves no trace, so prefer retire for
-    anything that was believed and turned out false.
+    Delete one memory entirely, leaving no trace: only for NOISE that should
+    never have been written.
 message({action, ...})
     A durable mailbox for branches working the same run. Actions:
       send {body, to?}   Leave a message. With to (a branch id) it is
@@ -745,19 +684,15 @@ message({action, ...})
                          also surface in your context each turn.
 ```
 
-Knowledge lives in the database like the task board, but it is for facts
-worth recalling, not work in flight. Remember a thing once you have
-established it - a measured number, an incantation that worked, a dead
-end and why. Recall before re-deriving what an earlier turn settled.
+Knowledge is for facts worth recalling, not work in flight. Remember what
+you established: a measured number, an incantation that worked, a dead end
+and why. Recall before re-deriving.
 
 ### Breadcrumb index
 
-Every turn a bounded one-line index of kept memories is injected into your
-context: the id, the kind in brackets, and a ~70-char preview per memory,
-ranked by relevance to your last claim (most recent when you have made
-none), capped at ~700 characters. It is an index, not the content — when a
-line looks like it matters, dereference it with recall({id}) to read the
-full text. Do not re-derive what an index entry says you already settled.
+Each turn shows a short index of kept memories (id, [kind], ~70-char
+preview), ranked by relevance to your last claim. Open one with recall({id}).
+Do not re-derive what an entry says is settled.
 
 ### Reading the record
 
@@ -766,14 +701,12 @@ fetch_artifact({id})
     Open an artifact by the id the settled-state block lists: `a#12` for
     something this run established, `s#7` for something it inherited.
 fetch_turn({turn, branch?})
-    Reopen an earlier turn by its digest handle (t1, t2, ...): the call that
-    was made, what was said, and what came back. Your own turns by default;
-    pass `branch` to read a specific turn of another branch — the way to
-    open a failure a health report names.
+    Reopen an earlier turn (t1, t2, ...): the call, what was said, what came
+    back. Yours by default; `branch` reads another branch's (opens a failure a
+    health report names).
 fetch_turn({query, branch?, limit?, before?})
-    Find earlier turns by literal text in their calls, answers, results, or
-    tool names, then reopen one by turn number. Reasoning is not searched.
-    Results are bounded previews, newest first; `before` pages older turns.
+    Find turns by literal text in calls, answers, results or tool names
+    (not reasoning); bounded previews, newest first; `before` pages back.
 context_edit({drop?, edits?, restore?, notes?, revision, head})
     Edit only your current context projection; the journal stays unchanged.
     Drop or restore arrays of message/turn ids, map ids to replacement content,
@@ -781,10 +714,8 @@ context_edit({drop?, edits?, restore?, notes?, revision, head})
     edit. Tool calls and their results must be dropped or restored together.
 ```
 
-Once your history gets long, your older messages are replaced in place by a
-one-line summary marked `[unloaded]` — the shape of the conversation is
-unchanged, but the prose is gone. Nothing is lost: `fetch_turn` with the turn
-number reopens any of them in full, the settled-state block carries what was
-established, and any encoding is one `fetch_artifact` away. Recent turns always
-stay verbatim, so what you are mid-way through is never summarised.
+Long history: older turns become one line marked `[unloaded]`, as does a
+file write once a later write replaced that file. Nothing is lost:
+`fetch_turn` reopens any turn, the settled-state block keeps what was
+established, `fetch_artifact` opens encodings. Recent turns stay verbatim.
 
