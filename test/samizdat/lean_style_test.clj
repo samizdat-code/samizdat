@@ -127,3 +127,11 @@
     (is (str/includes? imp "Make the requested change") "the implementer keeps the lean frame")
     (is (str/includes? (aloop/system-prompt-for :supervisor) "You supervise a run")
         "and the full loop frames it the same way")))
+
+(deftest lean-terse-is-lean-with-a-request-for-short-thinking
+  (let [terse {:run {:style :lean-terse}}]
+    (is (= (dissoc (gates/style terse) :terse-reasoning?) (gates/style lean)) "it extends lean")
+    (is (true? (:terse-reasoning? (gates/style terse))))
+    (let [p (fn [c] (with-redefs [config/file-config (fn [& _] c)] (aloop/system-prompt-for :implementer)))]
+      (is (str/includes? (p terse) "Think in short notes"))
+      (is (not (str/includes? (p lean) "Think in short notes"))))))

@@ -911,6 +911,15 @@
    ;; Lean without a shell tool beside eval: programs run through `sh` in a
    ;; script (karamazov-6p51.7, after xi, which drops bash while clj is on).
    ;; An arm to measure, not a default: Terminal-Bench tasks are shell-heavy.
+   ;; :lean with one line asking for terse reasoning, for an A/B against it.
+   ;; Caveman's cited result (Adobe, arXiv 2606.24083): terse output 1.4-2.4x
+   ;; cheaper across eight models. Reasoning was the largest cost on ctb-r12
+   ;; (one photonic turn: 91K completion tokens); whether a shorter thought
+   ;; solves as often is the open question this style exists to measure.
+   :lean-terse
+   {:extends :lean
+    :terse-reasoning? true}
+
    :lean-repl
    {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
@@ -2279,6 +2288,21 @@
   :kind :threshold :capability-tunable? false
   :provenance ["karamazov-d1pw.2" "autolith bounded recursive inference"]
   :doc "Call, token, and recursion ceilings for one private inference tree."}
+
+ :output-shrink
+ {:value {:min-chars 4000 :min-run 3 :keep-head 15 :keep-tail 30 :context-after 4
+          :message "\n[Shrunk from {{total}} chars: repeated lines collapsed, routine lines dropped, errors, failures and summaries kept.{% if file %} The whole output is in `{{file}}`.{% endif %}]"}
+  :kind :policy :capability-tunable? true
+  :provenance ["caveman engine/compressors/log.go, repetition.go"]
+  :doc "A LONG TOOL OUTPUT REDUCED TO WHAT MATTERS before it is clipped
+        (samizdat.agent.shrink). Runs of identical lines collapse to one and
+        a count; past :min-chars, the first :keep-head and last :keep-tail
+        lines stay, every line wordlists.edn :output-keep matches stays with
+        :context-after lines after it (a stack trace's frames), and each
+        dropped run becomes one line naming how many. On ctb-r12 the largest
+        results hit the 40K clip, which kept a build log's start and end and
+        cut the error between. The whole output still spills to a file the
+        :message names. nil :min-chars turns it off."}
 
  :tool-clip
  {:value

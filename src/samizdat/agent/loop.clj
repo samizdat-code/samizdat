@@ -55,6 +55,8 @@
             [samizdat.config :as config]
             [samizdat.agent.phases :as phases]
             [samizdat.agent.roles :as roles]
+            [samizdat.agent.shrink :as shrink]
+            [samizdat.lexicon :as lexicon]
             [samizdat.agent.state :as state]
             [samizdat.agent.storm :as storm]
             [samizdat.agent.thinking :as thinking]
@@ -197,7 +199,8 @@
                 ;; A style may leave the shell out of the tools it describes, so
                 ;; programs run through eval's `sh` (karamazov-6p51.7). The tool
                 ;; stays callable: `sh` reaches it through the bridge.
-                :no-shell (boolean (:no-shell? (gates/style (config/file-config root))))}]
+                :no-shell (boolean (:no-shell? (gates/style (config/file-config root))))
+                :terse-reasoning (boolean (:terse-reasoning? (gates/style (config/file-config root))))}]
        ((if presentation? roles/presentation-catalogue roles/scope-catalogue)
         ;; A role may name its own frame in roles.edn :frame, for a fresh-context
         ;; worker that should not read the implementer's whole working method.
@@ -310,7 +313,18 @@
   ([s turn] (truncate s turn nil))
   ([s turn window] (truncate s turn window nil))
   ([s turn window spill]
-   (let [s (str s)
+   (let [raw (str s)
+         {:keys [min-chars message] :as shrink-policy} (gates/threshold :output-shrink)
+         keep-re (some-> (lexicon/wordlist :output-keep) re-pattern)
+         shrunk (if (and min-chars (> (count raw) (long min-chars)))
+                  (shrink/shrink raw (assoc shrink-policy :keep keep-re))
+                  raw)
+         ;; Shrinking changed it: say so, and where the whole output went.
+         s (if (= shrunk raw)
+             raw
+             (str shrunk (prompt/render-str message
+                                            {:total (count raw)
+                                             :file (when spill (try (spill raw) (catch Throwable _ nil)))})))
          {:keys [tool-result-chars tool-result-window-share tool-result-floor
                  tool-result-head-share chars-per-token]} (gates/threshold :context-budget)
          cap (if window
@@ -326,7 +340,7 @@
                                  {:shown cap :total (count s) :turn turn
                                   ;; The whole result in a file a script can read
                                   ;; (karamazov-6p51.3), when the caller keeps one.
-                                  :file (when spill (try (spill s) (catch Throwable _ nil)))})
+                                  :file (when spill (try (spill raw) (catch Throwable _ nil)))})
               "\n"
               (subs s (- (count s) tail))))
        s))))

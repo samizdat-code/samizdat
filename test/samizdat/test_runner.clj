@@ -259,6 +259,7 @@
             [samizdat.glm-adapter-test]
             [samizdat.responses-adapter-test]
             [samizdat.deepseek-messages-test]
+            [samizdat.shrink-test]
             [samizdat.native-history-test]
             [samizdat.code-metrics-test]
             [samizdat.shell-writes-test]
@@ -356,6 +357,7 @@
     samizdat.glm-adapter-test
     samizdat.responses-adapter-test
     samizdat.deepseek-messages-test
+    samizdat.shrink-test
     samizdat.native-history-test
     samizdat.code-metrics-test
     samizdat.shell-writes-test

@@ -387,7 +387,13 @@
   sent, which system prompt frame is used and whether done asks only for an answer."
   [config]
   (when-let [k (get-in config [:run :style])]
-    (get (threshold :styles) (keyword (name k)))))
+    (let [styles (threshold :styles)
+          s (get styles (keyword (name k)))]
+      ;; `:extends` names a style this one is merged over, one level, so a
+      ;; variant states only what differs.
+      (if-let [base (some->> (:extends s) name keyword (get styles))]
+        (merge base (dissoc s :extends))
+        s))))
 
 (defn review-max-wait
   "Seconds a ship review holds a done: gates.edn :ship-review :max-wait-seconds,
