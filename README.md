@@ -78,7 +78,12 @@ before. Providers are declared by alias and assigned to roles:
          :critic :pro}}
 ```
 
-Built-in types are `:local`, `:openai`, `:deepseek`, `:glm` and `:ollama`. An
+Built-in types are `:local`, `:openai`, `:openai-responses`, `:deepseek`,
+`:glm` and `:ollama`. `:openai` is chat completions, for any
+OpenAI-compatible server; `:openai-responses` is OpenAI's Responses API, the
+one GPT-5 and later models are driven through, and what `OPENAI_API_KEY`
+selects. A model that refuses an effort level takes
+`:reasoning-effort-map {"none" "low"}`. An
 entry takes any `:llm` knob as well (`:temperature`, `:max-tokens`,
 `:gen-floor-tps`, `:features`, ...); what it leaves out comes from its
 type's preset. A role maps to one alias — for another model on the same

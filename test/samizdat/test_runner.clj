@@ -257,6 +257,7 @@
             [samizdat.memory-exposure-test]
             [samizdat.context-handling-test]
             [samizdat.glm-adapter-test]
+            [samizdat.responses-adapter-test]
             [samizdat.native-history-test]
             [samizdat.code-metrics-test]
             [samizdat.shell-writes-test]
@@ -352,6 +353,7 @@
     samizdat.memory-exposure-test
     samizdat.context-handling-test
     samizdat.glm-adapter-test
+    samizdat.responses-adapter-test
     samizdat.native-history-test
     samizdat.code-metrics-test
     samizdat.shell-writes-test

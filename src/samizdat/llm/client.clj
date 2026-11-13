@@ -369,9 +369,11 @@
         use-prefill? (boolean (and (:prefill request)
                                    (adapter/prefill-support? adapter config)))
         streamed? (boolean (and (:on-delta request) (contains? (:features config) :stream)))
+        wire? (satisfies? adapter/StreamWire adapter)
         body (cond-> (adapter/chat-body adapter config request)
+               (and streamed? wire?) (->> (adapter/stream-body adapter))
                ;; Usage rides the last chunk only when asked for.
-               streamed? (assoc :stream true :stream_options {:include_usage true}))
+               (and streamed? (not wire?)) (assoc :stream true :stream_options {:include_usage true}))
         payload (json/write-str body)
         started (System/currentTimeMillis)
         opts {:headers (merge (request-headers adapter config)
@@ -381,7 +383,8 @@
               :conn-timeout (:conn-timeout-ms config default-conn-timeout-ms)}
         resp (try
                (if streamed?
-                 (stream/post url (assoc opts :max-response-ms (:max-response-ms config)
+                 (stream/post url (assoc opts :codec (when wire? (adapter/stream-codec adapter))
+                                         :max-response-ms (:max-response-ms config)
                                          :idle-ms (:stream-idle-ms config default-stream-idle-ms)
                                          :first-content-ms (:stream-first-content-ms config
                                                                                       default-stream-first-content-ms))
@@ -534,7 +537,8 @@
   their usage must not calibrate the primary request's different shape."
   [adapter config request estimate]
   (let [body (adapter/chat-body adapter config request)
-        messages (:messages body)
+        ;; A Responses body carries its conversation as :input.
+        messages (or (:messages body) (:input body))
         actual (cond-> #{}
                  (seq messages) (conj :messages)
                  (some :prefix messages) (conj :prefill)

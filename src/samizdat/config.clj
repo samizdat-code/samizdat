@@ -396,6 +396,24 @@
               :features #{:native-tool-choice :reasoning-effort :stream}
               :key-env  "OPENAI_API_KEY"
               :model    "gpt-4o"}
+   ;; OpenAI's GPT-5-and-later reasoning models over the Responses API
+   ;; (llm/adapter/responses.clj), the wire pi and opencode drive them
+   ;; through; :openai above stays chat completions for the gateways and
+   ;; servers that speak only that. Pi's catalog for gpt-6.1-terra: 272K
+   ;; context, 128K output, effort low..max plus none. No temperature —
+   ;; reasoning models refuse one. Verbosity low as opencode sends it for
+   ;; GPT-5.x, so the prose around a call stays short.
+   :openai-responses {:context-window 272000
+                      :request-window 272000
+                      :max-tokens 128000
+                      :reasoning-effort "medium"
+                      :text-verbosity "low"
+                      :temperature nil
+                      :base-url "https://api.openai.com/v1"
+                      :features #{:native-tool-choice :native-tools :native-history
+                                  :reasoning-effort :stream}
+                      :key-env "OPENAI_API_KEY"
+                      :model "gpt-6.1-terra"}
    ;; A local llama-server / vLLM / LM Studio OpenAI-compatible endpoint.
    :local    {;; A local endpoint is launched with whatever -c it was given, so
               ;; the conservative value is right until HARNESS_CONTEXT_WINDOW
@@ -513,7 +531,7 @@
 
 (defn- detect-provider []
   (or (some-> (env "HARNESS_PROVIDER") str/lower-case keyword)
-      (first (for [p [:deepseek :glm :openai]
+      (first (for [p [:deepseek :glm :openai-responses]
                    :let [ke (:key-env (providers p))]
                    :when (env ke)]
                p))
@@ -705,7 +723,10 @@
                   ;; off-value, which the adapter turns into each provider's
                   ;; documented disable wire (deepseek: thinking off; glm-5.3
                   ;; cannot disable, so: effort low).
-                  :reasoning-effort (env "HARNESS_REASONING_EFFORT")
+                  :reasoning-effort (or (env "HARNESS_REASONING_EFFORT")
+                                        (:reasoning-effort defaults))
+                  ;; Responses API `text.verbosity`, sent only when set.
+                  :text-verbosity (:text-verbosity defaults)
                   :max-tokens  (or (env-long "HARNESS_MAX_TOKENS")
                                    (:max-tokens defaults)
                                    16384)
@@ -853,6 +874,10 @@
         :model       (:model defaults)
         :context-window (:context-window defaults)
         :request-window (:request-window defaults)
+        ;; The preset's effort was never carried here, so DeepSeek's
+        ;; "high" was declared and not sent.
+        :reasoning-effort (or (env "HARNESS_REASONING_EFFORT") (:reasoning-effort defaults))
+        :text-verbosity (:text-verbosity defaults)
         :temperature (provider-temperature type)
         :max-tokens  (or (env-long "HARNESS_MAX_TOKENS") (:max-tokens defaults) 16384)
         :timeout-ms  (or (env-long "HARNESS_TIMEOUT_MS") 300000)

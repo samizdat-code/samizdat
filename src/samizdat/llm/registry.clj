@@ -24,12 +24,14 @@
   (:require [clojure.string :as str]
             [samizdat.llm.adapter :as adapter]
             [samizdat.llm.adapter.ollama :as ollama]
-            [samizdat.llm.adapter.openai :as openai]))
+            [samizdat.llm.adapter.openai :as openai]
+            [samizdat.llm.adapter.responses :as responses]))
 
 (def adapters
   {:deepseek openai/deepseek
    :glm openai/glm
    :openai openai/openai
+   :openai-responses responses/openai-responses
    :local openai/local
    :ollama ollama/ollama})
 

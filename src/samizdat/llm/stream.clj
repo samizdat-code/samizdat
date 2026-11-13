@@ -115,6 +115,13 @@
                  (not-empty (str text)) (assoc :text text)
                  (not-empty (str reasoning)) (assoc :reasoning reasoning)))))
 
+(def chat-codec
+  "How a chat-completions stream folds: the functions above, and no JSON
+  chunk that ends it, since `data: [DONE]` does. `post` takes another codec
+  under `:codec` for a wire whose events differ (the Responses API's typed
+  events, which end on a terminal event instead of [DONE])."
+  {:accumulate accumulate :completion completion :delta delta :end? (constantly false)})
+
 ;; --- the socket --------------------------------------------------------------
 
 (defn- open
@@ -159,9 +166,13 @@
 
   `:socket-timeout` bounds each read; `:max-response-ms` the whole response,
   as jolt.http.platform's cap does for an unstreamed call. `on-delta`
-  throwing does not fail the call: a watcher's trouble is not the model's."
-  [url {:keys [headers body socket-timeout conn-timeout max-response-ms idle-ms first-content-ms]} on-delta]
-  (let [t (sse/parse-url url)
+  throwing does not fail the call: a watcher's trouble is not the model's.
+
+  `:codec` is how the chunks fold ({:accumulate :completion :delta :end?}),
+  `chat-codec` when absent."
+  [url {:keys [headers body socket-timeout conn-timeout max-response-ms idle-ms first-content-ms codec]} on-delta]
+  (let [{:keys [accumulate completion delta end?]} (or codec chat-codec)
+        t (sse/parse-url url)
         started (System/currentTimeMillis)
         deadline (when (and max-response-ms (pos? max-response-ms)) (+ started max-response-ms))
         conn (open t socket-timeout conn-timeout)
@@ -218,7 +229,7 @@
                                                    (catch Throwable _ nil))]
                                         (if (map? c)
                                           (do (some-> (delta c) hand-on)
-                                              [(accumulate acc c) done?])
+                                              [(accumulate acc c) (or done? (boolean (end? c)))])
                                           [acc done?]))))
                                   [acc false] events)
               _ (when (and acc (not= acc @latest))
