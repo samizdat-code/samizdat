@@ -1875,3 +1875,24 @@
       (let [r2 (done! (:branch r) 12)]
         (is (str/includes? (str (:result r2)) "has not landed") "held while it is out")
         (is (= 1 (count (journal/notes conn rid :ship-review-requested))) "asked for once")))))
+
+(defn- oversight-fn [sym]
+  (cells/load-cells!)
+  @(cells/cell-var 'cells.oversight sym))
+
+(deftest a-check-in-gets-a-short-pass
+  ;; Phase 2 round 4: a pass the clock alone woke spent 19 of its 20 turns
+  ;; re-reading a run that was fine. A check-in is a glance; a pass something
+  ;; went wrong for keeps the whole allowance.
+  (let [checkin-only? (oversight-fn 'checkin-only?)
+        allowance (oversight-fn 'pass-allowance)
+        floors {:unmet-floor 2 :idle-floor 25}]
+    (is (checkin-only? {:checkin? true :idle-turns 0} floors))
+    (is (not (checkin-only? {:checkin? true :idle-turns 30} floors))
+        "the clock and something else: a real look")
+    (is (not (checkin-only? {:idle-turns 30} floors)))
+    (is (not (checkin-only? {} floors)) "no look at all is not a check-in")
+    (is (= 20 (allowance {:pass-max-turns 20 :checkin-max-turns 6} false)))
+    (is (= 6 (allowance {:pass-max-turns 20 :checkin-max-turns 6} true)))
+    (is (= 20 (allowance {:pass-max-turns 20} true)) "no check-in budget: the pass budget")
+    (is (nil? (allowance {} false)))))

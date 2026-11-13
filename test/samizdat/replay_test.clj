@@ -292,3 +292,23 @@
         (is (= (get-in (f {:id "T0"}) [:response :content])
                (nth (get-in case2 [:replies "T0"]) 2))
             "T0 advanced by three, independently")))))
+
+(deftest a-replayed-tape-renders-with-the-window-the-live-call-used
+  ;; karamazov-z5sj: the live call renders with the window, which keeps history
+  ;; verbatim up to a share of it; the replay rendered without, so past
+  ;; 240,000 characters its digest differed from request_hash and replay
+  ;; reported a divergence that never happened.
+  (testing "with-window takes the request window over the context window"
+    (is (= 9 (:window (infer/with-window {:llm-config {:request-window 9 :context-window 5}} {:id "T0"}))))
+    (is (= 5 (:window (infer/with-window {:llm-config {:context-window 5}} {:id "T0"}))))
+    (is (= {:id "T0"} (infer/with-window {:llm-config {}} {:id "T0"})) "no window, no key"))
+  (testing "an injected complete is handed the tape with the window"
+    (let [c (db/open! ":memory:")
+          rid (runs/start-run! c {:problem "p"})
+          seen (atom nil)]
+      (aloop/call-model {:complete (fn [t] (reset! seen t)
+                                     {:ok true :response {:content "x" :finish-reason "stop"
+                                                          :usage {:total-tokens 0}}})
+                         :llm-config {:context-window 128000} :conn c :run-id rid}
+                        {:id "T0" :messages [] :problem "p"})
+      (is (= 128000 (:window @seen))))))

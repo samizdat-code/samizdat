@@ -23,6 +23,7 @@
 ;;     would have to say so, and the manifest would refuse it.
 (ns cells.repair
   (:require [mycelium.cell :as cell]
+            [samizdat.agent.gates :as gates]
             [samizdat.llm.fence :as fence]))
 
 (cell/defcell :repair/control-chars
@@ -35,6 +36,20 @@
    :input  [:map [:body :string]]
    :output [:map [:body :string]]}
   (fn [_ data] (update data :body fence/repair-control-chars)))
+
+(cell/defcell :repair/literal-escapes
+  {:doc "Keep a backslash the model meant literally: grep's \\| or a regex's
+        \\d written straight into a JSON string is doubled, for the
+        characters gates.edn :literal-escapes lists. Others stay a parse
+        error that names the escape. After control-chars, so string
+        boundaries are already intact."
+   :pure true
+   :requires []
+   :input  [:map [:body :string]]
+   :output [:map [:body :string]]}
+  (fn [_ data]
+    (update data :body fence/escape-literal-backslashes
+            (or (gates/threshold :literal-escapes) ""))))
 
 (cell/defcell :repair/trailing-commas
   {:doc "Drop commas that sit directly before a } or ], outside strings —

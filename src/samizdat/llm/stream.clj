@@ -146,6 +146,10 @@
         "UTF-8")
       b))))
 
+(def ^:private min-poll-ms
+  "The watchdog's shortest wake-up, so a tiny bound cannot spin it."
+  50)
+
 (defn post
   "POST `body` to `url` asking for a stream, calling `on-delta` with each
   delta (see `delta`) as it arrives. Returns {:status :headers :body} like
@@ -156,7 +160,7 @@
   `:socket-timeout` bounds each read; `:max-response-ms` the whole response,
   as jolt.http.platform's cap does for an unstreamed call. `on-delta`
   throwing does not fail the call: a watcher's trouble is not the model's."
-  [url {:keys [headers body socket-timeout conn-timeout max-response-ms idle-ms]} on-delta]
+  [url {:keys [headers body socket-timeout conn-timeout max-response-ms idle-ms first-content-ms]} on-delta]
   (let [t (sse/parse-url url)
         started (System/currentTimeMillis)
         deadline (when (and max-response-ms (pos? max-response-ms)) (+ started max-response-ms))
@@ -168,19 +172,34 @@
         ;; connection when a STARTED stream has sent nothing for `idle-ms`, or
         ;; the deadline passes; the pending read then fails and the caller's
         ;; retry decides (tb21-paced configure-git-webserver lost ten minutes).
+        ;; CONTENT, not bytes: an SSE keep-alive comment resets the socket read
+        ;; and used to reset this clock too, so a provider that sent only
+        ;; keep-alives held a turn for as long as it liked (karamazov-uqmg:
+        ;; music-harmony lost 14 minutes on one call). And before the first
+        ;; content, `first-content-ms` bounds a stream that never starts.
         last-at (atom started)
+        first-at (atom nil)
+        closed-why (atom nil)
         done (atom false)
         ;; It looks a few times per bound, whichever bound is tighter.
-        poll-ms (some-> (if (and idle-ms (pos? idle-ms)) idle-ms max-response-ms) (quot 4))
+        poll-ms (some->> [idle-ms first-content-ms max-response-ms]
+                         (filter #(and % (pos? %))) seq (apply min) (#(quot % 4)) (max min-poll-ms))
         _ (when (and poll-ms (pos? poll-ms))
             (future
               (loop []
                 (Thread/sleep (long poll-ms))
                 (when-not @done
-                  (let [now (System/currentTimeMillis)]
-                    (if (or (and deadline (> now deadline))
-                            (and idle-ms (pos? idle-ms) @latest (> (- now @last-at) idle-ms)))
-                      (try ((:close! conn)) (catch Throwable _ nil))
+                  (let [now (System/currentTimeMillis)
+                        why (cond
+                              (and deadline (> now deadline)) "past the response deadline"
+                              (and idle-ms (pos? idle-ms) @latest (> (- now @last-at) idle-ms))
+                              (str "no content for " idle-ms " ms")
+                              (and first-content-ms (pos? first-content-ms) (nil? @latest)
+                                   (> (- now started) first-content-ms))
+                              (str "no content within " first-content-ms " ms of the request"))]
+                    (if why
+                      (do (reset! closed-why why)
+                          (try ((:close! conn)) (catch Throwable _ nil)))
                       (recur)))))))]
     (try
       ((:send! conn) (request-bytes t headers (str body)))
@@ -191,7 +210,6 @@
                                            max-response-ms "ms"))))
         (reset! latest acc)
         (let [got ((:recv! conn))
-              _ (reset! last-at (System/currentTimeMillis))
               {:keys [state events]} (if got (sse/feed st got) {:state st :events []})
               [acc done?] (reduce (fn [[acc done?] {:keys [data]}]
                                     (if (= "[DONE]" (str/trim (str data)))
@@ -202,7 +220,10 @@
                                           (do (some-> (delta c) hand-on)
                                               [(accumulate acc c) done?])
                                           [acc done?]))))
-                                  [acc false] events)]
+                                  [acc false] events)
+              _ (when (and acc (not= acc @latest))
+                  (reset! last-at (System/currentTimeMillis))
+                  (when-not @first-at (reset! first-at (System/currentTimeMillis))))]
           (reset! latest acc)
           (cond
             (and (nil? got) (nil? (:status state)))
@@ -211,21 +232,31 @@
 
             (and (or (nil? got) (:done? state)) (not done?)
                  (not (:raw? state)) (not (:error acc)))
-            (throw (ex-info "provider stream ended before [DONE]" {}))
+            (throw (ex-info (str "provider stream ended before [DONE]"
+                                 (when-let [why @closed-why] (str ": " why)))
+                            {}))
 
             (or (nil? got) done? (:done? state))
             {:status (:status state)
              :headers (:headers state)
+             ;; How long the provider took to send its first content.
+             :first-content-ms (some-> @first-at (- started))
              :body (if (:raw? state)
                      (sse/body-text state)
                      (json/write-str (completion acc)))}
 
             :else (recur state acc))))
       (catch Throwable e
-        (if-let [acc @latest]
-          (throw (ex-info "provider stream interrupted"
-                          {:partial-body (json/write-str (completion acc))} e))
-          (throw e)))
+        (cond
+          @latest
+          (throw (ex-info (str "provider stream interrupted"
+                               (when-let [why @closed-why] (str ": " why)))
+                          {:partial-body (json/write-str (completion @latest))} e))
+          ;; The watchdog closed it before any content: say why, in the
+          ;; words the client classifies as a transient stream failure.
+          @closed-why
+          (throw (ex-info (str "provider stream ended before [DONE]: " @closed-why) {} e))
+          :else (throw e)))
       (finally (reset! done true)
                ;; The watchdog may have closed it already.
                (try ((:close! conn)) (catch Throwable _ nil))))))

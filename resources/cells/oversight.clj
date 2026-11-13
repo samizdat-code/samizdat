@@ -171,6 +171,19 @@
                sent-back-green?
                (seq offers))))
 
+(defn checkin-only?
+  "Whether the only reason to look is the check-in clock: the signals say
+  look, and say nothing once the clock is taken away."
+  [signals floors]
+  (boolean (and (worth-a-look? signals floors)
+                (not (worth-a-look? (assoc signals :checkin? false) floors)))))
+
+(defn pass-allowance
+  "Turns one pass may spend: :checkin-max-turns for a pass the clock alone
+  woke, when set, else :pass-max-turns."
+  [{:keys [pass-max-turns checkin-max-turns]} checkin?]
+  (if (and checkin? checkin-max-turns) checkin-max-turns pass-max-turns))
+
 (defn idle-by-branch
   "Turns since its own last write, for each branch whose role can write.
 
@@ -346,6 +359,7 @@
                       [:oversight/directives :any]
                       [:oversight/failing :any]
                       [:oversight/reviews :any]
+                      [:oversight/checkin-only? {:optional true} :boolean]
                       [:oversight/worth-a-look? :boolean]]
              :quiet  [:map [:oversight/worth-a-look? :boolean]]}]}
   (fn [{:keys [conn run-id]} data]
@@ -478,7 +492,25 @@
                       ;; Each directive's status/outcome, so the next pass is
                       ;; told only what changed.
                       :directives (into {} (map (juxt (comp str :id) :state)) directives)
-                      :round (count (journal/notes conn run-id :route))}]
+                      :round (count (journal/notes conn run-id :route))}
+             ;; What is NEW since the last spent pass, judged against the floors.
+             news (since-last-look
+                   (assoc signals
+                          :errors errors :refused refusals
+                          :at-cap? (at-cap? round)
+                          :nothing-shipped? (nothing-shipped? results)
+                          :sent-back-green? (sent-back-green? round)
+                          :workflow-signals workflow-signals
+                          :silent? (some? (:oversight/silent-for-ms data))
+                          :offers offers)
+                   (:signals (journal/last-note conn run-id :oversight))
+                   {:idle-floor idle-floor
+                    :checkin-minutes (:checkin-minutes limits)
+                    :plateau-runs (:plateau-runs tp)})
+             floors {:unmet-floor (gates/threshold :oversight-unmet-floor)
+                     :idle-floor idle-floor
+                     :done-refused-floor (:done-refused-floor (gates/threshold :oversight-limits))
+                     :plateau-runs (:plateau-runs tp)}]
          (assoc data
                 :oversight/turns watched
                 ;; Not its own: the supervisor's manifest journals too.
@@ -504,24 +536,8 @@
                 :oversight/failing failing
                 :oversight/reviews reviews
                 :oversight/plateau plateau
-                :oversight/worth-a-look?
-                (worth-a-look? (since-last-look
-                                (assoc signals
-                                       :errors errors :refused refusals
-                                       :at-cap? (at-cap? round)
-                                       :nothing-shipped? (nothing-shipped? results)
-                                       :sent-back-green? (sent-back-green? round)
-                                       :workflow-signals workflow-signals
-                                       :silent? (some? (:oversight/silent-for-ms data))
-                                       :offers offers)
-                                (:signals (journal/last-note conn run-id :oversight))
-                                {:idle-floor idle-floor
-                                 :checkin-minutes (:checkin-minutes limits)
-                                 :plateau-runs (:plateau-runs tp)})
-                               {:unmet-floor (gates/threshold :oversight-unmet-floor)
-                                :idle-floor idle-floor
-                                :done-refused-floor (:done-refused-floor (gates/threshold :oversight-limits))
-                                :plateau-runs (:plateau-runs tp)}))))
+                :oversight/checkin-only? (checkin-only? news floors)
+                :oversight/worth-a-look? (worth-a-look? news floors))))
      (assoc data :oversight/worth-a-look? false))))
 
 ;; --- reason -----------------------------------------------------------------
@@ -1111,7 +1127,9 @@
                       ;; A pass keeps an allowance of its own, on top of the turns
                       ;; this branch has already spent.
                       (:pass-max-turns (gates/threshold :oversight))
-                      (assoc :max-turns (+ done (:pass-max-turns (gates/threshold :oversight))))
+                      ;; A check-in is a glance: the clock alone woke it.
+                      (assoc :max-turns (+ done (pass-allowance (gates/threshold :oversight)
+                                                                (:oversight/checkin-only? data))))
                       (and (pos? done) (:max-turns rc)
                            (nil? (:pass-max-turns (gates/threshold :oversight))))
                       (update :max-turns + done)))

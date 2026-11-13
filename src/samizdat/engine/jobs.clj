@@ -65,11 +65,43 @@
                               lines)
                      :total (inc total)}))))
 
+(defn- open-log
+  "A stream's capture: the file its bytes are written to, up to `retain`
+  bytes, and the counts the shell-log record keeps. nil without a path."
+  [path retain]
+  (when path
+    (io/make-parents (io/file (str path)))
+    {:out (java.io.FileOutputStream. (str path)) :retain (or retain Long/MAX_VALUE)
+     :observed (atom 0) :retained (atom 0) :error (atom nil)}))
+
+(defn- log!
+  "Write bytes `[start, start+n)` of `buffer` to `log`, as far as it retains."
+  [log buffer start n]
+  (when log
+    (let [{:keys [out retain observed retained error]} log
+          room (max 0 (- retain @retained))
+          k (min n room)]
+      (swap! observed + n)
+      (when (and (pos? k) (nil? @error))
+        (try (.write ^java.io.OutputStream out buffer start k)
+             (swap! retained + k)
+             (catch Throwable e (reset! error (or (ex-message e) (str e)))))))))
+
+(defn- close-log
+  "Close `log` and say what it holds, as proc's :capture does for a command."
+  [log]
+  (when log
+    (try (.close ^java.io.OutputStream (:out log)) (catch Throwable _ nil))
+    (cond-> {:observed-bytes @(:observed log) :retained-bytes @(:retained log)
+             :complete? (and (nil? @(:error log)) (= @(:observed log) @(:retained log)))}
+      @(:error log) (assoc :error @(:error log)))))
+
 (defn- pump!
   "Read `in` on a daemon thread, splitting on newline into `output`. A line
   longer than `max-chars` bytes is cut there, and what is left at end of
-  stream is the last line. Returns the thread."
-  [in output cap max-chars stream]
+  stream is the last line. Every byte also goes to `log` when there is one.
+  Returns the thread."
+  [in output cap max-chars stream log]
   (daemon
    (fn []
      (let [buffer (byte-array 8192)
@@ -82,6 +114,7 @@
          (loop []
            (let [n (.read ^java.io.InputStream in buffer)]
              (when-not (neg? n)
+               (log! log buffer 0 n)
                (loop [i 0 start 0]
                  (cond
                    (= i n) (when (< start n) (.write pending buffer start (- n start)))
@@ -100,16 +133,19 @@
            (when (pos? (.size pending)) (flush!))))))))
 
 (defn- spawn
-  "Start `argv` in `dir` with exactly `env`, its stdin closed."
+  "Start `argv` in `dir` with exactly `env`, its stdin closed, as the leader
+  of its own process group where it can be, so a kill reaches what it
+  detached. [process group?]."
   [argv env dir]
-  (let [builder (ProcessBuilder. ^java.util.List (mapv str argv))]
+  (let [[argv group?] (proc/in-own-group true argv env)
+        builder (ProcessBuilder. ^java.util.List (mapv str argv))]
     (when dir (.directory builder (io/file (str dir))))
     (let [environment (.environment builder)]
       (.clear environment)
       (doseq [[k v] env] (.put environment (str k) (str v))))
     (let [p (.start builder)]
       (try (.close (.getOutputStream p)) (catch Throwable _ nil))
-      p)))
+      [p group?])))
 
 (defn- ended
   "`reg` with job `id` ended as `status` with `exit` — unless it was killed,
@@ -121,15 +157,19 @@
 
 (defn- monitor!
   "Wait for `p` on a daemon thread; once its output is drained, record how it
-  ended."
-  [id ^java.lang.Process p pumps]
+  ended, then close its logs and hand `on-end` how it went."
+  [id ^java.lang.Process p pumps logs on-end]
   (daemon
    (fn []
      (let [exit (try (.waitFor p) (.exitValue p) (catch Throwable _ nil))]
        ;; Drain what it wrote before saying it ended, so a reader that sees
        ;; the end also sees the last lines.
        (doseq [^Thread t pumps] (try (.join t 1000) (catch Throwable _ nil)))
-       (swap! registry ended id (if (= 0 exit) :completed :failed) exit)))))
+       (let [reg (swap! registry ended id (if (= 0 exit) :completed :failed) exit)
+             capture {:stdout (close-log (:stdout logs)) :stderr (close-log (:stderr logs))}]
+         (when on-end
+           (try (on-end {:status (get-in reg [:jobs id :status]) :exit exit :capture capture})
+                (catch Throwable _ nil))))))))
 
 (defn- running? [job] (= :running (:status job)))
 
@@ -138,7 +178,7 @@
 
 (defn- public [job]
   (select-keys job [:id :run-id :branch-id :command :status :exit :pid
-                    :started-ms :ended-ms]))
+                    :started-ms :ended-ms :capture-id]))
 
 (defn- id-number [id] (or (some-> (re-find #"\d+$" (str id)) parse-long) 0))
 
@@ -162,8 +202,12 @@
   {:job id}, {:refused :cap :max n} when the run already has `max-jobs`
   running (nothing is started), or {:error message} when the spawn failed.
   `known` rides along for the reader's redaction; `buffer-lines` and
-  `max-line-chars` bound what is kept."
-  [{:keys [run-id branch-id command argv env dir known max-jobs buffer-lines max-line-chars]}]
+  `max-line-chars` bound what is kept. `capture` {:stdout path :stderr path
+  :retain-bytes n} also writes each stream to a file, and `on-end` is called
+  with {:status :exit :capture} once the job has ended and its files are
+  closed; `capture-id` rides along for the reader."
+  [{:keys [run-id branch-id command argv env dir known max-jobs buffer-lines max-line-chars
+           capture capture-id on-end]}]
   (let [slot (volatile! nil)]
     ;; Reserve the id under the cap before spawning, so two starts at once
     ;; cannot both take the last place.
@@ -177,23 +221,27 @@
                               (assoc-in [:jobs id]
                                         {:id id :run-id run-id :branch-id branch-id
                                          :command command :status :running
+                                         :capture-id capture-id
                                          :started-ms (now) :known known
                                          :output (atom {:lines [] :total 0})
                                          :cursor (atom 0)
                                          :buffer-lines buffer-lines}))))))
     (if-let [id @slot]
       (try
-        (let [p (spawn argv env dir)
+        (let [[p group?] (spawn argv env dir)
               output (get-in @registry [:jobs id :output])
-              pumps [(pump! (.getInputStream p) output buffer-lines max-line-chars :stdout)
-                     (pump! (.getErrorStream p) output buffer-lines max-line-chars :stderr)]]
-          (swap! registry update-in [:jobs id] assoc :proc p
+              logs {:stdout (open-log (:stdout capture) (:retain-bytes capture))
+                    :stderr (open-log (:stderr capture) (:retain-bytes capture))}
+              pumps [(pump! (.getInputStream p) output buffer-lines max-line-chars :stdout (:stdout logs))
+                     (pump! (.getErrorStream p) output buffer-lines max-line-chars :stderr (:stderr logs))]]
+          (swap! registry update-in [:jobs id] assoc :proc p :group? group?
                  :pid (try (.pid p) (catch Throwable _ nil)))
-          (monitor! id p pumps)
+          (monitor! id p pumps logs on-end)
           ;; Killed (or its run forgotten) between the reservation and the
           ;; spawn: the kill found no process to signal, so signal it here.
           (let [j (get-in @registry [:jobs id])]
             (when (or (nil? j) (= :killed (:status j)))
+              (when group? (proc/kill-group! (:pid j)))
               (proc/reap! {:proc p})))
           {:job id})
         (catch Throwable e
@@ -290,15 +338,20 @@
     (cond
       (or (nil? j) (not= run-id (:run-id j))) nil
       (not (running? j)) :not-running
-      :else (do (when-let [p (or (:proc j) (get-in @registry [:jobs id :proc]))]
-                  (proc/reap! {:proc p}))
-                :killed))))
+      :else (let [j (merge j (get-in @registry [:jobs id]))]
+              ;; The group first: what it detached is no longer in its tree.
+              (when (:group? j) (proc/kill-group! (:pid j)))
+              (when-let [p (:proc j)]
+                (proc/reap! {:proc p}))
+              :killed))))
 
 (defn forget-run!
   "Kill every running job of run `run-id` and drop them all."
   [run-id]
-  (doseq [{:keys [id] :as j} (of-run @registry run-id)]
-    (when (running? j)
-      (try (kill! run-id id) (catch Throwable _ nil))))
+  (doseq [{:keys [id group? pid] :as j} (of-run @registry run-id)]
+    (if (running? j)
+      (try (kill! run-id id) (catch Throwable _ nil))
+      ;; Ended, but what it left behind in its group does not outlive the run.
+      (when group? (try (proc/kill-group! pid) (catch Throwable _ nil)))))
   (swap! registry update :jobs
          (fn [m] (into {} (remove (fn [[_ j]] (= run-id (:run-id j)))) m))))

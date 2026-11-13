@@ -116,7 +116,7 @@
   [conn run-id {:keys [branch-id turn tool-name args result category
                        parse-error auto-repaired assistant-text reasoning-text
                        usage policy-refusal? prefix forced-tool forced-via
-                       elapsed-ms model-change task-id full-result]}]
+                       elapsed-ms first-content-ms attempts model-change task-id full-result]}]
   (db/with-writer
     (db/execute! conn
                    ["INSERT INTO turns (run_id, branch_id, turn, tool_name, args, result,
@@ -127,8 +127,8 @@
                                         policy_refusal,
                                         prefix_stable_chars, prefix_chars, prefix_change,
                                         forced_tool, forced_via, elapsed_ms, request_hash,
-                                        task_id, full_result)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                                        task_id, full_result, first_content_ms, call_attempts)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     run-id branch-id turn (str tool-name) (js (or args {}))
                     (str result) (some-> category name) parse-error
                     (if auto-repaired 1 0)
@@ -165,7 +165,11 @@
                     (some-> task-id str not-empty)
                     ;; The result before its clip (migration v45): nil when
                     ;; nothing was clipped.
-                    (some-> full-result str not-empty)]))
+                    (some-> full-result str not-empty)
+                    ;; How the call went (migration v61): nil when there
+                    ;; was no call, or it was not streamed.
+                    (some-> first-content-ms long)
+                    (some-> attempts long)]))
   ;; WHAT THE BRANCH IS RUNNING ON, on the turn it learned it
   ;; (karamazov-a28w). The loop marks the branch when the provider-reported
   ;; model is first seen or changes, so this is once per agent rather than a
@@ -463,6 +467,7 @@
              ["SELECT id, run_id, branch_id, turn, tool_name, args, result,
                       category, parse_error, auto_repaired, created_at,
                       prompt_tokens, cache_hit_tokens, completion_tokens, elapsed_ms,
+                      first_content_ms, call_attempts,
                       prefix_change, forced_tool, forced_via
                  FROM turns
                 WHERE run_id = ? AND branch_id = ? AND id > ?

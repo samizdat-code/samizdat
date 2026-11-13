@@ -1125,13 +1125,35 @@
   process is the job's own rather than a child of a call that returns.
 
   A refusal comes back exactly as `run-shell` returns it, never launched."
-  [{:keys [root] :as ctx} launch]
-  (let [{:keys [effect command env settings known outside-all] :as gate} (shell-gate ctx)]
+  [{:keys [root conn] :as ctx} launch]
+  (let [{:keys [effect command env settings known outside-all decided] :as gate} (shell-gate ctx)]
     (if (not= :allow effect)
       (:result gate)
       (let [spawn (confined-spawn root command env settings)
-            r (launch (assoc (select-keys spawn [:argv :env :dir])
-                             :command command :known known))]
+            ;; Captured like any command's output (shell-log:<id>), finished
+            ;; when the job ends: the launcher's buffer keeps only the tail.
+            allocation (allocate-capture (assoc ctx :execution-recovery
+                                                (:execution-recovery decided)))
+            finish (when allocation
+                     (fn [{:keys [status capture]}]
+                       (let [status (case status
+                                      :killed :cancelled
+                                      (if (some :error (vals capture)) :capture-error :complete))]
+                         (redact-capture-file (:stdout-path allocation) (:stdout-read-path allocation) known)
+                         (redact-capture-file (:stderr-path allocation) (:stderr-read-path allocation) known)
+                         (captures/finish! conn (:id allocation) status capture
+                                           (select-keys allocation [:stdout-read-path :stderr-read-path]))
+                         ((requiring-resolve 'samizdat.store.executions/complete!)
+                          conn (:id allocation)
+                          {:status status
+                           :artifacts (mapv #(str "shell-log:" (:id allocation) "?stream=" %)
+                                            ["stdout" "stderr"])}))))
+            r (launch (cond-> (assoc (select-keys spawn [:argv :env :dir])
+                                     :command command :known known)
+                        allocation (assoc :capture (assoc (select-keys (:options allocation) [:stdout :stderr])
+                                                          :retain-bytes (get-in allocation [:options :retain-bytes]))
+                                          :capture-id (:id allocation)
+                                          :on-end finish)))]
         (observe-reads! ctx command outside-all)
         (assoc r :policy {:effect :allow})))))
 

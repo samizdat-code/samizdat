@@ -208,3 +208,59 @@
         (is (str/includes? (:result r) "4")))
       (let [again (jobs-tool c run {"action" "list"})]
         (is (not (str/includes? (:result again) "finished-now")) "told once")))))
+
+(defn- alive? [pid]
+  (let [h (java.lang.ProcessHandle/of pid)]
+    (and (.isPresent h) (.isAlive (.get h)))))
+
+(defn- orphan-pid
+  "The pid a job's detached grandchild wrote to `f`, once it is there."
+  [f]
+  (when (settle #(pos? (count (str/trim (try (slurp f) (catch Throwable _ ""))))) 3000)
+    (parse-long (str/trim (slurp f)))))
+
+(deftest a-job-s-orphans-die-with-it
+  ;; Round 3 of phase 2: a shell command runs in its own process group and is
+  ;; killed by group, so an orphan it detached dies with it (html-js-filter's
+  ;; 117 filter.py processes). A job was killed by tree only, and an orphan
+  ;; reparented to init is no longer in the tree.
+  (let [run (str "jobs-" (random-uuid))
+        f (str (jolt.fs/create-temp-dir) "/orphan.pid")]
+    (try
+      (testing "killing the job"
+        (let [{:keys [job]} (start run ["bash" "-c" (str "(sleep 30 & echo $! > " f ") ; sleep 30")])
+              pid (orphan-pid f)]
+          (is (pos? pid))
+          (is (alive? pid))
+          (is (= :killed (jobs/kill! run job)))
+          (is (settle #(not (alive? pid)) 3000) "the orphan is gone")))
+      (testing "a job that ended on its own still has its orphans killed at run end"
+        (spit f "")
+        (let [{:keys [job]} (start run ["bash" "-c" (str "(sleep 30 & echo $! > " f ") ; exit 0")])
+              pid (orphan-pid f)]
+          (is (settle #(= :completed (:status (jobs/job run job))) 3000))
+          (is (alive? pid) "a job may leave a server behind while the run goes on")
+          (jobs/forget-run! run)
+          (is (settle #(not (alive? pid)) 3000) "but not past the run")))
+      (finally (jobs/forget-run! run)))))
+
+(deftest a-job-s-output-is-kept-as-a-shell-log
+  ;; Background jobs had no shell-log capture: their output lived only in the
+  ;; bounded buffer, so lines that left it were gone. Now the job's streams
+  ;; are captured like any command's, readable through the resource tool once
+  ;; it ends, and the jobs tool says where.
+  (with-run [c run root]
+    (spit (str root "/many.sh") "for i in $(seq 1 120); do echo line-$i; done\necho oops >&2\nexit 0\n")
+    (grants/grant! c run "bash *")
+    (let [r (shell c run root "bash many.sh")
+          [{:keys [id]}] (jobs/jobs run)]
+      (is id (:result r))
+      (is (settle #(not= :running (:status (jobs/job run id))) 3000))
+      (let [capture (settle #(= "complete" (:status (first (db/fetch c ["SELECT status FROM shell_captures"])))) 3000)
+            row (first (db/fetch c ["SELECT * FROM shell_captures"]))]
+        (is capture "the capture is finished when the job ends")
+        (is (str/includes? (slurp (:stdout_read_path row)) "line-1\n"))
+        (is (str/includes? (slurp (:stdout_read_path row)) "line-120"))
+        (is (str/includes? (slurp (:stderr_read_path row)) "oops"))
+        (let [o (jobs-tool c run {"action" "output" "id" id})]
+          (is (str/includes? (:result o) (str "shell-log:" (:id row))) (:result o)))))))

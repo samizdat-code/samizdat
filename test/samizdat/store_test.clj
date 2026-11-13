@@ -172,6 +172,25 @@
                                      :result "boom" :category :neutral})
         (is (nil? (:elapsed_ms (first (journal/turns c rid)))))))))
 
+(deftest a-turn-records-how-the-call-went
+  ;; karamazov-uqmg: music-harmony lost 14 minutes to one call that sent
+  ;; keep-alives and no content, and the row read as a slow turn. The row
+  ;; keeps how long the first content took and how many attempts the call
+  ;; needed, so a stall is told apart from slow decode by a query.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "p"})]
+      (journal/record-turn! c rid {:branch-id "B1" :turn 1 :tool-name "verify"
+                                   :result "ok" :category :success
+                                   :elapsed-ms 90000 :first-content-ms 2500 :attempts 3})
+      (let [t (first (journal/turns c rid))]
+        (is (= 2500 (:first_content_ms t)))
+        (is (= 3 (:call_attempts t))))
+      (journal/record-turn! c rid {:branch-id "B1" :turn 2 :tool-name "__provider_error__"
+                                   :result "boom" :category :neutral})
+      (let [t (second (journal/turns c rid))]
+        (is (nil? (:first_content_ms t)) "absent when nothing was timed")
+        (is (nil? (:call_attempts t)))))))
+
 (deftest a-turn-records-the-task-it-belongs-to
   ;; karamazov-d5wo.5: history labelled by task, so a question about one task
   ;; is a query on its turns rather than a scan of the run.

@@ -372,11 +372,20 @@
                                             :sent-reasoning (:sent-reasoning before))))))
      :flush! (fn [] (let [[before _] (swap-vals! st mark 0)] (publish! before)))}))
 
+(defn with-window
+  "`tape` carrying the window its render is sized against: what the provider
+  will take, else the model's context window. The live call and anything
+  standing in for it (a replay) render the same tape only if both see it
+  (karamazov-z5sj)."
+  [ctx tape]
+  (if-let [w (or (get-in ctx [:llm-config :request-window])
+                 (get-in ctx [:llm-config :context-window]))]
+    (assoc tape :window w)
+    tape))
+
 (defn- prepare*
   [ctx {:keys [id] :as tape} {:keys [attempt rendered fit? dispatch?] :or {attempt 1}}]
-  (let [rendered (or rendered
-                     (render (assoc tape :window (or (get-in ctx [:llm-config :request-window])
-                                                     (get-in ctx [:llm-config :context-window])))))
+  (let [rendered (or rendered (render (with-window ctx tape)))
         {:keys [grammar] forced-prefill :prefill forced-tool :force-tool}
         (force-mechanism ctx tape)
         reasoning-budget (reasoning-budget-for ctx tape)

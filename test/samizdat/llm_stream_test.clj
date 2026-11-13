@@ -22,6 +22,7 @@
   (:require [jolt.time]
             [clojure.core.async :as async]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
             [ring-chez.adapter :as adapter]
             [ring-chez.sse :as rsse]
@@ -177,3 +178,61 @@
             took (- (System/currentTimeMillis) t0)]
         (is (instance? Throwable r) "a stall is a failure, not an answer")
         (is (< took 8000) (str "cut near the idle bound, not the socket timeout: " took "ms"))))))
+
+(defn- keepalive-server
+  "A stream that sends `content` first (or nothing), then only SSE comment
+  keep-alives for 20 s: bytes, but no content."
+  [content]
+  (fn [_]
+    (let [ch (async/chan 64)]
+      (future
+        (when content (rsse/send! ch {:data (json/write-str (chunk {:content content}))}))
+        (dotimes [_ 40] (async/>!! ch ": keep-alive\r\n\r\n") (Thread/sleep 500))
+        (async/close! ch))
+      {:status 200 :headers {"Content-Type" "text/event-stream"} :body ch})))
+
+(deftest keep-alives-are-not-progress
+  ;; karamazov-uqmg: music-harmony lost 14 minutes on one call that sent no
+  ;; tokens; keep-alives reset the socket read and the idle clock, which counted
+  ;; bytes rather than content.
+  (testing "after content, keep-alives alone are a stall"
+    (with-server (keepalive-server "partial")
+      (fn [port]
+        (let [t0 (System/currentTimeMillis)
+              r (try (stream/post (str "http://127.0.0.1:" port "/v1/chat/completions")
+                                  {:headers {} :body "{}" :socket-timeout 30000 :conn-timeout 2000
+                                   :idle-ms 1500}
+                                  (fn [_]))
+                     (catch Throwable e e))
+              took (- (System/currentTimeMillis) t0)]
+          (is (instance? Throwable r))
+          (is (< took 8000) (str "cut near the idle bound: " took "ms"))))))
+  (testing "before content, a first-content bound cuts a stream that never starts"
+    (with-server (keepalive-server nil)
+      (fn [port]
+        (let [t0 (System/currentTimeMillis)
+              r (try (stream/post (str "http://127.0.0.1:" port "/v1/chat/completions")
+                                  {:headers {} :body "{}" :socket-timeout 30000 :conn-timeout 2000
+                                   :idle-ms 1500 :first-content-ms 2000}
+                                  (fn [_]))
+                     (catch Throwable e e))
+              took (- (System/currentTimeMillis) t0)]
+          (is (instance? Throwable r))
+          (is (str/includes? (str (ex-message r)) "no content") (ex-message r))
+          (is (< took 8000) (str "cut near the first-content bound: " took "ms")))))))
+
+(deftest a-reply-says-when-its-first-content-came
+  (with-server (fn [_]
+                 (let [ch (async/chan 64)]
+                   (future
+                     (Thread/sleep 300)
+                     (doseq [c chunks] (rsse/send! ch {:data (json/write-str c)}))
+                     (rsse/send! ch {:data "[DONE]"})
+                     (async/close! ch))
+                   {:status 200 :headers {"Content-Type" "text/event-stream"} :body ch}))
+    (fn [port]
+      (let [r (stream/post (str "http://127.0.0.1:" port "/v1/chat/completions")
+                           {:headers {} :body "{}" :socket-timeout 5000 :conn-timeout 2000}
+                           (fn [_]))]
+        (is (<= 250 (:first-content-ms r) 3000) (pr-str (:first-content-ms r)))))))
+
