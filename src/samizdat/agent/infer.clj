@@ -148,10 +148,11 @@
   "The tape as it goes to the wire, with only a verified stable prefix reused.
   The source tape remains untouched, and the result equals llm.message/compact."
   [{:keys [id messages turns squeeze window]}]
-  (let [budget (squeezed-budget (gates/threshold :context-budget)
-                                squeeze
-                                (gates/threshold :context-squeeze)
-                                window)
+  (let [budget (assoc (squeezed-budget (gates/threshold :context-budget)
+                                       squeeze
+                                       (gates/threshold :context-squeeze)
+                                       window)
+                      :supersede-tools (:supersede-tools (gates/threshold :context-budget)))
         {:keys [entry messages]} (hydration/compact (get @render-cache id)
                                                     messages turns budget)]
     (.put ^java.util.Map @render-cache id entry)

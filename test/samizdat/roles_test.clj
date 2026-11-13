@@ -155,6 +155,12 @@
       (doseq [tool full]
         (is (roles/may-use? :builder tool)
             (str tool " remains authorized even when its documentation is deferred")))))
-  (doseq [role [:supervisor :reviewer :answerer :critic]]
+  (doseq [role [:reviewer :answerer :critic]]
     (is (nil? (:core-tools (roles/spec role)))
-        (str role " stays on static presentation"))))
+        (str role " stays on static presentation")))
+  (testing "the supervisor is shown its steering tools first and keeps the whole surface"
+    (is (contains? (roles/core-tools :supervisor) "intervene"))
+    (is (contains? (roles/surface :supervisor) "tool_search"))
+    (doseq [t (:core-tools (roles/spec :supervisor))]
+      (is (roles/may-use? :supervisor t) (str t " is on the supervisor's surface")))
+    (is (roles/may-use? :supervisor "cell") "tuning tools stay authorized, only deferred")))

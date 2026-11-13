@@ -1266,6 +1266,9 @@
                                     :ran? (:ran? result)
                                     :single-call? (when (= "eval" tool) (single-call-eval? (:args parsed)))
                                     :args (when (= "tool_search" tool) (:args parsed))
+                                    ;; The file a call names, so compaction can tell when a
+                                    ;; later write replaced an earlier one's whole body.
+                                    :path (let [p (:path (:args parsed))] (when (string? p) p))
                                     ;; Kept for failures AND malformed calls,
                                     ;; only so repeating-failure? can see a
                                     ;; loop. The turns table holds the

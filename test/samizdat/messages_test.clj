@@ -149,3 +149,53 @@
         (is (zero? (:reused-prefix
                     (hydration/compact previous msgs (assoc turns 0 {:turn 1 :tool-name "other"})
                                        hydration-opts))))))))
+;; --- a file rewritten later drops its earlier body ----------------------------
+
+(defn- writes-conversation []
+  [{:role "system" :content "sys"} {:role "user" :content "go"}
+   {:role "assistant" :content (str "v1 " (apply str (repeat 500 "a"))) :turn 1}
+   {:role "user" :content "ok" :turn 1}
+   {:role "assistant" :content (str "other " (apply str (repeat 500 "b"))) :turn 2}
+   {:role "user" :content "ok" :turn 2}
+   {:role "assistant" :content (str "v2 " (apply str (repeat 500 "c"))) :turn 3}
+   {:role "user" :content "ok" :turn 3}
+   {:role "assistant" :content (str "refused " (apply str (repeat 500 "d"))) :turn 4}
+   {:role "user" :content "refused" :turn 4}])
+
+(def ^:private writes-turns
+  [{:turn 1 :tool "write_file" :path "src/a.py" :category :success}
+   {:turn 2 :tool "write_file" :path "src/b.py" :category :success}
+   {:turn 3 :tool "write_file" :path "src/a.py" :category :success}
+   {:turn 4 :tool "write_file" :path "src/b.py" :category :failure}])
+
+(def ^:private writes-opts
+  ;; Far under any threshold: only the supersede rule can fire.
+  {:keep-pairs 30 :threshold-chars 1000000 :batch 1 :floor 120
+   :supersede-tools #{"write_file"}})
+
+(deftest a-rewritten-file-s-earlier-write-is-unloaded
+  (let [plan (llm-message/compaction-plan (writes-conversation) writes-turns writes-opts)
+        out (:messages plan)]
+    (is (llm-message/unloaded? (:content (nth out 2))) "v1 of src/a.py, rewritten at turn 3")
+    (is (str/includes? (:content (nth out 2)) "t1 write_file"))
+    (is (str/starts-with? (:content (nth out 6)) "v2 ") "the current version stays whole")
+    (is (str/starts-with? (:content (nth out 4)) "other ")
+        "src/b.py's only successful write stays: the later one was refused")
+    (is (str/starts-with? (:content (nth out 8)) "refused "))
+    (is (contains? (:rewrites plan) 2) "the rewrite is one the prefix cache knows about")
+    (is (= (count (writes-conversation)) (count out)) "shape unchanged")))
+
+(deftest without-the-policy-nothing-is-superseded
+  (let [out (:messages (llm-message/compaction-plan (writes-conversation) writes-turns
+                                                    (dissoc writes-opts :supersede-tools)))]
+    (is (= (writes-conversation) out))))
+
+(deftest a-superseded-render-matches-an-uncached-one
+  (let [opts writes-opts
+        msgs (vec (take 6 (writes-conversation)))
+        turns (vec (take 2 writes-turns))
+        previous (:entry (hydration/compact nil msgs turns opts))
+        msgs' (writes-conversation)
+        next-entry (hydration/compact previous msgs' writes-turns opts)]
+    (is (= (:messages next-entry) (llm-message/compact msgs' writes-turns opts))
+        "a write superseded after the last render is rewritten, not reused stale")))

@@ -274,7 +274,9 @@
                                                   :tool tool
                                                   :category cat
                                                   :args (when (= "tool_search" tool)
-                                                          (parse-json (:args t)))})
+                                                          (parse-json (:args t)))
+                                                  :path (let [p (:path (parse-json (:args t)))]
+                                                          (when (string? p) p))})
                                  (state/record-outcome {:category cat
                                                         :progress? (= :success cat)
                                                         :policy-refusal? (pos? (or (:policy_refusal t) 0))})))))

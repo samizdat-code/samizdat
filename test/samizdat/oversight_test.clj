@@ -1282,9 +1282,9 @@
         b1 (:oversight/branch (pass nil))
         _ (pass b1)
         [first-brief second-brief] @seen]
-    (is (str/includes? first-brief "Decide one of four things"))
+    (is (str/includes? first-brief "Decide one:"))
     (is (str/includes? first-brief "Workflows available"))
-    (is (not (str/includes? second-brief "Decide one of four things"))
+    (is (not (str/includes? second-brief "Decide one:"))
         "the instructions are still in its context")
     (is (not (str/includes? second-brief "Workflows available")))
     (is (str/includes? second-brief "Per branch") "the run's position is always new")

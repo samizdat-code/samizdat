@@ -4350,8 +4350,13 @@
           ;; (karamazov-0wvc.1).
           :compaction-chars    240000
           ;; On a model with a large window, history stays verbatim up to this share of
-          ;; it (tokens times :chars-per-token), never below :compaction-chars.
-          :compaction-window-share 0.3
+          ;; it (tokens times :chars-per-token), never below :compaction-chars. nil:
+          ;; :compaction-chars on every window. At 0.3 on a 1M window the threshold was
+          ;; ~1.26M characters and never reached: ctb builders ran to 165-516K tokens,
+          ;; mostly one-off scratch scripts and replayed reasoning, where folding all
+          ;; but the last :keep-pairs turns leaves 37-49K (one-vig-1, one-react-1,
+          ;; one-html-2, one-mvcc-1, 2026-11-12).
+          :compaction-window-share nil
           ;; How many exchanges the compaction frontier moves by at once
           ;; (karamazov-pdes). Measured on run 5e78b96a: advancing one
           ;; exchange per turn re-prefilled the whole verbatim window on
@@ -4359,6 +4364,11 @@
           ;; four send a byte-identical history and the window floats
           ;; between 10 and 13 exchanges. 1 is the old behaviour.
           :compaction-batch    4
+          ;; Tools whose call carries a whole file. Once a later call of one
+          ;; rewrites the same path successfully, the earlier call is
+          ;; unloaded at once, whatever the threshold: the file no longer
+          ;; holds that body. Empty turns it off.
+          :supersede-tools     #{"write_file"}
           :diff-chars          12000
           :shell-output-chars  8000
           :shared-code-chars   700

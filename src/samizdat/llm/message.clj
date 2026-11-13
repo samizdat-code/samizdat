@@ -223,6 +223,32 @@
                          m)))
         messages))
 
+(defn- superseded
+  "Indices of assistant messages whose turn wrote a whole file (a tool in
+  `tools`) that a LATER turn wrote again successfully. The earlier body is
+  dead weight: the file no longer holds it, and the model reads the current
+  one with read_file. On interleaved-vigenere 98 full rewrites stayed in the
+  history, ~8.6K characters each, and the branch reached 384K tokens with the
+  fold threshold never in reach. Only a success supersedes: a refused write
+  changed nothing on disk."
+  [messages turns-by-number tools]
+  (when (seq tools)
+    (let [write-of (fn [m]
+                     (when (= "assistant" (:role m))
+                       (when-let [t (get turns-by-number (:turn m))]
+                         (when (and (contains? tools (:tool t)) (string? (:path t)))
+                           t))))
+          indexed (keep-indexed (fn [i m] (when (and (>= i frame-size) (not (:compacted? m)))
+                                            (when-let [t (write-of m)] [i t])))
+                                messages)]
+      (loop [[[i t] & more] (reverse indexed) live #{} out #{}]
+        (if (nil? i)
+          out
+          (let [p (:path t)]
+            (recur more
+                   (if (= :success (:category t)) (conj live p) live)
+                   (if (contains? live p) (conj out i) out))))))))
+
 (defn compaction-plan
   "Compact a branch's older turns IN PLACE, so the array's shape never changes.
 
@@ -256,7 +282,7 @@
   the branch's own history is untouched and a resume replays what was really
   sent at the time."
   ([messages turns] (compaction-plan messages turns nil))
-  ([messages turns {:keys [keep-pairs threshold-chars floor batch]}]
+  ([messages turns {:keys [keep-pairs threshold-chars floor batch supersede-tools]}]
    (let [messages (vec messages)
          turns (vec (or turns []))
          keep-pairs (or keep-pairs (default-keep-pairs))
@@ -276,10 +302,15 @@
          active? (and (>= total threshold) (> (count messages) frame-size))
          turns-by-number (into {} (map (juxt :turn identity)) turns)
          opts {:floor (or floor tape/default-floor) :roles compactable-roles}
-         due (if active?
-               (remove #(< % frame-size)
-                       (tape/due-indices messages keep compactable-roles))
-               [])
+         ;; A rewritten file's earlier write goes whatever the threshold: it is
+         ;; never needed again, and each message is still rewritten only once.
+         stale (superseded messages turns-by-number (set supersede-tools))
+         due (sort (distinct
+                    (concat (if active?
+                              (remove #(< % frame-size)
+                                      (tape/due-indices messages keep compactable-roles))
+                              [])
+                            stale)))
          strip-before (if (and active? (>= aged (max 1 (long (or batch 1)))))
                         (let [r (if (and (number? batch) (> batch 1)) (mod aged (long batch)) 0)
                               assistants (keep-indexed (fn [i m] (when (= "assistant" (:role m)) i))
@@ -296,7 +327,7 @@
      {:source messages
       :turns turns
       :options {:keep-pairs keep-pairs :threshold-chars threshold
-                :batch batch :floor (:floor opts)}
+                :batch batch :floor (:floor opts) :supersede-tools (set supersede-tools)}
       :messages rendered
       :rewrites (into (set due) (range frame-size strip-before))})))
 

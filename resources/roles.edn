@@ -90,7 +90,15 @@
   :tools #{"intervene" "read_file" "read_digest" "inspect_clojure" "grep" "lsp" "resource" "inference" "diagnosis" "execution" "skill" "doc" "complete" "manual"
            "introspect" "cells" "cell" "reload_cells" "manifest" "prompt" "policy" "adopt"
            "fetch_turn" "fetch_artifact" "recall" "remember" "forget" "retire" "outcome"
-           "experiment" "verdict" "papercut" "battery" "message" "eval" "shell" "jobs" "websearch" "done" "give_up"}
+           "experiment" "verdict" "papercut" "battery" "message" "eval" "shell" "jobs" "websearch" "done" "give_up"
+           "tool_search"}
+  ;; What a supervisor uses steering a task run (five ctb journals, 176
+  ;; calls: shell, introspect, intervene, fetch_turn, remember, read_file —
+  ;; and no cell, manifest, prompt, experiment, battery or adopt call).
+  ;; Documented up front; the tuning tools stay authorized and are found
+  ;; with tool_search once the harness-tuning skill says to tune.
+  :core-tools #{"intervene" "introspect" "fetch_turn" "fetch_artifact" "shell" "read_file" "grep"
+                "remember" "recall" "outcome" "skill" "done" "give_up" "tool_search"}
   :prompt "roles/supervisor"
   ;; Its own frame, so a run's style cannot replace it with the implementer's
   ;; (karamazov-oi16.4): under :lean the supervisor took system-lean, which
