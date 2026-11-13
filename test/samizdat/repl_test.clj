@@ -22,6 +22,7 @@
   complete a name — the way the plan says development should work."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
+            [samizdat.agent.tools.repl :as repl-tools]
             [samizdat.repl :as repl]))
 
 (deftest close-session-removes-the-namespace
@@ -197,3 +198,27 @@
       (is (= #{"helper" "xs"} (set (map :name defs))))
       (is (= "Doubles." (:doc (first (filter #(= "helper" (:name %)) defs))))))
     (is (nil? (repl/session-defs nil 60 100)))))
+
+(deftest the-shown-value-is-capped-and-the-forms-own-printing-is-not
+  (let [caps {:print {:length 5 :level 2}}]
+    (is (= "(0 1 2 3 4 ...)" (:value (repl/eval-code "(range)" (repl/new-session) 5000 caps))))
+    (is (= "51" (:value (repl/eval-code "(count (pr-str (vec (range 20))))" (repl/new-session) 5000 caps))))
+    (is (= "{:a [1 #]}" (:value (repl/eval-code "{:a [1 [2 [3]]]}" (repl/new-session) 5000 caps)))))
+  (testing "no caps asked for, the value is whole"
+    (is (= "[0 1 2 3 4 5 6]" (:value (repl/eval-code "(vec (range 7))" (repl/new-session) 5000))))))
+
+(deftest each-form-of-a-batch-keeps-its-value-and-output
+  (let [r (repl/eval-code "(def two 2)\n(do (println \"side\") (inc two))\n(* two 10)"
+                          (repl/new-session) 5000)]
+    (is (= 3 (count (:forms r))))
+    (is (= ["3" "20"] (map :value (rest (:forms r)))))
+    (is (= "side\n" (:out (second (:forms r)))))
+    (is (= "(* two 10)" (:text (last (:forms r)))))
+    (is (= "20" (:value r)))))
+
+(deftest a-batch-is-shown-form-by-form
+  (is (= "-- (def two 2)\n=> #'user/two\n-- (do (println \"side\") …\nside\n=> 3"
+         (repl-tools/per-form [{:text "(def two 2)" :value "#'user/two" :out ""}
+                               {:text "(do (println \"side\")\n (inc two))" :value "3" :out "side\n"}]
+                              60)))
+  (is (= "(abcde …" (repl-tools/form-label "(abcdefgh)" 6))))

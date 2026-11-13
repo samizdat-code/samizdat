@@ -41,6 +41,7 @@
             [samizdat.agent.source :as source]
             [samizdat.bridge :as bridge]
             [samizdat.callable :as callable]
+            [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
             [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
@@ -154,7 +155,9 @@
         ran (atom false)
         wrote (atom false)
         r (route/eval-for (assoc ctx :bridge (bridge-handler (assoc ctx :ran ran :wrote wrote)) :restart? restart?
-                                 :wait? (flag :wait) :abort? (flag :abort))
+                                 :wait? (flag :wait) :abort? (flag :abort)
+                                 :print (some-> (gates/threshold :eval-print)
+                                                (select-keys [:length :level])))
                           code session timeout)
         prefix (if-let [why (:restarted r)]
                  (str (str/trim (prompt/render "repl-restarted" {(name why) true})) "\n" prefix)
@@ -185,13 +188,34 @@
      @ran (assoc :ran? true)
      @wrote (assoc :progress? true))))
 
+(defn form-label
+  "A form's first line, cut to `limit` characters, marked when there is more."
+  [text limit]
+  (let [text (str/trim (str text))
+        line (first (str/split-lines text))
+        cut? (and limit (> (count line) limit))]
+    (str (if cut? (subs line 0 limit) line)
+         (when (or cut? (< (count line) (count text))) " …"))))
+
+(defn per-form
+  "Each form of a batch under its first line, with what it printed and its
+  value — the way jolt-nrepl-mcp's eval shows a batch (after clojure-mcp's)."
+  [forms limit]
+  (str/join "\n" (for [{:keys [text out value]} forms]
+                   (str "-- " (form-label text limit) "\n"
+                        (when (seq out) (str (str/trimr out) "\n"))
+                        "=> " value))))
+
 (defn- result-of
   "The tool result for eval result `r`, after `prefix`."
   [{:keys [branch] :as ctx} prefix r]
   (do
     (if (:ok r)
-      (base/ok branch (scrubbed (str prefix "=> " (:value r)
-                                     (when (seq (:out r)) (str "\n" (:out r))))))
+      (base/ok branch (scrubbed (if (next (:forms r))
+                                  (str prefix (per-form (:forms r)
+                                                        (:label-chars (gates/threshold :eval-print))))
+                                  (str prefix "=> " (:value r)
+                                       (when (seq (:out r)) (str "\n" (:out r)))))))
       (assoc (base/fail branch
                         (scrubbed (str prefix "Eval error: " (:error r)
                                        (when (seq (:out r)) (str "\n" (:out r)))
@@ -278,7 +302,9 @@
     (let [d (route/doc-for ctx (str (base/arg ctx :symbol)))]
       (if (:not-found d)
         (base/malformed branch (str "No var " (base/arg ctx :symbol) " is loaded."))
-        (base/ok branch (str (:name d) "\n" (pr-str (:arglists d)) "\n\n" (:doc d)))))))
+        (base/ok branch (str (:name d) "\n" (pr-str (:arglists d)) "\n\n" (:doc d)
+                             (when (:file d)
+                               (str "\n\n" (:file d) (when (:line d) (str ":" (:line d)))))))))))
 
 (defmethod base/run-tool "complete" [{:keys [branch] :as ctx}]
   (if-let [m (base/missing ctx :prefix)]

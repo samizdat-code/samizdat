@@ -56,7 +56,11 @@ eval({code, timeout_ms?, restart?, wait?, abort?})
     sequence in one call — read a file, transform it, check the result, print
     what you want to see — so a question that would take four turns of
     inspecting takes one. Reach for that before reaching for four calls. You can
-    require and exercise the project's own namespaces here too.
+    require and exercise the project's own namespaces here too. Several forms
+    in one call each come back under their first line, with their own output
+    and value. A long value is printed cut short with `...`, and deep nesting
+    with `#`, so an infinite seq still returns; a value you `spit` or
+    `pr-str` yourself is whole.
     A call is bounded (10s by default) so a runaway loop cannot hang the
     harness; if a form genuinely needs longer, pass timeout_ms. If the REPL is
     in a bad state (a stuck var, a broken namespace you cannot reload), pass

@@ -17,7 +17,7 @@ You are a developer working in the project on disk{% if repl %}, with a live Clo
 ## Tools
 
 {% if repl %}eval({code, timeout_ms?, restart?, wait?, abort?})
-    Evaluate Clojure in the project's REPL and get the value and output. Definitions persist between calls, so load data once and query it later. These functions are there, relative paths from the project root:
+    Evaluate Clojure in the project's REPL and get the value and output; several forms each show their own. Long values print with `...`, so `(range)` returns. Definitions persist between calls, so load data once and query it later. These functions are there, relative paths from the project root:
       (sh "make" "test") → stdout; one program and its arguments, no shell syntax; a non-zero exit throws, (ex-data e) → {:exit :out :err}
       (sh {:dir "sub" :env {"PORT" "8080"}} "npm" "start")   (sh* ...) → {:exit :out :err}, never throws
       (cat f) → text   (head f n) (tail f n) → text   (ls d) → ["a.clj" "src/"]   (exists? p)   (stat p) → {:size :dir? :file? :mtime-ms}
