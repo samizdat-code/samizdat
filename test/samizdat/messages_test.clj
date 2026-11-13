@@ -215,3 +215,55 @@
     (is (some #(llm-message/unloaded? (:content %))
               (:messages (llm-message/compaction-plan msgs turns (assoc opts :count-reasoning? true))))
         "with replay the same history folds")))
+
+;; --- reasoning goes back for the recent replies only -----------------------------
+
+(defn- thinking-conversation [n]
+  (into [{:role "system" :content "sys"} {:role "user" :content "go"}]
+        (mapcat (fn [t]
+                  [{:role "assistant" :content (str "<think>thought " t "</think>call " t) :turn t}
+                   {:role "user" :content (str "result " t) :turn t}])
+                (range 1 (inc n)))))
+
+(defn- thinks [out] (mapv #(str/includes? (str (:content %)) "<think>")
+                          (filter #(= "assistant" (:role %)) out)))
+
+(deftest only-the-recent-replies-keep-their-reasoning
+  ;; ctb-r12 photonic-waveguide-routing: one 251K-character thought went back on
+  ;; every later turn and the builder reached 200K tokens in 17 turns.
+  (let [opts {:keep-pairs 30 :threshold-chars 1000000 :batch 1 :floor 120 :reasoning-keep-turns 2}
+        plan (llm-message/compaction-plan (thinking-conversation 5) [] opts)]
+    (is (= [false false false true true] (thinks (:messages plan))))
+    (is (str/includes? (:content (nth (:messages plan) 2)) "call 1") "the reply itself stays")
+    (is (contains? (:rewrites plan) 2) "the rewrite is one the prefix cache knows about"))
+  (testing "off without the policy"
+    (is (= [true true true true true]
+           (thinks (:messages (llm-message/compaction-plan (thinking-conversation 5) []
+                                                           {:keep-pairs 30 :threshold-chars 1000000}))))))
+  (testing "the frontier moves in batches, so most turns send an identical history"
+    (let [opts {:keep-pairs 30 :threshold-chars 1000000 :batch 4 :floor 120 :reasoning-keep-turns 2}
+          at (fn [n] (thinks (:messages (llm-message/compaction-plan (thinking-conversation n) [] opts))))]
+      (is (= [false false false false true true] (at 6)) "6 replies: 4 aged, a whole batch, stripped")
+      (is (= [false false false false true true true] (at 7)) "7: the frontier holds")
+      (is (= [false false false false true true true true true] (at 9)) "9: still holds")
+      (is (= [false false false false false false false false true true] (at 10)) "10: it moves by a batch"))))
+
+(deftest a-reasoning-window-render-matches-an-uncached-one
+  (let [opts {:keep-pairs 30 :threshold-chars 1000000 :batch 2 :floor 120 :reasoning-keep-turns 2}
+        previous (:entry (hydration/compact nil (thinking-conversation 5) [] opts))
+        next-entry (hydration/compact previous (thinking-conversation 7) [] opts)]
+    (is (= (:messages next-entry) (llm-message/compact (thinking-conversation 7) [] opts)))))
+
+(deftest aged-reasoning-does-not-count-toward-the-fold
+  (let [msgs (thinking-conversation 6)
+        big (mapv #(if (= "assistant" (:role %))
+                     (update % :content (fn [c] (str/replace c "thought" (apply str (repeat 300 "t")))))
+                     %)
+                  msgs)
+        opts {:keep-pairs 1 :threshold-chars 1000 :batch 1 :floor 120 :count-reasoning? true}]
+    (is (some #(llm-message/unloaded? (:content %))
+              (:messages (llm-message/compaction-plan big [] opts)))
+        "all of it replayed: over the threshold")
+    (is (not-any? #(llm-message/unloaded? (:content %))
+                  (:messages (llm-message/compaction-plan big [] (assoc opts :reasoning-keep-turns 2))))
+        "only two replies' reasoning sent: under it")))

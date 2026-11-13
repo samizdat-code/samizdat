@@ -249,6 +249,25 @@
                    (if (= :success (:category t)) (conj live p) live)
                    (if (contains? live p) (conj out i) out))))))))
 
+(defn- reasoning-aged
+  "Indices of assistant messages whose reasoning no longer goes back: all
+  but the last `keep` replies, the frontier moving `batch` replies at a time
+  so the history between moves is byte-identical and the prefix cache holds.
+  A message already compacted carries no reasoning and is left out."
+  [messages keep batch]
+  (when (and keep (pos? keep))
+    (let [assistants (vec (keep-indexed (fn [i m] (when (and (= "assistant" (:role m)) (>= i frame-size)) i))
+                                        messages))
+          n (count assistants)
+          aged (- n keep)
+          b (if (and (number? batch) (> batch 1)) (long batch) 1)
+          ;; Whole batches only: the frontier stays put until another batch has aged.
+          strip (* b (quot (max 0 aged) b))]
+      (set (for [i (subvec assistants 0 (min n strip))
+                 :let [m (nth messages i)]
+                 :when (and (not (:compacted? m)) (str/includes? (str (:content m)) "<think>"))]
+             i)))))
+
 (defn compaction-plan
   "Compact a branch's older turns IN PLACE, so the array's shape never changes.
 
@@ -282,7 +301,8 @@
   the branch's own history is untouched and a resume replays what was really
   sent at the time."
   ([messages turns] (compaction-plan messages turns nil))
-  ([messages turns {:keys [keep-pairs threshold-chars floor batch supersede-tools count-reasoning?]}]
+  ([messages turns {:keys [keep-pairs threshold-chars floor batch supersede-tools count-reasoning?
+                            reasoning-keep-turns]}]
    (let [messages (vec messages)
          turns (vec (or turns []))
          keep-pairs (or keep-pairs (default-keep-pairs))
@@ -298,8 +318,15 @@
          ;; from its first turn past keep-pairs (karamazov-0wvc.1).
          ;; Without thinking when `prepare` strips it before the wire; with it
          ;; when the endpoint has each reply's reasoning sent back.
-         total (reduce + 0 (map (comp count (if count-reasoning? identity strip-think-blocks) str :content)
-                                (drop frame-size messages)))
+         ;; Reasoning past the window is not sent, so it does not count.
+         sent-reasoning? (let [aged (reasoning-aged messages reasoning-keep-turns batch)]
+                           (fn [i] (and count-reasoning? (not (contains? aged i)))))
+         total (reduce + 0 (map-indexed (fn [i m]
+                                          (count ((if (sent-reasoning? (+ i frame-size))
+                                                    identity
+                                                    strip-think-blocks)
+                                                  (str (:content m)))))
+                                        (drop frame-size messages)))
          active? (and (>= total threshold) (> (count messages) frame-size))
          turns-by-number (into {} (map (juxt :turn identity)) turns)
          opts {:floor (or floor tape/default-floor) :roles compactable-roles}
@@ -324,14 +351,22 @@
                                                      opts))
                                   messages
                                   due)
-                    (pos? strip-before) (strip-context-before strip-before))]
+                    (pos? strip-before) (strip-context-before strip-before))
+         ;; Reasoning goes back for the recent replies only (gates.edn
+         ;; :context-budget :reasoning-keep-turns): one 251K-character thought
+         ;; replayed on every turn put a builder at 200K tokens in 17 turns
+         ;; (ctb-r12 photonic). The reply itself stays; only its think block goes.
+         aged-reasoning (reasoning-aged rendered reasoning-keep-turns batch)
+         rendered (reduce (fn [ms i] (update-in ms [i :content] strip-think-blocks))
+                          (vec rendered) (sort aged-reasoning))]
      {:source messages
       :turns turns
       :options {:keep-pairs keep-pairs :threshold-chars threshold
                 :batch batch :floor (:floor opts) :supersede-tools (set supersede-tools)
-                :count-reasoning? (boolean count-reasoning?)}
+                :count-reasoning? (boolean count-reasoning?)
+                :reasoning-keep-turns reasoning-keep-turns}
       :messages rendered
-      :rewrites (into (set due) (range frame-size strip-before))})))
+      :rewrites (-> (set due) (into (range frame-size strip-before)) (into aged-reasoning))})))
 
 (defn compact
   "Compact a branch's older turns in place. Compatibility wrapper for the
