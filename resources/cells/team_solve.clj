@@ -1057,8 +1057,10 @@
   {:doc "The strict rerun. When the current work fails and earlier work passed,
         restore the last passing work and re-check. Pass ships with an honest
         answer; fail abandons with the reason, never a pretend completion. With no
-        check available, work that exists ships and the answer says it is unverified."
-   :effects [:proc :fs :db]
+        check available, work that exists ships and the answer says it is unverified.
+        On repository work the answer is a report written from the run's record."
+   ;; :net: the report is a model call.
+   :effects [:proc :fs :db :net]
    :requires [:config :conn :run-id :root]
    :input  [:map [:branch :map]]
    :output [:map [:team-solve/final :keyword] [:verdict :keyword] [:branch :map]]}
@@ -1084,7 +1086,12 @@
              :verdict (if pass? :done :abandoned)
              :branch (if pass?
                        (assoc branch :final-answer
-                              (str (final-report ctx (or (:result l) (:summary g)) g)
+                              ;; A program's answer is the program: the parity runs
+                              ;; reproduce the reference request for request, and a
+                              ;; report call there is one it never made.
+                              (str (if (program? ctx)
+                                     (or (:result l) (:summary g))
+                                     (final-report ctx (or (:result l) (:summary g)) g))
                                    (when restore? (str "\n\n" (prompt/prompt "team-solve-restored")))
                                    (when-not (:ran g) (str "\n\n" (str/trim (prompt/prompt "team-solve-unverified"))))))
                        (let [why (or (:stopped l) "The check never passed.")]
