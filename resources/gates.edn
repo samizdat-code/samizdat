@@ -4369,6 +4369,14 @@
           ;; unloaded at once, whatever the threshold: the file no longer
           ;; holds that body. Empty turns it off.
           :supersede-tools     #{"write_file"}
+          ;; Replies whose reasoning still goes back to an endpoint that
+          ;; replays it; older replies keep their text and lose the think
+          ;; block, the frontier moving :compaction-batch replies at a time so
+          ;; the prefix cache holds between moves. On ctb-r12 photonic one
+          ;; 251K-character thought was replayed every turn (200K tokens by
+          ;; turn 17). DeepSeek takes an empty thinking block for the rest.
+          ;; nil sends all of it, as DeepSeek's own harness does.
+          :reasoning-keep-turns 4
           :diff-chars          12000
           :shell-output-chars  8000
           :shared-code-chars   700

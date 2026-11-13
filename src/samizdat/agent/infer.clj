@@ -153,7 +153,8 @@
                                        (gates/threshold :context-squeeze)
                                        window)
                       :supersede-tools (:supersede-tools (gates/threshold :context-budget))
-                      :count-reasoning? (boolean reasoning-sent?))
+                      :count-reasoning? (boolean reasoning-sent?)
+                      :reasoning-keep-turns (:reasoning-keep-turns (gates/threshold :context-budget)))
         {:keys [entry messages]} (hydration/compact (get @render-cache id)
                                                     messages turns budget)]
     (.put ^java.util.Map @render-cache id entry)
