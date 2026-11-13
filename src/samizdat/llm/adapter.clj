@@ -95,3 +95,13 @@
    :parse-models (fn [_ _] [])
    :error-message (fn [_ _] nil)
    :usage-cap? (fn [_ _ _] false)})
+
+;; Optional: a wire that streams differently from chat completions. An
+;; adapter without it is streamed as chat completions — `stream: true` with
+;; usage on the last chunk, folded by samizdat.llm.stream/chat-codec.
+(defprotocol StreamWire
+  (stream-body [this body]
+    "`body` (from chat-body) asking for a stream.")
+  (stream-codec [this]
+    "How the stream's chunks fold: {:accumulate :completion :delta :end?},
+     the shape samizdat.llm.stream/post takes under :codec."))

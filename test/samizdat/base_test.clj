@@ -542,6 +542,11 @@
                        changes the fence is changing the base's wire format
                        and is rebuilding anyway."}}
 
+   "src/samizdat/llm/adapter/responses.clj"
+   {:threshold {16 "The smallest max_output_tokens OpenAI's Responses API
+                    accepts; below it the request is a 400. A wire limit."
+                64 "prompt_cache_key's length limit on the wire."}}
+
    "src/samizdat/llm/adapter/openai.clj"
    {:vocabulary {"/beta/?$"
                  "DeepSeek's /beta path, which serves completions but not

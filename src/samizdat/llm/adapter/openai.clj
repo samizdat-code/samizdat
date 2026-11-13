@@ -45,22 +45,41 @@
                          #(re-pattern (lexicon/wordlist :usage-cap-signals))))
 
 
-(defn- tool-call->fence
-  "A native OpenAI tool_call turned into the harness's text-fence convention, so
-  a native call parses through exactly the same path a fenced one does.
-  `arguments` is a JSON string, re-embedded as `args` when it parses — and
-  embedded AS WRITTEN when it does not, so the fence parser's repair ladder
-  gets its chance and a failure is reported to the model as the parse error
-  it is, rather than becoming an empty `{}` the tool then calls missing."
-  [tc]
-  (let [name (get-in tc [:function :name])
-        raw (str (get-in tc [:function :arguments]))
-        args (try (json/read-str raw) (catch Throwable _ ::unparsed))]
+(defn- decoded-args
+  "`raw` arguments decoded, or ::unparsed. Arguments encoded TWICE — a JSON
+  string whose text is the object, which models trained on a different
+  harness's wire send (opencode's tool-input repair unwraps the same
+  stringified root) — decode to the object rather than to a string the tool
+  would read as no arguments at all."
+  [raw]
+  (let [v (try (json/read-str raw) (catch Throwable _ ::unparsed))]
+    (if (string? v)
+      (let [inner (try (json/read-str v) (catch Throwable _ nil))]
+        (if (map? inner) inner v))
+      v)))
+
+(defn call->fence
+  "A native call — its `name` and its `raw` JSON arguments string — turned
+  into the harness's text-fence convention, so a native call parses through
+  exactly the same path a fenced one does. The arguments are re-embedded as
+  `args` when they parse — and embedded AS WRITTEN when they do not, so the
+  fence parser's repair ladder gets its chance and a failure is reported to
+  the model as the parse error it is, rather than becoming an empty `{}` the
+  tool then calls missing. Shared by every adapter whose wire has native
+  calls."
+  [name raw]
+  (let [raw (str raw)
+        args (decoded-args raw)]
     (str "```tool-call\n"
          (if (= ::unparsed args)
            (str "{\"name\": " (json/write-str name) ", \"args\": " raw "}")
            (json/write-str {:name name :args args}))
          "\n```")))
+
+(defn- tool-call->fence
+  "A chat-completions tool_call as a fence (see `call->fence`)."
+  [tc]
+  (call->fence (get-in tc [:function :name]) (get-in tc [:function :arguments])))
 
 (defn- native-content
   "What a reply said, with every native call it made appended as a fence:
