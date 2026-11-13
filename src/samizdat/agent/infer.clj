@@ -147,12 +147,13 @@
 (defn render
   "The tape as it goes to the wire, with only a verified stable prefix reused.
   The source tape remains untouched, and the result equals llm.message/compact."
-  [{:keys [id messages turns squeeze window]}]
+  [{:keys [id messages turns squeeze window reasoning-sent?]}]
   (let [budget (assoc (squeezed-budget (gates/threshold :context-budget)
                                        squeeze
                                        (gates/threshold :context-squeeze)
                                        window)
-                      :supersede-tools (:supersede-tools (gates/threshold :context-budget)))
+                      :supersede-tools (:supersede-tools (gates/threshold :context-budget))
+                      :count-reasoning? (boolean reasoning-sent?))
         {:keys [entry messages]} (hydration/compact (get @render-cache id)
                                                     messages turns budget)]
     (.put ^java.util.Map @render-cache id entry)
@@ -379,10 +380,15 @@
   standing in for it (a replay) render the same tape only if both see it
   (karamazov-z5sj)."
   [ctx tape]
-  (if-let [w (or (get-in ctx [:llm-config :request-window])
-                 (get-in ctx [:llm-config :context-window]))]
-    (assoc tape :window w)
-    tape))
+  (let [llm (:llm-config ctx)
+        w (or (:request-window llm) (:context-window llm))]
+    (cond-> tape
+      w (assoc :window w)
+      ;; The endpoint gets each reply's reasoning back, so the fold has to
+      ;; count it: ctb-r12 interleaved-vigenere sent ~650K characters while
+      ;; the threshold, counting history without it, saw ~180K and stayed
+      ;; off until turn 87.
+      (config/supports? llm :replay-reasoning) (assoc :reasoning-sent? true))))
 
 (defn- prepare*
   [ctx {:keys [id] :as tape} {:keys [attempt rendered fit? dispatch?] :or {attempt 1}}]
