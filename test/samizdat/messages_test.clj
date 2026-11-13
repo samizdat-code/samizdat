@@ -199,3 +199,19 @@
         next-entry (hydration/compact previous msgs' writes-turns opts)]
     (is (= (:messages next-entry) (llm-message/compact msgs' writes-turns opts))
         "a write superseded after the last render is rewritten, not reused stale")))
+
+(deftest replayed-reasoning-counts-toward-the-fold
+  ;; ctb-r12 interleaved-vigenere: ~480K characters of reasoning went back to the
+  ;; endpoint while the threshold counted only the ~180K without it.
+  (let [msgs (into [{:role "system" :content "sys"} {:role "user" :content "go"}]
+                   (mapcat (fn [t]
+                             [{:role "assistant" :content (str "<think>" (apply str (repeat 400 "r")) "</think>call " t) :turn t}
+                              {:role "user" :content "ok" :turn t}])
+                           (range 1 9)))
+        turns (mapv (fn [t] {:turn t :tool "eval" :category :success}) (range 1 9))
+        opts {:keep-pairs 2 :threshold-chars 1500 :batch 1 :floor 120}]
+    (is (= msgs (:messages (llm-message/compaction-plan msgs turns opts)))
+        "without replay the visible history is under the threshold")
+    (is (some #(llm-message/unloaded? (:content %))
+              (:messages (llm-message/compaction-plan msgs turns (assoc opts :count-reasoning? true))))
+        "with replay the same history folds")))

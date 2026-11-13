@@ -282,7 +282,7 @@
   the branch's own history is untouched and a resume replays what was really
   sent at the time."
   ([messages turns] (compaction-plan messages turns nil))
-  ([messages turns {:keys [keep-pairs threshold-chars floor batch supersede-tools]}]
+  ([messages turns {:keys [keep-pairs threshold-chars floor batch supersede-tools count-reasoning?]}]
    (let [messages (vec messages)
          turns (vec (or turns []))
          keep-pairs (or keep-pairs (default-keep-pairs))
@@ -296,8 +296,9 @@
          ;; never compacted, so counting it says nothing about how long the
          ;; branch has run, and one over the threshold compacted every branch
          ;; from its first turn past keep-pairs (karamazov-0wvc.1).
-         ;; Without thinking, which `prepare` strips before the wire.
-         total (reduce + 0 (map (comp count strip-think-blocks str :content)
+         ;; Without thinking when `prepare` strips it before the wire; with it
+         ;; when the endpoint has each reply's reasoning sent back.
+         total (reduce + 0 (map (comp count (if count-reasoning? identity strip-think-blocks) str :content)
                                 (drop frame-size messages)))
          active? (and (>= total threshold) (> (count messages) frame-size))
          turns-by-number (into {} (map (juxt :turn identity)) turns)
@@ -327,7 +328,8 @@
      {:source messages
       :turns turns
       :options {:keep-pairs keep-pairs :threshold-chars threshold
-                :batch batch :floor (:floor opts) :supersede-tools (set supersede-tools)}
+                :batch batch :floor (:floor opts) :supersede-tools (set supersede-tools)
+                :count-reasoning? (boolean count-reasoning?)}
       :messages rendered
       :rewrites (into (set due) (range frame-size strip-before))})))
 

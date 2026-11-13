@@ -43,8 +43,7 @@
   scratch directory rather than all of /tmp, and the profile is written
   somewhere outside every writable path. A confined process that can rewrite
   its own confinement has none the moment anything restarts it."
-  (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
+  (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
             [ebb.core :as ebb]
@@ -156,51 +155,66 @@
   (try (tail-of-text (slurp f) n)
        (catch Exception _ "")))
 
-(defn gitlib-dir
-  "The directory jolt keeps a git dependency in under its gitlibs root: the
-  URL with `:` and `/` replaced, then the sha (`https___github.com_x_y/<sha>`)."
-  [url sha]
-  (str (str/replace (str url) #"[:/]" "_") "/" sha))
+(defn seed-dirs
+  "Where each entry of a classpath `entries` (paths) comes from and goes, as
+  [relative-dir root-key] pairs: a gitlib's source path names its lib/sha
+  directory under `:gitlibs`, a jar its Maven version directory (jar and pom)
+  under `:m2`. Entries under neither root are the project's own and skipped.
+  Pure."
+  [entries {:keys [gitlibs m2]}]
+  (let [under (fn [root e]
+                (let [r (str (str/replace (str root) #"/+$" "") "/")]
+                  (when (and root (str/starts-with? (str e) r))
+                    (subs (str e) (count r)))))]
+    (vec (distinct
+          (keep (fn [e]
+                  (if-let [rel (under gitlibs e)]
+                    (let [[lib sha] (str/split rel #"/")]
+                      (when (and lib sha) [(str lib "/" sha) :gitlibs]))
+                    (when-let [rel (under m2 e)]
+                      (let [parts (str/split rel #"/")]
+                        (when (> (count parts) 1)
+                          [(str/join "/" (butlast parts)) :m2])))))
+                entries)))))
 
-(defn git-closure
-  "Every git dependency `deps` (a deps map) reaches, as gitlib-dir paths, read
-  from the deps.edn files under `root`. A library missing from `root` is still
-  named, so the caller can tell it was needed; its own deps are not known."
-  [root deps]
-  (loop [todo (vec deps) seen #{}]
-    (if-let [[_ {:keys [git/url git/sha]}] (first todo)]
-      (let [d (when (and url sha) (gitlib-dir url sha))]
-        (if (or (nil? d) (contains? seen d))
-          (recur (subvec todo 1) seen)
-          (let [f (io/file root d "deps.edn")
-                more (when (.exists f)
-                       (try (:deps (edn/read-string (slurp f))) (catch Throwable _ nil)))]
-            (recur (into (subvec todo 1) more) (conj seen d)))))
-      seen)))
+(defn seed-caches!
+  "Copy into the `to` roots each directory of `dirs` (from seed-dirs) that
+  the `from` roots hold and `to` lacks, so the image's own confined caches
+  start with what the harness already fetched. Copied, not shared: the image
+  may write its caches, and the harness loads code from its own
+  (karamazov-1gbh). Without this the image fetched every dependency itself,
+  which needs git, network and TLS in the project's environment: a task
+  container without git (ctb-r12 bun-sourcemap-leak) never got a REPL.
+  Returns the relative paths copied."
+  [dirs from to]
+  (vec (for [[d k] dirs
+             :let [src (some-> (get from k) (io/file d))
+                   dst (some-> (get to k) (io/file d))]
+             :when (and src dst (.isDirectory src) (not (.exists dst)))]
+         (do (fs/create-dirs (str (.getParentFile dst)))
+             (fs/copy-tree (str src) (str dst))
+             d))))
 
-(defn seed-gitlibs!
-  "Copy into `to` each git dependency of `deps` that `from` holds and `to`
-  lacks, so the image's own confined cache starts with what the harness
-  already fetched. Copied, not shared: the image may write its cache, and
-  the harness loads code from its own (karamazov-1gbh). Without this the
-  image cloned every git dependency, which needs git and network in the
-  project's environment: a task container without git (ctb-r12
-  bun-sourcemap-leak) never got a REPL. Returns the paths copied."
-  [from to deps]
-  (when (and from to (.isDirectory (io/file from)))
-    (vec (for [d (sort (git-closure from deps))
-               :let [src (io/file from d) dst (io/file to d)]
-               :when (and (.isDirectory src) (not (.exists dst)))]
-           (do (fs/create-dirs (str (.getParentFile dst)))
-               (fs/copy-tree (str src) (str dst))
-               d)))))
-
-(defn- harness-gitlibs
-  "Where the harness's own jolt keeps git dependencies."
+(defn- harness-caches
+  "Where the harness's own jolt keeps git and Maven dependencies."
   []
-  (or (not-empty (System/getenv "JOLT_GITLIBS_DIR"))
-      (not-empty (System/getenv "GITLIBS"))
-      (str (System/getenv "HOME") "/.jolt/gitlibs")))
+  {:gitlibs (or (not-empty (System/getenv "JOLT_GITLIBS_DIR"))
+                (not-empty (System/getenv "GITLIBS"))
+                (str (System/getenv "HOME") "/.jolt/gitlibs"))
+   :m2 (or (not-empty (System/getenv "JOLT_MAVEN_REPOSITORY"))
+           (str (System/getenv "HOME") "/.m2/repository"))})
+
+(defn- image-classpath
+  "The image's classpath as the harness's own jolt resolves it, from the
+  harness's caches. Run in a scratch directory: it leaves a cache where it
+  runs."
+  []
+  (let [dir (str (fs/create-temp-dir))
+        r (proc/run {:dir dir :timeout-ms (:fetch-ms (gates/threshold :image-start))}
+                    "jolt" "-Sdeps" nrepl-sdeps "-Spath")]
+    (try (fs/delete-tree dir) (catch Throwable _ nil))
+    (when (= 0 (:exit r))
+      (remove str/blank? (str/split (str/trim (str (:out r))) #":")))))
 
 (defn- fetch-deps!
   "Fetch the image's dependencies into the project's confined caches, under
@@ -249,10 +263,11 @@
                      :scratch-paths [scratch (get cenv "JOLT_CACHE_DIR")]
                      :protect (confine/protected root)}
                     (sandbox/deny-read-kinds (:deny-read sandbox-spec)))]
-    (try (when-let [copied (seq (seed-gitlibs! (harness-gitlibs) (get cenv "JOLT_GITLIBS_DIR")
-                                              (:deps (edn/read-string nrepl-sdeps))))]
-           (log/info "seeded the project image's gitlibs from the harness's:" (str/join ", " copied)))
-         (catch Throwable e (log/warn "seeding the project image's gitlibs failed:" (ex-message e))))
+    (try (let [from (harness-caches)
+               to {:gitlibs (get cenv "JOLT_GITLIBS_DIR") :m2 (get cenv "JOLT_MAVEN_REPOSITORY")}]
+           (when-let [copied (seq (seed-caches! (seed-dirs (image-classpath) from) from to))]
+             (log/info "seeded the project image's caches from the harness's:" (str/join ", " copied))))
+         (catch Throwable e (log/warn "seeding the project image's caches failed:" (ex-message e))))
     (fetch-deps! root backend env)
     (sandbox/write-profile! backend profile spec)
     (loop [attempt 1 port port]
