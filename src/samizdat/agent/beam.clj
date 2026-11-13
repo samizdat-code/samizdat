@@ -1065,9 +1065,13 @@
         ;; A replay asks for none (:oversight? false): its passes fire on a
         ;; clock, so where their turns land would be timing again, and the
         ;; recording has nothing to answer them with (karamazov-x0dx).
-        ctx (assoc ctx :stop-oversight (if (false? (:oversight? ctx))
-                                         (constantly nil)
-                                         (oversight-stream ctx)))]
+        ctx (assoc ctx
+                   :stop-oversight (if (false? (:oversight? ctx))
+                                     (constantly nil)
+                                     (oversight-stream ctx))
+                   ;; A stream is running that will answer a ship review, so a
+                   ;; done may wait for one (tools.ship/await-review).
+                   :supervisor-live? (not (false? (:oversight? ctx))))]
     (try
       (let [data (myc/run-compiled (beam-manifest conn config) ctx
                                    {:branches branches :turn start-turn})]
