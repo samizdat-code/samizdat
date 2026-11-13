@@ -43,7 +43,8 @@
   scratch directory rather than all of /tmp, and the profile is written
   somewhere outside every writable path. A confined process that can rewrite
   its own confinement has none the moment anything restarts it."
-  (:require [clojure.java.io :as io]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
             [ebb.core :as ebb]
@@ -155,6 +156,52 @@
   (try (tail-of-text (slurp f) n)
        (catch Exception _ "")))
 
+(defn gitlib-dir
+  "The directory jolt keeps a git dependency in under its gitlibs root: the
+  URL with `:` and `/` replaced, then the sha (`https___github.com_x_y/<sha>`)."
+  [url sha]
+  (str (str/replace (str url) #"[:/]" "_") "/" sha))
+
+(defn git-closure
+  "Every git dependency `deps` (a deps map) reaches, as gitlib-dir paths, read
+  from the deps.edn files under `root`. A library missing from `root` is still
+  named, so the caller can tell it was needed; its own deps are not known."
+  [root deps]
+  (loop [todo (vec deps) seen #{}]
+    (if-let [[_ {:keys [git/url git/sha]}] (first todo)]
+      (let [d (when (and url sha) (gitlib-dir url sha))]
+        (if (or (nil? d) (contains? seen d))
+          (recur (subvec todo 1) seen)
+          (let [f (io/file root d "deps.edn")
+                more (when (.exists f)
+                       (try (:deps (edn/read-string (slurp f))) (catch Throwable _ nil)))]
+            (recur (into (subvec todo 1) more) (conj seen d)))))
+      seen)))
+
+(defn seed-gitlibs!
+  "Copy into `to` each git dependency of `deps` that `from` holds and `to`
+  lacks, so the image's own confined cache starts with what the harness
+  already fetched. Copied, not shared: the image may write its cache, and
+  the harness loads code from its own (karamazov-1gbh). Without this the
+  image cloned every git dependency, which needs git and network in the
+  project's environment: a task container without git (ctb-r12
+  bun-sourcemap-leak) never got a REPL. Returns the paths copied."
+  [from to deps]
+  (when (and from to (.isDirectory (io/file from)))
+    (vec (for [d (sort (git-closure from deps))
+               :let [src (io/file from d) dst (io/file to d)]
+               :when (and (.isDirectory src) (not (.exists dst)))]
+           (do (fs/create-dirs (str (.getParentFile dst)))
+               (fs/copy-tree (str src) (str dst))
+               d)))))
+
+(defn- harness-gitlibs
+  "Where the harness's own jolt keeps git dependencies."
+  []
+  (or (not-empty (System/getenv "JOLT_GITLIBS_DIR"))
+      (not-empty (System/getenv "GITLIBS"))
+      (str (System/getenv "HOME") "/.jolt/gitlibs")))
+
 (defn- fetch-deps!
   "Fetch the image's dependencies into the project's confined caches, under
   the SHELL's confinement (karamazov-1gbh). The image has no network, and
@@ -202,6 +249,10 @@
                      :scratch-paths [scratch (get cenv "JOLT_CACHE_DIR")]
                      :protect (confine/protected root)}
                     (sandbox/deny-read-kinds (:deny-read sandbox-spec)))]
+    (try (when-let [copied (seq (seed-gitlibs! (harness-gitlibs) (get cenv "JOLT_GITLIBS_DIR")
+                                              (:deps (edn/read-string nrepl-sdeps))))]
+           (log/info "seeded the project image's gitlibs from the harness's:" (str/join ", " copied)))
+         (catch Throwable e (log/warn "seeding the project image's gitlibs failed:" (ex-message e))))
     (fetch-deps! root backend env)
     (sandbox/write-profile! backend profile spec)
     (loop [attempt 1 port port]
