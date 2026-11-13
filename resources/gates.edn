@@ -2412,6 +2412,8 @@
           :notes-chars 8000
           :current-chars 20000
           :report-chars 600
+          ;; The diff the final report is written from (team-solve-report-user).
+          :final-report-diff-chars 12000
           :cutoff-chars 9000
           :ideate? true
           :ideators ["team-solve-ideator-a" "team-solve-ideator-b"]
@@ -2423,7 +2425,7 @@
           :program-brute-timeout-ms 30000
           :program-llm {:local {:max-tokens 128000 :top-p 0.95 :top-k 20
                                 :max-response-ms 14400000}}
-          :temperatures {:plan 0.3 :ideate 0.4 :manage 0.2 :work 0.2 :cutoff 0.2 :review 0.2}}
+          :temperatures {:plan 0.3 :ideate 0.4 :manage 0.2 :work 0.2 :cutoff 0.2 :review 0.2 :report 0.2}}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-p4b3" "karamazov-9jkl"]
   :doc "THE TEAM-SOLVE WORKFLOW'S NUMBERS (cells/team_solve.clj). :max-rounds is

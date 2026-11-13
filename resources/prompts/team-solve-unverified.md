@@ -1,1 +1,1 @@
-[NO CHECK RAN: this project has no paired samples and no configured verify command, so nothing mechanical confirmed this work. An independent reviewer read the change.]
+Not verified mechanically: the project has no tests or verify command the run could use; a reviewer read the change.
