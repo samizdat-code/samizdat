@@ -6,6 +6,7 @@
   claim-evidence gates those methods share (answer-tokens,
   uncovered-tokens, engages-problem? and friends)."
   (:require [clojure.string :as str]
+            [samizdat.cancel :as cancel]
             [clojure.walk :as walk]
             [samizdat.agent.acceptance :as acceptance]
             [samizdat.agent.checklist :as checklist]
@@ -594,6 +595,23 @@
 
 (declare done*)
 
+(defn await-review
+  "`review` (journal/review-state) after waiting for it to land, when it is
+  pending: re-read with `read` every `:poll-ms` until it is not or `:wait-ms`
+  has passed, then returned as it stands. A pending review answered with a
+  refusal had the branch call done again and again: ctb-r12
+  payments-pipeline-fix spent 22 turns that way during one review and ran out
+  at its turn cap. `:now` and `:sleep!` are the clock, for tests."
+  [read review {:keys [wait-ms poll-ms now sleep!]}]
+  (if-not (:pending? review)
+    review
+    (let [deadline (+ (now) wait-ms)]
+      (loop [r review]
+        (if (or (not (:pending? r)) (>= (now) deadline))
+          r
+          (do (sleep! (min poll-ms (max 0 (- deadline (now)))))
+              (recur (read))))))))
+
 (defmethod base/run-tool "done" [{:keys [branch] :as ctx}]
   ;; A ROLE'S OUTPUT CONTRACT first (karamazov-05z0.14): a role that declares
   ;; one in roles.edn :output finishes with a `result` that fits it, so the
@@ -747,10 +765,21 @@
         ;; never held, so it skips the read — keyed on the BRANCH, not on
         ;; `advisory?`, which lean also sets for its implementer and which
         ;; kept the review from ever running there.
+        read-review #(journal/review-state (:conn ctx) (:run-id ctx)
+                                           (gates/review-max-wait (:config ctx))
+                                           {:tester? (gates/tester-applies? (:config ctx))})
         review (when (and (not (:advisory? branch)) (:conn ctx) (:run-id ctx))
-                 (journal/review-state (:conn ctx) (:run-id ctx)
-                                       (gates/review-max-wait (:config ctx))
-                                       {:tester? (gates/tester-applies? (:config ctx))}))
+                 (let [r (read-review)
+                       {:keys [done-wait-seconds done-poll-seconds]} (gates/threshold :ship-review)]
+                   ;; Already told once that the review is out: wait for it here,
+                   ;; in this call, instead of refusing again.
+                   (if (and done-wait-seconds done-poll-seconds
+                            (get (:ship-refused branch) :supervisor-review))
+                     (await-review read-review r {:wait-ms (* 1000 done-wait-seconds)
+                                                  :poll-ms (* 1000 done-poll-seconds)
+                                                  :now #(System/currentTimeMillis)
+                                                  :sleep! cancel/sleep!})
+                     r)))
         time-used (gates/time-used (get-in ctx [:config :run :time-limit-seconds])
                                    (:started-ms ctx) (System/currentTimeMillis))
         wind-down (:wind-down (gates/threshold :time-budget))

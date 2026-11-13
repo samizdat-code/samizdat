@@ -241,3 +241,31 @@
     (is (nil? (ship/ship-gate-block (assoc ev :refused {:time-left 1 :unusual-change 1}
                                            :unusual-change true))))
     (is (= :time-left (:name (ship/ship-gate-rung ev))) "and which rung refused is named")))
+
+(defn- helper-fns
+  "The pure output helpers, read out of the helper source and evaluated in a
+  scratch namespace: the rest of the file needs the image's bridge."
+  [names]
+  (let [forms (read-string (str "[" (helpers) "]"))
+        wanted (filter #(and (seq? %) (contains? names (second %))) forms)
+        n (create-ns (gensym "helpers-under-test"))]
+    (binding [*ns* n]
+      (refer-clojure)
+      (alias 'str 'clojure.string)
+      (doseq [f wanted] (eval f)))
+    (fn [sym] @(ns-resolve n sym))))
+
+(deftest test-summary-and-first-error-read-a-noisy-run
+  (let [h (helper-fns '#{text-of error-line summary-line first-error test-summary})
+        summary (h 'test-summary)
+        first-error (h 'first-error)
+        run (str/join "\n" (concat ["collecting ..."]
+                                   (map #(str "test_ok_" % " PASSED") (range 200))
+                                   ["test_edge FAILED" "E  assert 1 == 2" "E  +  where 1 = f()"]
+                                   ["=== 1 failed, 200 passed in 2.1s ==="]))]
+    (is (= ["test_edge FAILED" "E  assert 1 == 2" "E  +  where 1 = f()" "=== 1 failed, 200 passed in 2.1s ==="]
+           (str/split-lines (summary run)))
+        "failures and the count line, in order; no passing lines")
+    (is (= "test_edge FAILED\nE  assert 1 == 2" (first-error run 1)))
+    (is (= "error: x\nnext" (first-error {:out "ok\nerror: x\nnext\nmore" :err ""} 1)) "sh*'s result map")
+    (is (nil? (first-error "all fine")))))

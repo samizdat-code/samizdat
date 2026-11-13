@@ -911,6 +911,15 @@
    ;; Lean without a shell tool beside eval: programs run through `sh` in a
    ;; script (karamazov-6p51.7, after xi, which drops bash while clj is on).
    ;; An arm to measure, not a default: Terminal-Bench tasks are shell-heavy.
+   ;; :lean with one line asking for terse reasoning, for an A/B against it.
+   ;; Caveman's cited result (Adobe, arXiv 2606.24083): terse output 1.4-2.4x
+   ;; cheaper across eight models. Reasoning was the largest cost on ctb-r12
+   ;; (one photonic turn: 91K completion tokens); whether a shorter thought
+   ;; solves as often is the open question this style exists to measure.
+   :lean-terse
+   {:extends :lean
+    :terse-reasoning? true}
+
    :lean-repl
    {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
@@ -2280,6 +2289,21 @@
   :provenance ["karamazov-d1pw.2" "autolith bounded recursive inference"]
   :doc "Call, token, and recursion ceilings for one private inference tree."}
 
+ :output-shrink
+ {:value {:min-chars 4000 :min-run 3 :keep-head 15 :keep-tail 30 :context-after 4
+          :message "\n[Shrunk from {{total}} chars: repeated lines collapsed, routine lines dropped, errors, failures and summaries kept.{% if file %} The whole output is in `{{file}}`.{% endif %}]"}
+  :kind :policy :capability-tunable? true
+  :provenance ["caveman engine/compressors/log.go, repetition.go"]
+  :doc "A LONG TOOL OUTPUT REDUCED TO WHAT MATTERS before it is clipped
+        (samizdat.agent.shrink). Runs of identical lines collapse to one and
+        a count; past :min-chars, the first :keep-head and last :keep-tail
+        lines stay, every line wordlists.edn :output-keep matches stays with
+        :context-after lines after it (a stack trace's frames), and each
+        dropped run becomes one line naming how many. On ctb-r12 the largest
+        results hit the 40K clip, which kept a build log's start and end and
+        cut the error between. The whole output still spills to a file the
+        :message names. nil :min-chars turns it off."}
+
  :tool-clip
  {:value
   {:message "\n… [{{shown}} of {{total}} chars shown, from the start and the end — the middle was clipped. {% if file %}The whole result is in `{{file}}`: search it from `eval` with `(grep #\"re\" \"{{file}}\")` or read part of it, rather than running this again. {% endif %}Ask for the part you still need (a narrower command, a `read_file` with an `offset`, or a filter{% if turn %}, or `read_digest {turns: [{{turn}}], question}` to ask about the whole of this result{% endif %}), not the same call again.]"
@@ -3225,7 +3249,12 @@
  {:value {:max-wait-seconds 360 :evidence-shown 25 :unread-kinds #{"message" "review"}
           ;; On a clock of :long-clock-seconds or more the review runs a blind
           ;; tester first (:tester), so the done is held long enough for both.
-          :long-clock-seconds 3600 :max-wait-long-seconds 1500}
+          :long-clock-seconds 3600 :max-wait-long-seconds 1500
+          ;; A done made after the branch was told its review is out waits up to
+          ;; this long, in the call, for the review to land, instead of being
+          ;; refused again: ctb-r12 payments-pipeline-fix re-called done 22 times
+          ;; during one review and hit its turn cap. Under the turn deadline.
+          :done-wait-seconds 600 :done-poll-seconds 10}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-oi16.11"]
   :doc "The supervisor's review of a done with time left (ship rung :supervisor-review).

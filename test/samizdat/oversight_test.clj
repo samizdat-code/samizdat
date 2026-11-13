@@ -1896,3 +1896,21 @@
     (is (= 6 (allowance {:pass-max-turns 20 :checkin-max-turns 6} true)))
     (is (= 20 (allowance {:pass-max-turns 20} true)) "no check-in budget: the pass budget")
     (is (nil? (allowance {} false)))))
+
+(deftest the-brief-shows-what-the-tester-left-untested
+  ;; ctb-r12: session-window-debug, wal-recovery-ordering, bun-sourcemap-leak and
+  ;; music-harmony failed on requirements no blind test touched.
+  (let [t (prompt/render "blind-tests" {:ran 9 :failing []
+                                        :requirements ["sessions survive late events — t1.py" "idle source — t2.py"]
+                                        :untested ["acks wait for the durable prefix — no way to observe ack order"]})]
+    (is (str/includes? t "covering 2 requirements"))
+    (is (str/includes? t "did NOT test"))
+    (is (str/includes? t "acks wait for the durable prefix")))
+  (let [t (prompt/render "blind-tests" {:ran 4 :failing []})]
+    (is (str/includes? t "listed no requirements") "an older report says it cannot tell"))
+  (testing "the tester is asked for the map, both halves of an allowance, and an outside load test"
+    (let [p (prompt/prompt "roles/tester")]
+      (is (str/includes? p "REQUIREMENTS.md"))
+      (is (str/includes? p "TWO requirements"))
+      (is (str/includes? p "separate client process"))
+      (is (str/includes? p "\"untested\"")))))

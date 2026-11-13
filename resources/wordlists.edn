@@ -331,6 +331,14 @@
   "\\s*\\|\\s*(?:tail|head)(?:\\s+-n)?\\s+-?\\d+\\s*$"
   "\\s*;\\s*echo\\s+[\"']?EXIT[=:]\\s*\\$\\?[\"']?\\s*$"]
 
+ ;; --- what a long tool output must keep (samizdat.agent.shrink) ----------
+ ;; Lines of a long command output that survive shrinking whatever else is
+ ;; dropped: errors, failures, tracebacks, assertions, warnings, and the
+ ;; summary lines test runners end with. After caveman's log compressor
+ ;; (engine/compressors/log.go). One pattern string; case-insensitive.
+ :output-keep
+ "(?i)\\b(error|errors|fail|failed|failure|failures|fatal|panic|exception|traceback|assert|assertion|warning|warn|denied|refused|not found|no such|undefined|cannot|unable|segfault|killed|timeout|timed out|expected|actual|mismatch|summary|total)\\b|^\\s*(at |File \"|\\^|E  |FAILED|ERROR|---|===)"
+
  ;; --- the completeness rung (karamazov-g86, dirge completeness_gate.rs) ----
  ;; A `done` whose answer says, in the model's own first-person voice, that
  ;; work remains — the most ordinary way for an autonomous run to end badly,

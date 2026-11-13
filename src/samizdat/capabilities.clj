@@ -55,6 +55,7 @@
             [samizdat.eval.samples]
             [samizdat.agent.select]
             [samizdat.agent.skills]
+            [samizdat.agent.shrink]
             [samizdat.agent.state]
             [samizdat.agent.storm]
             [samizdat.agent.stubs]

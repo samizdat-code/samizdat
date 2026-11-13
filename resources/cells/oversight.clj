@@ -680,6 +680,8 @@
         res (get-in out [:branch :final-result])
         report {:ran (or (:ran res) 0)
                 :failing (vec (map str (:failing res)))
+                :requirements (vec (map str (:requirements res)))
+                :untested (vec (map str (:untested res)))
                 :answer (some-> (get-in out [:branch :final-answer]) str)
                 :error (:error out)}]
     (runs/close-branch! conn run-id bid "done" "blind tester finished")

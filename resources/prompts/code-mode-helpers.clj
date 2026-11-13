@@ -190,6 +190,38 @@
 
 ;; --- writing (through the bridge, checked like the file tools) ---------------
 
+(defn- text-of
+  "A string, or sh*'s {:out :err} as one string, stdout first."
+  [s]
+  (if (map? s) (str (:out s) (when (seq (:err s)) (str "\n" (:err s)))) (str s)))
+
+(def ^:private error-line
+  #"(?i)\b(error|exception|traceback|fatal|panic|failed|failure|assertionerror|segmentation fault)\b")
+
+(def ^:private summary-line
+  #"(?i)\b(error|errors|exception|traceback|failed|failure|failures|assert|expected|actual|tests? run|ran \d+|\d+ (passed|failed|tests?))\b|^\s*(E  |FAIL|ERROR|---|===|ok |not ok)")
+
+(defn first-error
+  "The first line of a command's output that looks like an error, with up to
+  `n` lines after it (6 by default), or nil when nothing does. Takes a
+  string or sh*'s result: (first-error (sh* \"make\"))."
+  ([s] (first-error s 6))
+  ([s n]
+   (let [ls (vec (str/split-lines (text-of s)))]
+     (when-let [i (first (keep-indexed (fn [i l] (when (re-find error-line l) i)) ls))]
+       (str/join "\n" (subvec ls i (min (count ls) (+ i 1 n))))))))
+
+(defn test-summary
+  "The lines of a test run that matter, in order: failures, errors,
+  assertions and the count lines, at most `n` (60 by default). Takes a string
+  or sh*'s result: (test-summary (sh* \"pytest\" \"-q\"))."
+  ([s] (test-summary s 60))
+  ([s n]
+   (->> (str/split-lines (text-of s))
+        (filter #(re-find summary-line %))
+        (take n)
+        (str/join "\n"))))
+
 (defn spit
   "Write a file through write_file: checked, recorded, refused when it would
   break the file. (spit f s {:append true}) appends. Returns the tool's report."
