@@ -260,6 +260,7 @@
             [samizdat.responses-adapter-test]
             [samizdat.deepseek-messages-test]
             [samizdat.shrink-test]
+            [samizdat.review-wait-test]
             [samizdat.native-history-test]
             [samizdat.code-metrics-test]
             [samizdat.shell-writes-test]
@@ -358,6 +359,7 @@
     samizdat.responses-adapter-test
     samizdat.deepseek-messages-test
     samizdat.shrink-test
+    samizdat.review-wait-test
     samizdat.native-history-test
     samizdat.code-metrics-test
     samizdat.shell-writes-test

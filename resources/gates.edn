@@ -3249,7 +3249,12 @@
  {:value {:max-wait-seconds 360 :evidence-shown 25 :unread-kinds #{"message" "review"}
           ;; On a clock of :long-clock-seconds or more the review runs a blind
           ;; tester first (:tester), so the done is held long enough for both.
-          :long-clock-seconds 3600 :max-wait-long-seconds 1500}
+          :long-clock-seconds 3600 :max-wait-long-seconds 1500
+          ;; A done made after the branch was told its review is out waits up to
+          ;; this long, in the call, for the review to land, instead of being
+          ;; refused again: ctb-r12 payments-pipeline-fix re-called done 22 times
+          ;; during one review and hit its turn cap. Under the turn deadline.
+          :done-wait-seconds 600 :done-poll-seconds 10}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-oi16.11"]
   :doc "The supervisor's review of a done with time left (ship rung :supervisor-review).

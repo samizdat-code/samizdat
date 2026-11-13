@@ -120,7 +120,11 @@
   :prompt "roles/tester"
   :output [:map
            [:ran :int]
-           [:failing [:vector :string]]]
+           [:failing [:vector :string]]
+           ;; The requirement map (ctb-r12: four tasks lost to requirements no
+           ;; test touched). Optional so an older tester's report still reads.
+           [:requirements {:optional true} [:vector :string]]
+           [:untested {:optional true} [:vector :string]]]
   :sees #{:requirement}}
 
  :reviewer
