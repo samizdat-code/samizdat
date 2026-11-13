@@ -24,7 +24,8 @@
   cwd is the project, that a write to $HOME is refused, that the shell is not
   reachable — and none of it can be asserted against a string. The pure parts
   are tested as pure parts; the confinement is tested by trying to escape it."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
             [jolt.fs :as fs]
             [jolt.process :as process]
@@ -297,3 +298,26 @@
         (is (= 2 @spawned) "tried again on a fresh port")
         (is (< (- (System/currentTimeMillis) t0) 10000)
             "and did not wait out the connect deadline for a child that had died")))))
+
+(deftest the-image-s-git-deps-are-seeded-from-the-harness-s-cache
+  ;; ctb-r12 bun-sourcemap-leak: the confined cache started empty and the image
+  ;; cloned nrepl and sci from GitHub, which a task container without git cannot.
+  (let [from (str (fs/create-temp-dir))
+        to (str (fs/create-temp-dir))
+        a (image/gitlib-dir "https://github.com/x/a" "aaa")
+        b (image/gitlib-dir "https://github.com/x/b.git" "bbb")
+        gone (image/gitlib-dir "https://github.com/x/gone" "ggg")]
+    (is (= "https___github.com_x_a/aaa" a))
+    (fs/create-dirs (str from "/" a))
+    (spit (str from "/" a "/deps.edn")
+          (pr-str {:deps {'x/b {:git/url "https://github.com/x/b.git" :git/sha "bbb"}
+                          'x/gone {:git/url "https://github.com/x/gone" :git/sha "ggg"}
+                          'm/c {:mvn/version "1.0"}}}))
+    (fs/create-dirs (str from "/" b))
+    (spit (str from "/" b "/core.clj") "(ns b)")
+    (let [deps {'x/a {:git/url "https://github.com/x/a" :git/sha "aaa"}}]
+      (is (= #{a b gone} (image/git-closure from deps)) "through deps.edn, maven deps skipped")
+      (is (= [a b] (image/seed-gitlibs! from to deps)) "what the harness holds is copied")
+      (is (.exists (io/file to b "core.clj")))
+      (is (empty? (image/seed-gitlibs! from to deps)) "an entry already there is left alone")
+      (is (nil? (image/seed-gitlibs! (str from "/missing") to deps)) "no harness cache, nothing to do"))))
