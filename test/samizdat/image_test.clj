@@ -299,25 +299,28 @@
         (is (< (- (System/currentTimeMillis) t0) 10000)
             "and did not wait out the connect deadline for a child that had died")))))
 
-(deftest the-image-s-git-deps-are-seeded-from-the-harness-s-cache
-  ;; ctb-r12 bun-sourcemap-leak: the confined cache started empty and the image
-  ;; cloned nrepl and sci from GitHub, which a task container without git cannot.
-  (let [from (str (fs/create-temp-dir))
-        to (str (fs/create-temp-dir))
-        a (image/gitlib-dir "https://github.com/x/a" "aaa")
-        b (image/gitlib-dir "https://github.com/x/b.git" "bbb")
-        gone (image/gitlib-dir "https://github.com/x/gone" "ggg")]
-    (is (= "https___github.com_x_a/aaa" a))
-    (fs/create-dirs (str from "/" a))
-    (spit (str from "/" a "/deps.edn")
-          (pr-str {:deps {'x/b {:git/url "https://github.com/x/b.git" :git/sha "bbb"}
-                          'x/gone {:git/url "https://github.com/x/gone" :git/sha "ggg"}
-                          'm/c {:mvn/version "1.0"}}}))
-    (fs/create-dirs (str from "/" b))
-    (spit (str from "/" b "/core.clj") "(ns b)")
-    (let [deps {'x/a {:git/url "https://github.com/x/a" :git/sha "aaa"}}]
-      (is (= #{a b gone} (image/git-closure from deps)) "through deps.edn, maven deps skipped")
-      (is (= [a b] (image/seed-gitlibs! from to deps)) "what the harness holds is copied")
-      (is (.exists (io/file to b "core.clj")))
-      (is (empty? (image/seed-gitlibs! from to deps)) "an entry already there is left alone")
-      (is (nil? (image/seed-gitlibs! (str from "/missing") to deps)) "no harness cache, nothing to do"))))
+(deftest the-image-s-deps-are-seeded-from-the-harness-s-caches
+  ;; ctb-r12: the confined caches started empty and the image fetched nrepl, sci
+  ;; and its Maven deps itself, which a task container without git (bun) or TLS
+  ;; (react) cannot.
+  (let [from {:gitlibs (str (fs/create-temp-dir)) :m2 (str (fs/create-temp-dir))}
+        to {:gitlibs (str (fs/create-temp-dir)) :m2 (str (fs/create-temp-dir))}
+        g (fn [& p] (str/join "/" (cons (:gitlibs from) p)))
+        m (fn [& p] (str/join "/" (cons (:m2 from) p)))
+        cp [(str "./src")
+            (g "https___github.com_x_a" "aaa" "src")
+            (g "https___github.com_x_a" "aaa" "resources")
+            (m "org" "x" "c" "1.0" "c-1.0.jar")]
+        dirs (image/seed-dirs cp from)]
+    (is (= [["https___github.com_x_a/aaa" :gitlibs] ["org/x/c/1.0" :m2]] dirs)
+        "one entry per lib directory; the project's own path is skipped")
+    (fs/create-dirs (g "https___github.com_x_a" "aaa" "src"))
+    (spit (g "https___github.com_x_a" "aaa" "src" "a.clj") "(ns a)")
+    (fs/create-dirs (m "org" "x" "c" "1.0"))
+    (spit (m "org" "x" "c" "1.0" "c-1.0.pom") "<project/>")
+    (is (= ["https___github.com_x_a/aaa" "org/x/c/1.0"] (image/seed-caches! dirs from to)))
+    (is (.exists (io/file (:gitlibs to) "https___github.com_x_a/aaa/src/a.clj")))
+    (is (.exists (io/file (:m2 to) "org/x/c/1.0/c-1.0.pom")) "the pom comes with the jar's directory")
+    (is (empty? (image/seed-caches! dirs from to)) "what is already there is left alone")
+    (is (empty? (image/seed-caches! dirs (assoc from :m2 nil) {:gitlibs nil :m2 nil}))
+        "no roots, nothing to do")))

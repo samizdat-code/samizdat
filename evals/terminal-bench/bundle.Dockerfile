@@ -12,3 +12,7 @@ ENV PATH=/opt/samizdat/jolt/bin:/opt/samizdat/jolt:/usr/local/bin:/usr/bin:/bin
 WORKDIR /opt/samizdat/repo
 RUN jolt -e '(require (quote samizdat.core)) (println :loaded)'
 RUN cp -r /root/.jolt /opt/samizdat/dotjolt
+# The Maven jars the load above resolved. Without them every trial re-resolved
+# samizdat's deps from Clojars at start, which needs TLS: a task container
+# without libcrypto (ctb-r12 react-lead-form) never started the server.
+RUN cp -r /root/.m2/repository /opt/samizdat/m2

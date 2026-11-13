@@ -130,7 +130,12 @@ class SamizdatAgent(BaseInstalledAgent):
                 f" :socket-timeout {timeout * 1000} :throw-exceptions false"
                 + (" :body (System/getenv \"SZ_BODY\")" if body is not None else "") +
                 "})] (if (< (:status r) 400) (print (:body r)) (System/exit 22)))")
+        # The bundle's caches, both: without the Maven one this re-resolved samizdat's
+        # deps from Clojars on every call, which a container without TLS cannot, and a
+        # run that started came back as no run id (ctb-r12 bun-sourcemap-leak: 16 turns
+        # journalled, scored as a no-start).
         jolt = ("cd /opt/samizdat/repo && JOLT_GITLIBS_DIR=/opt/samizdat/gitlibs "
+                "JOLT_MAVEN_REPOSITORY=/opt/samizdat/m2 "
                 f"/opt/samizdat/jolt/jolt -e {shlex.quote(form)}")
         r = await self._sh(
             environment,
@@ -242,7 +247,8 @@ class SamizdatAgent(BaseInstalledAgent):
             + (f"HARNESS_MAX_RESPONSE_MS={LONG_RESPONSE_MS} HARNESS_TURN_DEADLINE_MS={LONG_TURN_MS} "
                if limit and limit >= LONG_CLOCK_S else "")
             + (f"HARNESS_REASONING_EFFORT={self.harness_effort} " if self.harness_effort else "") +
-            "JOLT_GITLIBS_DIR=/opt/samizdat/gitlibs PATH=/opt/samizdat/jolt:$PATH"
+            "JOLT_GITLIBS_DIR=/opt/samizdat/gitlibs JOLT_MAVEN_REPOSITORY=/opt/samizdat/m2 "
+            "PATH=/opt/samizdat/jolt:$PATH"
             + (":/installed-agent/ctb-python/bin" if self.ctb_toolkit else "") + " "
             f"nohup jolt -m samizdat.core > /tmp/samizdat-serve.log 2>&1 &"
         )
