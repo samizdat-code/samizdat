@@ -375,6 +375,8 @@
                                             :sent-reasoning (:sent-reasoning before))))))
      :flush! (fn [] (let [[before _] (swap-vals! st mark 0)] (publish! before)))}))
 
+(llm/set-delta-hook! (fn [run-id branch-id] (delta-publisher run-id (str branch-id) nil)))
+
 (defn with-window
   "`tape` carrying the window its render is sized against: what the provider
   will take, else the model's context window. The live call and anything

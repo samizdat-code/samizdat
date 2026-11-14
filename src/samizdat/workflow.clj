@@ -250,37 +250,13 @@
   (when-let [p (:prompt definition)]
     (prompt-text p)))
 
-(defn role-ctx
-  "The ctx a role's sub-loop runs under, with its LLM adapter and config swapped
-  to the provider config :roles assigns `role` — e.g. {:implementor :flash
-  :supervisor :glm}. A role with no entry keeps the run's default model. This
-  is how a cheap model can implement while a stronger one reviews or
-  supervises."
-  [ctx role]
-  ;; :role rides the ctx from here on. It used to be consumed by prompt
-  ;; assembly and dropped, which left the tool layer unable to tell a
-  ;; supervisor from an implementor — and WHICH IMAGE AN EVAL LANDS IN is
-  ;; exactly that question (samizdat.repl.route). A ctx with no role gets the
-  ;; project image, which is the safe direction.
-  (let [ctx (assoc ctx :role role)]
-    ;; Resolution is config/role-llm, shared with read_digest, so a role's
-    ;; model has one answer whether it runs a sub-loop or one call.
-    ;; Then whatever a person switched for this role mid-run
-    ;; (samizdat.agent.live), over the configured assignment.
-    (live/in-ctx
-     (if-let [llm (config/role-llm (:config ctx) (:llm-config ctx) role)]
-       (assoc ctx :llm-adapter (registry/adapter-for (:provider llm))
-              :llm-config (if-let [fbs (seq (:fallback-llms llm))]
-                            ;; Each fallback with its own adapter, retired per
-                            ;; RUN (llm.client/chat, karamazov-0e2c.9).
-                            (-> llm
-                                (dissoc :fallback-llms)
-                                (assoc :fallback-scope (:run-id ctx)
-                                       :fallbacks (mapv (fn [l] {:adapter (registry/adapter-for (:provider l))
-                                                                 :config l})
-                                                        fbs)))
-                            llm))
-       ctx))))
+(defn- keep-stream
+  "`role-ctx`'s llm config with the run's streaming target carried over from
+  the ctx it was built from: a role's config is resolved afresh from the
+  config, and without these its calls streamed nowhere."
+  [ctx built]
+  (let [keep (select-keys (:llm-config ctx) [:stream-run-id :stream-branch])]
+    (cond-> built (seq keep) (update :llm-config merge keep))))
 
 (defn note-schema-warnings!
   "Record any :mycelium/warnings the pass accumulated, and return `data`.
@@ -564,3 +540,36 @@
         ;; The project image outlives a session, because it is a PROCESS. Left
         ;; running it holds a port and a sandbox for the life of the harness.
         (route/release! (:root ctx)))))))
+
+(defn role-ctx
+  "The ctx a role's sub-loop runs under, with its LLM adapter and config swapped
+  to the provider config :roles assigns `role` — e.g. {:implementor :flash
+  :supervisor :glm}. A role with no entry keeps the run's default model. This
+  is how a cheap model can implement while a stronger one reviews or
+  supervises."
+  [ctx role]
+  ;; :role rides the ctx from here on. It used to be consumed by prompt
+  ;; assembly and dropped, which left the tool layer unable to tell a
+  ;; supervisor from an implementor — and WHICH IMAGE AN EVAL LANDS IN is
+  ;; exactly that question (samizdat.repl.route). A ctx with no role gets the
+  ;; project image, which is the safe direction.
+  (let [ctx (assoc ctx :role role)]
+    (keep-stream ctx
+    ;; Resolution is config/role-llm, shared with read_digest, so a role's
+    ;; model has one answer whether it runs a sub-loop or one call.
+    ;; Then whatever a person switched for this role mid-run
+    ;; (samizdat.agent.live), over the configured assignment.
+    (live/in-ctx
+     (if-let [llm (config/role-llm (:config ctx) (:llm-config ctx) role)]
+       (assoc ctx :llm-adapter (registry/adapter-for (:provider llm))
+              :llm-config (if-let [fbs (seq (:fallback-llms llm))]
+                            ;; Each fallback with its own adapter, retired per
+                            ;; RUN (llm.client/chat, karamazov-0e2c.9).
+                            (-> llm
+                                (dissoc :fallback-llms)
+                                (assoc :fallback-scope (:run-id ctx)
+                                       :fallbacks (mapv (fn [l] {:adapter (registry/adapter-for (:provider l))
+                                                                 :config l})
+                                                        fbs)))
+                            llm))
+       ctx)))))

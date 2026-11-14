@@ -1283,6 +1283,11 @@
         ;; An atom because the tracer is built once and read per step.
         run-id* (atom run-id)
         _ (when on-start (on-start run-id))
+        ;; Where a call that is not a branch turn streams its reply: the
+        ;; workflow choice below, a manager or planner, a critic. Plain data,
+        ;; read by llm.client/chat; the root branch is the one a front end
+        ;; opens on.
+        llm-config (assoc llm-config :stream-run-id run-id :stream-branch "B1")
         ;; A run that named no workflow gets one chosen for it from the
         ;; catalogue (samizdat.agent.select), billed to the run now that the
         ;; row exists (karamazov-2rqb.1). Before the compile, because the
