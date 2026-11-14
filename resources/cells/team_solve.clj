@@ -823,6 +823,24 @@
   (or (:worker-turns l)
       (if (gates/run-time-left ctx) (:worker-max-turns-timed p) (:worker-max-turns p))))
 
+;; Every worker row stayed 'active' after its worker returned, so a front end
+;; kept showing a finished worker as the one working — its thinking line
+;; waiting on a branch that would never stream again while the manager's
+;; calls streamed elsewhere. The board's close-row! fixed the same thing for
+;; its owners; this is that rule for a team-solve worker.
+(defn- close-worker!
+  "Close worker branch `bid` with how its loop ended: still active means it hit
+  its cap (exhausted), no branch back means it threw (abandoned)."
+  [conn run-id bid out]
+  (let [b (:branch out)
+        s (:status b)
+        error? (or (nil? b) (= :error (:verdict out)))
+        status (cond error? :abandoned
+                     (contains? #{:done :abandoned :culled :exhausted} s) s
+                     :else :exhausted)]
+    (runs/close-branch! conn run-id bid status
+                        (or (:inactive-reason b) (when error? "the worker failed")))))
+
 (defn- run-solver
   "One worker on one task: its own branch, a fresh context, a turn cap, and a board
   row it holds, so the tree's single-writer rule sees whose change this is. A crash
@@ -853,12 +871,14 @@
             out (myc/run-compiled (wf/compiled-manifest "solver") rctx {:branch b :turn 1})
             done? (= :done (:verdict out))]
         (if done? (tasks/close! conn task-id) (tasks/release! conn task-id bid))
+        (close-worker! conn run-id bid out)
         {:verdict (:verdict out)
          :answer (get-in out [:branch :final-answer])
          :reason (get-in out [:branch :inactive-reason])})
       (catch Throwable e
         (when (cancel/control-signal? e) (throw e))
         (try (tasks/release! conn task-id bid) (catch Throwable _ nil))
+        (try (close-worker! conn run-id bid nil) (catch Throwable _ nil))
         {:verdict :error :reason (or (ex-message e) (str e))}))))
 
 (defn- attempt-trace

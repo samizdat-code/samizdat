@@ -158,8 +158,11 @@
   frame than opening it on the branch that is working. The supervisor's SUP
   is the last choice: it stays active after the run ends, and a run opened
   on it showed its passes where the answer should have been (karamazov-ttrn)."
-  [branches]
-  (or (winner branches)
+  ([branches] (active-branch branches true))
+  ([branches over?]
+  ;; Only a finished run has a winner: a team-solve worker is `done` when it
+  ;; hands back, and the run goes on elsewhere.
+  (or (when over? (winner branches))
       ;; An active one that has taken a turn: on the board loop B1
       ;; coordinates and a task branch does the work.
       (:id (first (filter #(and (= "active" (str (:status %))) (not (supervisor? %))
@@ -168,7 +171,7 @@
       (:id (first (filter #(and (= "active" (str (:status %))) (not (supervisor? %)))
                           branches)))
       (:id (first (remove supervisor? branches)))
-      (:id (first branches))))
+      (:id (first branches)))))
 
 (defn- finished? [detail]
   (contains? #{"completed" "exhausted" "failed" "aborted"}
@@ -188,8 +191,19 @@
         ;; the user off whichever branch they were reading the moment another
         ;; one became active.
         (nil? (:branch-id s))
-        (cond-> (assoc s :branch-id (active-branch (:branches body)) :branch-auto? true)
+        (cond-> (assoc s :branch-id (active-branch (:branches body) (finished? body)) :branch-auto? true)
           (finished? body) (assoc :winner-shown (:run-id s)))
+
+        ;; Picked for you and ENDED while the run goes on: a team-solve worker
+        ;; hands back and the manager thinks on B1. Left where it was, the log
+        ;; waited on a thinking that was streaming on another branch.
+        (and (:branch-auto? s) (not (finished? body))
+             (some #(and (= (:branch-id s) (:id %)) (not= "active" (str (:status %))))
+                   (:branches body))
+             (let [b (active-branch (:branches body) false)]
+               (and b (not= b (:branch-id s)))))
+        (assoc s :branch-id (active-branch (:branches body) false) :branch nil :turn-text {}
+               :branch-auto? true)
 
         ;; Picked for you and idle — no turn measured on it — while another
         ;; branch has started working: follow the work. A branch a person
@@ -197,10 +211,10 @@
         ;; traded for another working one.
         (and (:branch-auto? s) (not (finished? body))
              (not (:context (first (filter #(= (:branch-id s) (:id %)) (:branches body)))))
-             (let [b (active-branch (:branches body))]
+             (let [b (active-branch (:branches body) false)]
                (and b (not= b (:branch-id s))
                     (:context (first (filter #(= b (:id %)) (:branches body)))))))
-        (assoc s :branch-id (active-branch (:branches body)) :branch nil :turn-text {}
+        (assoc s :branch-id (active-branch (:branches body) false) :branch nil :turn-text {}
                :branch-auto? true)
 
         ;; Except ONCE, when the run being watched finishes: the branch that

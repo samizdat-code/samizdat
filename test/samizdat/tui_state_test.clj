@@ -823,7 +823,28 @@
                   (st/apply-detail (detail {:id "A" :status "active" :context {:turn 2}}))
                   (st/apply-detail (detail {:id "A" :status "active" :context {:turn 2}}
                                            {:id "B" :status "active" :context {:turn 9}})))]
-        (is (= "A" (:branch-id s)))))))
+        (is (= "A" (:branch-id s)))))
+    (testing "a picked branch that has ended hands over to the one still working"
+      ;; Team-solve: W1 finishes and the manager thinks on B1. Left on W1 the
+      ;; log waited for a thinking that streamed on B1.
+      (let [s (-> (st/initial "b")
+                  (st/apply-detail (detail {:id "B1" :status "active"}
+                                           {:id "W1" :status "active" :context {:turn 4}}))
+                  (st/apply-detail (detail {:id "B1" :status "active"}
+                                           {:id "W1" :status "done" :context {:turn 9}})))]
+        (is (= "B1" (:branch-id s)))
+        (testing "and on to the next worker once it takes a turn"
+          (is (= "W2" (:branch-id (st/apply-detail
+                                   s (detail {:id "B1" :status "active"}
+                                             {:id "W1" :status "done" :context {:turn 9}}
+                                             {:id "W2" :status "active" :context {:turn 1}})))))))
+      (testing "but not off the branch a person chose"
+        (is (= "W1" (:branch-id (-> (st/initial "b")
+                                    (st/apply-detail (detail {:id "B1" :status "active"}
+                                                             {:id "W1" :status "active" :context {:turn 4}}))
+                                    (st/select-branch "W1")
+                                    (st/apply-detail (detail {:id "B1" :status "active"}
+                                                             {:id "W1" :status "done" :context {:turn 9}}))))))))))
 
 (deftest an-interrupted-run-takes-a-directive-to-carry-on
   ;; After Esc the run is interrupted, not over: what is typed next is what
