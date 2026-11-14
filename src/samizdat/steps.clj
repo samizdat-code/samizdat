@@ -49,6 +49,7 @@
 
   Mechanism only. The numbers are `:step-ring` in gates.edn, and nothing here
   decides when a step is interesting."
+  (:refer-clojure :exclude [reset!])
   (:require [clojure.tools.logging :as log]
             [samizdat.agent.gates :as gates]
             [samizdat.events :as events]))

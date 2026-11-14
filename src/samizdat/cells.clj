@@ -39,6 +39,7 @@
   named (karamazov-3vu1.9). Each load evaluates every source into one fresh
   context, so a failed load leaves the previous load's handlers — and the
   helpers they close over — exactly as they were."
+  (:refer-clojure :exclude [ns-aliases])
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [jolt.fs :as fs]

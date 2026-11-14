@@ -40,6 +40,7 @@
   gate) and a questionnaire (`ask_human`). They differ only in what the
   request carries and what the answer carries, so they share the queue, the
   deadline and the endpoints."
+  (:refer-clojure :exclude [reset!])
   (:require [clojure.string :as str]
             [clojure.tools.logging :as log]
             [samizdat.agent.gates :as gates]

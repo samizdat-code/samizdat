@@ -3,6 +3,7 @@
 
 (ns samizdat.store.diagnoses
   "Durable exact-owner diagnosis cases."
+  (:refer-clojure :exclude [read])
   (:require [clojure.data.json :as json]
             [samizdat.store.db :as db]))
 

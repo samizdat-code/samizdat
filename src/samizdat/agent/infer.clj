@@ -53,6 +53,7 @@
   Policy lives elsewhere. Nothing here decides how deep to fork, what to
   probe, how to score the results or whether to commit a winner — that is a
   cell's job, in resources, where the supervisor can rewrite it."
+  (:refer-clojure :exclude [trampoline])
   (:require [clojure.tools.logging :as log]
             [samizdat.agent.budget :as budget]
             [samizdat.agent.gates :as gates]

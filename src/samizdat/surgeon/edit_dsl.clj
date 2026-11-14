@@ -7,7 +7,7 @@
 
 (ns samizdat.surgeon.edit-dsl
   "Capability-limited structural X-ray expressions over source snapshots."
-  (:refer-clojure :exclude [partition-all])
+  (:refer-clojure :exclude [partition-all replace])
   (:require [clojure.string :as str]
             [rewrite-clj.zip :as z]
             [samizdat.resource.workspace :as workspace]

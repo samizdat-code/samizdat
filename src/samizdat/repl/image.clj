@@ -87,7 +87,7 @@
   (RFC-013). A bare `jolt nrepl-server` answers the interrupt op with
   unknown-op. base-test holds this equal to deps.edn's pin, so the two cannot
   drift."
-  "8ada4beeb100a391045ec2d93eb566b476fb46f7")
+  "eb33e8b56fb6145d23c6e63f70151b0df7ada41f")
 
 (def nrepl-sdeps
   "The -Sdeps map the image is started with: nrepl, its middleware, and the

@@ -19,6 +19,7 @@
 (ns samizdat.llm-stream-test
   "A provider reply streamed: the chunks folded back into the completion the
   adapters already parse, and each delta handed on as it arrives."
+  (:refer-clojure :exclude [chunk])
   (:require [jolt.time]
             [clojure.core.async :as async]
             [clojure.data.json :as json]

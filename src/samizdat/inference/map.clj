@@ -3,6 +3,7 @@
 
 (ns samizdat.inference.map
   "Ordered inference maps over one shared budget tree."
+  (:refer-clojure :exclude [await])
   (:require [samizdat.agent.gates :as gates]
             [samizdat.cancel :as cancel]
             [samizdat.inference.budget :as budget]

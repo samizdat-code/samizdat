@@ -8,6 +8,7 @@
   model saw, role-tagged, with the steer composed into the user message the
   way the loop composes it; only runs that shipped and verified qualify; and
   no secret crosses into the file."
+  (:refer-clojure :exclude [run!])
   (:require ;; the java.time.* host shim, before data.json — see samizdat.store.journal
             [jolt.time]
             [clojure.data.json :as json]
