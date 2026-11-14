@@ -170,6 +170,10 @@
             :supervisor "supervisor" :system "sys"}
   ;; Who issued a steer, as a role.
   :issued-by {"human" :user "supervisor" :supervisor "watch" :supervisor}
+  ;; Roles whose lines are the agents talking to each other: folded to one
+  ;; line by default, so the conversation shows the person the work's
+  ;; status. Empty shows everything open.
+  :collapsed-roles #{:supervisor :critic :system}
   ;; Journal notes shown in the conversation: the kind, the role it speaks
   ;; as, and the path to its words in the note's data (the whole data when
   ;; that path holds nothing). The kinds are what the branch fetch asks for.

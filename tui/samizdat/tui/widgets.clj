@@ -251,6 +251,16 @@
                      (:text e)
                      "nothing streamed yet — some models send their reasoning only with the finished turn")))))
 
+(defn- aside-entry
+  "What one agent told another, folded to its first line under who said it:
+  open on a click, like a thinking."
+  [state {:keys [role text] :as e} handles]
+  (let [line (str/trim (str (first (remove str/blank? (str/split-lines (str text))))))
+        line (if (> (count line) 100) (str (subs line 0 100) "…") line)]
+    (fold state (tl/fold-id e)
+          (str "◇ " (get handles role (name role)) ": " line)
+          #(say-entry (assoc e :kind :say) handles))))
+
 (defn- tool-entry
   "A tool call as a CHAMBER, dirge's word: a box headed by the tool and the
   one argument it is known by, the first lines of what came back, and the
@@ -317,6 +327,7 @@
                             (case (:kind e)
                               :say (say-entry e handles)
                               :thinking (thinking-entry state e)
+                              :aside (aside-entry state e handles)
                               :tool (tool-entry state e cfg))])))
              (empty-note "no turns yet — pick a run")))))
 

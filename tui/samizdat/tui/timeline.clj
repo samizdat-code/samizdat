@@ -168,8 +168,13 @@
   A finished run's answer used to be only a truncated claim in a side panel
   (karamazov-ttrn)."
   [problem turns text interventions branch-id notes local-notes answer
-   {:keys [issued-by banner] by-kind :notes}]
-  (let [later (sort-by :at
+   {:keys [issued-by banner collapsed-roles] by-kind :notes}]
+  (let [aside? (set collapsed-roles)
+        ;; What the agents tell each other — a supervisor's steer, a critic's
+        ;; score, the harness's notes — folds to one line: the person reads the
+        ;; status of the work, and these are the machinery of getting there.
+        aside (fn [e] (if (and (= :say (:kind e)) (aside? (:role e))) (assoc e :kind :aside) e))
+        later (sort-by :at
                        (concat (all-turn-entries turns text banner)
                                (steer-entries interventions branch-id issued-by)
                                (note-entries notes by-kind)
@@ -177,7 +182,7 @@
                                (for [n local-notes]
                                  {:key (:key n) :role :system :kind :say
                                   :at (:at n) :text (:text n)})))]
-    (cond-> (vec (cond->> later
+    (cond-> (vec (cond->> (map aside later)
                    (not (str/blank? (str problem)))
                    (cons {:key "problem" :role :user :kind :say :at "" :text (str problem)})))
       (not (str/blank? (str answer)))
@@ -234,6 +239,7 @@
   [e]
   (case (:kind e)
     :thinking (:key e)
+    :aside (:key e)
     :tool (str (:key e) "/more")
     nil))
 
@@ -244,6 +250,7 @@
   (keep (fn [e]
           (case (:kind e)
             :thinking (fold-id e)
+            :aside (fold-id e)
             :tool (when (> (count (re-seq #"\n" (:result e))) (dec (or result-lines 4)))
                     (fold-id e))
             nil))

@@ -935,3 +935,17 @@
         out (render :widget/approvals {:approvals [a]} {})]
     (is (some #(re-find #"allow always \(a\)" (str (:label (props-of %)))) (nodes-of :button out)))
     (is (re-find #"this exact command" (texts out)))))
+
+(deftest a-supervisor-s-steer-draws-as-one-closed-line
+  (let [st {:branch-id "B1"
+            :detail {:interventions [{:id 7 :branch_id "B1" :kind "message" :issued_by "supervisor"
+                                      :payload "{\"text\":\"Run the parser tests before shipping.\\nThey fail on empty input.\"}"
+                                      :status "applied" :created_at "2026-09-23T10:00:03.000Z"}]}
+            :branch {:turns turns} :turn-text turn-text}
+        settings (assoc-in conv-settings [:conversation :collapsed-roles] #{:supervisor})
+        settings (assoc-in settings [:conversation :issued-by] {"supervisor" :supervisor})
+        out (render :widget/conversation (assoc st :settings settings) {})
+        said (texts out)]
+    (is (str/includes? said "◇ supervisor: Run the parser tests before shipping.") "its first line, under who said it")
+    (is (not (str/includes? said "They fail on empty input.")) "the rest is a click away")
+    (is (str/includes? said "Looking at the namespace first.") "the agent's own words stay open")))

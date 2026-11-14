@@ -408,6 +408,8 @@
    :program-guard-extract-user "prompts/program-guard-extract-user.md"
    :program-guard-brute-system "prompts/program-guard-brute-system.md"
    :program-guard-brute-user "prompts/program-guard-brute-user.md"
+   :team-solve-report-system "prompts/team-solve-report-system.md"
+   :team-solve-report-user "prompts/team-solve-report-user.md"
    :team-solve-cutoff-system "prompts/team-solve-cutoff-system.md"
    :team-solve-cutoff-user "prompts/team-solve-cutoff-user.md"
    :team-solve-finalize "prompts/team-solve-finalize.md"

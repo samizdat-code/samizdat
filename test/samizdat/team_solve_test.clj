@@ -92,6 +92,11 @@
           (do (record! :manage messages)
               {:content (manager-reply (manager (swap! managers inc))) :finish-reason "stop"})
 
+          (str/includes? sys "report a person reads")
+          (do (record! :report messages)
+              {:content "**What changed**\n- Added the feature file.\n\n**How it was checked**\n- No mechanical check ran."
+               :finish-reason "stop"})
+
           (str/includes? sys "CUT OFF")
           (do (record! :cutoff messages)
               {:content "it was reading and never wrote anything" :finish-reason "stop"})
@@ -451,7 +456,29 @@
             (run conn d {:problem "Add a feature file."}))]
     (is (= :completed (:status r)) (pr-str (:status r)))
     (is (true? (:unverified (journal/last-note conn (:run-id r) :team-solve-verify))))
-    (is (str/includes? (str (:answer r)) "NO CHECK RAN"))))
+    (is (str/includes? (str (:answer r)) "Not verified mechanically"))
+    (testing "the answer is a report of the work, written from the run's record"
+      (is (str/includes? (str (:answer r)) "**What changed**"))
+      (is (not (str/includes? (str (:answer r)) "wrote it")) "not the last worker's message"))))
+
+(deftest the-report-is-written-from-the-whole-record
+  (let [conn (db/open! ":memory:")
+        d (repo-dir)
+        calls (atom {})
+        r (with-redefs [llm/chat (scripted {:calls calls
+                                            :manager (fn [n] (if (zero? n) {:next "edit it"} {:status "done"}))
+                                            :worker (fn [messages]
+                                                      (let [all (str/join "\n" (map (comp str :content) (rest messages)))]
+                                                        (if (str/includes? all "<tool_result tool=\"write_file\"")
+                                                          {:content (json-call "done" {"answer" finished}) :finish-reason "stop"}
+                                                          {:content (json-call "write_file" {"path" "feature.txt" "content" "new"})
+                                                           :finish-reason "stop"})))})]
+            (run conn d {:problem "Add a feature file."}))
+        sent (str/join "\n" (map (comp str :content) (first (:report @calls))))]
+    (is (= :completed (:status r)))
+    (is (str/includes? sent "Add a feature file.") "the request")
+    (is (str/includes? sent "wrote it") "what the worker reported")
+    (is (str/includes? sent "- feature.txt") "and the files git says changed")))
 
 (deftest a-verify-command-is-the-gate-when-a-repository-has-one
   (let [conn (db/open! ":memory:")

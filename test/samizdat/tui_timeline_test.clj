@@ -251,3 +251,17 @@
       (is (not= :thinking (:kind (last (tl/entries (assoc-in s [:detail :branches 0 :status] "done") {}))))))
     (testing "not while a person is being asked"
       (is (not= :thinking (:kind (last (tl/entries (assoc s :approvals [{:id "a"}]) {}))))))))
+
+(deftest what-the-agents-tell-each-other-folds
+  (let [es (tl/entries state (assoc settings :collapsed-roles #{:supervisor :critic :system}))]
+    (is (= [[:user :say] [:agent :thinking] [:agent :say] [:agent :tool]
+            [:user :say] [:critic :aside] [:agent :say] [:agent :tool]
+            [:supervisor :aside] [:supervisor :aside]]
+           (mapv (juxt :role :kind) es))
+        "the critic and the supervisor fold; the person and the agent stay open")
+    (is (= "progress is slow" (:text (nth es 5))) "the words are kept for when it opens")
+    (is (some #{(:key (nth es 5))} (tl/fold-ids es {})) "and it is a fold the keys can open"))
+  (testing "the run's answer is never folded"
+    (let [es (tl/entries (assoc-in state [:detail :run :final_answer] "Done: fixed the lexer.")
+                         (assoc settings :collapsed-roles #{:agent}))]
+      (is (= :say (:kind (last es)))))))
