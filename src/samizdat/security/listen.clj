@@ -24,7 +24,8 @@
   IS the harness process, and both sit on loopback with no credentials. What
   the agent runs has to be kept off them (karamazov-3vu1.1), and the confining
   profile can only name ports someone wrote down — so the servers write them
-  down here as they bind, rather than the profile guessing from defaults.")
+  down here as they bind, rather than the profile guessing from defaults."
+  (:refer-clojure :exclude [reset!]))
 
 (defonce ^:private bound (atom {}))
 

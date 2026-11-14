@@ -49,6 +49,7 @@
   or a tool that has no run behind it gets exactly the behaviour the harness
   had before this existed. That is what keeps the seam addable without a flag
   day: nothing has to know whether a project store is present."
+  (:refer-clojure :exclude [bound?])
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]

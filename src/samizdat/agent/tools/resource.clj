@@ -3,6 +3,7 @@
 
 (ns samizdat.agent.tools.resource
   "Model-facing reads and revision-gated changes through resource resolvers."
+  (:refer-clojure :exclude [key read])
   (:require [clojure.string :as str]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.roles :as roles]

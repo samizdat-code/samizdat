@@ -3,6 +3,7 @@
 
 (ns samizdat.store.executions
   "Durable execution records, receipts, and explicit revival claims."
+  (:refer-clojure :exclude [read])
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
             [samizdat.util :as util]

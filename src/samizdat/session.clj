@@ -48,6 +48,7 @@
   Process-wide and deliberately not per-run: a session outlives a run, and a
   pattern that only shows up across three runs is exactly the pattern a
   single-run digest cannot see. Reset by `system/start!`."
+  (:refer-clojure :exclude [reset!])
   (:require [clojure.string :as str]
             [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]))

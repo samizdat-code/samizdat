@@ -3,6 +3,7 @@
 
 (ns samizdat.agent.tools.structural
   "Structural queries and revision-gated staged rewrites."
+  (:refer-clojure :exclude [apply])
   (:require [clojure.string :as str]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]

@@ -20,6 +20,7 @@
   "A run's events pushed to a front end as server-sent events
   (karamazov-tq7m.1): the wire parser, the server's pump, and the two ends
   talking over a real socket."
+  (:refer-clojure :exclude [chunk])
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
             [samizdat.api.runs :as api-runs]
