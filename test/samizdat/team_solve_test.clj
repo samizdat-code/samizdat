@@ -422,6 +422,10 @@
             (with-policy {:worker-max-turns 3} #(run conn d)))]
     (is (= :completed (:status r)) (pr-str (:status r)))
     (is (= 1 (count (:cutoff @calls))) "the summarizer ran once")
+    (testing "a worker's row ends with its worker, so a front end stops showing it as working"
+      (let [st (into {} (map (juxt :id (comp str :status))) (runs/branches conn (:run-id r)))]
+        (is (= "exhausted" (st "W1")) (pr-str st))
+        (is (= "done" (st "W2")) (pr-str st))))
     (testing "the manager heard about it"
       (let [look (str/join "\n" (map (comp str :content) (second (:manage @calls))))]
         (is (str/includes? look "CUT OFF"))
