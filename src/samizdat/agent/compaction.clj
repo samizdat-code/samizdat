@@ -255,10 +255,13 @@
 
 (defn snapshot-facts
   "What a run has done, read from its journal rather than from a model:
-  {:files [{:path :turn}] :commands [{:command :turn :category :last}] :errors [...]}.
+  {:files [{:path :turn}] :reads [{:path :turn}] :commands [{:command :turn :category :last}] :errors [...]}.
   One entry per file and per command, at its latest turn. :errors are commands whose
-  latest run failed."
-  [turns {:keys [max-files max-commands max-errors result-chars write-tools command-tools]}]
+  latest run failed. :reads are files read and not written (a written file is in
+  :files already) whose latest read succeeded: the fold drops the turns that held
+  them, and a branch that cannot see what it read reads it again (karamazov-kfnn.3)."
+  [turns {:keys [max-files max-reads max-commands max-errors result-chars
+                 write-tools read-tools command-tools]}]
   (let [latest (fn [k rows]
                  (vals (reduce (fn [acc r]
                                  (assoc acc (k r) (assoc r :order (:turn r))))
@@ -273,15 +276,27 @@
                        :let [c (:command (turn-args t))] :when c]
                    {:command c :turn (:turn t) :category (str (:category t))
                     :last (last-line (:result t) result-chars)})
-        recent (by-turn (map #(dissoc % :order) (latest :command commands)))]
+        recent (by-turn (map #(dissoc % :order) (latest :command commands)))
+        written (set (map :path files))
+        reads (for [t turns :when (contains? (set read-tools) (:tool_name t))
+                    :let [p (:path (turn-args t))] :when p]
+                {:path (str p) :turn (:turn t) :ok? (not= "failure" (str (:category t)))})]
     {:files (vec (take max-files (sort-by :path (map #(dissoc % :order) (latest :path files)))))
+     :reads (->> (latest :path reads)
+                 (filter :ok?)
+                 (remove #(contains? written (:path %)))
+                 (map #(dissoc % :order :ok?))
+                 (sort-by :turn)
+                 (take-last (or max-reads (count reads)))
+                 (sort-by :path)
+                 vec)
      :commands (tail max-commands recent)
      :errors (tail max-errors (filterv #(= "failure" (:category %)) recent))}))
 
 (defn snapshot-empty?
   "Whether a snapshot has nothing to say."
-  [{:keys [files commands errors]}]
-  (and (empty? files) (empty? commands) (empty? errors)))
+  [{:keys [files reads commands errors]}]
+  (and (empty? files) (empty? reads) (empty? commands) (empty? errors)))
 
 ;; --- pruning tool output ------------------------------------------------------
 

@@ -66,6 +66,7 @@
             [samizdat.llm.accounting :as accounting]
             [samizdat.llm.client :as llm]
             [samizdat.llm.fence :as fence]
+            [samizdat.llm.windows :as windows]
             [samizdat.llm.grammar :as grammar]
             [samizdat.llm.message :as message]
             [samizdat.llm.toolspec :as toolspec]
@@ -385,7 +386,8 @@
   (karamazov-z5sj)."
   [ctx tape]
   (let [llm (:llm-config ctx)
-        w (or (:request-window llm) (:context-window llm))]
+        ;; Narrowed to what the endpoint was seen to refuse past (llm.windows).
+        w (windows/effective (dissoc llm :max-context))]
     (cond-> tape
       w (assoc :window w)
       ;; The endpoint gets each reply's reasoning back, so the fold has to
@@ -425,9 +427,7 @@
                  ;; What the provider will take, which :context-window need not
                  ;; be: on a model with a large window that is the ladder's
                  ;; budget, chosen for when to fold.
-                 :context-window (or (get-in ctx [:llm-config :request-window])
-                                     (get-in ctx [:llm-config :context-window])
-                                     (get-in ctx [:llm-config :max-context]))
+                 :context-window (windows/effective (:llm-config ctx))
                  :tools (tools-for-request tools)
                  :grammar grammar
                  :prefill forced-prefill

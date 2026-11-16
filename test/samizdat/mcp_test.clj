@@ -12,7 +12,8 @@
             [samizdat.approval :as approval]
             [samizdat.config :as config]
             [samizdat.layers :as layers]
-            [samizdat.mcp.client :as mcp]))
+            [samizdat.mcp.client :as mcp]
+            [samizdat.security.flow :as flow]))
 
 (def ^:private fake
   {:command ["sh" (.getAbsolutePath (io/file "test/fixtures/mcp/fake-server.sh"))]
@@ -59,6 +60,21 @@
   (testing "a project server nobody trusted is refused, and says why"
     (let [r (run {:servers {} :untrusted [:evil]} {"action" "call" "server" "evil" "tool" "x"})]
       (is (str/includes? (:result r) "trusted-roots")))))
+
+(deftest what-a-server-returns-is-untrusted-unless-the-operator-says-so
+  ;; karamazov-kfnn.11: a server can return a web page, an issue body, a
+  ;; message — anything someone else wrote. It lowers the branch's trust as
+  ;; webfetch does, unless its config entry says its output is the operator's.
+  (let [call {"action" "call" "server" "fake" "tool" "lookup" "arguments" {"word" "x"}}]
+    (try
+      (run {:servers {:fake (assoc fake :policy :allow)}} call)
+      (is (= :untrusted (:trust (flow/label-of {:run-id "r" :branch {:id "B1"}}))))
+      (is (= "fake/lookup" (get-in (flow/label-of {:run-id "r" :branch {:id "B1"}}) [:because :trust :via])))
+      (finally (flow/forget-run! "r")))
+    (try
+      (run {:servers {:fake (assoc fake :policy :allow :output :trusted)}} call)
+      (is (= :trusted (:trust (flow/label-of {:run-id "r" :branch {:id "B1"}}))))
+      (finally (flow/forget-run! "r")))))
 
 (deftest a-project-names-servers-only-where-the-person-trusted-it
   (let [tmp (doto (java.io.File/createTempFile "mcp-cfg" "") (.delete) (.mkdirs))

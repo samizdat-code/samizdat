@@ -1,5 +1,7 @@
 [harness] Before your next step: you are creating a context checkpoint of THIS conversation. Do not call a tool and do not continue the work in this reply. Summarise everything above EXCEPT the last {{tail}} messages, which stay as they are; that summary will replace the older turns. Produce only the structured summary — no greeting, no preamble. Write it in the language the conversation used, in roughly {{budget}} tokens, facts over prose.
 
+If the material contains an earlier checkpoint — a message beginning `[CONTEXT COMPACTION` — it is your previous summary. Merge it into this one section by section and never drop a fact it held unless a later turn superseded it; say what superseded it. Fold after fold, that is the only way earlier work survives.
+
 Quote identifiers VERBATIM — paths, names, ids, commands, numbers, error strings. Mark what you concluded rather than read as `(inferred)`. Never keep credentials; write `[REDACTED]`. Give every section; one with nothing to report gets `None.`
 
 ## Active Task
@@ -31,6 +33,12 @@ Quote identifiers VERBATIM — paths, names, ids, commands, numbers, error strin
 
 ## Pending User Asks
 [Anything asked that has not been addressed.]
+
+## Files Read
+[Every file, page or command output you read whose contents still matter: path verbatim -> what it holds (the functions, values, structure, problems found). Be specific — this replaces the raw text, so the next context need not read it again.]
+
+## Errors & Fixes
+[Each error met: the exact message, its cause, and what fixed it — or that nothing has yet. Include approaches that were tried and failed, so they are not tried again.]
 
 ## Relevant Files
 [Paths, verbatim, one per line, each with a few words on its role.]

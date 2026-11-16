@@ -383,6 +383,7 @@
                          {:data {:decision decision :deterministic (boolean det)
                                  :reason (judge/for-the-record :reply-chars det)
                                  :verdict (:verdict judged)
+                                 :epistemic (judge/epistemic rows diff)
                                  ;; true when no verdict line was read and
                                  ;; :verdict is the fail-open default
                                  :unread (boolean (:unread judged))

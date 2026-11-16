@@ -358,6 +358,13 @@
                         (gates/threshold :provider-error-limit))
                     :abandoned
 
+                    ;; A wall no retry moves — a refused key, a model the
+                    ;; endpoint does not have — ends it on the first
+                    ;; (karamazov-kfnn.6).
+                    (contains? (set (gates/threshold :provider-terminal-reasons))
+                               (:last-provider-reason branch))
+                    :abandoned
+
                     ;; Rate limits lift by themselves, so they get far longer.
                     (>= (or (:consecutive-rate-limits branch) 0)
                         (:limit (gates/threshold :rate-limit)))
@@ -385,7 +392,10 @@
                                            (if (state/active? branch)
                                              {:provider-errors (+ (or (:consecutive-provider-errors branch) 0)
                                                                   (or (:consecutive-rate-limits branch) 0)
-                                                                  (or (:consecutive-outages branch) 0))}
+                                                                  (or (:consecutive-outages branch) 0))
+                                              :wall (some-> (:last-provider-reason branch)
+                                                            ((set (gates/threshold :provider-terminal-reasons)))
+                                                            name)}
                                              {:status (some-> (:status branch) name)}))))
 
         (= verdict :continue)

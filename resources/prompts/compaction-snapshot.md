@@ -1,6 +1,8 @@
 ## From the run's journal
 {% if files %}
 Files written, with the latest turn: {% for f in files %}`{{f.path}}` (t{{f.turn}}){% if not forloop.last %}, {% endif %}{% endfor %}
+{% endif %}{% if reads %}
+Files read (the summary holds what they contain; re-read one only for its exact text): {% for f in reads %}`{{f.path}}` (t{{f.turn}}){% if not forloop.last %}, {% endif %}{% endfor %}
 {% endif %}{% if commands %}
 Latest commands:
 {% for c in commands %}- t{{c.turn}} {{c.category}}: `{{c.command|safe}}` → {{c.last|safe}}

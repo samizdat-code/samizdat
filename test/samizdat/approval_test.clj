@@ -170,6 +170,28 @@
       (is (= :allow (:effect (approval/resolve-ask {:run-id "r1"}
                                                    {:effect :ask :input "ls"})))))))
 
+(deftest an-irreversible-ask-goes-to-a-person-whatever-the-mode
+  ;; karamazov-kfnn.9: yolo, the classifier and an unattended timeout each
+  ;; stand in for a person on a command that can be undone. One that cannot
+  ;; waits for a person, or is refused.
+  (let [ask {:effect :ask :input "git push --force" :head "git"
+             :irreversible {:label :force-push}}]
+    (with-redefs [approval/policy (constantly {:mode :yolo :wait-ms 50 :on-timeout :allow})]
+      (is (= :ask (:effect (approval/resolve-ask {:run-id "r1"} ask)))
+          "yolo has nobody to ask, so it refuses"))
+    (with-redefs [approval/policy (constantly {:mode :block :wait-ms 50 :on-timeout :allow :auto? true})
+                  approval/classified-allow (fn [& _] "looks fine")]
+      (let [r (approval/resolve-ask {:run-id "r1"} ask)]
+        (is (= :ask (:effect r)) "neither the classifier nor a timeout allows it")
+        (is (:timed-out r))))
+    (with-redefs [approval/policy (constantly {:mode :block :wait-ms 3000 :on-timeout :deny})]
+      (let [answer (future (approval/resolve-ask {:run-id "r1"} ask))]
+        (future (loop [] (if-let [p (first (approval/pending "r1"))]
+                           (do (is (nil? (:always p)) "nothing to allow always")
+                               (approval/decide! (:id p) {:decision :allow}))
+                           (do (Thread/sleep 5) (recur)))))
+        (is (= :allow (:effect (deref answer 5000 {:effect :hung}))) "a person can allow it")))))
+
 ;; --- ask_human ---------------------------------------------------------------
 
 (defn- ask [args]

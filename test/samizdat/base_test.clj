@@ -188,6 +188,11 @@
 
 ;; --- what may stay, and why -------------------------------------------------
 
+(def ^:private irreversible-reason
+  "policy/irreversible-table (karamazov-kfnn.9): which commands cannot be
+  undone. It confines the agent — a person's ask only, over grants and yolo —
+  and a table the agent can edit is not one, the reason base-rules gives.")
+
 (def ^:private allowed
   "Literals that stay in the base, each with the reason it is mechanism.
 
@@ -220,6 +225,14 @@
                   the same way."}
     :threshold {32 "The first printable code point, where Python's repr starts
                     writing control characters as escapes. A fact of repr."}}
+
+   "src/samizdat/agent/reflect.clj"
+   {:vocabulary {"(?i)(cause|fix|not|files)\\s*:\\s*(.*)"
+                 "The labels of the GOTCHA line form prompts/task-reflection.md
+                  asks for (karamazov-kfnn.5): the parse protocol of that
+                  template, which travels with it as judge's verdict reader
+                  travels with judge.md. Change the form there and here in one
+                  edit."}}
 
    "src/samizdat/agent/judge.clj"
    {:vocabulary {"(?i)</material"
@@ -425,7 +438,14 @@
                        not a control (see policy.clj below)."}}
 
    "src/samizdat/security/policy.clj"
-   {:vocabulary {"(?:>&[0-9]+|>>?[ \\t]*/dev/null)(?![A-Za-z0-9_./-])"
+   {:vocabulary {"(?i)^git\\s+push\\b.*(\\s(-f|--force|--force-with-lease)\\b|\\s\\+[^\\s]+)" irreversible-reason
+                 "(?i)^git\\s+push\\b.*\\s(--delete|-d)\\b" irreversible-reason
+                 "(?i)^git\\s+(reset\\s+.*--hard|clean\\s+(-[a-z]*f|--force))" irreversible-reason
+                 "(?i)\\b(drop\\s+(table|database|schema)|truncate\\s+(table\\s+)?[a-z_\\\"`])" irreversible-reason
+                 "(?i)^((npm|yarn|pnpm)\\s+publish|cargo\\s+publish|gem\\s+push|twine\\s+upload|poetry\\s+publish|docker\\s+push|gh\\s+release\\s+create)\\b" irreversible-reason
+                 "(?i)^(terraform\\s+(destroy|apply\\b.*-auto-approve)|kubectl\\s+delete|helm\\s+(uninstall|delete))\\b" irreversible-reason
+                 "(?i)^(psql|mysql|mariadb|sqlite3|sqlcmd|clickhouse-client|duckdb|mongosh|cockroach)\\b" irreversible-reason
+                 "(?:>&[0-9]+|>>?[ \\t]*/dev/null)(?![A-Za-z0-9_./-])"
                  "What a benign redirection IS — `2>&1`, `2>/dev/null` — is
                   POSIX shell structure the grammar must recognize, like the
                   statement separators beside it. Not a vocabulary a project

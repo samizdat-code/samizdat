@@ -960,3 +960,16 @@
     (is (= 17000 (cmp/ladder-tokens {:input-tokens 17000} policy))))
   (testing "the shipped policy names the reservation"
     (is (pos? (:reply-reserve-tokens (samizdat.agent.gates/threshold :compaction))))))
+
+(deftest a-second-fold-carries-the-first-forward
+  ;; karamazov-kfnn.2: the previous checkpoint reaches the summarizer only as
+  ;; source material. Unless the template says so, a second fold summarises
+  ;; the first as one more turn and its details thin out fold by fold.
+  (doseq [f ["resources/prompts/compaction-summary.md"
+             "resources/prompts/compaction-summary-tape.md"]
+          :let [t (slurp f)]]
+    (testing f
+      (is (str/includes? t "CONTEXT COMPACTION") "names the earlier checkpoint by its marker")
+      (is (str/includes? t "never drop") "forbids dropping what the earlier one held")
+      (is (re-find #"(?m)^## Errors & Fixes$" t))
+      (is (re-find #"(?m)^## Files Read$" t)))))

@@ -475,7 +475,7 @@
 (deftest the-rules-are-enumerable
   (let [{:keys [structural table]} (policy/rules)]
     (is (= #{:deny :protected-path :grant :allow :compound-allow
-             :complex-downgrade :blocked-segment :malformed :default}
+             :complex-downgrade :blocked-segment :irreversible :malformed :default}
            (set (map :name structural))))
     (is (every? (comp string? :doc) structural) "each says what it decides")
     (is (= policy/base-rules table) "and the table is the table")))
@@ -868,3 +868,44 @@
           (is (not (str/includes? (:result read-result) secret)))
           (is (str/includes? (:result read-result) "REDACTED"))))
       (jolt.fs/delete-tree root))))
+
+;; --- what cannot be undone (karamazov-kfnn.9) --------------------------------
+
+(deftest an-irreversible-command-is-named
+  (doseq [[cmd label] [["git push --force origin main" :force-push]
+                       ["git push -f" :force-push]
+                       ["git push origin +main" :force-push]
+                       ["git push --force-with-lease" :force-push]
+                       ["git push origin --delete feature" :remote-delete]
+                       ["git reset --hard HEAD~3" :discard-work]
+                       ["git clean -fdx" :discard-work]
+                       ["psql -c 'DROP TABLE users'" :drop-data]
+                       ["sqlite3 app.db \"truncate table events\"" :drop-data]
+                       ["npm publish" :publish]
+                       ["cargo publish --allow-dirty" :publish]
+                       ["twine upload dist/*" :publish]
+                       ["gh release create v1.0" :publish]
+                       ["docker push me/app:latest" :publish]
+                       ["terraform destroy" :infra]
+                       ["terraform apply -auto-approve" :infra]
+                       ["kubectl delete ns prod" :infra]
+                       ["cd x && npm publish" :publish]]]
+    (is (= label (:label (policy/irreversible cmd))) cmd))
+  (doseq [cmd ["git push origin main" "git status" "npm test" "git reset --soft HEAD~1"
+               "grep -r 'drop table' ." "echo publish" "terraform plan"]]
+    (is (nil? (policy/irreversible cmd)) cmd)))
+
+(deftest an-irreversible-command-asks-over-a-grant
+  ;; A grant is a person widening the table for a kind of command; it was
+  ;; never a promise about the one command that cannot be taken back.
+  (let [d (policy/decide {:grants ["git push *"]} "git push --force origin main")]
+    (is (= :ask (:effect d)))
+    (is (= :force-push (get-in d [:irreversible :label]))))
+  (is (= :allow (:effect (policy/decide {:grants ["git push *"]} "git push origin main"))))
+  (is (= :deny (:effect (policy/decide {} "dd if=/dev/zero of=x && npm publish")))
+      "a hard deny still wins"))
+
+(deftest an-irreversible-refusal-says-why
+  (let [r (policy/run-shell {:args {:command "git push --force origin main"}})]
+    (is (str/includes? (:result r) "cannot be undone"))
+    (is (str/includes? (:result r) "Rule: `irreversible force-push"))))

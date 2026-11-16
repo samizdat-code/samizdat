@@ -33,6 +33,7 @@
             [samizdat.llm.client :as llm]
             [samizdat.store.db :as db]
             [samizdat.store.runs :as runs]
+            [samizdat.store.journal :as journal]
             [samizdat.store.tasks :as tasks]))
 
 (defmacro with-db [[binding] & body]
@@ -224,6 +225,30 @@
                                  :conn c :run-id rid :turn 1})]
           (is (not (:done? r))))))))
 
+(deftest done-carries-the-assumptions-the-run-made
+  ;; karamazov-kfnn.8: a run nobody watches decides things nobody asked it to
+  ;; — which store, which format, which edge case to drop. `assumptions` on
+  ;; done puts each one in the shipped answer, where the operator reads it and
+  ;; can overrule it, and journals them as data.
+  (with-db [c]
+    (let [rid (runs/start-run! c {:problem "add an export"})]
+      (runs/open-branch! c rid {:branch-id "B1"})
+      (let [r (tools/run-tool
+               {:tool-name "done"
+                :args {:answer "Added the CSV export."
+                       :assumptions [{"question" "Which delimiter?" "chosen" "comma"
+                                      "alternatives" ["tab" "semicolon"] "why" "the issue's sample uses commas"}
+                                     {"question" "Quote every field?" "chosen" "only fields that need it"}]}
+                :branch (state/new-branch {:id "B1" :problem "add an export"})
+                :conn c :run-id rid :turn 1})
+            answer (get-in r [:branch :final-answer])]
+        (is (:done? r))
+        (is (str/includes? answer "Which delimiter?"))
+        (is (str/includes? answer "comma"))
+        (is (str/includes? answer "semicolon"))
+        (is (str/includes? answer "the issue's sample uses commas"))
+        (is (= 2 (count (:entries (journal/last-note c rid :assumptions)))))))))
+
 (deftest task-tool-create-and-show
   (with-db [c]
     (let [rid (runs/start-run! c {:problem "p"})
@@ -262,6 +287,39 @@
       (let [t (tasks/get-task c id)]
         (is (= "done" (:status t)))
         (is (some? (:closed_at t)))))))
+
+(deftest a-task-with-a-check-closes-only-when-it-passes
+  ;; karamazov-kfnn.4: a task may carry a shell command that exits 0 when it
+  ;; is done. Closing it done runs the check — through the shell policy, as
+  ;; any command the agent wrote — and a red or refused check leaves it open
+  ;; with the reason, so "done" on the board means the check said so.
+  (with-db [c]
+    (let [root (doto (java.io.File/createTempFile "task-check" "") (.delete) (.mkdirs))
+          rid (runs/start-run! c {:problem "p"})
+          go (fn [args] (tools/run-tool {:tool-name "task" :args args
+                                          :branch (state/new-branch {:id "B1" :problem "p"})
+                                          :conn c :run-id rid :turn 1 :root (str root)}))
+          id (second (re-find #"(sz-[0-9a-f]+)" (:result (go {:action "create" :title "make the file"
+                                                              :check "ls present.txt"}))))]
+      (is (= "ls present.txt" (:check_cmd (tasks/get-task c id))))
+      (let [r (go {:action "close" :id id})]
+        (is (not= "done" (:status (tasks/get-task c id))) "a red check leaves it open")
+        (is (str/includes? (:result r) "ls present.txt"))
+        (is (= :failure (:category r))))
+      (spit (java.io.File. root "present.txt") "x")
+      (let [r (go {:action "close" :id id})]
+        (is (= "done" (:status (tasks/get-task c id))))
+        (is (str/includes? (:result r) "check passed")))
+      (testing "a check the policy will not run does not close it either"
+        (let [id2 (second (re-find #"(sz-[0-9a-f]+)" (:result (go {:action "create" :title "t2"
+                                                                   :check "python3 -c 1"}))))]
+          (go {:action "close" :id id2})
+          (is (not= "done" (:status (tasks/get-task c id2))))))
+      (testing "cancelling never runs it"
+        (let [id3 (tasks/create! c {:title "t3" :check "ls nope"})]
+          (go {:action "close" :id id3 :status "cancelled"})
+          (is (= "cancelled" (:status (tasks/get-task c id3))))))
+      (jolt.fs/delete-tree root))))
 
 (deftest task-tool-bad-calls-are-mechanics
   ;; A bad id or a missing action is a call made wrong, not a failed line of

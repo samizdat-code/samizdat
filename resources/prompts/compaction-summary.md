@@ -4,6 +4,8 @@ You have roughly {{budget}} tokens. Spend them on facts, not prose.
 
 **Quote identifiers VERBATIM**: file paths, namespace and function names, ids, commands, exact numbers, error strings, version numbers, config keys. Copy them character for character. Never paraphrase, abbreviate or tidy an identifier — a path you rewrote is a path the next turn cannot open. Mark anything you concluded rather than read as `(inferred)`, and anything stated but never confirmed as `(unverified)`. Never preserve API keys, tokens, passwords or credentials; write `[REDACTED]`.
 
+If the material contains an earlier checkpoint — a message beginning `[CONTEXT COMPACTION` — it is your previous summary. Merge it into this one section by section and never drop a fact it held unless a later turn superseded it; say what superseded it. Fold after fold, that is the only way earlier work survives.
+
 Fill in every section. A section with nothing to report gets `None.` — do not omit it and do not invent content for it.
 
 ## Active Task
@@ -35,6 +37,12 @@ Fill in every section. A section with nothing to report gets `None.` — do not 
 
 ## Pending User Asks
 [Anything asked that has not been addressed.]
+
+## Files Read
+[Every file, page or command output you read whose contents still matter: path verbatim -> what it holds (the functions, values, structure, problems found). Be specific — this replaces the raw text, so the next context need not read it again.]
+
+## Errors & Fixes
+[Each error met: the exact message, its cause, and what fixed it — or that nothing has yet. Include approaches that were tried and failed, so they are not tried again.]
 
 ## Relevant Files
 [Paths, verbatim, one per line, each with a few words on its role.]

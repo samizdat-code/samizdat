@@ -541,6 +541,19 @@
         ;; running it holds a port and a sandbox for the life of the harness.
         (route/release! (:root ctx)))))))
 
+(defn- cross-family-llm
+  "A review role's model from another provider family, when gates.edn
+  :cross-family-review asks for one and the role has no :roles entry of its
+  own (karamazov-kfnn.7). Nil otherwise, and the role keeps the run's model."
+  [ctx role]
+  (let [{:keys [enabled? roles candidates]}
+        (try (gates/threshold :cross-family-review) (catch Throwable _ nil))]
+    (when (and enabled? (contains? (set roles) role))
+      (config/other-family-llm (:config ctx) (:llm-config ctx)
+                               (if (= :configured candidates)
+                                 (keys (get-in ctx [:config :providers]))
+                                 candidates)))))
+
 (defn role-ctx
   "The ctx a role's sub-loop runs under, with its LLM adapter and config swapped
   to the provider config :roles assigns `role` — e.g. {:implementor :flash
@@ -560,7 +573,8 @@
     ;; Then whatever a person switched for this role mid-run
     ;; (samizdat.agent.live), over the configured assignment.
     (live/in-ctx
-     (if-let [llm (config/role-llm (:config ctx) (:llm-config ctx) role)]
+     (if-let [llm (or (config/role-llm (:config ctx) (:llm-config ctx) role)
+                      (cross-family-llm ctx role))]
        (assoc ctx :llm-adapter (registry/adapter-for (:provider llm))
               :llm-config (if-let [fbs (seq (:fallback-llms llm))]
                             ;; Each fallback with its own adapter, retired per

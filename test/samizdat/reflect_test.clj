@@ -8,11 +8,14 @@
   the half that was missing: across the live runs the implementor made 46 turns
   and zero `remember` calls, so every session started knowing nothing about the
   codebase and spent its first turns rediscovering the layout."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [jolt.fs]
             [samizdat.agent.reflect :as reflect]
             [samizdat.llm.client]
             [samizdat.store.db :as db]
+            [samizdat.store.evidence :as evidence]
             [samizdat.store.journal]
             [samizdat.store.knowledge :as knowledge]
             [samizdat.store.runs]))
@@ -73,6 +76,32 @@
         kinds (into {} (map (juxt :id (comp :kind #(knowledge/get-by-id @conn %) :id))) written)]
     (is (= 3 (count written)))
     (is (= #{"overview" "semantic" "procedural"} (set (vals kinds))))))
+
+(deftest a-gotcha-is-structured-and-anchored-to-its-files
+  ;; karamazov-kfnn.5: a gotcha is worth most as symptom, cause, fix and the
+  ;; hypothesis that wasted the time — and it goes stale when the code it
+  ;; describes changes, so it carries the revision of each file it names.
+  (is (= {:symptom "`Unable to resolve symbol: foo`" :cause "the ns was not reloaded"
+          :fix "require it with :reload" :wrong "a typo in foo"
+          :files ["src/a.clj" "src/b.clj"]}
+         (reflect/parse-gotcha "`Unable to resolve symbol: foo` | cause: the ns was not reloaded | fix: require it with :reload | not: a typo in foo | files: src/a.clj, src/b.clj")))
+  (is (= {:symptom "`find | head` is refused"} (reflect/parse-gotcha "`find | head` is refused"))
+      "an unstructured line is its own symptom")
+  (let [root (doto (java.io.File/createTempFile "reflect" "") (.delete) (.mkdirs))]
+    (io/make-parents (io/file root "src/a.clj"))
+    (spit (io/file root "src/a.clj") "(ns a)")
+    (let [line "`boom` | cause: x | fix: y | files: src/a.clj, src/missing.clj"
+          [w] (reflect/record! @conn {:run-id "r1" :root (str root)} {"GOTCHAS" [line]})
+          ev (evidence/for-claim @conn (:id w))]
+      (is (= ["src/a.clj"] (mapv :path ev)) "a file that is not there anchors nothing")
+      (is (= :current ((evidence/file-checker (str root)) (first ev))))
+      (spit (io/file root "src/a.clj") "(ns a) (defn changed [])")
+      (is (= :stale ((evidence/file-checker (str root)) (first ev))))
+      (testing "the same symptom with other words around it corroborates"
+        (let [[w2] (reflect/record! @conn {:run-id "r2" :root (str root)}
+                                    {"GOTCHAS" ["`boom` | cause: x again | fix: y"]})]
+          (is (:repeat? w2)))))
+    (jolt.fs/delete-tree (str root))))
 
 (deftest there-is-at-most-one-overview
   ;; It is the orientation note, not a pile of them — capped by construction

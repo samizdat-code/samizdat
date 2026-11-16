@@ -98,6 +98,15 @@
 (defn- has-vendor-gate? [s]
   (boolean (some #(str/includes? s %) vendor-gates)))
 
+(defn credential?
+  "Whether `s` carries a vendor credential shape (sk-, AKIA, ghp_, …) — the
+  vendor half of `sensitive-value?`, without the URL-password half: a diff
+  full of test fixtures like postgres://u:p@localhost is not leaking anything,
+  while an sk- key added to the tree is (karamazov-kfnn.1)."
+  [s]
+  (let [v (str s)]
+    (boolean (and (has-vendor-gate? v) (re-find vendor-prefix-re v)))))
+
 (defn sensitive-value?
   "Whether a value carries a high-confidence credential shape, regardless of
   the name it sits under — a DATABASE_URL with an embedded password, or an

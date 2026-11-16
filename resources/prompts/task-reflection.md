@@ -35,9 +35,12 @@ worth recording only if breaking it costs a turn. Say what happens and why, not
 "always" or "never": a bare standing rule is not kept.]
 
 ## GOTCHAS
-[One per line: what wasted time here, with the exact error or refusal that
-announced it. This is the highest-value section — a gotcha recorded once saves
-every later session the turn it costs to rediscover.]
+[One per line: what wasted time here, in this form —
+`exact error or refusal | cause: why it happened | fix: what made it go away | not: the explanation you tried first that was wrong | files: path, path`
+The error text first and verbatim; leave out a part you do not know. `files`
+are the project files the gotcha is about: it is marked stale when they
+change. This is the highest-value section — a gotcha recorded once saves every
+later session the turn it costs to rediscover.]
 
 ## WRONG
 [Ids of memories you were shown that turned out to be wrong or stale, one per

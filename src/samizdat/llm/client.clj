@@ -51,7 +51,9 @@
             [samizdat.llm.accounting :as accounting]
             [samizdat.llm.message :as message]
             [samizdat.llm.ratelimit :as ratelimit]
+            [samizdat.llm.rejected :as rejected]
             [samizdat.llm.stream :as stream]
+            [samizdat.llm.windows :as windows]
             [samizdat.prompt :as prompt]
             [samizdat.util :as util]
             [samizdat.session :as session]))
@@ -317,7 +319,7 @@
   "The outcome of a response that failed — a non-2xx, or a 2xx whose body is
   an error: the retry decision, the error text, and the reason when there is
   one (a context overflow, a usage cap)."
-  [adapter status decoded resp]
+  [adapter config status decoded resp]
   ;; A context overflow outranks the status-code ladder: it is the one
   ;; 5xx that is deterministic, and the reason travels from where it is
   ;; detected so the loop can respond by compacting rather than retrying
@@ -331,6 +333,10 @@
         ;; Only a CLIENT error: a 5xx saying "insufficient capacity" is an
         ;; outage, and reading it as a cap ended the run (eca reads quota
         ;; wording only on a 429).
+        ;; An overflow that names the window teaches it (karamazov-kfnn.6):
+        ;; the next request is sized to what the endpoint takes, rather than
+        ;; squeezed toward it one failed call at a time.
+        _ (when overflow? (windows/learn! config (windows/window-in (:body resp))))
         cap? (and (not overflow?)
                   (or (= 402 status)
                       (and (client-error? status)
@@ -354,6 +360,10 @@
                                             0 (min 300 (count (str (:body resp))))))))}
       overflow? (assoc :reason :context-overflow)
       cap?      (assoc :reason :usage-cap)
+      ;; Walls that no retry moves, named so the loop can end on the first
+      ;; rather than spend its strikes learning nothing (karamazov-kfnn.6).
+      (and (not overflow?) (not cap?) (#{401 403} status)) (assoc :reason :auth)
+      (and (not overflow?) (not cap?) (= 404 status)) (assoc :reason :model-unknown)
       ;; A window that will reopen, which the loop waits out rather than counting
       ;; towards an outage.
       (and (not overflow?) (not cap?)
@@ -370,7 +380,9 @@
                                    (adapter/prefill-support? adapter config)))
         streamed? (boolean (and (:on-delta request) (contains? (:features config) :stream)))
         wire? (satisfies? adapter/StreamWire adapter)
-        body (cond-> (adapter/chat-body adapter config request)
+        ;; Without the reasoning fields this endpoint refused before
+        ;; (llm.rejected).
+        body (cond-> (rejected/strip config (adapter/chat-body adapter config request))
                (and streamed? wire?) (->> (adapter/stream-body adapter))
                ;; Usage rides the last chunk only when asked for.
                (and streamed? (not wire?)) (assoc :stream true :stream_options {:include_usage true}))
@@ -420,7 +432,7 @@
         ;; with its business codes. Classified like any other failure, so a
         ;; per-minute limit there is retried and a 1261 is an overflow
         ;; rather than a flat "API error" (karamazov-jvdu).
-        (failure adapter status decoded resp)
+        (failure adapter config status decoded resp)
         (if-let [parsed (adapter/parse-chat adapter decoded)]
           (let [merged (message/merge-reasoning (:content parsed) (:reasoning parsed))]
             (if (str/blank? merged)
@@ -486,7 +498,12 @@
            :error (str (adapter/display-name adapter)
                        " reply had no completion in it: "
                        (subs (str (:body resp)) 0 (min 300 (count (str (:body resp))))))}))
-      (failure adapter status decoded resp))))
+      (let [refused (rejected/refused-in status body (:body resp))]
+        (if (and refused (rejected/learn! config refused))
+          (do (log/warn (adapter/display-name adapter) "refused" (str/join ", " (map name refused))
+                        "— sending without it, and leaving it off for" (:model config))
+              (post-once* adapter config request url))
+          (failure adapter config status decoded resp))))))
 
 (defn- partial-response
   "Parse a cut stream at the adapter boundary, retaining only a completion

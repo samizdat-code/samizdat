@@ -44,6 +44,7 @@
             [samizdat.userspace :as userspace]
             [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]
+            [samizdat.security.secrets :as secrets]
             [samizdat.util :as util]))
 
 ;; The judge's preamble is read from resources/prompts/judge.md on each use
@@ -352,6 +353,21 @@
                            (re-find (re-pattern (:code-ext-regex (rules)))
                                     (str (get-in r [:args :path])))))))
 
+(defn epistemic
+  "What a verdict on this run rests on (karamazov-kfnn.7): `:verified` when
+  a test run passed at or after the last code edit, `:inferred` when there
+  is a diff to read but no such run, `:assumed` when there is neither. A
+  pass is only as strong as this, and the journal says which it was."
+  [rows diff]
+  (let [last-edit (reduce max -1 (keep (fn [r] (when (edited-code? [r]) (:turn r))) rows))
+        green-after (some (fn [r] (and (ran-tests? [r])
+                                       (= "success" (str (:category r)))
+                                       (>= (or (:turn r) -1) last-edit)))
+                          rows)]
+    (cond green-after :verified
+          (not (str/blank? (str diff))) :inferred
+          :else :assumed)))
+
 (defn- outside-tool? [name]
   (re-find (re-pattern (:outside-reach-regex (rules))) (str name)))
 
@@ -403,20 +419,44 @@
                                     (map #(java.util.regex.Pattern/quote %)
                                          (remove str/blank? (str/split (str phrase) #"\s+")))))))
 
+(defn- veto-pattern
+  "An entry's pattern: `:re`, a regex string, matched case-insensitively, for
+  a shape a phrase cannot spell (every quote style of a not-implemented
+  throw); else its `:phrase` through `veto-regex`. An entry whose `:re` does
+  not compile matches nothing rather than taking the gate down."
+  [{:keys [re phrase]}]
+  (if re
+    (try (re-pattern (str "(?i)" re)) (catch Throwable _ nil))
+    (veto-regex phrase)))
+
+(def ^:private credential-why
+  "A credential in the tree is a leak the moment it is committed or pushed; read it from the environment or a config file the repository ignores.")
+
 (defn diff-veto
   "The first gates.edn :judge-vetoes entry a line the run ADDED matches, as
   {:id :line :why}, or nil (karamazov-0e2c.5). Removed and unchanged lines
-  are not the run's doing. Cheap and certain, so it runs before any judge."
+  are not the run's doing. Cheap and certain, so it runs before any judge.
+
+  After the table, a vendor credential (secrets/credential?) added in the
+  diff is vetoed as `:credential` (karamazov-kfnn.1). That check is here and
+  not in the table for the reason security/flow gives: it confines the agent,
+  and a table the agent can edit is not one. Its `:line` is redacted — the
+  veto is shown to the model and journaled, and repeating the key there would
+  be the leak it is refusing."
   [diff]
   (let [vetoes (try (gates/threshold :judge-vetoes) (catch Throwable _ nil))
         added (->> (str/split-lines (str diff))
                    (filter #(and (str/starts-with? % "+") (not (str/starts-with? % "+++"))))
                    (map #(subs % 1)))]
-    (first (for [{:keys [id phrase why]} vetoes
-                 :let [re (veto-regex phrase)]
-                 line added
-                 :when (re-find re line)]
-             {:id id :line (str/trim line) :why why}))))
+    (or (first (for [{:keys [id why] :as v} vetoes
+                     :let [re (veto-pattern v)]
+                     :when re
+                     line added
+                     :when (re-find re line)]
+                 {:id id :line (str/trim line) :why why}))
+        (first (for [line added
+                     :when (secrets/credential? line)]
+                 {:id :credential :line (str/trim (secrets/redact line)) :why credential-why})))))
 
 (defn deterministic-block
   "The first deterministic finalization gate that fires, or nil. These are

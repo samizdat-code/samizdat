@@ -777,6 +777,45 @@ Some trailing prose that is not a bullet.
       (is (= :disabled-assertion
              (:id (judge/diff-veto "diff --git a/t b/t\n+++ b/t\n+  #_(is (= 1 2))\n")))))))
 
+(deftest a-verdict-says-what-it-rests-on
+  ;; karamazov-kfnn.7: a pass after tests ran green on the final code is not
+  ;; the same claim as a pass from reading the diff.
+  (let [write {:turn 3 :tool_name "write_file" :args {:path "src/a.clj"} :category "success"}
+        test-ok {:turn 4 :tool_name "shell" :args {:command "jolt test"} :category "success"}
+        test-old (assoc test-ok :turn 2)
+        test-red (assoc test-ok :category "failure")]
+    (is (= :verified (judge/epistemic [write test-ok] "diff")))
+    (is (= :inferred (judge/epistemic [test-old write] "diff")) "tests from before the last edit do not count")
+    (is (= :inferred (judge/epistemic [write test-red] "diff")) "a red run verifies nothing")
+    (is (= :assumed (judge/epistemic [write] "")) "no tests and no diff to read")))
+
+(deftest a-diff-that-focuses-stubs-or-leaks-is-vetoed
+  ;; karamazov-kfnn.1: a focused test runs the suite down to one test, a
+  ;; not-implemented body is a placeholder shipped as done, and a credential
+  ;; added to the tree is a leak — all certain from the added lines alone.
+  (let [added (fn [line] (str "diff --git a/t b/t\n--- a/t\n+++ b/t\n@@ -0,0 +1 @@\n+" line "\n"))
+        id (comp :id judge/diff-veto added)]
+    (testing "focused tests"
+      (is (= :focused-js-test (id "  it.only('parses', () => {")))
+      (is (= :focused-js-test (id "test.only(\"x\", fn)")))
+      (is (= :focused-js-suite (id "describe.only('suite', () => {"))))
+    (testing "not-implemented placeholders, whatever the language"
+      (is (= :not-implemented (id "  throw new Error('not implemented');")))
+      (is (= :not-implemented (id "  (throw (ex-info \"Not yet implemented\" {}))")))
+      (is (= :not-implemented (id "    raise RuntimeError(\"not implemented\")")))
+      (is (= :not-implemented (id "    todo!()")))
+      (is (= :not-implemented (id "    unimplemented!(\"later\")"))))
+    (testing "an abstract method is not a placeholder"
+      (is (nil? (id "        raise NotImplementedError"))))
+    (testing "a live credential, reported without echoing it"
+      (let [key "sk-proj-abcdefghijklmnopqrstuvwxyz0123"
+            v (judge/diff-veto (added (str "API_KEY = \"" key "\"")))]
+        (is (= :credential (:id v)))
+        (is (not (str/includes? (str (:line v)) key)) "the veto must not repeat the secret")
+        (is (not (str/includes? (str (judge/deterministic-block "done" [] #{} (added key))) key)))))
+    (testing "a credential the run removed is not its doing"
+      (is (nil? (judge/diff-veto "diff --git a/t b/t\n+++ b/t\n-AKIAABCDEFGHIJKLMNOP\n"))))))
+
 ;; --- strict reading of a verdict (karamazov-0e2c.6) ----------------------------------
 
 (deftest an-unreadable-verdict-is-unscored-not-a-pass

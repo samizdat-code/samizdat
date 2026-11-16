@@ -88,6 +88,21 @@
     (is (= 1 (count (:files (cmp/snapshot-facts turns (snap-opts {:max-files 1 :max-commands 1 :max-errors 1 :result-chars 5}))))))
     (is (cmp/snapshot-empty? (cmp/snapshot-facts [] (snap-opts {}))))))
 
+(deftest the-snapshot-names-what-was-read
+  ;; karamazov-kfnn.3: the fold drops the reads with the turns that carried
+  ;; them, and a branch that cannot see what it already read reads it again.
+  (let [more (conj turns
+                   {:turn 10 :tool_name "read_file" :args (json/write-str {:path "src/d.clj"}) :result "..." :category "success"}
+                   {:turn 11 :tool_name "read_file" :args (json/write-str {:path "src/d.clj" :offset 40}) :result "..." :category "success"}
+                   {:turn 12 :tool_name "read_file" :args (json/write-str {:path "src/gone.clj"}) :result "no such file" :category "failure"})
+        {:keys [reads]} (cmp/snapshot-facts more (snap-opts {}))]
+    (is (= ["src/d.clj"] (mapv :path reads))
+        "one line per path at its latest read; a written file is already listed, a failed read held nothing")
+    (is (= 11 (:turn (first reads))))
+    (is (not (cmp/snapshot-empty? (cmp/snapshot-facts [(last (butlast more))] (snap-opts {})))))
+    (is (str/includes? (prompt/render "compaction-snapshot" (cmp/snapshot-facts more (snap-opts {})))
+                       "`src/d.clj`"))))
+
 (deftest a-rejected-summary-no-longer-blocks-a-fold
   (let [{:keys [out notes]} (fold! {:turns turns :chat (fn [& _] {:content "## Active Task\nNone."})})
         text (str/join "\n" (map :content (get-in out [:branch :messages])))

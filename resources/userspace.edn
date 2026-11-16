@@ -343,6 +343,8 @@
    :reply-format-dropped "prompts/reply-format-dropped.md"
    :task-busy "prompts/task-busy.md"
    :task-board-owned "prompts/task-board-owned.md"
+   :task-check-failed "prompts/task-check-failed.md"
+   :done-assumptions "prompts/done-assumptions.md"
    :task-claimed "prompts/task-claimed.md"
    :task-current "prompts/task-current.md"
    :task-folded "prompts/task-folded.md"

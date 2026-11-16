@@ -180,7 +180,7 @@
     {:vars [answered? digest fold id-of standing]}
 
     samizdat.agent.judge
-    {:vars [blocking-findings consensus critic-prompt critique-message deterministic-block diff-veto evidence
+    {:vars [blocking-findings consensus critic-prompt critique-message deterministic-block diff-veto epistemic evidence
             finding-segments findings focus-sources focused-diff for-the-record parse-criteria parse-verdict
             parse-yesno review review-plan review-rubric section-bullets yesno-prompt]
      :effects #{:net}}

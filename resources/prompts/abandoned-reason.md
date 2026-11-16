@@ -1,1 +1,1 @@
-{% if provider-errors %}the provider failed {{provider-errors}} calls in a row{% else %}the branch stopped ({{status}}) without an answer{% endif %}
+{% if wall %}the provider refused the call ({{wall}}), which no retry changes{% else %}{% if provider-errors %}the provider failed {{provider-errors}} calls in a row{% else %}the branch stopped ({{status}}) without an answer{% endif %}{% endif %}

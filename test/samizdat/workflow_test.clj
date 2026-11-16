@@ -364,6 +364,34 @@
         (is (= :openai (get-in c [:llm-config :provider])))
         (is (= :base-adapter (:llm-adapter c)))))))
 
+(deftest a-reviewer-runs-on-another-family-when-the-policy-asks
+  ;; karamazov-kfnn.7: a reviewer on the author's model shares its blind
+  ;; spots. With gates.edn :cross-family-review on, a review role nobody
+  ;; assigned takes the first candidate of a different provider family that
+  ;; has credentials; an explicit :roles entry still wins.
+  (let [cfg {:providers {:glm53 {:type :glm :model "glm-5.3" :api-key "k1"}
+                         :ds {:type :deepseek :model "deepseek-flash" :api-key "k2"}
+                         :keyless {:type :openai :model "gpt" :api-key nil}}}
+        base {:config cfg :llm-adapter :base-adapter
+              :llm-config {:provider :deepseek :model "deepseek-flash"}}
+        policy {:enabled? true :roles #{:critic :reviewer} :candidates [:keyless :ds :glm53]}]
+    (with-redefs [samizdat.agent.gates/threshold
+                  (let [t samizdat.agent.gates/threshold]
+                    (fn [k] (if (= k :cross-family-review) policy (t k))))]
+      (is (= :glm (get-in (workflow/role-ctx base :critic) [:llm-config :provider]))
+          "deepseek authored, so neither deepseek nor the keyless candidate")
+      (is (= :deepseek (get-in (workflow/role-ctx (assoc-in base [:llm-config :provider] :glm) :critic)
+                               [:llm-config :provider])))
+      (is (= :deepseek (get-in (workflow/role-ctx base :implementor) [:llm-config :provider]))
+          "not a review role")
+      (is (= :deepseek (get-in (workflow/role-ctx (assoc-in base [:config :roles] {:critic :ds}) :critic)
+                               [:llm-config :provider]))
+          "an explicit assignment wins"))
+    (with-redefs [samizdat.agent.gates/threshold
+                  (let [t samizdat.agent.gates/threshold]
+                    (fn [k] (if (= k :cross-family-review) (assoc policy :enabled? false) (t k))))]
+      (is (= :base-adapter (:llm-adapter (workflow/role-ctx base :critic))) "off by default"))))
+
 (deftest catalog-lists-every-workflow-with-a-description
   ;; self-healing: the supervisor can only switch to / tune a workflow it knows
   ;; exists. The catalog is that discoverable menu.

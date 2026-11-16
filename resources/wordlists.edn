@@ -259,6 +259,23 @@
  ;; exceed_context_size_error (karamazov-1fai).
  "(?i)context (size|length|window)|context_length_exceeded|maximum context|prompt exceeds max length|prompt is too long|input is too long|too many (input )?tokens|request too large|exceed_context_size|\"?1261\"?"
 
+ :context-window-numbers
+ ;; How an overflow error states the window, each a regex whose first group
+ ;; is the number of tokens (samizdat.llm.windows, karamazov-kfnn.6): OpenAI
+ ;; and the servers that copy it, llama.cpp's context size and n_ctx, and
+ ;; Anthropic's "N tokens > M maximum".
+ ["(?i)maximum context length is (\\d+)"
+  "(?i)context (?:size|window|length) (?:is |of )?\\((\\d+) tokens\\)"
+  "(?i)context (?:window|length) (?:is|of) (\\d+)"
+  "(?i)\"?n_ctx\"?\\s*[:=]\\s*(\\d+)"
+  "(?i)(\\d+) (?:tokens )?maximum"]
+
+ :rejected-field-signals
+ ;; How a 400 says a request field is not accepted (samizdat.llm.rejected,
+ ;; karamazov-kfnn.6). Read only beside the name of a reasoning field the
+ ;; request carried, so a 400 about a message or a tool is never taken for it.
+ "(?i)unrecogni[sz]ed|unknown (field|param|parameter|argument|key)|not (supported|permitted|allowed)|unsupported|extra (fields|inputs|arguments)|additional propert|invalid (field|param|parameter|argument)|does not support"
+
  :transient-error-signals
  ;; How a failure says "this will pass" when nothing else classifies it: a
  ;; stream cut short (the idle watchdog closing a stalled stream ends it

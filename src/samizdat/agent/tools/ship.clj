@@ -612,6 +612,23 @@
           (do (sleep! (min poll-ms (max 0 (- deadline (now)))))
               (recur (read))))))))
 
+(defn assumptions-of
+  "done's `assumptions`, normalized: [{:question :chosen :alternatives :why}]
+  with blanks dropped. A string entry is a question with its answer unstated."
+  [ctx]
+  (let [raw (base/arg ctx :assumptions)
+        raw (if (string? raw) (try (json/read-str raw) (catch Throwable _ [raw])) raw)
+        txt #(some-> % str str/trim not-empty)
+        get* (fn [m k] (or (get m k) (get m (name k))))]
+    (vec (for [e (if (sequential? raw) raw [])
+               :let [m (if (map? e) e {:question e})
+                     q (txt (get* m :question))]
+               :when q]
+           (cond-> {:question q}
+             (txt (get* m :chosen)) (assoc :chosen (txt (get* m :chosen)))
+             (seq (get* m :alternatives)) (assoc :alternatives (str/join ", " (keep txt (get* m :alternatives))))
+             (txt (get* m :why)) (assoc :why (txt (get* m :why))))))))
+
 (defmethod base/run-tool "done" [{:keys [branch] :as ctx}]
   ;; A ROLE'S OUTPUT CONTRACT first (karamazov-05z0.14): a role that declares
   ;; one in roles.edn :output finishes with a `result` that fits it, so the
@@ -959,7 +976,16 @@
         ;; it is visible where the answer is judged.
         answer (if (seq items) (str answer (checklist/render items accounted)) answer)
         reasons (exam/explained-record touched-tests explained prior-explained)
-        answer (if (seq reasons) (str answer (exam/render touched-tests explained prior-explained)) answer)]
+        answer (if (seq reasons) (str answer (exam/render touched-tests explained prior-explained)) answer)
+        ;; What the run decided without asking (karamazov-kfnn.8), on the
+        ;; answer where the operator reads it and can overrule it.
+        assumed (assumptions-of ctx)
+        answer (if (seq assumed)
+                 (str answer "\n\n" (str/trim (prompt/render "done-assumptions" {:entries assumed})))
+                 answer)]
+    (when (and (nil? block) (seq assumed) (:conn ctx) (:run-id ctx))
+      (journal/note! (:conn ctx) (:run-id ctx) :assumptions
+                     {:branch-id (:id branch) :turn (:turn ctx) :data {:entries assumed}}))
     (when (and (nil? block) (seq reasons) (:conn ctx) (:run-id ctx))
       (journal/note! (:conn ctx) (:run-id ctx) :tests-explained
                      {:branch-id (:id branch) :turn (:turn ctx) :data {:entries reasons}}))

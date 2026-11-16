@@ -10,6 +10,7 @@
             [samizdat.security.flow :as flow]
             [samizdat.agent.state :as state]
             [samizdat.prompt :as prompt]
+            [samizdat.security.policy :as policy]
             [samizdat.store.journal :as journal]
             [samizdat.store.tasks :as tasks]))
 
@@ -101,7 +102,7 @@
       (when (and row (not (tasks/terminal? (:status row)))) row))))
 
 (def ^:private task-usage
-  (str "Actions: create {title, body?, type?, priority?, parentId?, contract?, tests?},"
+  (str "Actions: create {title, body?, type?, priority?, parentId?, contract?, tests?, check?},"
        " list, show {id}, update {id, ...fields}, claim {id},"
        " switch {id, reason}, close {id, status?}."))
 
@@ -170,6 +171,7 @@
                                           :parent-id (base/arg ctx :parentId)
                                           :contract (base/arg ctx :contract)
                                           :tests (base/arg ctx :tests)
+                                          :check (base/arg ctx :check)
                                           :run-id (when-not (base/arg ctx :backlog) run-id)
                                           ;; What this branch had read goes with it.
                                           :flow (flow/carried ctx)})]
@@ -281,7 +283,9 @@
 
         "close"
         (or (want :id)
-            (let [row (tasks/get-task conn (base/arg ctx :id))]
+            (let [row (tasks/get-task conn (base/arg ctx :id))
+                  ;; Run at most once, and only when the gates below reach it.
+                  check (delay (policy/run-shell (assoc ctx :args {:command (:check_cmd row)})))]
               (cond
                 (not row)
                 (base/malformed branch (str "No task " (base/arg ctx :id) "."))
@@ -313,8 +317,21 @@
                 (base/malformed branch (prompt/render "task-board-owned"
                                                       {:id (:id row) :title (:title row)}))
 
+                ;; Its own check, when it has one, says whether it is done
+                ;; (karamazov-kfnn.4) — run through the shell policy like any
+                ;; command the agent wrote, so it can be refused too. Red or
+                ;; refused, the task stays open and the reason comes back.
+                (and (= "done" (str (or (base/arg ctx :status) "done")))
+                     (not (str/blank? (str (:check_cmd row))))
+                     (not= :success (:category @check)))
+                (let [r @check]
+                  (base/fail branch (prompt/render "task-check-failed"
+                                                   {:id (:id row) :check (:check_cmd row)
+                                                    :output (str/trim (str (:result r)))})))
+
                 :else
-              (let [t (tasks/close! conn (base/arg ctx :id) (or (base/arg ctx :status) "done"))
+              (let [checked? (not (str/blank? (str (:check_cmd row))))
+                    t (tasks/close! conn (base/arg ctx :id) (or (base/arg ctx :status) "done"))
                     ;; Closing the CURRENT task clears the slot, so the next
                     ;; context block asks for the next one instead of pointing
                     ;; at finished work.
@@ -324,7 +341,9 @@
                                  ;; the finished statement stops being pinned,
                                  ;; so compaction can fold it away (swd)
                                  (state/unpin-task-statement (:id t))))]
-                (base/ok branch (str "Closed " (task-line t))
+                (base/ok branch (str "Closed " (task-line t)
+                                     (when (and checked? (= "done" (str (:status t))))
+                                       (str " — its check passed: `" (:check_cmd row) "`")))
                          :progress? true)))))
 
         (base/malformed branch (str "Unknown task action `" action "`. " task-usage)))
