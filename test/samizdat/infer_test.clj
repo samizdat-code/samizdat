@@ -1229,6 +1229,25 @@
       (is (= :continue (:verdict (route {:max-turns 1000}
                                         {:branch (update at :consecutive-outages dec) :turn 3})))))))
 
+(deftest a-wall-the-provider-will-not-move-ends-the-branch-at-once
+  ;; karamazov-kfnn.6: a bad key or an unknown model fails every call the
+  ;; same way, and "Try again" spent the whole :provider-error-limit learning
+  ;; nothing. gates.edn :provider-terminal-reasons names the reasons that end
+  ;; the branch on the first failure.
+  (cells/load-cells!)
+  (let [route (:handler (cell/get-cell! :loop/route))
+        b (state/new-branch {:id "B" :problem "p"})
+        step (fn [reason]
+               (with-redefs [journal/record-turn! (fn [& _] nil)]
+                 (aloop/provider-error-step {} b 1 "401 invalid key" reason)))]
+    (is (contains? (set (gates/threshold :provider-terminal-reasons)) :auth))
+    (let [d (route {:max-turns 1000} {:branch (step :auth) :turn 3})]
+      (is (= :abandoned (:verdict d)))
+      (is (re-find #"auth" (str (get-in d [:branch :inactive-reason])))))
+    (is (= :abandoned (:verdict (route {:max-turns 1000} {:branch (step :model-unknown) :turn 3}))))
+    (is (= :continue (:verdict (route {:max-turns 1000} {:branch (step :call-failed) :turn 3})))
+        "an ordinary failure still gets its strikes")))
+
 (deftest a-rate-limit-that-never-lifts-still-ends-the-branch
   (cells/load-cells!)
   (let [route (:handler (cell/get-cell! :loop/route))

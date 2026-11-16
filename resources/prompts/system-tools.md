@@ -10,12 +10,15 @@ branch_theses({theses})
     Propose up to 4 competing plans. The first commits this branch; the rest
     become sibling branches that explore independently and share your failure
     log, so none of you repeats another's dead end.
-done({answer, checklist?, changed_tests?, result?})
+done({answer, checklist?, changed_tests?, assumptions?, result?})
     Ship. `answer` is REQUIRED: the run's output, what you did and why to
     believe it. Refused without one, or when it states figures the evidence
     does not support, or engages nothing the problem asked.
     `result`: a value, for a role whose instructions ask for one (shape in
     your role); refused without it for that role.
+    `assumptions`: each choice you made that nobody told you —
+    [{"question": "…", "chosen": "…", "alternatives": ["…"], "why": "…"}].
+    They ride on the answer, where the operator can overrule them.
     `checklist`: each requirement you owe, by id:
     [{"item": "p1", "status": "met" | "not_met" | "n/a", "evidence": "…"}].
     Ids: problem list items (p1…), acceptance criteria (a1…), task tests
@@ -583,10 +586,12 @@ doing.
 ```
 task({action, ...})
     Ground your work in durable tasks. Actions:
-      create {title, body?, type?, priority?, parentId?, contract?, tests?}
+      create {title, body?, type?, priority?, parentId?, contract?, tests?, check?}
           A task can parent other tasks; an epic is just a task with
           type "epic". contract and tests are the delegation spec: what
           the work must satisfy and the tests that define delivery.
+          check is a shell command that exits 0 when the task is done;
+          closing it done runs the check, and a red one leaves it open.
           Pass backlog: true to leave it unclaimed.
       list                 The board: your run's tasks plus the open backlog.
       show {id}            One task in full, with its children.
@@ -595,7 +600,7 @@ task({action, ...})
       claim {id}           Take an open task. You hold ONE at a time.
       switch {id, reason}  Set the current task down and take another. The
                            reason is recorded — say why you are stopping.
-      close {id, status?}  done (default) or cancelled.
+      close {id, status?}  done (default, runs its check) or cancelled.
     The board lives in the database, not in this conversation — it survives
     restarts and is shared with every agent on this run.
 split({reason, parts})

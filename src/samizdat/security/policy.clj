@@ -409,6 +409,44 @@
 
 (def ^:private default-effect :ask)
 
+;; --- what cannot be undone ------------------------------------------------------
+
+(def ^:private irreversible-table
+  "Commands whose effect cannot be taken back (karamazov-kfnn.9): each
+  [label regex]. Matched per statement, case-insensitively, after the same
+  splitting the deny side uses. A hit makes the command an ask that only a
+  PERSON can answer — not a grant, not yolo, not the auto classifier, not an
+  unattended timeout (approval/resolve-ask). Why each cannot be undone is
+  prose, in prompts/shell-refused.md by label.
+
+  In src/ for the reason `base-rules` gives: it confines the agent, and a
+  table the agent can edit is not one. Conservative on purpose: a miss here
+  falls back to the ordinary table, where git push and installs are already
+  asks; a false hit costs a run a person's attention."
+  [[:force-push #"(?i)^git\s+push\b.*(\s(-f|--force|--force-with-lease)\b|\s\+[^\s]+)"]
+   [:remote-delete #"(?i)^git\s+push\b.*\s(--delete|-d)\b"]
+   [:discard-work #"(?i)^git\s+(reset\s+.*--hard|clean\s+(-[a-z]*f|--force))"]
+   [:drop-data #"(?i)\b(drop\s+(table|database|schema)|truncate\s+(table\s+)?[a-z_\"`])"]
+   [:publish #"(?i)^((npm|yarn|pnpm)\s+publish|cargo\s+publish|gem\s+push|twine\s+upload|poetry\s+publish|docker\s+push|gh\s+release\s+create)\b"]
+   [:infra #"(?i)^(terraform\s+(destroy|apply\b.*-auto-approve)|kubectl\s+delete|helm\s+(uninstall|delete))\b"]])
+
+(defn irreversible
+  "{:label :statement} for the first statement of `command` that cannot
+  be undone, or nil. A statement inside quotes (grep 'drop table') is data,
+  so the SQL rule is read only where a database client is the head."
+  [command]
+  (let [raw (str/trim (str command))
+        stmts (->> (cons raw (:segments (shell-split raw)))
+                   (mapcat (fn [st] [st (exec-prefix-stripped st) (assignments-stripped st)]))
+                   (map str/trim)
+                   distinct)
+        sql-head? #(re-find #"(?i)^(psql|mysql|mariadb|sqlite3|sqlcmd|clickhouse-client|duckdb|mongosh|cockroach)\b" %)]
+    (first (for [[label re] irreversible-table
+                 st stmts
+                 :when (and (re-find re st)
+                            (or (not= :drop-data label) (sql-head? st)))]
+             {:label label :statement st}))))
+
 ;; --- protected paths ---------------------------------------------------------
 
 (def ^:private protected-paths
@@ -468,6 +506,7 @@
    {:name :compound-allow :doc "every statement allowed"}
    {:name :complex-downgrade :doc "allow demoted; command opaque"}
    {:name :blocked-segment :doc "one statement not allowed"}
+   {:name :irreversible :doc "cannot be undone; a person's ask only"}
    {:name :malformed :doc "unparseable by the shell"}
    {:name :default :doc "nothing matched; ask"}])
 
@@ -587,6 +626,11 @@
                  (and compound-allow? (not= :deny effect)) :allow
                  downgraded? :ask
                  :else effect)
+        ;; What cannot be undone asks whatever allowed it — a person's grant
+        ;; included, which widened a KIND of command and never promised the
+        ;; one that cannot be taken back (karamazov-kfnn.9).
+        irrev (when (not= :deny effect) (irreversible raw))
+        effect (if (and irrev (= :allow effect)) :ask effect)
         ;; WHICH RULE MADE IT, most authoritative first, mirroring the
         ;; cascade above — so the refusal names the rule instead of leaving
         ;; the model to guess at a table it has never seen.
@@ -607,7 +651,8 @@
     ;; list", which is false and sent a live run round the same wall twice.
     {:effect effect :head head :raw raw :complex? complex? :promoted? promoted?
      :blocked-segment blocked-segment :malformed malformed
-     :rule rule
+     :rule (if irrev {:name :irreversible :label (:label irrev)} rule)
+     :irreversible irrev
      ;; Which protected path forced the deny, so the refusal can name it.
      :protected-path protected-hit}))
 
@@ -819,7 +864,7 @@
                   label (with-flow label command
                                    (delay (acceptance/configured-commands (config/file-config root)))))
         rule (:rule decided)
-        rule-text (str/join " " (remove nil? [(name (:name rule)) (:pattern rule)
+        rule-text (str/join " " (remove nil? [(name (:name rule)) (some-> (:label rule) name) (:pattern rule)
                                               (:path rule) (:segment rule)
                                               (:index rule)]))
         ;; A person's chance to turn an :ask into an :allow, bounded by
@@ -880,6 +925,7 @@
                                   :note note :unanswered timed-out})
                   (prompt/render "shell-refused"
                                {:command command :head head :complex? complex?
+                                :irreversible (some-> (:irreversible decided) :label name)
                                 :outside (some->> (:outside decided)
                                                   (map #(str "`" % "`"))
                                                   (str/join ", "))

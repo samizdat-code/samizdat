@@ -38,6 +38,8 @@
             [samizdat.llm.message :as message]
             [samizdat.llm.registry :as registry]
             [samizdat.llm.stream :as stream]
+            [samizdat.llm.rejected :as rejected]
+            [samizdat.llm.windows :as windows]
             [samizdat.tape :as tape]))
 
 ;; --- fence extraction -------------------------------------------------------
@@ -1151,6 +1153,71 @@
       (with-redefs [http/post (fn [& _] {:status 200 :body (json/write-str {:error {:code "1261" :message "Prompt exceeds max length"}})})]
         (let [e (try (client/chat a {:model "m"} [{:role "user" :content "x"}]) (catch Exception ex ex))]
           (is (= :context-overflow (:reason (ex-data e)))))))))
+
+(deftest an-overflow-that-names-the-window-teaches-it
+  ;; karamazov-kfnn.6: a config that says 1M in front of a server started with
+  ;; -c 32768 overflowed, squeezed one notch, overflowed again — a failed
+  ;; call per notch. When the error says the number, that number is the
+  ;; window from then on for that endpoint and model.
+  (is (= 32768 (windows/window-in "This model's maximum context length is 32768 tokens. However, you requested 40000")))
+  (is (= 32768 (windows/window-in "{\"error\":{\"message\":\"the request exceeds the available context size (32768 tokens)\",\"n_ctx\":32768}}")))
+  (is (= 200000 (windows/window-in "prompt is too long: 210000 tokens > 200000 maximum")))
+  (is (nil? (windows/window-in "Context size has been exceeded.")) "no number, nothing learned")
+  (windows/forget!)
+  (let [a (registry/adapter-for :deepseek-chat)
+        cfg {:model "m" :base-url "http://x" :context-window 1000000}]
+    (with-redefs [http/post (fn [& _] {:status 400 :body (json/write-str {:error {:message "This model's maximum context length is 65536 tokens"}})})]
+      (let [e (try (client/chat a cfg [{:role "user" :content "x"}]) (catch Exception ex ex))]
+        (is (= :context-overflow (:reason (ex-data e))))))
+    (is (= 65536 (windows/effective cfg)) "the learned window wins over the configured one")
+    (is (= 1000000 (windows/effective (assoc cfg :model "other"))) "only for that model")
+    (is (= 4096 (windows/effective (assoc cfg :request-window 4096))) "a smaller configured one still wins")
+    (windows/learn! cfg 900000)
+    (is (= 65536 (windows/effective cfg)) "a window only ever narrows"))
+  (windows/forget!))
+
+(deftest a-reasoning-field-the-endpoint-refuses-is-dropped-and-remembered
+  ;; karamazov-kfnn.6: an OpenAI-compatible server that does not know
+  ;; reasoning_effort answers 400 to every call that carries it, and the run
+  ;; ends on a knob it never needed. Drop the field, send again once, and
+  ;; leave it off for that endpoint and model from then on.
+  (rejected/forget!)
+  (let [a (registry/adapter-for :openai)
+        cfg {:model "m" :base-url "http://x" :reasoning-effort "high" :max-retries 0}
+        bodies (atom [])]
+    (with-redefs [http/post (fn [_ opts]
+                              (let [b (json/read-str (:body opts) :key-fn keyword)]
+                                (swap! bodies conj b)
+                                (if (contains? b :reasoning_effort)
+                                  {:status 400 :body (json/write-str {:error {:message "Unrecognized request argument supplied: reasoning_effort"}})}
+                                  {:status 200 :body (json/write-str {:choices [{:message {:content "ok"} :finish_reason "stop"}]})})))]
+      (is (= "ok" (:content (client/chat a cfg [{:role "user" :content "x"}]))))
+      (is (= [true false] (mapv #(contains? % :reasoning_effort) @bodies)))
+      (reset! bodies [])
+      (is (= "ok" (:content (client/chat a cfg [{:role "user" :content "x"}]))))
+      (is (= [false] (mapv #(contains? % :reasoning_effort) @bodies)) "remembered: not sent again")))
+  (testing "a 400 about something else is not mistaken for it"
+    (rejected/forget!)
+    (let [a (registry/adapter-for :openai)
+          calls (atom 0)]
+      (with-redefs [http/post (fn [& _] (swap! calls inc)
+                                {:status 400 :body (json/write-str {:error {:message "messages: invalid role"}})})]
+        (try (client/chat a {:model "m" :base-url "http://x" :reasoning-effort "high" :max-retries 0}
+                          [{:role "user" :content "x"}])
+             (catch Exception _ nil))
+        (is (= 1 @calls)))))
+  (rejected/forget!))
+
+(deftest a-refused-key-or-an-unknown-model-says-so
+  (let [a (registry/adapter-for :deepseek-chat)
+        reason (fn [status msg]
+                 (with-redefs [http/post (fn [& _] {:status status :body (json/write-str {:error {:message msg}})})]
+                   (:reason (ex-data (try (client/chat a {:model "m" :max-retries 0} [{:role "user" :content "x"}])
+                                          (catch Exception ex ex))))))]
+    (is (= :auth (reason 401 "Authentication Fails, Your api key is invalid")))
+    (is (= :auth (reason 403 "forbidden")))
+    (is (= :model-unknown (reason 404 "The model `m` does not exist")))
+    (is (not (#{:auth :model-unknown} (reason 400 "messages: invalid role"))) "a bad request is not a wall")))
 
 (deftest a-402-is-a-usage-cap-and-is-not-retried
   ;; DeepSeek answers 402 "Insufficient Balance" when the account is out of

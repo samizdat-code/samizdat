@@ -121,6 +121,10 @@
               (note! {:verdict verdict
                       :blocked (not pass?)
                       :split split
+                      ;; What the verdict rests on: tests green on the final
+                      ;; code, a reading of the diff, or neither (kfnn.7).
+                      :epistemic (judge/epistemic rows diff)
+                      :reviewer (some-> (:provider llm-config) name)
                       :findings (judge/for-the-record :reply-chars (judge/findings reply))})
               (if pass?
                 (ship data)

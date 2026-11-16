@@ -931,6 +931,28 @@
         :else (cond-> (provider-llm config alias {})
                 (seq fallbacks) (assoc :fallback-llms fallbacks))))))
 
+(defn family
+  "The provider family an :llm config belongs to: its provider type up to the
+  first dash (:deepseek-chat and :deepseek are one family, :openai-responses
+  and :openai another). Two models of one family share training and so blind
+  spots, which is what a cross-family reviewer is chosen to avoid."
+  [llm]
+  (some-> (:provider llm) name (str/split #"-") first keyword))
+
+(defn other-family-llm
+  "The :llm of the first alias in `candidates` whose family differs from
+  `default-llm`'s and that can be called — it carries an API key, or is a
+  :local server that needs none. Nil when none qualifies. An alias that does
+  not resolve is skipped, not fatal: the candidates are a preference list."
+  [config default-llm candidates]
+  (let [mine (family default-llm)]
+    (some (fn [alias]
+            (let [llm (try (provider-llm config (as-key alias) {}) (catch Throwable _ nil))]
+              (when (and llm (not= mine (family llm))
+                         (or (some? (:api-key llm)) (= :local (:provider llm))))
+                llm)))
+          candidates)))
+
 (defn redacted
   "The config with every :api-key masked, WHEREVER it sits, for logging and
   for /health.

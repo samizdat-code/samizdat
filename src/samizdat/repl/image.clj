@@ -100,9 +100,13 @@
 
 (defn spawn-argv
   "The argv that starts the image: `jolt -Sdeps <nrepl-sdeps> nrepl-server
-  <port>`, wrapped for the backend given `{:profile path :spec spec}`. Pure."
+  --no-port-file <port>`, wrapped for the backend given `{:profile path :spec spec}`. Pure."
   [backend confinement port]
-  (sandbox/wrap backend confinement ["jolt" "-Sdeps" nrepl-sdeps "nrepl-server" (str port)]))
+  ;; --no-port-file: the image runs with the PROJECT as its directory, and a
+  ;; .nrepl-port there replaces the operator's own (their editor then connects
+  ;; to the agent's image) and is deleted when the image stops. The harness
+  ;; knows the port; nothing needs the file.
+  (sandbox/wrap backend confinement ["jolt" "-Sdeps" nrepl-sdeps "nrepl-server" "--no-port-file" (str port)]))
 
 (defn- await-port!
   "Block until `port` accepts a connection, `deadline-ms` passes, or `proc`

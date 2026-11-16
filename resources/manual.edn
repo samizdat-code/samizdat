@@ -223,7 +223,11 @@
    {:name samizdat.agent.judge/rubric-problems
     :summary "rubrics.edn (policy role :rubrics) holds the critic's rubric as data: dimensions with a :question, :mandatory (a failure is a [high] finding) and worked :examples {:verdict :fail|:pass :snippet :rationale}, rendered into the critic prompt; a save is refused unless it has that shape. In an RFC's acceptance criteria, [!] or [3!] marks a criterion mandatory: not met fails the rubric whatever the weighted score."}
    {:name samizdat.agent.judge/diff-veto
-    :summary "Lines a run may not add without saying why — a test or assertion switched off (#_ (deftest, (comment (deftest, pytest skip, it.skip, #[ignore], t.Skip) — from gates.edn :judge-vetoes, matched whitespace-insensitively on the diff's added lines and checked in judge/deterministic-block before any judge is paid."}
+    :summary "Lines a run may not add without saying why — a test or assertion switched off (#_ (deftest, (comment (deftest, pytest skip, it.skip, #[ignore], t.Skip), a focused test (it.only, describe.only), a not-implemented placeholder (throw/raise … not implemented, todo!(), unimplemented!()) — from gates.edn :judge-vetoes (:phrase whitespace-insensitive, or :re a regex), checked on the diff's added lines in judge/deterministic-block before any judge is paid. A vendor credential (sk-, AKIA, ghp_, …) added in the diff is vetoed by src/ as :credential, reported redacted."}
+   {:name samizdat.agent.judge/epistemic
+    :summary "What a verdict rests on: :verified (a test run passed at or after the last code edit), :inferred (a diff was read, no such run) or :assumed. Journaled on the critic and :critique notes beside the verdict, with the reviewer's provider."}
+   {:name samizdat.config/other-family-llm
+    :summary "gates.edn :cross-family-review {:enabled? :roles :candidates}: a review role (:critic, :reviewer) that config.edn :roles does not assign runs on the first candidate of ANOTHER provider family with credentials (workflow/role-ctx). :candidates :configured is every :providers entry in order. Off by default: it moves review calls onto another account."}
    {:name samizdat.agent.judge/consensus
     :summary "The ship-gate critic asked gates.edn :critic-consensus :samples times: the majority of the samples that answered decides, the split {:passes :total :errors} is journaled on the :critic note, an errored sample is not a vote, a tie does not pass, and all failing is the usual fail-open."}
    {:name samizdat.agent.gitdiff/review-diff
@@ -295,6 +299,16 @@
     :summary "How the policy reads a command's shell structure — statements, separators, redirection — through a POSIX-subset grammar; a string the shell would refuse comes back with the position it stopped at."}]}
 
  {:group "Policy as data"
+  :entries
+  [{:name samizdat.security.policy/irreversible
+    :summary "Commands that cannot be undone — force push, remote branch delete, git reset --hard / clean -f, DROP/TRUNCATE through a database client, npm/cargo/gem/twine/docker publish, gh release create, terraform destroy / apply -auto-approve, kubectl delete, helm uninstall — are an ask only a PERSON answers: over a grant, and never by yolo, the auto classifier, an unattended timeout or an allow-always. The table is in src/ because it confines the agent; the refusal names the rule `irreversible <label>`."}
+   {:name samizdat.security.flow/observe!*
+    :summary "An mcp call lowers the branch's flow trust like webfetch (security/flow): a server returns what others wrote. A config.edn :mcp server entry with :output :trusted is the operator saying its output is theirs."}
+   {:name samizdat.llm.windows/effective
+    :summary "The window a request is sized against: :request-window, else :context-window, narrowed to what the endpoint said it takes. An overflow error that names the limit (wordlists.edn :context-window-numbers) teaches it per base-url and model for the process, so the next request fits instead of squeezing one failed call at a time."}
+   {:name samizdat.llm.rejected/refused-in
+    :summary "A 400 that names a reasoning field the request carried (reasoning_effort, thinking, …) beside wordlists.edn :rejected-field-signals drops it, sends once more, and leaves it off for that endpoint and model. A refused key (401/403) or unknown model (404) carries :auth / :model-unknown, and gates.edn :provider-terminal-reasons ends the branch on the first."}]}
+ {:group "Policy as data (continued)"
   :entries
   [{:name samizdat.store.userspace/last-shipped-generation
     :summary "Generations: every run's end records which project versions were current and how it ended. The newest one a run shipped on is the set known to work together; when gates.edn :generation-fallback :error-runs runs in a row have errored since, the supervisor's brief names every version that moved and the one to go back to. To boot the shipped workflow without touching the project's files, start with SAMIZDAT_PRISTINE=1 or config :userspace {:mode :shipped}."}
@@ -461,6 +475,18 @@
     :summary "The `jobs` tool (list, output since the last read, kill; prompts/jobs-tool.md), and the notice a branch gets at its next call when one of its jobs exits on its own, with its last :notice-tail-lines lines (prompts/job-exited.md)."}]}
 
  {:group "Evidence and diagnosis"
+  :entries
+  [{:name samizdat.store.tasks/create!
+    :summary "task create {…, check} stores a shell command that exits 0 when the task is done. close (done) runs it through the shell policy first; red or refused, the task stays open and the output comes back. Cancelling never runs it."}
+   {:name samizdat.agent.tools.ship/assumptions-of
+    :summary "done {…, assumptions: [{question, chosen, alternatives?, why?}]} — each choice made without being told rides on the shipped answer under 'Assumptions made without asking' and is journaled as :assumptions."}
+   {:name samizdat.agent.reflect/parse-gotcha
+    :summary "A reflection GOTCHA is `error | cause: … | fix: … | not: wrong hypothesis | files: a, b`. It is keyed on the error (other wording corroborates) and anchored as :file evidence to each named file at its current revision, so recall says stale once that code changes."}
+   {:name samizdat.agent.gitdiff/flagged-commits
+    :summary "The orient block lists recent commits on the files the task names whose subject says revert, hotfix, fixup, regression, workaround or rollback (gates.edn :orient-inject :history {:commits :max :pattern})."}
+   {:name samizdat.agent.compaction/snapshot-facts
+    :summary "The fold snapshot lists files read (gates.edn :compaction :snapshot :read-tools, :max-reads) beside files written, commands and failures; the summary template merges any earlier checkpoint section by section and keeps Files Read and Errors & Fixes sections."}]}
+ {:group "Evidence and diagnosis (continued)"
   :entries
   [{:name samizdat.store.evidence/status
     :summary "Recompute current, stale, unverified, conflicted, or retired from durable evidence and premises using local checks only."}

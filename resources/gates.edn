@@ -211,6 +211,14 @@
         cap. Run 3020cbca's supervisor made 2810 calls to a server that was not
         running, and 74ddebb8's 1002 that all failed the same way."}
 
+ :provider-terminal-reasons
+ {:value #{:auth :model-unknown} :kind :policy :capability-tunable? false
+  :provenance ["karamazov-kfnn.6"]
+  :doc "Provider failure reasons (llm.client) that end a branch on the first
+        one: a refused key (401/403) or a model the endpoint does not have
+        (404) fails every call the same way, and spending :provider-error-limit
+        strikes on it learns nothing."}
+
  :provider-outage
  {:value {:pause-ms 30000 :limit 12} :kind :threshold :capability-tunable? false
   :provenance ["karamazov-1fai"]
@@ -1535,15 +1543,39 @@
           {:id :ignored-rust-test :phrase "#[ignore]"
            :why "An ignored test no longer runs."}
           {:id :skipped-go-test :phrase "t.Skip("
-           :why "A skipped test no longer runs."}]
+           :why "A skipped test no longer runs."}
+          {:id :focused-js-test :re "\\b(it|test)\\.only\\s*\\("
+           :why "A focused test makes the runner skip every other test, so the suite passes without running."}
+          {:id :focused-js-suite :re "\\bdescribe\\.only\\s*\\("
+           :why "A focused suite makes the runner skip every other suite, so the suite passes without running."}
+          {:id :not-implemented
+           :re "\\b(throw|raise|ex-info|panic!?|error)\\b.{0,80}\\bnot[ _-]+(yet[ _-]+)?implemented|\\b(todo|unimplemented)!\\s*\\("
+           :why "A body that only says it is not implemented is a placeholder: the feature is missing, whatever the tests say."}]
   :kind :policy :capability-tunable? false
   :doc "Lines a run may not ADD to its diff without saying why: each switches
         off a test or an assertion, which turns a red suite green without
-        fixing anything. Checked before any judge is asked (judge/diff-veto,
-        from judge/deterministic-block), whitespace-insensitively between the
-        phrase's tokens. A hit sends the branch back with :why
-        (prompts/judge-veto.md)."
-  :provenance ["karamazov-0e2c.5"]}
+        fixing anything, or ship a placeholder as the feature. Checked before
+        any judge is asked (judge/diff-veto, from judge/deterministic-block):
+        a :phrase whitespace-insensitively between its tokens, a :re as a
+        case-insensitive regex. A hit sends the branch back with :why
+        (prompts/judge-veto.md). A vendor credential added in the diff is
+        vetoed too, by src/ (secrets/credential?), not by this table."
+  :provenance ["karamazov-0e2c.5" "karamazov-kfnn.1"]}
+
+ :cross-family-review
+ {:value {:enabled? false
+          :roles #{:critic :reviewer}
+          :candidates :configured}
+  :kind :policy :capability-tunable? false
+  :provenance ["karamazov-kfnn.7"]
+  :doc "A review role that config.edn :roles does not assign runs on a model
+        from ANOTHER provider family than the run's (workflow/role-ctx,
+        config/other-family-llm): a reviewer on the author's model shares its
+        blind spots. :candidates is the preference list of provider aliases,
+        or :configured for every config.edn :providers entry in order; the
+        first of another family with credentials is taken, and none means the
+        run's own model. Off by default because it moves review calls onto
+        another account."}
 
  :critic-consensus
  {:value {:samples 3}
@@ -3820,7 +3852,11 @@
                           "\\b([a-z][a-z0-9_]*(?:[-./][a-z0-9_]+)+)\\b"]
           :definition-patterns ["\\((?:defn-?|def|defmacro|defmulti|defmethod|defprotocol|defrecord|deftype|ns)\\s+{name}(?:\\s|$|\\))"
                                 "^\\s*(?:def|class)\\s+{name}\\b"
-                                "\\b(?:func|function|fn|const|let|var)\\s+{name}\\b"]}
+                                "\\b(?:func|function|fn|const|let|var)\\s+{name}\\b"]
+          ;; Flagged commits on the files found (karamazov-kfnn.10): the
+          ;; last :commits on them, subjects matching :pattern, at most :max.
+          :history {:commits 200 :max 5
+                    :pattern "(?i)\\b(revert|hotfix|fixup|regression|workaround|roll ?back)\\b"}}
   :kind :policy :capability-tunable? false
   :provenance ["karamazov-fp21.3"]
   :doc "THE OPENING BLOCK THAT SAYS WHERE THE NAMES THE PROBLEM MENTIONS ARE
@@ -4241,8 +4277,9 @@
                 :note "[{{chars}} chars written and on disk: read_file for the file now, fetch_turn for this call]"}
    ;; WHAT A FOLD KEEPS WITHOUT ASKING A MODEL (after context-mode). Read from the
    ;; journal, so a rejected summary no longer leaves history unfolded.
-   :snapshot {:max-files 40 :max-commands 8 :max-errors 6 :result-chars 200
+   :snapshot {:max-files 40 :max-reads 40 :max-commands 8 :max-errors 6 :result-chars 200
               :write-tools #{"write_file" "edit_file" "patch" "edit_clojure"}
+              :read-tools #{"read_file"}
               :command-tools #{"shell" "run_check"}}
    :rejected-preview-chars 400
    ;; A result shorter than this is left alone: summarising it costs more
@@ -6072,7 +6109,15 @@
                                                             :properties {:test {:type "string" :description "The test's name, or the file's path for a file that is not Clojure."}
                                                                          :reason {:type "string" :description "Why it changed or went, and what pins the behaviour now."}}
                                                             :required ["test" "reason"]}
-                                                    :description "One entry per pre-existing test this change altered or deleted."}}
+                                                    :description "One entry per pre-existing test this change altered or deleted."}
+                                    :assumptions {:type "array"
+                                                  :items {:type "object"
+                                                          :properties {:question {:type "string" :description "What had to be decided that nobody said."}
+                                                                       :chosen {:type "string" :description "What you chose."}
+                                                                       :alternatives {:type "array" :items {:type "string"}}
+                                                                       :why {:type "string"}}
+                                                          :required ["question" "chosen"]}
+                                                  :description "Each choice you made without being told, so the operator can overrule it."}}
                        :required ["answer"]}}
   "give_up" {:name "give_up"
              :description "Abandon the task, stating why it cannot be finished."

@@ -75,7 +75,7 @@
   "Insert a task and return its id. Unset fields take the dirge defaults:
   type task, status open, priority normal, no parent, backlog (no run)."
   [conn {:keys [title body type status priority parent-id run-id contract tests
-                stub-file stubs flow]}]
+                stub-file stubs flow check]}]
   (when (str/blank? (str title))
     (throw (ex-info "a task needs a title" {})))
   (when (and parent-id (nil? (get-task conn parent-id)))
@@ -96,8 +96,9 @@
                                ["INSERT INTO tasks (id, title, body, type, status, priority,
                                                     parent_id, run_id, contract, tests,
                                                     stub_file, stubs,
-                                                    created_at, updated_at, closed_at, flow)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                                                    created_at, updated_at, closed_at, flow,
+                                                    check_cmd)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                                 id (str title) (or body "") (or type "task")
                                 status priority parent-id run-id
                                 (or contract "") (or tests "")
@@ -108,7 +109,8 @@
                                 ;; was built (v21).
                                 (or stub-file "")
                                 (str/join "," (remove str/blank? (map str (or stubs []))))
-                                now now (when (terminal? status) now) flow]))
+                                now now (when (terminal? status) now) flow
+                                (str/trim (str (or check "")))]))
                 id
                 (catch Throwable e
                   (if (and (db/id-collision? e) (< attempt 5))

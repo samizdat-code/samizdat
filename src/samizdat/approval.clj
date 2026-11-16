@@ -346,22 +346,29 @@
         answered! (fn [label]
                     (when-let [c (and (:occurrence decision) (:conn ctx))]
                       (learned/observe! c (:occurrence decision) {:outcome label})))
-        classified (delay (when auto? (classified-allow ctx decision)))]
+        ;; What cannot be undone is a person's call or nobody's
+        ;; (karamazov-kfnn.9): no yolo, no classifier, no allow-on-timeout,
+        ;; and nothing to allow always — each of those stands in for a person
+        ;; on a command that could be taken back.
+        irrev? (some? (:irreversible decision))
+        on-timeout (if irrev? :deny on-timeout)
+        classified (delay (when (and auto? (not irrev?)) (classified-allow ctx decision)))]
     (cond
       (not= :ask effect) decision
       ;; The same text a person already allowed on this run: trust is of
       ;; the content, so only a change asks again (karamazov-0e2c.19).
-      (and content-key (content-approved? run-id content-key))
+      (and content-key (not irrev?) (content-approved? run-id content-key))
       (assoc decision :effect :allow :approved-before true)
       ;; Exactly this text, allowed always earlier on this run.
-      (and input (contains? (get @exact-allowed run-id) (str input)))
+      (and input (not irrev?) (contains? (get @exact-allowed run-id) (str input)))
       (assoc decision :effect :allow :approved-before true)
       ;; Nobody is asked and everything that would have been is allowed.
       ;; Flagged, so the journal tells a yolo allow from a person's.
-      (= :yolo mode) (assoc decision :effect :allow :yolo true)
+      (and (= :yolo mode) (not irrev?)) (assoc decision :effect :allow :yolo true)
       ;; :auto's classifier, before any person. Flagged with its reason, so
       ;; the journal tells its allow from a person's.
       @classified (assoc decision :effect :allow :classified @classified)
+      ;; yolo with an irreversible command has nobody to ask.
       (not= :block mode) decision
       :else
       (try
@@ -370,10 +377,10 @@
               ;; Nor for a flow gap: a grant clears a command, not what the
               ;; branch has read.
               pattern (when (and (:head decision) (not (:complex? decision))
-                                 (not (:flow? decision)))
+                                 (not (:flow? decision)) (not irrev?))
                         (grant-pattern (:head decision) input))
               ;; With no pattern to widen to, always is this exact text.
-              exact (when (and (nil? pattern) (not (str/blank? (str input))))
+              exact (when (and (nil? pattern) (not irrev?) (not (str/blank? (str input))))
                       (str input))
               id (request! {:run-id run-id :branch-id branch-id :kind :shell
                             :input input :details details :reason reason

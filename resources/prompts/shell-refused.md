@@ -1,5 +1,10 @@
 {% if envrefs %}Command denied: it references {{envrefs}}, and the operator has not listed that name in config.edn `:shell :env-refs`. A reference resolves only the names the operator allowed; this cannot be granted from inside the run.{% else %}{% if denied %}Command denied by policy: `{{head}}` is on the deny list. This cannot be overridden.{% else %}{% if protected %}Command denied: it could modify `{{path}}` — the operator's run config, which defines the verify gate this run ships against. The run a gate judges cannot rewrite the gate, and no grant unlocks this. Reading it is fine (`cat`, `grep`). If the gate itself is wrong, say so in your answer and let the operator change it.{% else %}Command needs approval: `{{command}}`.
-{% if outside %}
+{% if irreversible %}
+It cannot be undone — {% ifequal irreversible "force-push" %}a force push rewrites what others have already pulled{% endifequal %}{% ifequal irreversible "remote-delete" %}a deleted remote branch is gone for everyone{% endifequal %}{% ifequal irreversible "discard-work" %}it throws away uncommitted work git has no copy of{% endifequal %}{% ifequal irreversible "drop-data" %}dropped or truncated data has no undo{% endifequal %}{% ifequal irreversible "publish" %}a published release cannot be unpublished from everyone who fetched it{% endifequal %}{% ifequal irreversible "infra" %}it changes or destroys live infrastructure{% endifequal %} — so only a person can allow it: no
+grant, unattended mode or classifier answers for it. If the work needs it, say
+so in your answer and leave it to the operator; otherwise find a way that can
+be taken back.
+{% else %}{% if outside %}
 It reads outside the project: {{outside}}. The project's own tree and its
 declared reference paths are readable without asking; anything else needs a
 person to allow it, or the operator to add the directory to
@@ -36,7 +41,7 @@ this run has no human watching, it will not be granted. Prefer a tool that does
 the same job without the shell: `read_file` and `grep` to look around, `eval`
 to run Clojure, including this project's own tests once you have required the
 namespace.
-{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}
+{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}{% endif %}
 {% endif %}{% if note %}
 A person looked at this and said: {{note}}
 {% endif %}{% if unanswered %}

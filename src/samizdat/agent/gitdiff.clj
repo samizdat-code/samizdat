@@ -50,6 +50,29 @@
 (defn- lines [out]
   (some->> out str/split-lines (remove str/blank?) vec))
 
+(defn flagged-commits
+  "Recent commits on `paths` whose subject matches `pattern` — a revert, a
+  hotfix, a fixup (karamazov-kfnn.10): [{:sha :date :subject :paths}],
+  newest first, at most `max` of them, from the last `commits` commits on
+  those paths. Empty when `root` is not a git repository or nothing matches.
+  The pattern is the caller's (gates.edn); this only reads the log."
+  [root paths {:keys [commits max pattern]}]
+  (let [re (try (re-pattern (str pattern)) (catch Throwable _ nil))]
+    (if (or (nil? re) (empty? paths) (nil? commits) (nil? max))
+      []
+      (let [out (apply git root "log" (str "-n" (long commits))
+                       "--date=short" "--format=%x00%h%x09%ad%x09%s" "--name-only" "--"
+                       (map str paths))]
+        (->> (str/split (str out) #"\x00")
+             (keep (fn [chunk]
+                     (let [[head & files] (remove str/blank? (str/split-lines chunk))
+                           [sha date subject] (some-> head (str/split #"\t" 3))]
+                       (when (and subject (re-find re subject))
+                         {:sha sha :date date :subject subject
+                          :paths (vec (filter (set (map str paths)) files))}))))
+             (take (long max))
+             vec)))))
+
 (defn- whole-tree-commit
   "A commit of the working tree as it stands, untracked files included
   (.gitignore respected), parented on `base`. Built in a scratch index, so

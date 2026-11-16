@@ -8,3 +8,9 @@ The task names these, and this is where they are. A snippet is where to look, no
 {{d.snippet}}
 ```
 {% endfor %}
+{% if history %}
+### Recent reverts and hotfixes on these files
+
+A person undid or rushed something here lately. Read the commit before you change the same code: `git show <sha>`.
+{% for h in history %}- `{{h.sha}}` {{h.date}} {{h.subject}} — {% for p in h.paths %}{{p}}{% if not forloop.last %}, {% endif %}{% endfor %}
+{% endfor %}{% endif %}

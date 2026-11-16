@@ -51,7 +51,7 @@ run_check({})
     Run the project's configured check, if any.
 task({action, ...})
     Stuck? Split the work into parts, one at a time: `{"action": "create", "title": ..., "body": ..., "parentId": ...}` per part, `{"action": "switch", "id": ..., "reason": ...}` to work one, `{"action": "close", "id": ...}` once it works, then the next. `{"action": "list"}` shows the board.
-done({answer, checklist?, changed_tests?, result?})
+done({answer, checklist?, changed_tests?, assumptions?, result?})
     Finish: `answer` says what was done and how it was checked.
 give_up({reason})
     Stop when the work cannot be done; say why.

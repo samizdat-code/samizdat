@@ -13,7 +13,10 @@
     :prompt     each call is put to a person (the default)
     :deny       nothing
 
-  — and its result passes the redaction boundary like a shell's. Which
+  — and its result passes the redaction boundary like a shell's, and lowers
+  the branch's trust as webfetch does (karamazov-kfnn.11): a server can hand
+  back a page, an issue body or a message anyone wrote. A server entry with
+  `:output :trusted` is the operator saying its output is theirs. Which
   servers a project may run at all is config/mcp-servers: a project's own
   config names servers only for a root the person trusted."
   (:require [clojure.string :as str]
@@ -23,6 +26,7 @@
             [samizdat.config :as config]
             [samizdat.mcp.client :as mcp]
             [samizdat.prompt :as prompt]
+            [samizdat.security.flow :as flow]
             [samizdat.security.secrets :as secrets]))
 
 (defn- msg [ctx] (prompt/render "mcp-tool" ctx))
@@ -98,6 +102,12 @@
                   (if (and (= :ask (allowed spec tool)) (not (ask! ctx server tool args)))
                     (base/refusal branch (msg {:declined true :server server :tool tool}))
                     (let [{:keys [text error?]} (mcp/call server spec tool args)
+                          ;; Before the result reaches the model: a failure's
+                          ;; text came from the server too.
+                          _ (when-not (= :trusted (some-> (:output spec) keyword))
+                              (flow/observe!* ctx {:trust :untrusted}
+                                              {:turn (:turn ctx) :tool "mcp"
+                                               :via (str server "/" tool)}))
                           ;; Model-bound, so through the redaction boundary
                           ;; (RFC-003), as a shell result is.
                           text (secrets/redact text (secrets/known-values (into {} (System/getenv))))]

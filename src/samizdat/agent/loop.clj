@@ -64,6 +64,7 @@
             [samizdat.agent.tools :as tools]
             [samizdat.agent.skills :as skills]
             [samizdat.llm.message :as message]
+            [samizdat.llm.windows :as windows]
             [samizdat.prompt :as prompt]
             [samizdat.session :as session]
             [samizdat.security.flow :as flow]
@@ -298,9 +299,7 @@
 (defn- result-window
   "The model's window in tokens, which a tool result's budget scales with."
   [ctx]
-  (or (get-in ctx [:llm-config :request-window])
-      (get-in ctx [:llm-config :context-window])
-      (get-in ctx [:llm-config :max-context])))
+  (windows/effective (:llm-config ctx)))
 
 (defn- truncate
   "Clip a tool result to the budget, keeping its start and its end: what a command prints
@@ -830,10 +829,14 @@
          ;; A transient failure that outlasted the client's retries: waited
          ;; out on its own wider limit, like a rate limit (karamazov-1fai).
          outage? (= :outage reason)
-         branch (update branch (cond rate-limited? :consecutive-rate-limits
-                                     outage? :consecutive-outages
-                                     :else :consecutive-provider-errors)
-                        (fnil inc 0))]
+         branch (-> branch
+                    (update (cond rate-limited? :consecutive-rate-limits
+                                  outage? :consecutive-outages
+                                  :else :consecutive-provider-errors)
+                            (fnil inc 0))
+                    ;; What failed last, for :loop/route to weigh against
+                    ;; gates.edn :provider-terminal-reasons (karamazov-kfnn.6).
+                    (assoc :last-provider-reason reason))]
    (journal/record-turn! conn run-id
                          {:branch-id (:id branch) :turn turn
                           :tool-name "__provider_error__" :result error
@@ -927,7 +930,7 @@
                           (state/record-mechanics signals)
                           ;; The provider answered: whatever outage the
                           ;; count measured is over (karamazov-e8iw).
-                          (dissoc :last-prefix :model-change :consecutive-provider-errors :consecutive-rate-limits
+                          (dissoc :last-prefix :model-change :consecutive-provider-errors :last-provider-reason :consecutive-rate-limits
                                   :consecutive-outages))
                 (contains? #{:urgent :over} pressure) state/squeeze-context
                 wire (assoc :last-wire wire :last-prefix prefix)

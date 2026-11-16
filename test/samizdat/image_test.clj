@@ -37,7 +37,7 @@
 
 ;; --- pure -------------------------------------------------------------------
 
-(def ^:private image-cmd ["jolt" "-Sdeps" image/nrepl-sdeps "nrepl-server" "7888"])
+(def ^:private image-cmd ["jolt" "-Sdeps" image/nrepl-sdeps "nrepl-server" "--no-port-file" "7888"])
 
 (deftest spawn-argv-wraps-for-the-backend
   ;; The image runs the harness's own nrepl (with interruptible-eval) merged
@@ -53,7 +53,11 @@
              (subvec argv 0 7)))
       (is (= ["--seccomp" "3"] (subvec argv (.indexOf argv "--seccomp")
                                        (+ 2 (.indexOf argv "--seccomp")))))
-      (is (= (into ["--"] image-cmd) (subvec argv (- (count argv) 6)))))))
+      (is (= (into ["--"] image-cmd) (subvec argv (- (count argv) 7))))))
+  (testing "the image writes no .nrepl-port into the project (karamazov-kfnn):
+            the project's root is the operator's, and a port file there
+            points their editor at the agent's image, then vanishes with it"
+    (is (some #{"--no-port-file"} (image/spawn-argv :none {} 7888)))))
 
 (deftest free-port-is-actually-free
   (let [p (image/free-port)]

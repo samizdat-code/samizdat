@@ -33,6 +33,9 @@
             [samizdat.llm.client :as llm]
             [samizdat.llm.message :as message]
             [samizdat.prompt :as prompt]
+            [samizdat.agent.files :as files]
+            [samizdat.resource.workspace :as workspace]
+            [samizdat.store.evidence :as evidence]
             [samizdat.store.journal :as journal]
             [samizdat.store.knowledge :as knowledge]))
 
@@ -121,6 +124,61 @@
             {:id id :why line}))
         (get sections "WRONG")))
 
+(defn- split-outside-code
+  "`s` split on ` | ` wherever the bar is not inside backticks: an error
+  quoted verbatim is often a shell pipeline."
+  [s]
+  (loop [i 0 start 0 code? false out []]
+    (cond
+      (>= i (count s)) (conj out (subs s start))
+      (= \` (.charAt s i)) (recur (inc i) start (not code?) out)
+      (and (not code?) (= \| (.charAt s i))
+           (pos? i) (Character/isWhitespace (.charAt s (dec i)))
+           (< (inc i) (count s)) (Character/isWhitespace (.charAt s (inc i))))
+      (recur (inc i) (inc i) code? (conj out (subs s start (dec i))))
+      :else (recur (inc i) start code? out))))
+
+(defn parse-gotcha
+  "A GOTCHA line as {:symptom :cause :fix :wrong :files} (karamazov-kfnn.5):
+  `symptom | cause: … | fix: … | not: … | files: a, b`. The first part is
+  the symptom; the rest are labelled and each may be absent. A line with no
+  `|` is all symptom, which is what a reflector that ignored the form wrote."
+  [line]
+  (let [[symptom & parts] (map str/trim (split-outside-code (str line)))
+        label (fn [p] (when-let [[_ k v] (re-matches #"(?i)(cause|fix|not|files)\s*:\s*(.*)" p)]
+                        [(str/lower-case k) (str/trim v)]))
+        fields (into {} (keep label parts))]
+    (cond-> {:symptom symptom}
+      (seq (fields "cause")) (assoc :cause (fields "cause"))
+      (seq (fields "fix")) (assoc :fix (fields "fix"))
+      (seq (fields "not")) (assoc :wrong (fields "not"))
+      (seq (fields "files")) (assoc :files (vec (remove str/blank? (map str/trim (str/split (fields "files") #","))))))))
+
+(defn- anchor!
+  "File evidence for memory `id`: each of `paths` that is a file under `root`,
+  at its current revision — so recall says the memory is stale once the code
+  it describes changes (store/evidence file-checker). A path that is not
+  there anchors nothing."
+  [conn id root paths]
+  (when root
+    (doseq [p paths
+            :let [abs (try (files/resolve-under-root root p) (catch Throwable _ nil))]
+            :when (and abs (.isFile (java.io.File. (str abs))))]
+      (try (evidence/add! conn id {:source-type :file :path p
+                                   :revision (workspace/content-revision (slurp (str abs)))})
+           (catch Throwable _ nil)))))
+
+(defn- pattern-key
+  "What makes two lines the same memory. A gotcha is its symptom: the same
+  error explained in other words is the same gotcha, corroborated."
+  [section line]
+  (cond (= "OVERVIEW" section) "project:overview"
+        :else (str (str/lower-case section) ":"
+                   (str/lower-case (str/replace (if (= "GOTCHAS" section)
+                                                  (:symptom (parse-gotcha line))
+                                                  line)
+                                                #"[^A-Za-z0-9]+" "-")))))
+
 (defn- scoped
   "A RULE or GOTCHA with the task it was learned on. The memory trap
   (2611.07554v1): a note that drops the situation it came from is read later
@@ -147,16 +205,13 @@
   corroborated that description rather than correcting it, and the same run
   flagged the memory it had just agreed with as WRONG. A standing fact
   corroborates; a description restates."
-  [conn {:keys [run-id shown source task]} sections]
+  [conn {:keys [run-id shown source task root]} sections]
   (let [written
         (vec (for [[section lines] sections
                    :let [kind (section->kind section)]
                    :when kind
                    line lines
-                   :let [key (if (= "OVERVIEW" section)
-                               "project:overview"
-                               (str (str/lower-case section) ":"
-                                    (str/lower-case (str/replace line #"[^A-Za-z0-9]+" "-"))))
+                   :let [key (pattern-key section line)
                          existing (knowledge/by-pattern conn key)]]
                (if existing
                  ;; Corroborate BEFORE restating, and report whichever row is
@@ -169,11 +224,13 @@
                        restated (when (= "OVERVIEW" section)
                                   (knowledge/restate! conn (:id existing) line))]
                    {:id (or restated (:id existing)) :kind kind :repeat? true})
-                 {:id (knowledge/remember! conn {:content (scoped section line task)
-                                                 :kind kind :origin :inferred
-                                                 :run-id run-id :pattern-key key
-                                                 :confidence 0.7 :source source})
-                  :kind kind :repeat? false})))]
+                 (let [id (knowledge/remember! conn {:content (scoped section line task)
+                                                     :kind kind :origin :inferred
+                                                     :run-id run-id :pattern-key key
+                                                     :confidence 0.7 :source source})]
+                   (when (= "GOTCHAS" section)
+                     (anchor! conn id root (:files (parse-gotcha line))))
+                   {:id id :kind kind :repeat? false}))))]
     (doseq [{:keys [id]} (corrections sections)]
       ;; The implementor is the only role positioned to notice that a memory it
       ;; was handed is stale, so its word counts against that memory's record
@@ -204,7 +261,7 @@
   Never throws and never blocks the branch from finishing: this runs at the end
   of a task, and a failure to record what was learned must not turn a completed
   task into a failed one."
-  [{:keys [conn run-id llm-adapter llm-config] :as _ctx} branch]
+  [{:keys [conn run-id llm-adapter llm-config root] :as _ctx} branch]
   (try
     (let [turns (journal/branch-turns conn run-id (:id branch))
           ;; WHAT THE BRANCH WAS SHOWN, not knowledge/standing recomputed now
@@ -238,7 +295,7 @@
                    (when (seq ts)
                      {:branch (:id branch) :from (reduce min ts) :to (reduce max ts)}))
           written (record! conn {:run-id run-id :shown (set shown) :source source
-                                 :task (:problem branch)} sections)]
+                                 :task (:problem branch) :root root} sections)]
       (journal/note! conn run-id :task-reflection
                      {:branch-id (:id branch)
                       :data {:sections (keys sections) :written (count written)}})

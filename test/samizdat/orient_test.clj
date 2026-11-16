@@ -130,3 +130,32 @@
           (is (contains? rels "src/real.clj"))
           (is (= 2 (count rels)) (pr-str rels))))
       (finally (fs/delete-tree base)))))
+
+(deftest the-opening-names-reverts-on-the-files-in-scope
+  ;; karamazov-kfnn.10: a fix a person reverted, or a hotfix on the very file
+  ;; the task names, is what an agent most needs to know and least sees. The
+  ;; opening lists the flagged commits on the files it found.
+  (let [root (doto (java.io.File/createTempFile "orient-hist" "") (.delete) (.mkdirs))
+        r (str root)
+        git (fn [& args] (apply proc/run {:timeout-ms 15000} "git" "-C" r
+                                (concat ["-c" "user.email=t@t" "-c" "user.name=t" "-c" "commit.gpgsign=false"] args)))
+        commit (fn [file body msg]
+                 (fs/create-dirs (str r "/src"))
+                 (spit (str r "/" file) body)
+                 (git "add" "-A") (git "commit" "-q" "-m" msg))]
+    (git "init" "-q")
+    (commit "src/parse.clj" "(ns parse) (defn parse-line [s] s)" "Add the parser")
+    (commit "src/parse.clj" "(ns parse) (defn parse-line [s] (str s))" "Hotfix: parse-line drops trailing commas")
+    (commit "src/other.clj" "(ns other)" "Revert \"Rewrite other\"")
+    (commit "src/parse.clj" "(ns parse) (defn parse-line [s] (str s \"\"))" "Tidy parse-line")
+    (let [{:keys [block history]} (orient/block r "Fix `parse-line` for quoted fields" (policy))]
+      (is (= ["Hotfix: parse-line drops trailing commas"] (mapv :subject history))
+          "flagged, and only on the files in scope")
+      (is (str/includes? (str block) "Hotfix: parse-line drops trailing commas"))
+      (is (str/includes? (str block) "src/parse.clj")))
+    (testing "no git, no history, the block still renders"
+      (fs/delete-tree (str r "/.git"))
+      (let [{:keys [block history]} (orient/block r "Fix `parse-line`" (policy))]
+        (is (empty? history))
+        (is (str/includes? (str block) "parse-line"))))
+    (fs/delete-tree r)))

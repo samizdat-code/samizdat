@@ -27,6 +27,7 @@
   wrote down."
   (:require [clojure.string :as str]
             [jolt.fs :as fs]
+            [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.prompt :as prompt]))
 
 ;; --- the names ---------------------------------------------------------------
@@ -155,8 +156,16 @@
   [root problem policy]
   (when (and (:enabled? policy) root (not (str/blank? (str problem))))
     (let [names (problem-names problem policy)
-          defs (if (seq names) (definitions root names policy) [])]
+          defs (if (seq names) (definitions root names policy) [])
+          ;; What people undid or rushed on those same files
+          ;; (karamazov-kfnn.10): the turn an agent re-lands a reverted fix
+          ;; is the one this saves.
+          history (if (and (seq defs) (:history policy))
+                    (try (gitdiff/flagged-commits root (distinct (map :path defs)) (:history policy))
+                         (catch Throwable _ []))
+                    [])]
       {:names names
        :found (mapv :name defs)
+       :history history
        :block (when (seq defs)
-                (prompt/render "orient-inject" {:definitions defs}))})))
+                (prompt/render "orient-inject" {:definitions defs :history history}))})))
