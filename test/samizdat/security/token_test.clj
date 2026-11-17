@@ -103,3 +103,57 @@
                          (str "Authorization: Bearer " t "\r\n")))
       (is (not (str/includes? (#'sse/request-text {:host "127.0.0.1" :port 4556 :path "/v1/x"} nil)
                               "Authorization"))))))
+
+(defn- busy [port]
+  (ex-info (str "port " port " is already in use")
+           {:errno 48 :errno-name "EADDRINUSE" :port port}))
+
+(deftest a-second-server-takes-the-next-free-port-and-leaves-the-first-ones-token
+  ;; `samizdat` in ~/src/humanizer while ~/src/jolt-lang's server held 3985:
+  ;; the start died on the bind, and on its way out it deleted 3985.token —
+  ;; the RUNNING server's — because the token was written before the bind
+  ;; and the failed start revoked everything it had written.
+  (with-token-dir [_]
+    (spit (token/path-for 3985) "the-other-servers-token")
+    (let [tried (atom [])
+          bind (fn [port] (swap! tried conj port)
+                 (if (#{3985 3986} port) (throw (busy port)) {:server port}))
+          r (system/bind-server! bind 3985 5)]
+      (is (= [3985 3986 3987] @tried))
+      (is (= 3987 (:port r)))
+      (is (= {:server 3987} (:server r)))
+      (is (= "the-other-servers-token" (token/read-for 3985)) "not ours to touch")
+      (is (nil? (token/read-for 3986)))
+      (is (= (token/current) (token/read-for 3987)) "the token is written once the server listens")
+      (testing "revoking what this process holds leaves the other server's file"
+        (token/revoke-all!)
+        (is (= "the-other-servers-token" (token/read-for 3985)))
+        (is (nil? (token/read-for 3987)))))))
+
+(deftest a-pinned-port-that-is-busy-fails-as-before
+  (with-token-dir [_]
+    (spit (token/path-for 3985) "the-other-servers-token")
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"already in use"
+                          (system/bind-server! (fn [p] (throw (busy p))) 3985 0)))
+    (is (= "the-other-servers-token" (token/read-for 3985)))
+    (is (nil? (token/current)) "nothing held for a port it never got")
+    (testing "and a scan that runs out says so"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"already in use"
+                            (system/bind-server! (fn [p] (throw (busy p))) 3985 2))))
+    (testing "an error that is not a busy port is not scanned past"
+      (let [tried (atom 0)]
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (system/bind-server! (fn [_] (swap! tried inc) (throw (ex-info "boom" {}))) 3985 5)))
+        (is (= 1 @tried))))))
+
+(deftest a-front-end-finds-the-port-its-projects-server-took
+  (let [root (str (fs/create-temp-dir))
+        env (fn [m] (fn [k] (get m k)))]
+    (testing "with no record and nothing set, the default port"
+      (is (= "http://127.0.0.1:3985" (client/default-base-url (env {}) root))))
+    (system/write-port-file! root 3987)
+    (testing "the port the project's server recorded"
+      (is (= "http://127.0.0.1:3987" (client/default-base-url (env {}) root))))
+    (testing "what the person set wins"
+      (is (= "http://127.0.0.1:4000" (client/default-base-url (env {"HARNESS_PORT" "4000"}) root)))
+      (is (= "http://h:1" (client/default-base-url (env {"SAMIZDAT_URL" "http://h:1"}) root))))))

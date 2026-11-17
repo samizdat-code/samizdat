@@ -56,21 +56,50 @@
     (.nextBytes (java.security.SecureRandom.) b)
     (apply str (map #(format "%02x" (bit-and % 0xff)) b))))
 
+(defonce ^:private published
+  ;; The ports whose token FILE this process wrote. Only those are its to
+  ;; delete: a start that failed to bind deleted the running server's
+  ;; 3985.token on its way out, and every new client of that server was
+  ;; refused from then on.
+  (atom #{}))
+
+(defn hold!
+  "A new token for a server about to listen on `port`, held in memory only:
+  the API asks for it from the first request. Its file is written by
+  `publish!` once the port is really ours. Returns it."
+  [port]
+  (let [t (fresh)]
+    (swap! issued assoc port t)
+    t))
+
+(defn publish!
+  "Write the token held for `port` to its file, owner-only. Returns it."
+  [port]
+  (when-let [t (get @issued port)]
+    (let [p (path-for port)]
+      (fs/create-dirs (dir))
+      ;; Created empty and narrowed BEFORE the token is written, so there is no
+      ;; moment it sits in a file others may read. Appended, not spat over: a
+      ;; plain spit replaces the file, and the replacement has the default mode.
+      (fs/delete-if-exists p)
+      (spit p "")
+      (fs/set-posix-file-permissions p "rw-------")
+      (spit p t :append true)
+      (swap! published conj port)
+      t)))
+
 (defn issue!
   "A new token for the server on `port`, written owner-only. Returns it."
   [port]
-  (let [t (fresh)
-        p (path-for port)]
-    (fs/create-dirs (dir))
-    ;; Created empty and narrowed BEFORE the token is written, so there is no
-    ;; moment it sits in a file others may read. Appended, not spat over: a
-    ;; plain spit replaces the file, and the replacement has the default mode.
-    (fs/delete-if-exists p)
-    (spit p "")
-    (fs/set-posix-file-permissions p "rw-------")
-    (spit p t :append true)
-    (swap! issued assoc port t)
-    t))
+  (hold! port)
+  (publish! port))
+
+(defn release!
+  "Forget the token held for `port` without touching any file: the port was
+  someone else's."
+  [port]
+  (swap! issued dissoc port)
+  nil)
 
 (defn read-for
   "The token a server on `port` issued, read from its file, or nil."
@@ -83,10 +112,12 @@
   (first (vals @issued)))
 
 (defn revoke!
-  "Drop the token for `port` and its file."
+  "Drop the token for `port`, and its file when this process wrote it."
   [port]
   (swap! issued dissoc port)
-  (try (fs/delete-if-exists (path-for port)) (catch Throwable _ nil))
+  (when (contains? @published port)
+    (swap! published disj port)
+    (try (fs/delete-if-exists (path-for port)) (catch Throwable _ nil)))
   nil)
 
 (defn revoke-all! []

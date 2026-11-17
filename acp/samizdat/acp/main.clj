@@ -22,9 +22,7 @@
             [samizdat.api.client :as client])
   (:import [java.io BufferedReader InputStreamReader]))
 
-(defn- default-base []
-  (or (System/getenv "SAMIZDAT_URL")
-      (str "http://127.0.0.1:" (or (System/getenv "HARNESS_PORT") "3985"))))
+(defn- default-base [] (client/default-base-url))
 
 (defn connection
   "The protocol's state over one pair of streams: `write!` sends one
