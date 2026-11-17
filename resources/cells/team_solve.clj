@@ -218,8 +218,38 @@
 
 ;; --- the work -----------------------------------------------------------------
 
-(defn- diff-text [{:keys [root git-baseline]} cap]
-  (when git-baseline (gitdiff/diff root git-baseline cap)))
+(defn- written-paths
+  "What the run wrote, newest first, in a project git cannot diff: the file
+  tools' record, then whatever else changed under the root since the run
+  started — a file a shell command wrote is in no tool's record."
+  [{:keys [conn run-id root]}]
+  (let [p (policy)
+        n (:written-files-max p)
+        tools (mapv :path (journal/run-writes conn run-id n))
+        since (:started_at (runs/get-run conn run-id))
+        shell (:paths (gitdiff/changed-since root since (:changed-scan p)))
+        abs (fn [x] (if (str/starts-with? (str x) "/") (str x) (str root "/" x)))]
+    (->> (concat tools shell)
+         (reduce (fn [acc x] (if (some #(= (abs x) (abs %)) acc) acc (conj acc x))) [])
+         (take n)
+         vec)))
+
+(defn- work-view
+  "The work as a reviewer and the report read it: {:text :written?}. The
+  diff against the run's baseline, or the files the run wrote as they stand
+  (:written? true) when there is no baseline — a project that is not a
+  repository showed an empty diff, and the reviewer refused working code as
+  \"nothing was produced\" (run 9af33edc) — or when the diff is empty: an
+  empty diff is believed only when the run's own record agrees, since a
+  baseline that moved under a commit or a git that failed showed \"no
+  changes\" for finished work (run 674ac724)."
+  [{:keys [root git-baseline] :as ctx} cap]
+  (let [d (when git-baseline (gitdiff/diff root git-baseline cap))]
+    (if (str/blank? d)
+      {:text (gitdiff/written-files root (written-paths ctx) cap) :written? true}
+      {:text d :written? false})))
+
+(defn- diff-text [ctx cap] (:text (work-view ctx cap)))
 
 (defn- current-work
   "What the manager and a worker read as the work so far."
@@ -672,6 +702,16 @@
   (let [r (samples/run-one ["python3" (target ctx)] (str input "\n") {:dir (str (:root ctx))})]
     (and (:ran r) (not= (str/trim (str (:out r))) (str/trim (str expected))))))
 
+(defn- empty-revise?
+  "A reply that sends the change back and names nothing to fix: the REVISE
+  word and nothing after it but punctuation and empty bullets. A fresh worker
+  given that as its task has nothing to act on, and counting it toward
+  :max-reviews ends a run unsolved on no finding at all."
+  [reply]
+  (let [t (str/trim (str reply))]
+    (boolean (and (re-find #"(?i)^revise\b" t)
+                  (str/blank? (str/replace (subs t 6) #"[\s\-*:.•]+" ""))))))
+
 (defn- review!
   "An independent reviewer, one call in a fresh context, on a repository change that
   is about to ship. It reads what was asked, the diff and the captured check. A check
@@ -680,14 +720,22 @@
   {:pass? bool :findings text}. A reply that does not begin PASS sends it back, but a
   call that failed outright passes: it reviewed nothing, and its signal is raised."
   [ctx l]
-  (let [reply (ask ctx :critic :review
+  (let [view (work-view ctx (:current-chars (policy)))
+        reply (ask ctx :critic :review
                    (prompt/prompt "team-solve-review-system")
                    (prompt/render "team-solve-review-user"
                                   {:problem (:problem l)
-                                   :diff (diff-text ctx (:current-chars (policy)))
+                                   :diff (:text view)
+                                   :written (:written? view)
                                    :check (get-in l [:gate :report])}))
-        head (str/upper-case (subs reply 0 (min 4 (count reply))))]
-    {:pass? (or (str/blank? reply) (= "PASS" head))
+        head (str/upper-case (subs reply 0 (min 4 (count reply))))
+        nothing? (empty-revise? reply)]
+    (when nothing?
+      (signal! ctx :review-empty :manage
+               (str "The reviewer answered " (pr-str (clip (str/trim reply) 80))
+                    " and named no finding; the change was not sent back.")))
+    {:pass? (or (str/blank? reply) (= "PASS" head) nothing?)
+     :empty? nothing?
      :findings reply}))
 
 (cell/defcell :team-solve/manage
@@ -809,7 +857,9 @@
                          {:data {:round round :status status :go (name (:go d))
                                  :task (:task l) :why (:why d)
                                  :overrode-done (boolean (:overrode-done d))
-                                 :review (when reviewed (if (:pass? reviewed) "pass" "refused"))
+                                 :review (when reviewed (cond (:empty? reviewed) "empty"
+                                                              (:pass? reviewed) "pass"
+                                                              :else "refused"))
                                  :counterexample (when counter (if counter-fails? "fails" "false"))}})
           (position! ctx :manage l)
           (assoc data :team-solve/go (:go d)))))))
@@ -1062,7 +1112,9 @@
   [{:keys [conn run-id root git-baseline] :as ctx} fallback gate]
   (let [results (->> (journal/notes conn run-id :team-solve-ledger)
                      (keep :result) (map str) (remove str/blank?) distinct vec)
-        files (when git-baseline (gitdiff/changed-files root git-baseline))
+        files (if git-baseline
+                (gitdiff/changed-files root git-baseline)
+                (not-empty (written-paths ctx)))
         text (ask ctx :summarizer :report
                   (prompt/prompt "team-solve-report-system")
                   (prompt/render "team-solve-report-user"

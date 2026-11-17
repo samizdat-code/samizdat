@@ -259,15 +259,23 @@
   (or (resolve-under-root root path)
       (some #(resolve-under-root % path) refs)))
 
+(declare resolve-read* hidden?)
+
 (defn resolve-read!
   "`resolve-for-read`, and when the path is outside every root, a question for
   a person (karamazov-3vu1.3): approval/resolve-ask, which asks under :block,
   allows under :yolo and refuses under :refuse. The canonical path when the
   read may go ahead, nil when not.
 
-  The operator's secret regions are refused whatever the answer. read_file
-  runs in the harness process, not under the shell's sandbox, so this is the
-  only thing that keeps ~/.ssh out of it."
+  The operator's secret regions are refused whatever the answer, and so is a
+  hidden tree inside the project (`hidden?`, the API's token). read_file runs
+  in the harness process, not under the shell's sandbox, so this is the only
+  thing that keeps ~/.ssh and the token out of it."
+  [{:keys [root] :as ctx} refs path]
+  (let [abs (resolve-read* ctx refs path)]
+    (when-not (and abs (hidden? root abs)) abs)))
+
+(defn- resolve-read*
   [{:keys [root] :as ctx} refs path]
   (or (resolve-for-read (or root ".") refs path)
       (let [abs (str (fs/canonicalize (if (absolute? path) path (fs/path (or root ".") path))))
@@ -345,6 +353,18 @@
   party it protects against."
   [root abs]
   (= abs (resolve-under-root (or root ".") run-config-path)))
+
+(defn hidden?
+  "Whether `abs` is in a tree of the project the agent may neither read nor
+  write: the HTTP API's token (confine/hidden). The shell and the image are
+  kept out of it by the OS sandbox; read_file and the write tools run in the
+  harness, so this is what keeps them out — the directory being under the
+  project root does not make it a project file."
+  [root abs]
+  (let [canon (fn [p] (try (str (fs/canonicalize p)) (catch Throwable _ (str p))))
+        a (canon abs)]
+    (boolean (some #(let [h (canon %)] (or (= a h) (str/starts-with? a (str h "/"))))
+                   (confine/hidden (canon (or root ".")))))))
 
 (defn- confining-files
   "The files under `root`'s .samizdat that confine the agent: the role map,
@@ -553,7 +573,7 @@
       :else
       (if-let [abs (resolve-under-root (or root ".") path)]
         (cond
-          (run-config? root abs) (miss branch (msg {:protected true :path path}))
+          (or (run-config? root abs) (hidden? root abs)) (miss branch (msg {:protected true :path path}))
           (not (fs/exists? abs)) (miss branch (msg {:no-file true :path path}))
           :else
           (with-path-lock abs (fn []
@@ -845,7 +865,7 @@
       :else
       (if-let [abs (resolve-under-root (or root ".") path)]
         (cond
-          (run-config? root abs)
+          (or (run-config? root abs) (hidden? root abs))
           (miss branch (msg {:protected true :path path}))
 
           (not (fs/exists? abs))
@@ -971,7 +991,7 @@
       :else
       (if-let [abs (resolve-under-root (or root ".") path)]
         (cond
-          (run-config? root abs)
+          (or (run-config? root abs) (hidden? root abs))
           (miss branch (msg {:protected true :path path}))
 
           (workflow-refused? ctx root abs)

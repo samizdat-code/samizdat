@@ -115,7 +115,7 @@ reference:
 jolt test          # the full suite (deps.edn :tasks test — raises ulimit -n)
 jolt serve         # start the harness: HTTP + nREPL, writes .nrepl-port
                    # the API wants the token it wrote at start:
-                   # curl -H "Authorization: Bearer $(cat ~/.config/samizdat/http/3985.token)" …
+                   # curl -H "Authorization: Bearer $(cat .samizdat/http/3985.token)" …
                    # (the front ends find it themselves; on Linux the nREPL
                    # starts only with config.edn :nrepl {:unconfined :allow})
 jolt -A:test -e '(require (quote clojure.test) (quote samizdat.foo-test))

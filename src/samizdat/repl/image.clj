@@ -265,7 +265,8 @@
         spec (merge sandbox-spec
                     {:project-root root
                      :scratch-paths [scratch (get cenv "JOLT_CACHE_DIR")]
-                     :protect (confine/protected root)}
+                     :protect (confine/protected root)
+                     :hide (confine/hidden root)}
                     (sandbox/deny-read-kinds (:deny-read sandbox-spec)))]
     (try (let [from (harness-caches)
                to {:gitlibs (get cenv "JOLT_GITLIBS_DIR") :m2 (get cenv "JOLT_MAVEN_REPOSITORY")}]

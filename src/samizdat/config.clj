@@ -714,6 +714,9 @@
       ;; binds where something else already lives) is worse than one on an
       ;; address nothing else wants.
       {:http     {:port (or (env-long "HARNESS_PORT") 3985)
+                  ;; When that port is taken — another project's server —
+                  ;; how many following ports to try. HARNESS_PORT pins it.
+                  :port-scan (if (env-long "HARNESS_PORT") 0 20)
                   ;; The server's worker pool. Every open event stream (a
                   ;; front end following a run) holds one, and so does a
                   ;; POST /v1/runs for the length of its workflow choice.

@@ -57,10 +57,10 @@
 (defn default-base-url
   "Where the server is. Defaults to the same port `jolt serve` does, so the
   TUI finds a default server with no configuration; `SAMIZDAT_URL` points it
-  elsewhere, and `HARNESS_PORT` alone is enough when only the port moved."
+  elsewhere, `HARNESS_PORT` alone is enough when only the port moved, and the
+  port this project's server recorded is used when it took another one."
   []
-  (or (System/getenv "SAMIZDAT_URL")
-      (str "http://127.0.0.1:" (or (System/getenv "HARNESS_PORT") "3985"))))
+  (client/default-base-url))
 
 ;; An ftxui atom, so a write from a poller thread redraws by itself. Plain
 ;; swap! from anywhere is safe: refresh! is thread-safe and every event ends

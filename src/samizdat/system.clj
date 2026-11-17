@@ -125,7 +125,7 @@
          (log/warn "userspace: an unedited update does not pass, left on offer:"
                    (name (:kind offer)) (:name offer) (pr-str problem))))))
 
-(declare start-system! abandon-start!)
+(declare start-system! abandon-start! bind-server! write-port-file!)
 
 (defn start!
   "Bring the system up. `overrides` is merged into the config, so a REPL
@@ -279,8 +279,13 @@
          _ (steps/start-pump!)
          ;; The API's bearer token, BEFORE the server listens, so there is
          ;; no moment it serves without one (security.token, karamazov-3vu1.11).
-         _ (token/issue! (get-in cfg [:http :port]))
-         server (adapter/run-server handler (select-keys (:http cfg) [:port :worker-threads]))]
+         ;; The token and the port go in THIS project's .samizdat/http.
+         _ (token/set-root! (get-in cfg [:run :root]))
+         {:keys [port server]} (bind-server! #(adapter/run-server handler (assoc (select-keys (:http cfg) [:worker-threads]) :port %))
+                                             (get-in cfg [:http :port])
+                                             (or (get-in cfg [:http :port-scan]) 0))
+         cfg (assoc-in cfg [:http :port] port)
+         _ (write-port-file! (get-in cfg [:run :root]) port)]
      (reset! system {:config cfg :conn c :server server})
      (peripherals/start! cfg)
      (doseq [{:keys [id phase message]} (peripherals/notices)]
@@ -307,6 +312,51 @@
        (when (pos? n)
          (log/info "marked" n "run(s) interrupted: still flagged running with no process")))
      :started))
+
+(defn- busy-port? [e]
+  (= "EADDRINUSE" (str (:errno-name (ex-data e)))))
+
+(defn bind-server!
+  "Listen with `bind` (port -> server) on `port`, or when another process
+  holds it on the next free one, at most `scan` further: {:port :server}. A
+  second project's server used to die on 3985 while the first held it. The
+  API's token is held in memory before each attempt — no moment the server
+  answers without one — and written to its file only for the port actually
+  bound, so a busy port's file, another server's, is never touched. An error
+  that is not a busy port, or a scan that runs out, throws as the bind did."
+  [bind port scan]
+  (loop [p (long port) left (long scan)]
+    (token/hold! p)
+    (let [r (try {:server (bind p)}
+                 (catch Throwable e
+                   (token/release! p)
+                   (if (and (busy-port? e) (pos? left)) ::busy (throw e))))]
+      (if (= ::busy r)
+        (do (log/info "port" p "is in use; trying" (inc p))
+            (recur (inc p) (dec left)))
+        (do (token/publish! p)
+            {:port p :server (:server r)})))))
+
+(def ^:private port-file ".samizdat/http/port")
+
+(defn write-port-file!
+  "Record which port this project's server took, for a front end started
+  in the project to find it (`samizdat --connect`). Best effort."
+  [root port]
+  (when root
+    (try (let [f (java.io.File. (str root) port-file)]
+           (.mkdirs (.getParentFile f))
+           (spit f (str port "\n")))
+         (catch Throwable e (log/warn "could not record the port:" (ex-message e))))))
+
+(defn remove-port-file!
+  "Drop the port record when it is still this server's, so a front end does
+  not follow it to a port another server may take next."
+  [root port]
+  (when root
+    (let [f (java.io.File. (str root) port-file)]
+      (when (= (str port) (some-> (try (slurp f) (catch Throwable _ nil)) str/trim))
+        (.delete f)))))
 
 (defn- abandon-start!
   "Undo what a start that threw had already done: the step pump, the repair
@@ -350,6 +400,8 @@
                        ["peripherals" #(peripherals/stop!)]
                        ["http server" #(adapter/stop-server (:server s))]
                        ["api token" #(token/revoke-all!)]
+                       ["port record" #(remove-port-file! (get-in s [:config :run :root])
+                                                          (get-in s [:config :http :port]))]
                        ;; After the server, so a request in flight can still
                        ;; read the trace it was serving; the rings go with it.
                        ["step pump" #(do (steps/stop-pump!) (steps/reset!))]
