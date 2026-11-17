@@ -370,3 +370,20 @@
         (is (nil? (gd/snapshot (str base "/dots/proj"))))
         (is (nil? (gd/project-files (str base "/dots/proj")))))
       (finally (sh "/tmp" (str "rm -rf " base))))))
+
+(deftest a-baseline-needs-no-git-identity
+  ;; CI, and anyone who never ran `git config user.name`: commit-tree refuses
+  ;; with "Author identity unknown", and an unborn repository got no baseline.
+  (let [dir (str "/tmp/samizdat-noid-" (System/nanoTime))
+        real scrub/scrubbed-process-env]
+    (try
+      (.mkdirs (java.io.File. dir))
+      (sh dir "git init -q && echo a > a")
+      (with-redefs [scrub/scrubbed-process-env
+                    (fn [] (assoc (real) "HOME" dir "GIT_CONFIG_NOSYSTEM" "1"
+                                  "GIT_CONFIG_GLOBAL" "/dev/null"
+                                  "GIT_CONFIG_COUNT" "1"
+                                  "GIT_CONFIG_KEY_0" "user.useConfigOnly"
+                                  "GIT_CONFIG_VALUE_0" "true"))]
+        (is (re-matches #"[0-9a-f]{40}" (str (gd/baseline dir)))))
+      (finally (sh dir (str "rm -rf " dir))))))

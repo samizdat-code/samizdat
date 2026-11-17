@@ -89,6 +89,10 @@
           ;; "." names no path) is not an ignore either.
           (not= 0 (:exit r))))))
 
+(def ^:private baseline-identity
+  {"GIT_AUTHOR_NAME" "samizdat" "GIT_AUTHOR_EMAIL" "samizdat@localhost"
+   "GIT_COMMITTER_NAME" "samizdat" "GIT_COMMITTER_EMAIL" "samizdat@localhost"})
+
 (defn- whole-tree-commit
   "A commit of the working tree as it stands, untracked files included
   (.gitignore respected), parented on `base` — or on nothing when `base` is
@@ -103,8 +107,12 @@
       (when (and (or (nil? base) (git* env root ["read-tree" base]))
                  (git* env root ["add" "-A"]))
         (when-let [tree (some-> (git* env root ["write-tree"]) str/trim not-empty)]
-          (some-> (apply git root "commit-tree" tree
-                         (concat (when base ["-p" base]) ["-m" "samizdat baseline"]))
+          ;; Its own identity: an object no ref names, made for a diff. Without
+          ;; it commit-tree refuses wherever user.name is unset (CI, a fresh
+          ;; machine) and an unborn repository got no baseline at all.
+          (some-> (git* (merge (secrets/scrubbed-process-env) baseline-identity) root
+                        (concat ["commit-tree" tree]
+                                (when base ["-p" base]) ["-m" "samizdat baseline"]))
                   str/trim not-empty)))
       (finally (.delete idx)))))
 
