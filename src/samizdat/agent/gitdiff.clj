@@ -360,6 +360,40 @@
                            d))))
        "")))
 
+(defn written-files
+  "The files at `paths`, as they stand now, for a root git cannot diff: no
+  repository means no baseline and `diff` answers \"\", which a reviewer reads
+  as \"nothing was produced\" (run 9af33edc wrote a working script outside
+  git and was refused twice for an empty diff). Each file under a header
+  naming its path from `root`; a file that is gone is said to be, a binary is
+  named without its bytes. Bounded to `cap` like `diff`. \"\" when there is
+  nothing to show. Which paths, and when this stands in for a diff, is the
+  caller's."
+  [root paths cap]
+  (if (or (nil? root) (empty? paths))
+    ""
+    (let [root-s (str root)
+          rel (fn [p] (let [p (str p)]
+                        (if (str/starts-with? p (str root-s "/"))
+                          (subs p (inc (count root-s)))
+                          p)))
+          file (fn [p] (let [f (java.io.File. (str p))]
+                         (if (.isAbsolute f) f (java.io.File. root-s (str p)))))
+          body (fn [p]
+                 (let [f (file p)]
+                   (cond
+                     (not (.isFile f)) "(no longer exists)"
+                     :else (let [t (try (slurp f) (catch Throwable _ nil))]
+                             (cond
+                               (nil? t) "(unreadable)"
+                               (str/includes? t (str (char 0))) (str "(binary, " (.length f) " bytes)")
+                               :else t)))))
+          text (str/join "\n" (for [p (distinct (map str paths))]
+                                (str "=== " (rel p) "\n" (body p))))]
+      (if (> (count text) (long cap))
+        (str (subs text 0 (long cap)) "\n… (files truncated at " cap " chars)")
+        text))))
+
 (defn- structural-reports
   "sdiff's report for each Clojure file changed since `baseline`, renames
   rolled up across them: {:files :renames}."

@@ -71,6 +71,8 @@
     :summary "A restorable git tree of the project's work, leaving out .samizdat. Team-solve keeps the last passing work this way on a repository."}
    {:name samizdat.agent.gitdiff/restore-work-tree!
     :summary "Put the work back as a work-tree-id holds it, removing files created since."}
+   {:name samizdat.agent.gitdiff/written-files
+    :summary "Files as they stand now, under headers naming their paths, bounded like a diff. Outside git there is no diff, so team-solve's reviewer and report read the files the run's tools wrote (journal/run-writes) this way."}
    {:name samizdat.eval.samples/grade
     :summary "Run a program against paired tests/N.in and N.out. A team-solve gate: a script decides, never a model."}
    {:name samizdat.eval.samples/run-one

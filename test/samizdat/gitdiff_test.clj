@@ -251,3 +251,35 @@
           (sh dir "printf 'a\\0b\\n\\n\\n' > weights.bin")
           (is (= 3 (gd/changed-lines dir base)))))
       (finally (sh dir (str "rm -rf " dir))))))
+
+(deftest written-files-shows-what-the-run-wrote-where-git-cannot
+  ;; A project that is not a git repository has no baseline and no diff. A
+  ;; reviewer handed "" reads that as "nothing was produced" and refuses work
+  ;; that exists: run 9af33edc wrote a working 25KB script in ~/src/jolt-lang
+  ;; and was abandoned for an empty diff, twice.
+  (let [dir (str "/tmp/samizdat-written-" (System/nanoTime))]
+    (try
+      (.mkdirs (java.io.File. (str dir "/sub")))
+      (spit (str dir "/sub/a.txt") "alpha\n")
+      (spit (str dir "/b.bin") (str "x" (char 0) "y"))
+      (spit (str dir "/big.txt") (apply str (repeat 500 "z")))
+      (testing "each file as it stands, by its path from the root, relative or absolute"
+        (let [t (gd/written-files dir ["sub/a.txt" (str dir "/big.txt")] 10000)]
+          (is (str/includes? t "sub/a.txt"))
+          (is (str/includes? t "alpha"))
+          (is (str/includes? t "big.txt"))
+          (is (not (str/includes? t (str dir "/big.txt"))) "an absolute path under the root is shortened")))
+      (testing "a file that is gone is said to be, and a binary is named without its bytes"
+        (let [t (gd/written-files dir ["gone.txt" "b.bin"] 10000)]
+          (is (str/includes? t "gone.txt"))
+          (is (re-find #"(?i)no longer exists" t))
+          (is (str/includes? t "b.bin"))
+          (is (not (str/includes? t (str (char 0)))))))
+      (testing "bounded like a diff"
+        (let [t (gd/written-files dir ["big.txt"] 100)]
+          (is (< (count t) 200))
+          (is (str/includes? t "truncated"))))
+      (testing "nothing written is the empty string, as an empty diff is"
+        (is (= "" (gd/written-files dir [] 1000)))
+        (is (= "" (gd/written-files nil ["a"] 1000))))
+      (finally (sh dir (str "rm -rf " dir))))))

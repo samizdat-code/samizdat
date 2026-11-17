@@ -162,14 +162,45 @@
       (not (str/blank? say))
       (conj {:key "live/say" :role :agent :kind :say :text say :live? true}))))
 
+(def ^:private ended-branch #{"abandoned" "exhausted" "failed" "error" "culled"})
+
+(defn- ending
+  "How a run that ended with no answer ended: its status, and the reason each
+  branch that stopped short recorded. Run 9af33edc ended exhausted with its
+  branch abandoned and no answer, and the last thing the log said was an old
+  supervisor note — nobody could tell it had stopped, or why. nil while the
+  run runs or when it has an answer, which ends the conversation instead."
+  [state]
+  (let [{:keys [status final_answer]} (get-in state [:detail :run])
+        status (str status)]
+    (when (and (not (str/blank? status)) (not= "running" status)
+               (str/blank? (str final_answer)))
+      (let [why (for [b (get-in state [:detail :branches])
+                      :when (and (ended-branch (str (:status b)))
+                                 (not (str/blank? (str (:inactive_reason b)))))]
+                  (str (:id b) " " (:status b) ": " (str/trim (str (:inactive_reason b)))))]
+        {:key "ending" :role :system :kind :say :final? true
+         :text (str "The run ended " status " with no answer."
+                    (when (seq why) (str "\n\n" (str/join "\n\n" why))))}))))
+
 (defn- history
   "Everything but the reply being streamed, oldest first — ending with the
   run's answer when it has one, because that is what the person asked for.
   A finished run's answer used to be only a truncated claim in a side panel
   (karamazov-ttrn)."
-  [problem turns text interventions branch-id notes local-notes answer
+  [problem turns text interventions branch-id notes local-notes answer end labels
    {:keys [issued-by banner collapsed-roles] by-kind :notes}]
   (let [aside? (set collapsed-roles)
+        ;; A tool that means something else on this branch's role: a
+        ;; team-solve worker's `done` hands its work to the manager and the
+        ;; run goes on — drawn as DONE / "Answer accepted." it read as the
+        ;; run finishing (run 9af33edc). tui.edn :conversation :relabel.
+        relabel (fn [e]
+                  (if-let [{:keys [label drop]} (and (= :tool (:kind e)) (get labels (:tool e)))]
+                    (cond-> (assoc e :tool (str label))
+                      (and drop (str/starts-with? (:result e) (str drop)))
+                      (update :result #(str/triml (subs % (count (str drop))))))
+                    e))
         ;; What the agents tell each other — a supervisor's steer, a critic's
         ;; score, the harness's notes — folds to one line: the person reads the
         ;; status of the work, and these are the machinery of getting there.
@@ -182,11 +213,12 @@
                                (for [n local-notes]
                                  {:key (:key n) :role :system :kind :say
                                   :at (:at n) :text (:text n)})))]
-    (cond-> (vec (cond->> (map aside later)
+    (cond-> (vec (cond->> (map (comp aside relabel) later)
                    (not (str/blank? (str problem)))
                    (cons {:key "problem" :role :user :kind :say :at "" :text (str problem)})))
       (not (str/blank? (str answer)))
-      (conj {:key "answer" :role :agent :kind :say :final? true :text (str answer)}))))
+      (conj {:key "answer" :role :agent :kind :say :final? true :text (str answer)})
+      end (conj end))))
 
 ;; The last answer, and what it was made from. Every frame asks — a keystroke
 ;; is a frame — and rebuilding it from every turn row was 108ms of a 170ms
@@ -205,6 +237,10 @@
             (get-in state [:branch :notes])
             (:local-notes state)
             (get-in state [:detail :run :final_answer])
+            (ending state)
+            (get-in settings [:relabel
+                              (some #(when (= (:branch-id state) (:id %)) (some-> (:role %) name))
+                                    (get-in state [:detail :branches]))])
             settings]
         [held es] @last-history]
     (if (and held (= held in))

@@ -587,6 +587,67 @@
       (is (= :completed (:status r)))
       (is (empty? (:review @calls))))))
 
+(defn- plain-dir
+  "A project that is not a git repository and has no check: ~/src/jolt-lang."
+  []
+  (let [d (str "/tmp/samizdat-team-solve-plain-" (System/nanoTime))]
+    (.mkdirs (java.io.File. d))
+    (spit (str d "/README.md") "hello\n")
+    d))
+
+(defn- writes-once [file content]
+  (fn [messages]
+    (let [all (str/join "\n" (map (comp str :content) (rest messages)))]
+      (if (str/includes? all "<tool_result tool=\"write_file\"")
+        {:content (json-call "done" {"answer" finished}) :finish-reason "stop"}
+        {:content (json-call "write_file" {"path" file "content" content})
+         :finish-reason "stop"}))))
+
+(deftest outside-git-the-reviewer-reads-the-files-the-run-wrote
+  ;; Run 9af33edc: ~/src/jolt-lang is not a repository, so the reviewer was
+  ;; handed an empty diff, answered "nothing was produced" twice, and a run
+  ;; that had written a working script ended abandoned.
+  (let [conn (db/open! ":memory:")
+        d (plain-dir)
+        calls (atom {})
+        r (with-redefs [llm/chat (scripted {:manager (fn [n] (if (zero? n) {:next "write it"} {:status "done"}))
+                                            :worker (writes-once "tool.jolt" "the-script-body-42")
+                                            :calls calls})]
+            (run conn d {:problem "Write tool.jolt."}))
+        seen (str/join " " (map :content (first (:review @calls))))
+        reported (str/join " " (map :content (first (:report @calls))))]
+    (is (= :completed (:status r)) (pr-str (:status r)))
+    (is (= 1 (count (:review @calls))))
+    (is (str/includes? seen "tool.jolt"))
+    (is (str/includes? seen "the-script-body-42") "the file's content, not an empty diff")
+    (is (not (str/includes? seen "(no changes)")))
+    (testing "the report names the file too"
+      (is (str/includes? reported "tool.jolt")))))
+
+(deftest an-empty-revise-is-not-a-refusal
+  ;; A reviewer that says REVISE and names nothing has given a fresh worker
+  ;; nothing to act on. Counting it toward :max-reviews ends a run unsolved
+  ;; on no finding at all.
+  (doseq [empty-reply ["REVISE" "REVISE\n\n" "REVISE:" "revise -\n- \n"]]
+    (testing (pr-str empty-reply)
+      (let [conn (db/open! ":memory:")
+            d (repo-dir)
+            calls (atom {})
+            r (with-redefs [llm/chat (scripted {:manager (fn [n] (if (zero? n) {:next "add it"} {:status "done"}))
+                                                :worker (repo-worker "ok.txt")
+                                                :calls calls
+                                                :review (fn [_] empty-reply)})]
+                (with-policy {:max-reviews 1}
+                  #(run conn d {:problem "Create ok.txt."
+                                :config {:run {:loop "team-solve" :root d :verify-cmd "test -f ok.txt"}}})))
+            id (:run-id r)]
+        (is (= :completed (:status r)) (pr-str (:status r)))
+        (is (= 1 (count (:review @calls))) "not sent back for another round")
+        (is (some #(= "empty" (:review %)) (rounds conn id)))
+        (is (nil? (:stopped (journal/last-note conn id :team-solve-ledger))))
+        (is (some #(= "review-empty" (:kind %)) (journal/notes conn id :workflow-signal))
+            "the supervisor is told the reviewer said nothing")))))
+
 (deftest finish-sends-team-solve-to-its-verify-stage
   ;; The verify stage's script judges the work, so finish there is not a claim
   ;; anyone has to trust, and unlike stop it does not mark the run stopped.

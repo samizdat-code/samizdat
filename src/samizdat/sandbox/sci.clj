@@ -161,7 +161,7 @@
      :effects #{:proc :fs}}
 
     samizdat.agent.gitdiff
-    {:vars [baseline changed-files diff max-diff-chars restore-work-tree! review-diff work-tree-id]
+    {:vars [baseline changed-files diff max-diff-chars restore-work-tree! review-diff work-tree-id written-files]
      :effects #{:proc}}
 
     ;; The probe's model calls and its journal line.
@@ -326,7 +326,7 @@
     ;; The run journal: reads, and appending a note or a side call's usage.
     samizdat.store.journal
     {:vars [branch-turns gate-firings gate-tally last-note last-turn minutes-since note! notes notes-since
-            progress record-side-call! retirement-candidates run-usage turns]
+            progress record-side-call! retirement-candidates run-usage run-writes turns]
      :effects #{:db}}
 
     ;; The paired-sample grader — the team-solve workflow's DETERMINISTIC

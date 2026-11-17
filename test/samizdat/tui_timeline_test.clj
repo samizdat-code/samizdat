@@ -230,6 +230,54 @@
            (select-keys (last es) [:role :kind :text :final?])))
     (is (not-any? :final? (tl/entries state settings)) "no answer, no entry")))
 
+(deftest a-run-that-ends-without-an-answer-says-so
+  ;; Run 9af33edc ended exhausted with its only branch abandoned and no
+  ;; answer: the last thing on screen was an old supervisor note, and the
+  ;; person could not tell whether it had stopped, or why.
+  (let [s (-> state
+              (assoc-in [:detail :run :status] "exhausted")
+              (assoc-in [:detail :branches]
+                        [{:id "B1" :status "abandoned"
+                          :inactive_reason "Not solved. REVISE\n- the diff is empty"}
+                         {:id "W2" :status "done" :inactive_reason nil}]))
+        end (last (tl/entries s settings))]
+    (is (:final? end) "it is the last thing the conversation says")
+    (is (= :system (:role end)))
+    (is (str/includes? (:text end) "exhausted"))
+    (is (str/includes? (:text end) "B1"))
+    (is (str/includes? (:text end) "the diff is empty") "and why, from the branch that ended"))
+  (testing "a running run, or one with an answer, gets no such entry"
+    (let [s (-> state (assoc-in [:detail :run :status] "running"))]
+      (is (not-any? :final? (tl/entries s settings))))
+    (let [s (-> state
+                (assoc-in [:detail :run :status] "completed")
+                (assoc-in [:detail :run :final_answer] "Done."))]
+      (is (= "Done." (:text (last (tl/entries s settings)))))))
+  (testing "with no reason recorded it still says the run ended"
+    (let [s (assoc-in state [:detail :run :status] "aborted")
+          end (last (tl/entries s settings))]
+      (is (:final? end))
+      (is (str/includes? (:text end) "aborted")))))
+
+(deftest a-workers-done-reads-as-a-hand-back
+  ;; A team-solve worker's `done` hands its work to the manager; the run goes
+  ;; on. Drawn as DONE / "Answer accepted." it read as the run being finished
+  ;; (run 9af33edc's W2), and the run then ended abandoned.
+  (let [cfg (assoc settings :relabel {"solver" {"done" {:label "handed back" :drop "Answer accepted."}}})
+        turn {:turn 3 :tool_name "done" :args "{}" :result "Answer accepted.\n\n### RESULT\nwrote it"
+              :category "success" :created_at "2026-09-23T10:00:09.000Z"}
+        s (-> state
+              (update-in [:branch :turns] conj turn)
+              (assoc-in [:detail :branches] [{:id "B1" :status "done" :role "solver"}]))
+        done (last (filter #(= :tool (:kind %)) (tl/entries s cfg)))]
+    (is (= "handed back" (:tool done)))
+    (is (= "### RESULT\nwrote it" (:result done)))
+    (testing "a branch with no such role keeps the tool's own name"
+      (let [s (assoc-in s [:detail :branches] [{:id "B1" :status "done" :role nil}])
+            done (last (filter #(= :tool (:kind %)) (tl/entries s cfg)))]
+        (is (= "done" (:tool done)))
+        (is (str/starts-with? (:result done) "Answer accepted."))))))
+
 (deftest a-working-branch-says-it-is-thinking
   ;; Between turns the model is working and nothing has streamed yet; the log
   ;; showed nothing at all, which reads as stuck. The line is a fold, like

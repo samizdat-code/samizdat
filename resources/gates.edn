@@ -2446,6 +2446,9 @@
           :report-chars 600
           ;; The diff the final report is written from (team-solve-report-user).
           :final-report-diff-chars 12000
+          ;; Outside git there is no diff: the reviewer and the report read
+          ;; at most this many of the files the run's tools wrote instead.
+          :written-files-max 40
           :cutoff-chars 9000
           :ideate? true
           :ideators ["team-solve-ideator-a" "team-solve-ideator-b"]
@@ -2472,7 +2475,10 @@
         finish its only long stretch of work, so it now has 40. :repo-task-chars
         bounds the manager's task on a repository, where it says where to start and the
         worker reads the request itself. :max-reviews: once it has refused that many times the run ends unsolved
-        with its findings, rather than ship what a reviewer refused. :unstick-wait-ms is how long :unstick waits for the
+        with its findings, rather than ship what a reviewer refused. A REVISE that
+        names no finding is not a refusal and does not count: a fresh worker has
+        nothing to act on. :written-files-max: in a project git cannot diff, how many
+        of the files the run's tools wrote stand in for the diff. :unstick-wait-ms is how long :unstick waits for the
         supervisor before taking its mechanical way out. :worker-max-turns caps
         one worker on one task; a supervisor `budget` directive overrides it.
         :worker-max-turns-timed replaces it when the run has a time limit: there the
