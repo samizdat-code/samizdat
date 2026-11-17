@@ -86,9 +86,16 @@
         (finally (.delete f))))))
 
 (defn remove!
-  "Remove the worktree at `dir` and git's record of it."
+  "Remove the worktree at `dir` and git's record of it. When git will not
+  remove it — another git process holding a lock under .git/worktrees — the
+  directory is deleted and the record pruned anyway: a checkout left behind
+  was a worker's tree that stayed on disk and in `git worktree list`."
   [root dir]
-  (git root "worktree" "remove" "--force" (str dir))
+  (let [r (git root "worktree" "remove" "--force" (str dir))]
+    (when-not (ok-out r)
+      (let [d (java.io.File. (str dir))]
+        (when (.exists d)
+          (doseq [f (reverse (file-seq d))] (.delete f))))))
   (git root "worktree" "prune")
   nil)
 
@@ -106,9 +113,14 @@
   When no worktree can be made — not a git tree, git refused — `run!` is
   called with nil, which a caller reads as \"work in place\"."
   [root run-id owner run! land?]
+  ;; Making and removing a worktree, like the baseline and a patch, are
+  ;; serialized: concurrent `worktree add`/`remove`/`prune` from parallel
+  ;; owners race on git's locks under .git/worktrees, and a remove that lost
+  ;; left a checkout behind (the team test, intermittently, on CI).
   (let [dir (dir-for run-id owner)
-        base (locking tree-lock (gitdiff/baseline root))
-        made (when base (create! root base dir))]
+        [base made] (locking tree-lock
+                      (let [b (gitdiff/baseline root)]
+                        [b (when b (create! root b dir))]))]
     (if-not made
       (run! nil)
       (try
@@ -120,4 +132,4 @@
                        (integrate! root p)
                        {:no-patch true}))
                    {:discarded true})))
-        (finally (remove! root made))))))
+        (finally (locking tree-lock (remove! root made)))))))
