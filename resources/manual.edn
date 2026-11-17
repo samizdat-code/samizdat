@@ -73,6 +73,8 @@
     :summary "Put the work back as a work-tree-id holds it, removing files created since."}
    {:name samizdat.agent.gitdiff/written-files
     :summary "Files as they stand now, under headers naming their paths, bounded like a diff. Outside git there is no diff, so team-solve's reviewer and report read the files the run wrote this way."}
+   {:name samizdat.agent.gitdiff/git-project?
+    :summary "Whether a root is a git project: inside a work tree that does not ignore it. Every git-backed mechanism (baseline, diff, snapshot, project files) asks this first; a directory of repositories, or a project under an all-ignoring home repo, is not one."}
    {:name samizdat.agent.gitdiff/changed-since
     :summary "Files modified under a root since an instant, by a bounded walk that skips named directories: {:paths :complete?}. Outside git, how team-solve finds a file a shell command wrote."}
    {:name samizdat.eval.samples/grade

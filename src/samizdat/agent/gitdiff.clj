@@ -73,22 +73,47 @@
              (take (long max))
              vec)))))
 
+(defn git-project?
+  "Whether `root` is a git project: git is installed, `root` is inside a work
+  tree, and that work tree does not ignore it. Everything here that relies on
+  git asks this first. Not a git project: a directory whose CHILDREN are
+  repositories (~/src/jolt-lang), or a project under a home directory kept in
+  git with everything ignored."
+  [root]
+  (boolean
+   (and root (proc/available? "git")
+        (= "true" (some-> (git root "rev-parse" "--is-inside-work-tree") str/trim))
+        (let [r (proc/run {:timeout-ms 15000 :env (secrets/scrubbed-process-env)}
+                          "git" "-C" (str root) "check-ignore" "-q" ".")]
+          ;; 0: ignored. 1: not. Anything else (the work tree's top, where
+          ;; "." names no path) is not an ignore either.
+          (not= 0 (:exit r))))))
+
 (defn- whole-tree-commit
   "A commit of the working tree as it stands, untracked files included
-  (.gitignore respected), parented on `base`. Built in a scratch index, so
-  the tree, the real index and the stash are not touched. nil when git
-  refuses any step."
+  (.gitignore respected), parented on `base` — or on nothing when `base` is
+  nil, a repository with no commits yet. Built in a scratch index, so the
+  tree, the real index and the stash are not touched. nil when git refuses
+  any step."
   [root base]
   (let [idx (java.io.File/createTempFile "samizdat-baseline" ".index")
         env (assoc (secrets/scrubbed-process-env) "GIT_INDEX_FILE" (.getPath idx))]
     (try
       (.delete idx)
-      (when (and (git* env root ["read-tree" base])
+      (when (and (or (nil? base) (git* env root ["read-tree" base]))
                  (git* env root ["add" "-A"]))
         (when-let [tree (some-> (git* env root ["write-tree"]) str/trim not-empty)]
-          (some-> (git root "commit-tree" tree "-p" base "-m" "samizdat baseline")
+          (some-> (apply git root "commit-tree" tree
+                         (concat (when base ["-p" base]) ["-m" "samizdat baseline"]))
                   str/trim not-empty)))
       (finally (.delete idx)))))
+
+(defn- commit-id
+  "The commit `rev` names now, as an id that will not move. nil when it names
+  none — an unborn HEAD."
+  [root rev]
+  (some-> (git root "rev-parse" "--verify" "--quiet" (str rev "^{commit}"))
+          str/trim not-empty))
 
 (defn tree-id
   "The id of the working tree's content as it stands — untracked files
@@ -96,7 +121,7 @@
   touched. Two calls on an unchanged tree give the same id. nil when git or
   the repo is unavailable."
   [root]
-  (when (and root (proc/available? "git"))
+  (when (git-project? root)
     (let [idx (java.io.File/createTempFile "samizdat-tree" ".index")
           env (assoc (secrets/scrubbed-process-env) "GIT_INDEX_FILE" (.getPath idx))]
       (try
@@ -112,13 +137,17 @@
   create` alone captures tracked edits only: run 74ddebb8 answered a
   question, wrote nothing, and passed `done` on the untracked README.md,
   NOTES.md and EXPLAINED.md an earlier run had left (karamazov-9554). Falls
-  back to the stash commit, then \"HEAD\". nil when git or the repo is
-  unavailable — the critic then reviews completeness only."
+  back to the stash commit, then the commit HEAD names — always an id, never
+  the ref \"HEAD\", which moves when the agent commits (run 674ac724). A
+  repository with no commits yet gets a parentless commit of its tree: there
+  is no HEAD to diff against at all. nil when git or the repo is unavailable
+  — the critic then reads the files the run wrote."
   [root]
-  (when (and root (proc/available? "git")
-             (git root "rev-parse" "--is-inside-work-tree"))
-    (let [base (or (some-> (git root "stash" "create") str/trim not-empty) "HEAD")]
-      (or (whole-tree-commit root base) base))))
+  (when (git-project? root)
+    (let [head (commit-id root "HEAD")
+          base (or (some-> (git root "stash" "create") str/trim not-empty) head)]
+      (or (whole-tree-commit root base)
+          (when base (commit-id root base))))))
 
 (defn- generated?
   "A path no run wrote: the harness's own state, a tool cache, build output
@@ -177,8 +206,7 @@
   there is no branch to name and the counts still matter; `:last-commit` is
   nil in a repo with no commits yet. Fails soft like everything else here."
   [root]
-  (when (and root (proc/available? "git")
-             (git root "rev-parse" "--is-inside-work-tree"))
+  (when (git-project? root)
     (merge {:branch (some-> (git root "symbolic-ref" "--quiet" "--short" "HEAD")
                             str/trim not-empty)
             :last-commit (some-> (git root "log" "-1" "--format=%s")
@@ -205,7 +233,7 @@
   .gitignore respected, the harness's own directory left out. Built in a scratch
   index so nothing is touched. nil when git or the repo is unavailable."
   [root]
-  (when (and root (proc/available? "git"))
+  (when (git-project? root)
     (let [idx (java.io.File/createTempFile "samizdat-work" ".index")
           env (assoc (secrets/scrubbed-process-env) "GIT_INDEX_FILE" (.getPath idx))]
       (try
@@ -248,7 +276,7 @@
   "Every file git would show in `root`: tracked ones and new ones, without
   what .gitignore hides. nil outside a git tree, or with no root."
   [root]
-  (when root
+  (when (git-project? root)
     (lines (git root "ls-files" "--cached" "--others" "--exclude-standard"))))
 
 (defn changed-files
@@ -345,19 +373,36 @@
   ;; comments only, which review-diff names instead of showing.
   ([root baseline cap excluded]
    (or (when (and root (rev? baseline))
-         ;; Without the untracked files the baseline holds unchanged, which
-         ;; `git diff` would show as deleted — the run did not delete them.
+         ;; Diffed from a SCRATCH index — the baseline's tree with the working
+         ;; tree added over it — so a file the run created and never `git
+         ;; add`ed is in the diff. A plain `git diff <baseline>` compares
+         ;; tracked paths only: run 674ac724's new script was invisible to
+         ;; its reviewer. An untracked file the baseline holds unchanged
+         ;; shows no change this way, and the real index is never touched.
          ;; --no-ext-diff --no-color: the unified diff whatever the
          ;; operator's git config says. A diff.external (difftastic, here)
          ;; replaced it with a side-by-side the judge's `diff --git`
          ;; chunking could not read.
-         (some-> (apply git root "diff" "--no-ext-diff" "--no-color" "--relative" baseline "--" "."
-                        (map #(str ":(exclude)" %)
-                             (concat (:stale (untracked-split root baseline)) excluded)))
-                 (as-> d (if (> (count d) (long cap))
-                           (str (subs d 0 (long cap))
-                                "\n… (diff truncated at " cap " chars)")
-                           d))))
+         (let [idx (java.io.File/createTempFile "samizdat-diff" ".index")
+               env (assoc (secrets/scrubbed-process-env) "GIT_INDEX_FILE" (.getPath idx))
+               ;; Untracked paths no run wrote — the harness's own state, a
+               ;; tool cache — left out; --directory names an untracked tree
+               ;; once rather than file by file.
+               generated (filter generated? (lines (git root "ls-files" "--others" "--exclude-standard"
+                                                        "--directory")))
+               excludes (map #(str ":(exclude)" %) (concat generated excluded))]
+           (try
+             (.delete idx)
+             (when (and (git* env root ["read-tree" baseline])
+                        (git* env root (concat ["add" "-A" "--" "."] excludes)))
+               (some-> (git* env root (concat ["diff" "--cached" "--no-ext-diff" "--no-color"
+                                               "--relative" baseline "--" "."]
+                                              excludes))
+                       (as-> d (if (> (count d) (long cap))
+                                 (str (subs d 0 (long cap))
+                                      "\n… (diff truncated at " cap " chars)")
+                                 d))))
+             (finally (.delete idx)))))
        "")))
 
 (defn written-files

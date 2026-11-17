@@ -234,15 +234,22 @@
          (take n)
          vec)))
 
-(defn- diff-text
-  "The work as a reviewer and the report read it: the diff against the run's
-  baseline, or outside git the files the run wrote as they stand. Without that
-  fallback a project that is not a repository showed an empty diff, and the
-  reviewer refused working code as \"nothing was produced\" (run 9af33edc)."
+(defn- work-view
+  "The work as a reviewer and the report read it: {:text :written?}. The
+  diff against the run's baseline, or the files the run wrote as they stand
+  (:written? true) when there is no baseline — a project that is not a
+  repository showed an empty diff, and the reviewer refused working code as
+  \"nothing was produced\" (run 9af33edc) — or when the diff is empty: an
+  empty diff is believed only when the run's own record agrees, since a
+  baseline that moved under a commit or a git that failed showed \"no
+  changes\" for finished work (run 674ac724)."
   [{:keys [root git-baseline] :as ctx} cap]
-  (if git-baseline
-    (gitdiff/diff root git-baseline cap)
-    (gitdiff/written-files root (written-paths ctx) cap)))
+  (let [d (when git-baseline (gitdiff/diff root git-baseline cap))]
+    (if (str/blank? d)
+      {:text (gitdiff/written-files root (written-paths ctx) cap) :written? true}
+      {:text d :written? false})))
+
+(defn- diff-text [ctx cap] (:text (work-view ctx cap)))
 
 (defn- current-work
   "What the manager and a worker read as the work so far."
@@ -713,12 +720,13 @@
   {:pass? bool :findings text}. A reply that does not begin PASS sends it back, but a
   call that failed outright passes: it reviewed nothing, and its signal is raised."
   [ctx l]
-  (let [reply (ask ctx :critic :review
+  (let [view (work-view ctx (:current-chars (policy)))
+        reply (ask ctx :critic :review
                    (prompt/prompt "team-solve-review-system")
                    (prompt/render "team-solve-review-user"
                                   {:problem (:problem l)
-                                   :diff (diff-text ctx (:current-chars (policy)))
-                                   :written (nil? (:git-baseline ctx))
+                                   :diff (:text view)
+                                   :written (:written? view)
                                    :check (get-in l [:gate :report])}))
         head (str/upper-case (subs reply 0 (min 4 (count reply))))
         nothing? (empty-revise? reply)]

@@ -161,7 +161,7 @@
      :effects #{:proc :fs}}
 
     samizdat.agent.gitdiff
-    {:vars [baseline changed-files changed-since diff max-diff-chars restore-work-tree! review-diff work-tree-id written-files]
+    {:vars [baseline changed-files changed-since diff git-project? max-diff-chars restore-work-tree! review-diff work-tree-id written-files]
      :effects #{:proc}}
 
     ;; The probe's model calls and its journal line.

@@ -642,6 +642,22 @@
     (is (str/includes? seen "gen.jolt"))
     (is (str/includes? seen "from-a-shell-77"))))
 
+(deftest an-empty-diff-is-not-shown-when-the-run-wrote-files
+  ;; Whatever made the diff come back empty — a baseline that moved, git
+  ;; failing — the reviewer is not told "no changes" while the run's own
+  ;; record says it wrote files.
+  (let [conn (db/open! ":memory:")
+        d (repo-dir)
+        calls (atom {})
+        r (with-redefs [gitdiff/diff (fn [& _] "")
+                        llm/chat (scripted {:manager (fn [n] (if (zero? n) {:next "write it"} {:status "done"}))
+                                            :worker (writes-once "tool.jolt" "body-from-the-record-9")
+                                            :calls calls})]
+            (run conn d {:problem "Write tool.jolt."}))
+        seen (str/join " " (map :content (first (:review @calls))))]
+    (is (= :completed (:status r)) (pr-str (:status r)))
+    (is (str/includes? seen "body-from-the-record-9"))))
+
 (deftest an-empty-revise-is-not-a-refusal
   ;; A reviewer that says REVISE and names nothing has given a fresh worker
   ;; nothing to act on. Counting it toward :max-reviews ends a run unsolved

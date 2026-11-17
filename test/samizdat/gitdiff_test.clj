@@ -13,8 +13,9 @@
     (with-redefs [proc/run (fn [opts & _] (reset! captured opts) {:exit 0 :out "" :err ""})]
       (gd/diff "/tmp/some-root" "HEAD"))
     (is (map? (:env @captured)) "git children get an explicit environment")
-    (is (= (scrub/scrubbed-process-env) (:env @captured))
-        "the git child sees the scrubbed process environment, not the parent's")))
+    (is (= (scrub/scrubbed-process-env) (dissoc (:env @captured) "GIT_INDEX_FILE"))
+        "the git child sees the scrubbed process environment, not the parent's —
+         plus, for the diff, the scratch index it is built in")))
 
 (deftest diff-fails-soft
   ;; No root, no baseline, or no repo must yield an empty diff, not a throw —
@@ -312,3 +313,60 @@
         (is (= [] (:paths (gd/changed-since nil since {}))))
         (is (= [] (:paths (gd/changed-since dir nil {})))))
       (finally (sh dir (str "rm -rf " dir))))))
+
+(deftest a-repository-with-no-commits-still-gets-a-fixed-baseline
+  ;; Run 674ac724 in ~/src/humanizer: `git init` and never a commit. stash
+  ;; create and read-tree HEAD both fail on an unborn HEAD, so the baseline
+  ;; fell back to the string "HEAD": `git diff HEAD` failed (the reviewer got
+  ;; an empty diff and refused finished work), and once a worker committed,
+  ;; HEAD moved with the work and the diff stayed empty.
+  (let [dir (str "/tmp/samizdat-unborn-" (System/nanoTime))]
+    (try
+      (.mkdirs (java.io.File. dir))
+      (sh dir "git init -q && echo old > a.py")
+      (let [base (gd/baseline dir)]
+        (is (some? base))
+        (is (not= "HEAD" base) "a commit id, not a ref that moves")
+        (is (re-matches #"[0-9a-f]{40}" (str base)))
+        (sh dir "echo new > b.jolt")
+        (is (= ["b.jolt"] (gd/changed-files dir base)) "a.py was there before the run")
+        (is (str/includes? (gd/diff dir base) "b.jolt"))
+        (testing "and the work stays visible after the agent commits it"
+          (sh dir "git add -A && git -c user.email=t@t -c user.name=t commit -qm port")
+          (is (str/includes? (gd/diff dir base) "b.jolt"))
+          (is (= ["b.jolt"] (gd/changed-files dir base)))))
+      (finally (sh dir (str "rm -rf " dir))))))
+
+(deftest a-baseline-is-never-a-moving-ref
+  (let [dir (str "/tmp/samizdat-moving-" (System/nanoTime))]
+    (try
+      (.mkdirs (java.io.File. dir))
+      (sh dir "git init -q && echo a > a && git add -A && git -c user.email=t@t -c user.name=t commit -qm one")
+      (with-redefs-fn {#'gd/whole-tree-commit (fn [& _] nil)}
+        (fn []
+          (let [base (gd/baseline dir)]
+            (is (re-matches #"[0-9a-f]{40}" (str base)) "HEAD resolved to the commit it named"))))
+      (finally (sh dir (str "rm -rf " dir))))))
+
+(deftest a-git-project-is-a-root-git-tracks
+  ;; Git is relied on only where the project IS a git project. ~/src/jolt-lang
+  ;; is not one (its children are); a project under a home directory kept in
+  ;; git with everything ignored is not one either.
+  (let [base (str "/tmp/samizdat-gitproj-" (System/nanoTime))]
+    (try
+      (sh "/tmp" (str "mkdir -p " base "/plain/child " base "/repo/sub " base "/dots/proj"))
+      (sh (str base "/plain/child") "git init -q")
+      (sh (str base "/repo") "git init -q")
+      (sh (str base "/dots") "git init -q && printf '*\\n' > .gitignore")
+      (is (false? (gd/git-project? (str base "/plain"))) "a directory of repositories is not one")
+      (is (true? (gd/git-project? (str base "/plain/child"))))
+      (is (true? (gd/git-project? (str base "/repo"))) "with no commits yet, still a repository")
+      (is (true? (gd/git-project? (str base "/repo/sub"))))
+      (is (false? (gd/git-project? (str base "/dots/proj"))) "inside a work tree that ignores it")
+      (is (false? (gd/git-project? nil)))
+      (testing "nothing git-backed is offered where it is not one"
+        (is (nil? (gd/baseline (str base "/plain"))))
+        (is (nil? (gd/baseline (str base "/dots/proj"))))
+        (is (nil? (gd/snapshot (str base "/dots/proj"))))
+        (is (nil? (gd/project-files (str base "/dots/proj")))))
+      (finally (sh "/tmp" (str "rm -rf " base))))))
