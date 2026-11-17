@@ -219,10 +219,20 @@
 ;; --- the work -----------------------------------------------------------------
 
 (defn- written-paths
-  "What the run's file tools wrote, newest first: in a project git cannot
-  diff, the only record of the work there is."
-  [{:keys [conn run-id]}]
-  (mapv :path (journal/run-writes conn run-id (:written-files-max (policy)))))
+  "What the run wrote, newest first, in a project git cannot diff: the file
+  tools' record, then whatever else changed under the root since the run
+  started — a file a shell command wrote is in no tool's record."
+  [{:keys [conn run-id root]}]
+  (let [p (policy)
+        n (:written-files-max p)
+        tools (mapv :path (journal/run-writes conn run-id n))
+        since (:started_at (runs/get-run conn run-id))
+        shell (:paths (gitdiff/changed-since root since (:changed-scan p)))
+        abs (fn [x] (if (str/starts-with? (str x) "/") (str x) (str root "/" x)))]
+    (->> (concat tools shell)
+         (reduce (fn [acc x] (if (some #(= (abs x) (abs %)) acc) acc (conj acc x))) [])
+         (take n)
+         vec)))
 
 (defn- diff-text
   "The work as a reviewer and the report read it: the diff against the run's

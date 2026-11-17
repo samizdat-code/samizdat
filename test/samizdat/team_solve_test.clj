@@ -624,6 +624,24 @@
     (testing "the report names the file too"
       (is (str/includes? reported "tool.jolt")))))
 
+(deftest outside-git-the-reviewer-sees-what-a-shell-command-wrote
+  ;; The file tools' record misses a file a command wrote. Here the file is
+  ;; written by the stub, outside any tool, as a shell command or a script
+  ;; it ran would write it; the worker then calls done.
+  (let [conn (db/open! ":memory:")
+        d (plain-dir)
+        calls (atom {})
+        shell-worker (fn [_]
+                       (spit (str d "/gen.jolt") "from-a-shell-77")
+                       {:content (json-call "done" {"answer" finished}) :finish-reason "stop"})
+        r (with-redefs [llm/chat (scripted {:manager (fn [n] (if (zero? n) {:next "write it"} {:status "done"}))
+                                            :worker shell-worker
+                                            :calls calls})]
+            (run conn d {:problem "Write the generator."}))
+        seen (str/join " " (map :content (first (:review @calls))))]
+    (is (str/includes? seen "gen.jolt"))
+    (is (str/includes? seen "from-a-shell-77"))))
+
 (deftest an-empty-revise-is-not-a-refusal
   ;; A reviewer that says REVISE and names nothing has given a fresh worker
   ;; nothing to act on. Counting it toward :max-reviews ends a run unsolved

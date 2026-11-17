@@ -394,6 +394,46 @@
         (str (subs text 0 (long cap)) "\n… (files truncated at " cap " chars)")
         text))))
 
+(defn- epoch-ms [t]
+  (cond
+    (number? t) (long t)
+    (string? t) (try (.toEpochMilli (java.time.Instant/parse t)) (catch Throwable _ nil))
+    :else nil))
+
+(defn changed-since
+  "Files under `root` modified after `since` (epoch ms, or an ISO instant as
+  the journal stores a run's start), as paths from the root, newest first:
+  {:paths [...] :complete? bool}. Outside git this is the only way to see a
+  file a SHELL command wrote — the file tools' record (journal/run-writes)
+  names only theirs. Directories named in `skip-dirs` are not entered; the
+  walk stops after `max-entries` files and directories, :complete? false."
+  [root since {:keys [skip-dirs max-entries]}]
+  (let [t (epoch-ms since)]
+    (if (or (nil? root) (nil? t))
+      {:paths [] :complete? true}
+      (let [skip (set (map str skip-dirs))
+            cap (long (or max-entries Long/MAX_VALUE))
+            root-s (str root)]
+        (loop [stack [(java.io.File. root-s)] n 0 hits []]
+          (cond
+            (empty? stack)
+            {:paths (mapv first (sort-by (comp - second) hits)) :complete? true}
+
+            (>= n cap)
+            {:paths (mapv first (sort-by (comp - second) hits)) :complete? false}
+
+            :else
+            (let [f (peek stack) stack (pop stack)]
+              (if (.isDirectory f)
+                (if (and (pos? n) (skip (.getName f)))
+                  (recur stack (inc n) hits)
+                  (recur (into stack (or (.listFiles f) [])) (inc n) hits))
+                (let [m (.lastModified f)]
+                  (recur stack (inc n)
+                         (if (> m t)
+                           (conj hits [(subs (.getPath f) (inc (count root-s))) m])
+                           hits)))))))))))
+
 (defn- structural-reports
   "sdiff's report for each Clojure file changed since `baseline`, renames
   rolled up across them: {:files :renames}."
