@@ -254,7 +254,7 @@ class SamizdatAgent(BaseInstalledAgent):
         )
         await self._sh(environment, serve, env={self.key_env: key})
         await self._sh(environment, "nohup sh /opt/samizdat/oom-sweep.sh >/dev/null 2>&1 &")
-        token_file = f'"$HOME/.config/samizdat/http/{PORT}.token"'
+        token_file = f'"{root}/.samizdat/http/{PORT}.token"'
         for _ in range(90):
             # curl when the image has it, else a bare TCP connect: an image may lack curl.
             # Only one or the other: a listening port answers TCP before /health answers

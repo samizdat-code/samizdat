@@ -124,7 +124,7 @@
   allow the shell — it stops the image starting, with `execvp() … Operation
   not permitted`. Failing closed is the right direction here and the message
   says what happened, but a spawner has to pass them."
-  [{:keys [project-root scratch-paths deny-read exec-roots protect]}]
+  [{:keys [project-root scratch-paths deny-read exec-roots protect hide]}]
   (->>
    [";; samizdat.security.sandbox — generated"
     "(version 1)"
@@ -154,6 +154,9 @@
     ;; is what makes it safe to deny a whole directory without first proving
     ;; the project is not under it.
     (rule "allow file-read*" (cons project-root scratch-paths))
+    ;; Trees INSIDE the project nothing here may read — the API's token.
+    ;; After the re-allow above, because the last match wins.
+    (rule "deny file-read*" hide)
     ""
     ";; exec"
     "(deny process-exec*)"
@@ -205,7 +208,7 @@
   `:deny-ports`     loopback ports the shell may not connect to — the harness's
 
   Exec and the network are otherwise open; see the section comment."
-  [{:keys [project-root scratch-paths writable deny-read deny-ports protect]}]
+  [{:keys [project-root scratch-paths writable deny-read deny-ports protect hide]}]
   (->>
    (concat
     [";; samizdat.security.sandbox — shell, generated"
@@ -224,6 +227,7 @@
      ";; read denies; project re-allowed"
      (rule "deny file-read*" deny-read)
      (rule "allow file-read*" (cons project-root scratch-paths))
+     (rule "deny file-read*" hide)
      ""
      ";; the harness's own ports"]
     (for [p (distinct (filter port? deny-ports))]
@@ -332,7 +336,7 @@
   A deny that CONTAINS a writable tree is not mounted: it would hide the
   project. The seatbelt profile re-allows the project after its denies for
   the same reason, and it is what lets a self-hosting run read itself. Pure."
-  [{:keys [project-root scratch-paths deny-dirs deny-files seccomp-fd protect]}]
+  [{:keys [project-root scratch-paths deny-dirs deny-files seccomp-fd protect hide]}]
   ;; Every path made absolute: bwrap reads a relative mount destination
   ;; against the sandbox's /, so a run with no :root — project root "." —
   ;; bound the working directory over / and bash was gone ("bwrap: execvp
@@ -353,6 +357,11 @@
                       (remove hides-writable? (clean deny-dirs))))
         (into (mapcat (fn [p] ["--ro-bind" "/dev/null" p])
                       (remove hides-writable? (clean deny-files))))
+        ;; Hidden trees inside the project — the API's token — under an empty
+        ;; tmpfs, mounted after the project and protected binds so it lands
+        ;; on top. Only what exists, as for the protected trees.
+        (into (mapcat (fn [p] ["--tmpfs" p])
+                      (filter #(.isDirectory (io/file %)) (clean hide))))
         (into (when seccomp-fd ["--seccomp" (str seccomp-fd)]))
         (into ["--chdir" (resolved project-root) "--"]))))
 

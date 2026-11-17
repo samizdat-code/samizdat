@@ -207,7 +207,7 @@
    {:name samizdat.approval/session-grants
     :summary "What a person allowed ALWAYS on a run in this session (the permission dialog's `a`): shell grant patterns like `cargo *`, merged into the policy's grants for that run, held in memory only, and dropped when the run ends. Never written to the project. Where no pattern can stand for the command — a flow gap, a compound that hides what it runs — `a` allows that exact text again for the run instead (the request carries :always-exact)."}
    {:name samizdat.security.token/issue!
-    :summary "The HTTP API's bearer token: issued when the server starts, written owner-only to ~/.config/samizdat/http/<port>.token (a place no shell command or eval image can read), required on every request but /health, dropped on stop. samizdat.api.client and the event stream send it for a loopback base URL."}
+    :summary "The HTTP API's bearer token: issued when the server starts, written owner-only to the project's .samizdat/http/<port>.token (hidden from every shell command, eval image and file tool: confine/hidden, files/hidden?; a second project's server takes the next free port, recorded in .samizdat/http/port), required on every request but /health, dropped on stop. samizdat.api.client and the event stream send it for a loopback base URL."}
    {:name jolt-lsp.sdiff.group/by-calls
     :summary "The critic's structural report opens with the changed forms grouped by the calls between them (a bare name in the same namespace, an alias or full name elsewhere, with namespaces and aliases resolved by jolt-lsp's analyzer), forms used from three or more other files set apart as shared so they do not join every caller into one group."}
    {:name jolt-lsp.sdiff.names/used

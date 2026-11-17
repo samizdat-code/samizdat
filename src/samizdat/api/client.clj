@@ -43,7 +43,7 @@
 (defn default-base-url
   "Where a front end started in `root` finds its server: SAMIZDAT_URL, else
   HARNESS_PORT, else the port that project's server recorded in
-  .samizdat/http.port (a second project's server takes the next free port,
+  .samizdat/http/port (a second project's server takes the next free port,
   not 3985), else 3985."
   ([] (default-base-url #(System/getenv %)
         (or (System/getenv "HARNESS_ROOT") (System/getProperty "user.dir"))))
@@ -51,7 +51,7 @@
    (or (getenv "SAMIZDAT_URL")
        (str "http://127.0.0.1:"
             (or (getenv "HARNESS_PORT")
-                (some-> (try (slurp (str root "/.samizdat/http.port")) (catch Throwable _ nil))
+                (some-> (try (slurp (str root "/.samizdat/http/port")) (catch Throwable _ nil))
                         str/trim not-empty)
                 "3985")))))
 

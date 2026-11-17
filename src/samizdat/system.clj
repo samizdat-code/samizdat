@@ -279,6 +279,8 @@
          _ (steps/start-pump!)
          ;; The API's bearer token, BEFORE the server listens, so there is
          ;; no moment it serves without one (security.token, karamazov-3vu1.11).
+         ;; The token and the port go in THIS project's .samizdat/http.
+         _ (token/set-root! (get-in cfg [:run :root]))
          {:keys [port server]} (bind-server! #(adapter/run-server handler (assoc (select-keys (:http cfg) [:worker-threads]) :port %))
                                              (get-in cfg [:http :port])
                                              (or (get-in cfg [:http :port-scan]) 0))
@@ -335,7 +337,7 @@
         (do (token/publish! p)
             {:port p :server (:server r)})))))
 
-(def ^:private port-file ".samizdat/http.port")
+(def ^:private port-file ".samizdat/http/port")
 
 (defn write-port-file!
   "Record which port this project's server took, for a front end started
@@ -346,6 +348,15 @@
            (.mkdirs (.getParentFile f))
            (spit f (str port "\n")))
          (catch Throwable e (log/warn "could not record the port:" (ex-message e))))))
+
+(defn remove-port-file!
+  "Drop the port record when it is still this server's, so a front end does
+  not follow it to a port another server may take next."
+  [root port]
+  (when root
+    (let [f (java.io.File. (str root) port-file)]
+      (when (= (str port) (some-> (try (slurp f) (catch Throwable _ nil)) str/trim))
+        (.delete f)))))
 
 (defn- abandon-start!
   "Undo what a start that threw had already done: the step pump, the repair
@@ -389,6 +400,8 @@
                        ["peripherals" #(peripherals/stop!)]
                        ["http server" #(adapter/stop-server (:server s))]
                        ["api token" #(token/revoke-all!)]
+                       ["port record" #(remove-port-file! (get-in s [:config :run :root])
+                                                          (get-in s [:config :http :port]))]
                        ;; After the server, so a request in flight can still
                        ;; read the trace it was serving; the rings go with it.
                        ["step pump" #(do (steps/stop-pump!) (steps/reset!))]

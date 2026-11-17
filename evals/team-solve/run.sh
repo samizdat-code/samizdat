@@ -51,7 +51,7 @@ for _ in $(seq 1 120); do
   curl -sf -m 2 "http://127.0.0.1:$port/health" >/dev/null 2>&1 && break
   sleep 2
 done
-token=$(cat "$HOME/.config/samizdat/http/$port.token")
+token=$(cat "$scratch/.samizdat/http/$port.token")
 api() { curl -sf -m 300 -H "Authorization: Bearer $token" -H 'Content-Type: application/json' "$@"; }
 
 # The problem text itself, as the method's authors found it matters: a rewritten

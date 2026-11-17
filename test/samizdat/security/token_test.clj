@@ -54,10 +54,26 @@
       (is (not (fs/exists? (token/path-for 4111))))
       (is (nil? (token/current))))))
 
-(deftest the-token-lives-where-the-sandbox-cannot-read
-  (with-redefs [token/home (constantly "/home/dev")]
-    (is (some #(str/starts-with? (#'token/default-dir) (str % "/"))
-              (confine/secret-regions "/home/dev" "/work/samizdat")))))
+(deftest the-token-lives-in-the-project-where-the-agent-cannot-read
+  ;; Per project, under .samizdat/http — no machine-wide directory — and that
+  ;; directory is one the sandbox hides from everything the agent spawns.
+  (with-redefs [token/project-root (constantly "/work/proj")]
+    (is (= "/work/proj/.samizdat/http" (token/dir)))
+    (is (= "/work/proj/.samizdat/http/3985.token" (token/path-for 3985)))
+    (is (some #(= (token/dir) %) (confine/hidden "/work/proj")))))
+
+(deftest the-project-is-the-servers-root-else-where-the-client-runs
+  (token/set-root! "/srv/a")
+  (try
+    (is (= "/srv/a" (token/project-root)))
+    (finally (token/set-root! nil)))
+  (is (not= "/srv/a" (token/project-root))))
+
+(deftest a-client-started-elsewhere-is-handed-the-token
+  ;; The GUI runs from its own checkout: SAMIZDAT_TOKEN carries it.
+  (with-token-dir [_]
+    (with-redefs [token/env (fn [k] (when (= "SAMIZDAT_TOKEN" k) "from-env"))]
+      (is (= "from-env" (token/read-for 3985))))))
 
 (defn- call [uri headers]
   (server/handler {:request-method :get :uri uri
@@ -157,3 +173,16 @@
     (testing "what the person set wins"
       (is (= "http://127.0.0.1:4000" (client/default-base-url (env {"HARNESS_PORT" "4000"}) root)))
       (is (= "http://h:1" (client/default-base-url (env {"SAMIZDAT_URL" "http://h:1"}) root))))))
+
+(deftest the-token-is-kept-out-of-a-committed-samizdat
+  (with-token-dir [d]
+    (token/issue! 4112)
+    (is (= "*\n" (slurp (str d "/.gitignore"))))))
+
+(deftest a-stopped-server-takes-its-port-record-with-it
+  (let [root (str (fs/create-temp-dir))]
+    (system/write-port-file! root 3987)
+    (system/remove-port-file! root 3986)
+    (is (fs/exists? (str root "/.samizdat/http/port")) "not ours: another server's record")
+    (system/remove-port-file! root 3987)
+    (is (not (fs/exists? (str root "/.samizdat/http/port"))))))

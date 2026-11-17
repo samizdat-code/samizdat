@@ -758,3 +758,20 @@
                                  (str (fs/canonicalize (str root "/.samizdat/userspace.edn"))))
         (is (:person-only? (first @asked))))
       (finally (fs/delete-tree root) (fs/delete-tree other)))))
+
+(deftest the-api-token-inside-the-project-is-not-the-file-tools-to-read
+  ;; read_file runs in the harness, not under the shell's sandbox: the
+  ;; token's directory being under the project root must not make it a
+  ;; project file. Nor may a write replace it and lock the front ends out.
+  (let [root (str "/tmp/samizdat-files-" (random-uuid))]
+    (fs/create-dirs (str root "/.samizdat/http"))
+    (spit (str root "/.samizdat/http/3985.token") "s3cret")
+    (spit (str root "/a.txt") "a")
+    (try
+      (is (nil? (files/resolve-read! {:root root :tool-name "read_file"} [] ".samizdat/http/3985.token")))
+      (is (nil? (files/resolve-read! {:root root :tool-name "read_file"} []
+                                     (str root "/.samizdat/http/3985.token"))))
+      (is (some? (files/resolve-read! {:root root :tool-name "read_file"} [] "a.txt")))
+      (is (files/hidden? root (str (fs/canonicalize (str root "/.samizdat/http/3985.token")))))
+      (is (not (files/hidden? root (str (fs/canonicalize (str root "/a.txt"))))))
+      (finally (fs/delete-tree root)))))

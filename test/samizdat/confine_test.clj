@@ -71,7 +71,9 @@
     (testing "not $HOME itself"
       (is (not (some #{"/home/dev"} (:writable spec)))))
     (is (= [3985 7888] (:deny-ports spec)))
-    (is (some #{"/home/dev/.ssh"} (:deny-read spec)))))
+    (is (some #{"/home/dev/.ssh"} (:deny-read spec)))
+    (testing "the API's token, inside the project, hidden from it"
+      (is (= ["/work/proj/.samizdat/http"] (:hide spec))))))
 
 (deftest a-confined-process-gets-its-own-jolt-and-maven-caches
   ;; karamazov-1gbh: ~/.jolt and ~/.m2 hold the source, jars and compiled code

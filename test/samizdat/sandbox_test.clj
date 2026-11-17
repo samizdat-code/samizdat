@@ -453,3 +453,50 @@
         (pr-str argv))
     (is (not-any? #{"."} argv) "no relative root reaches bwrap")))
 
+
+;; --- trees hidden inside the project ------------------------------------------
+;;
+;; The HTTP API's token lives in <root>/.samizdat/http. The project is
+;; re-allowed for reading after the denies, so a deny-read entry there would
+;; be undone: a hidden tree is denied AFTER that re-allow, and in bwrap
+;; mounted last, over the project bind.
+
+(deftest a-hidden-tree-is-unreadable-inside-the-readable-project
+  (doseq [p [(sandbox/seatbelt-profile (assoc spec :hide ["/Users/dev/proj/.samizdat/http"]))
+             (sandbox/seatbelt-shell-profile (assoc shell-spec :hide ["/Users/dev/proj/.samizdat/http"]))]]
+    (let [deny (str "(deny file-read* (subpath \"" (sandbox/resolved "/Users/dev/proj/.samizdat/http") "\"))")
+          allow (str/last-index-of p "(allow file-read*")]
+      (is (str/includes? p deny))
+      (is (< allow (str/index-of p deny))
+          "last match wins: after the project's re-allow"))))
+
+(deftest bwrap-hides-a-tree-inside-the-project
+  (let [dir (str (fs/create-temp-dir))
+        prot (str dir "/.samizdat")
+        hid (str prot "/http")]
+    (fs/create-dirs hid)
+    (doseq [argv [(sandbox/bwrap-argv {:project-root dir :protect [prot] :hide [hid]})
+                  (sandbox/bwrap-shell-argv {:project-root dir :protect [prot] :hide [hid]})]]
+      (let [at (fn [v] (some (fn [i] (when (= v (subvec argv i (+ i (count v)))) i))
+                             (range (- (count argv) (dec (count v))))))
+            ro (at ["--ro-bind" prot prot])
+            tmp (at ["--tmpfs" hid])]
+        (is tmp)
+        (is (< ro tmp) "mounted after the protected tree's bind, so it lands on top")))
+    (testing "one that does not exist is not mounted"
+      (is (not (some #{"/nope/.samizdat/http"}
+                     (sandbox/bwrap-argv {:project-root dir :hide ["/nope/.samizdat/http"]})))))))
+
+(deftest a-sandboxed-shell-cannot-read-the-api-token
+  (when (mac?)
+    (let [root (str (fs/create-temp-dir))
+          hid (str root "/.samizdat/http")
+          _ (fs/create-dirs hid)
+          _ (spit (str hid "/3985.token") "s3cret")
+          profile (str (fs/create-temp-dir) "/shell.sb")
+          _ (spit profile (sandbox/seatbelt-shell-profile {:project-root root
+                                                           :protect [(str root "/.samizdat")]
+                                                           :hide [hid]}))
+          sh (fn [cmd] (jolt.process/sh "sandbox-exec" "-f" profile "bash" "-c" (str "cd " root " && " cmd)))]
+      (is (not (str/includes? (str (:out (sh "cat .samizdat/http/3985.token"))) "s3cret")))
+      (is (str/includes? (:out (sh "echo ok > f && cat f")) "ok") "the rest of the project still readable"))))

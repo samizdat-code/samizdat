@@ -129,6 +129,15 @@
   [root]
   [(str root "/.samizdat")])
 
+(defn hidden
+  "The trees under the project root nothing the agent spawns may READ: the
+  HTTP API's token in .samizdat/http (samizdat.security.token). Inside the
+  project, so a deny-read would be undone by the project's re-allow: the
+  sandbox applies these after it. In src/, not policy, for the reason
+  `secret-regions` is: a list the agent can edit is not a list."
+  [root]
+  [(str root "/.samizdat/http")])
+
 (defn shell-spec
   "The confinement for one shell command, as samizdat.security.sandbox reads
   it. Pure.
@@ -146,7 +155,8 @@
                           (:writable settings)))
    :deny-read (secret-regions home harness-root)
    :deny-ports (vec ports)
-   :protect (protected root)})
+   :protect (protected root)
+   :hide (hidden root)})
 
 (defn unconfined-reason
   "Why the shell setting `setting` leaves the shell unconfined on `os-name` —
