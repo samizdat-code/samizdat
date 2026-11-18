@@ -1272,12 +1272,15 @@
   `rationale` — why the edit was made — is stored with the version and shown
   in the history; see store/save!."
   ([kind name new-body] (save! kind name new-body nil))
-  ([kind name new-body rationale]
+  ([kind name new-body rationale] (save! kind name new-body rationale nil))
+  ([kind name new-body rationale provenance]
+   ;; `provenance` {:run-id}: the run making the edit, so the version says
+   ;; which model it was made under (karamazov-amgk.1).
    (if-let [c (conn)]
      (let [v (if (files?)
                (save-file-version! kind name new-body
-                                   #(store/save! c kind name new-body "project" rationale))
-               (let [v (store/save! c kind name new-body "project" rationale)]
+                                   #(store/save! c kind name new-body "project" rationale provenance))
+               (let [v (store/save! c kind name new-body "project" rationale provenance)]
                  (invalidate!)
                  v))]
        (log/info "userspace" (clojure.core/name kind) name "saved as version" v)
@@ -1290,14 +1293,15 @@
   "Re-append an older version as the newest — the rollback, recorded with the
   caller's stated reason. Returns the new version number, or nil."
   ([kind name version] (revert! kind name version nil))
-  ([kind name version rationale]
+  ([kind name version rationale] (revert! kind name version rationale nil))
+  ([kind name version rationale provenance]
    (when-let [c (conn)]
      (if (files?)
        (when-let [b (:body (store/load-version c kind name version))]
          (save-file-version!
           kind name b
-          #(store/revert! c kind name version rationale)))
-       (let [v (store/revert! c kind name version rationale)]
+          #(store/revert! c kind name version rationale provenance)))
+       (let [v (store/revert! c kind name version rationale provenance)]
          (invalidate!)
          v)))))
 

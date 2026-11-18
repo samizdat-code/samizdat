@@ -169,6 +169,30 @@ All pure; every constant is `gates.edn :memory`.
 `corroborated?` `by-pattern` `distill!` `distill-verdicts!` `forget!`
 `age!` `curate!` `evict!` `graduation-candidates`.
 
+### `samizdat.store.sim` / `samizdat.sim` — the self-improvement memory
+
+After "Self-Improvement Memory Enables Continual Recursive Self-Improvement"
+(karamazov-amgk). The lever memory keeps a running score per change; this keeps
+the HISTORY, grouped by the problem each change was meant to fix.
+
+- `experiment {problem, fixes}` files an attempt under a problem cited by id
+  (`P3`) or named anew, with the battery cases it predicts to fix, before
+  anything is measured. Problems whose names match up to case and spacing are
+  one.
+- Attempts are appended and only settled — by `verdict`, and at the run's end
+  through `distil-session!` — so a replaced edit still says what it was for.
+  Predicted cases settle as fixed, missed or unresolved from `heldout_checks`.
+- Every userspace version records the run that made it and that run's model.
+  `model-mismatches` lists the edits in force made on another model, which the
+  brief raises after a switch.
+- `samizdat.sim` publishes each project's record to `sim.edn` in the person's
+  config dir and shows a project other projects' problems on roles it also
+  has. It is reached through `store.sim/on-change!`, so the store knows
+  nothing about files.
+- What one brief shows, and how much, is gates.edn `:sim`; the wording is
+  `prompts/improvement-record.md`, `model-switch.md` and
+  `foreign-improvements.md`.
+
 ## Protocol
 
 ```

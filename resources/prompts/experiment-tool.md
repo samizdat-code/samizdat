@@ -1,16 +1,20 @@
-{% if usage %}`experiment` binds a change you are making to what you expect it to do, so the next round can tell you whether it worked: {name, change, hypothesis, kind?, target?, predicts?}. Start one whenever you edit a cell, manifest, prompt or threshold. `kind` and `target` name what you edited (cell / manifest / prompt / policy and its name), and the ledger records the version. `predicts` is the one signal you expect to move and which way, e.g. "parse-error down" or "gate-unmet down"; the verdict says whether it did. `until` is when the edit should come out — "remove once the provider stops echoing the fence" — kept on the version and shown to every later supervisor while that version is current.
+{% if usage %}`experiment` binds a change you are making to what you expect it to do, so the next round can tell you whether it worked: {name, change, hypothesis, problem?, kind?, target?, predicts?, fixes?, until?}. `problem` is the root cause the change is meant to fix: cite one from the improvement record by id ("P3") when it explains the failure, or name a new one. Every attempt on a problem is kept with its outcome and the model it ran under, for every later supervisor and the next project. `fixes` lists the battery cases you expect this edit to fix, before anything is measured; the record settles each as fixed, missed or still unresolved once the battery replays it. Start one whenever you edit a cell, manifest, prompt or threshold. `kind` and `target` name what you edited (cell / manifest / prompt / policy and its name), and the ledger records the version. `predicts` is the one signal you expect to move and which way, e.g. "parse-error down" or "gate-unmet down"; the verdict says whether it did. `until` is when the edit should come out — "remove once the provider stops echoing the fence" — kept on the version and shown to every later supervisor while that version is current.
 `verdict {name}` reads it back: better / worse / unchanged / costly / cheaper / below best / too early, with the fitness and the tokens per turn before and after.
 `verdict {name, action, why}` settles it — action is `reverted` or `kept`. `reverted` also puts back the version before the edit when the experiment named its kind and target and nothing has edited it since. A losing change you have not settled keeps being raised, because a modification the evidence says is not helping, left in place because nobody got back to it, is the thing this measurement exists to prevent.{% endif %}{% if started %}Experiment `{{name}}` started. Measuring from here.
 
   changed:  {{change}}
-  expected: {{hypothesis}}{% if target %}
+  expected: {{hypothesis}}{% if problem %}
+  problem:  {{problem}}{% endif %}{% if target %}
   edit:     {{target}}{% endif %}{% if predicts %}
-  predicts: {{predicts}}{% endif %}{% if until %}
+  predicts: {{predicts}}{% endif %}{% if fixes %}
+  fixes:    {{fixes}}{% endif %}{% if until %}
   remove when: {{until}}{% endif %}
 
-You will see the verdict on your next turn. Change nothing else until then — a second change measured alongside this one tells you nothing about either.{% endif %}{% if settled %}`{{name}}` settled as {{action}}.{% if why %} Reason: {{why}}{% endif %}
+You will see the verdict on your next turn. Change nothing else until then — a second change measured alongside this one tells you nothing about either.{% if unfiled %}
 
-It will stop being raised. `remember` what it taught you if you have not already — a lever that does not move this problem is worth knowing next run, and this session's record dies with the process.{% endif %}{% if too-many %}Refused: `{{open}}` change is already in flight and unsettled, and the cap is `{{cap}}`.
+No `problem` was named, so this attempt is on the record under no root cause. Name one next time: an attempt filed under its problem is what the next supervisor, model or project can reuse.{% endif %}{% endif %}{% if settled %}`{{name}}` settled as {{action}}.{% if why %} Reason: {{why}}{% endif %}
+
+It will stop being raised. Its verdict and this decision stay on the improvement record with the problem it was filed under. `remember` anything it taught you that the record does not say.{% endif %}{% if too-many %}Refused: `{{open}}` change is already in flight and unsettled, and the cap is `{{cap}}`.
 
 Two changes measured over the same interval tell you nothing about either, so this is enforced rather than trusted to discipline. Settle what is open first — `verdict {name}` to read it, then `verdict {name, action: reverted|kept, why}` — and the slot frees.{% if unsettled %}
 

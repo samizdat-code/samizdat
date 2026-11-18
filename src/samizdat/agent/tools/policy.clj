@@ -364,7 +364,7 @@
                                 {:kind :policy :name name :text (str body)}
                                 {:commit! (fn []
                                             (self-graded!)
-                                            (let [v (userspace/save! :policy name (str body) why)]
+                                            (let [v (userspace/save! :policy name (str body) why {:run-id (:run-id ctx)})]
                                               (when (nil? v)
                                                 (throw (ex-info (msg {:unbound true :name name}) {})))
                                               (try (reload-and-verify! name) v
@@ -388,7 +388,7 @@
                     ;; before the save so a rollback still leaves the attempt
                     ;; visible.
                     (self-graded!)
-                    (let [v (userspace/save! :policy name (str body) why)]
+                    (let [v (userspace/save! :policy name (str body) why {:run-id (:run-id ctx)})]
                       (if (nil? v)
                         (base/fail branch (msg {:unbound true :name name}))
                         (try
@@ -422,7 +422,7 @@
             (nil? v) (base/malformed branch (base/missing ctx :version))
             (nil? why) (base/malformed branch (base/missing ctx :rationale))
             :else
-            (if-let [v' (userspace/revert! :policy name v why)]
+            (if-let [v' (userspace/revert! :policy name v why {:run-id (:run-id ctx)})]
               (do (reload-and-verify! name)
                   (base/ok branch (msg {:reverted true :name name
                                         :from v :version v'})

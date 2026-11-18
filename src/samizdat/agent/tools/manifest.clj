@@ -205,10 +205,10 @@
   recorded the untouched file as a newer version on top of it
   (karamazov-8nuu). A connection with no bound project (a test, a REPL) is
   written to directly, as before."
-  [conn name text why]
+  [conn name text why provenance]
   (if (userspace/bound?)
-    (userspace/save! :manifest name text why)
-    (us/save! conn :manifest name text "project" why)))
+    (userspace/save! :manifest name text why provenance)
+    (us/save! conn :manifest name text "project" why provenance)))
 
 (defn- read-ops
   "The `ops` argument as op maps ready for patch/apply-ops: a JSON list of
@@ -377,13 +377,13 @@
               ;; project has one, the edit is replayed in the background and
               ;; saved only if it passes; the branch is told either way.
               (if (heldout/defer! conn {:kind :manifest :name name :text edn-text}
-                                  {:commit! #(save! conn name edn-text why)
+                                  {:commit! #(save! conn name edn-text why {:run-id (:run-id ctx)})
                                    :run-id (:run-id ctx) :branch-id (:id branch)})
                 (base/ok branch
                          (str (prompt/render "heldout-pending" {:kind "manifest" :name name})
                               (dispatch-report edn-text) (cycle-report edn-text))
                          :progress? true)
-                (let [v (save! conn name edn-text why)]
+                (let [v (save! conn name edn-text why {:run-id (:run-id ctx)})]
                   (base/ok branch
                            (str (saved-line name v) (dispatch-report edn-text)
                                 (cycle-report edn-text))
@@ -452,9 +452,9 @@
                                         "\n\n" (ops-help)))
                     (let [{:keys [new text]} outcome
                           deferred (heldout/defer! conn {:kind :manifest :name name :text text}
-                                                   {:commit! #(save! conn name text why)
+                                                   {:commit! #(save! conn name text why {:run-id (:run-id ctx)})
                                                     :run-id (:run-id ctx) :branch-id (:id branch)})
-                          v (when-not deferred (save! conn name text why))]
+                          v (when-not deferred (save! conn name text why {:run-id (:run-id ctx)}))]
                       (base/ok branch
                                (str (if deferred
                                       (prompt/render "heldout-pending" {:kind "manifest" :name name})

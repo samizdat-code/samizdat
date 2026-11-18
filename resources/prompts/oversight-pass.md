@@ -83,7 +83,10 @@ Episodes confirmed in the number of distinct runs shown: a standing property of 
 {{inconclusive}}{% endif %}{% if prune %}
 {{prune}}{% endif %}{% if fallback %}
 {{fallback}}{% endif %}{% if removals %}
-{{removals}}{% endif %}{% if offers %}
+{{removals}}{% endif %}{% if model-switch %}
+{{model-switch}}{% endif %}{% if improvements %}
+{{improvements}}{% endif %}{% if foreign %}
+{{foreign}}{% endif %}{% if offers %}
 {{offers}}{% endif %}{% if rejected %}
 {{rejected}}{% endif %}{% if refused %}
 {{refused}}{% endif %}{% if drift %}

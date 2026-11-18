@@ -347,7 +347,7 @@
             (nil? v) (base/malformed branch (base/missing ctx :version))
             (nil? why) (base/malformed branch (base/missing ctx :rationale))
             :else
-            (if-let [nv (userspace/revert! :cell name v why)]
+            (if-let [nv (userspace/revert! :cell name v why {:run-id (:run-id ctx)})]
               (base/ok branch
                        (str "Reverted cell '" name "' to the body of v" v
                             ", stored as v" nv ". Reverting is itself an edit, so"

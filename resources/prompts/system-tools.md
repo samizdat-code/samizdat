@@ -478,12 +478,15 @@ intervene({kind, branch?, text?, expect?, basis?})
     `basis`: turns or artifacts it rests on; each must exist or nothing is
     sent. `expect`: what the branch should do next (a tool, command or file:
     "pytest", "write_file", "solve.py"); your next look shows whether it did.
-experiment({name, change, hypothesis, kind?, target?, predicts?, until?})
+experiment({name, change, hypothesis, problem?, kind?, target?, predicts?, fixes?, until?})
     Bind a change you are making to what you expect it to do, so the next
     round can tell you whether it worked. Start one whenever you edit a cell,
     manifest, prompt or threshold; name the edit with kind and target, and
     the one signal you expect to move with predicts ("parse-error down"). A change with no stated expectation cannot
     be wrong, and a change that cannot be wrong teaches nothing.
+    `problem` files it under a root cause: an id from the improvement record
+    ("P3") or a new name. `fixes` names the battery cases you expect it to
+    fix; they are settled when the battery replays them.
     `until` says when the edit should come out again ("remove once the
     provider fixes its tool-call echo"); later supervisors see it while the
     version is current.

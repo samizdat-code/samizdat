@@ -1941,3 +1941,32 @@
               r (done! b2 22 {:supervisor-live? true})]
           (is (>= (- (System/currentTimeMillis) t0) 1500) "a running stream: it waited")
           (is (str/includes? (str (:result r)) "has not landed") "and, still unanswered, held as before"))))))
+
+;; --- the self-improvement memory in the brief (karamazov-amgk) -------------------
+
+(deftest the-improvement-record-reaches-the-supervisor
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p" :model "glm-5"})
+        sim-store (fn [f] (requiring-resolve (symbol "samizdat.store.sim" f)))
+        pid ((sim-store "problem-id!") conn "parse errors on fenced calls" rid)]
+    ((sim-store "record-attempt!") conn {:problem-id pid :run-id rid :change "strip fences"
+                                          :hypothesis "fewer parse errors" :verdict :worse
+                                          :predicted ["case-a"]})
+    (journal/note! conn rid :run-error {:data {:error "boom" :node ":x"}})
+    (let [{:keys [prob]} (reasoning-over conn rid)]
+      (is (str/includes? (str prob) (str "P" pid " parse errors on fenced calls")))
+      (is (str/includes? (str prob) "strip fences"))
+      (is (str/includes? (str prob) "on glm-5: worse") "with the model it was measured under")
+      (is (str/includes? (str prob) "predicted to fix case-a"))
+      (is (str/includes? (str prob) "cite it by id") "and how to use it"))))
+
+(deftest an-edit-made-on-another-model-is-raised-after-a-switch
+  (let [conn (db/open! ":memory:")
+        old (runs/start-run! conn {:problem "p" :model "deepseek-v4-flash"})
+        rid (runs/start-run! conn {:problem "p" :model "bonsai-27b"})]
+    ((requiring-resolve 'samizdat.store.userspace/save!) conn :prompt "system" "v2" "project"
+     "work around the fence echo" {:run-id old})
+    (journal/note! conn rid :run-error {:data {:error "boom" :node ":x"}})
+    (let [{:keys [prob]} (reasoning-over conn rid)]
+      (is (str/includes? (str prob) "This run is on bonsai-27b"))
+      (is (str/includes? (str prob) "`system` v1, made on deepseek-v4-flash: work around the fence echo")))))

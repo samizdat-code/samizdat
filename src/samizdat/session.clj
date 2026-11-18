@@ -657,8 +657,22 @@
   has tried and what happened — the record that makes a second attempt at the
   same idea a decision rather than an accident."
   []
-  (vec (keep (fn [[nm e]] (assoc (verdict nm) :name nm :settled (:settled e)))
+  (vec (keep (fn [[nm e]] (cond-> (assoc (verdict nm) :name nm :settled (:settled e))
+                            (:attempt-id e) (assoc :attempt-id (:attempt-id e))))
              (:experiments @tally))))
+
+(defn attempt!
+  "Tie experiment `name` to its row in the self-improvement memory
+  (samizdat.store.sim), so the run's end settles that row with the verdict."
+  [name attempt-id]
+  (swap! tally update-in [:experiments (str name)]
+         #(when % (assoc % :attempt-id attempt-id)))
+  nil)
+
+(defn attempt-id
+  "The self-improvement memory row behind experiment `name`, or nil."
+  [name]
+  (get-in @tally [:experiments (str name) :attempt-id]))
 
 (defn unsettled-losses
   "Experiments that measured `worse`, `unchanged` or `costly` and have not

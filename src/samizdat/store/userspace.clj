@@ -132,14 +132,24 @@
   where a reason is demanded."
   ([conn kind name body] (save! conn kind name body "project"))
   ([conn kind name body source] (save! conn kind name body source nil))
-  ([conn kind name body source rationale]
-   (let [k (kind-str kind)]
+  ([conn kind name body source rationale] (save! conn kind name body source rationale nil))
+  ([conn kind name body source rationale {:keys [run-id]}]
+   ;; PROVENANCE (karamazov-amgk.1): the run that made the edit, and the
+   ;; model that run was on, so an edit tuned on one model is not carried
+   ;; onto another unexamined. Looked up here rather than passed, so every
+   ;; caller that knows its run gets the model with it.
+   (let [k (kind-str kind)
+         model (when run-id
+                 (some-> (db/fetch-one conn ["SELECT model FROM runs WHERE id = ?" (str run-id)])
+                         :model str not-empty))]
      (db/with-writer
        (let [v (inc (or (:version (load-latest conn k name)) 0))]
-         (db/execute! conn ["INSERT INTO userspace (kind, name, version, body, created_at, source, rationale)
-                             VALUES (?, ?, ?, ?, ?, ?, ?)"
+         (db/execute! conn ["INSERT INTO userspace (kind, name, version, body, created_at, source, rationale,
+                                                    run_id, model)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
                             k (str name) v (str body) (db/now) (str source)
-                            (some-> rationale str str/trim not-empty)])
+                            (some-> rationale str str/trim not-empty)
+                            (some-> run-id str) model])
          v)))))
 
 (defn seed!
@@ -206,12 +216,14 @@
   caller's stated reason appended — a revert with no account of itself is
   exactly the oscillation karamazov-c58 records."
   ([conn kind name version] (revert! conn kind name version nil))
-  ([conn kind name version rationale]
+  ([conn kind name version rationale] (revert! conn kind name version rationale nil))
+  ([conn kind name version rationale provenance]
    (when-let [row (load-version conn kind name version)]
      (save! conn kind name (:body row) "project"
             (str "revert to v" (long version)
                  (when-let [r (some-> rationale str str/trim not-empty)]
-                   (str ": " r)))))))
+                   (str ": " r)))
+            provenance))))
 
 (defn record-run-outcome!
   "Stamp how a run ended onto every project-authored version that is current

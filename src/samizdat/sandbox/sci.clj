@@ -378,6 +378,17 @@
             removal-conditions]
      :effects #{:db}}
 
+    ;; The self-improvement memory, read-only (karamazov-amgk): the
+    ;; project's record, the edits in force made on another model, and what
+    ;; other projects met on the same roles.
+    samizdat.store.sim
+    {:vars [model-mismatches problems]
+     :effects #{:db}}
+
+    samizdat.sim
+    {:vars [foreign-here]
+     :effects #{:db}}
+
     ;; Read-only reports: pending template offers and rejected edits.
     samizdat.userspace
     {:vars [offers prescription-mass rejections]}

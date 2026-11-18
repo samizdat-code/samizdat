@@ -193,7 +193,7 @@
               ;; body that fails it is a rejected edit — nothing was stored.
               (base/rejected branch (msg {:bad-render true :name name
                                           :complaint complaint}))
-              (if-let [v (userspace/save! :prompt name (str body) why)]
+              (if-let [v (userspace/save! :prompt name (str body) why {:run-id (:run-id ctx)})]
                 (base/ok branch (msg {:saved true :name name :version v})
                          :progress? true)
                 (base/fail branch (msg {:unbound true :name name}))))))
@@ -206,7 +206,7 @@
             (nil? v) (base/malformed branch (base/missing ctx :version))
             (nil? why) (base/malformed branch (base/missing ctx :rationale))
             :else
-            (if-let [nv (userspace/revert! :prompt name v why)]
+            (if-let [nv (userspace/revert! :prompt name v why {:run-id (:run-id ctx)})]
               (base/ok branch (msg {:reverted true :name name :from v :version nv})
                        :progress? true)
               (base/malformed branch (msg {:no-revert true :name name :version v})))))
