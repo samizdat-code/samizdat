@@ -25,6 +25,7 @@
   first match by directory order — the same layering as cells and config."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
+            [samizdat.layers :as layers]
             [samizdat.lexicon :as lexicon]))
 
 (def shipped-skills
@@ -51,17 +52,38 @@
   []
   (lexicon/wordlist :skill-roots))
 
-(def default-dirs
-  "The project-overlay directories scanned in addition to the shipped
-  resources. Relative to the process cwd; a caller working on another project
-  passes `(project-dirs root)` instead."
-  (skill-roots))
+(defn- resolve-root
+  "One skill root as a directory, or nil when it names nothing here.
+  `{global}` is the person's config dir (layers/global-dir: the selected
+  profile's, else $XDG_CONFIG_HOME/samizdat or ~/.config/samizdat), so a skill
+  can follow the person from project to project. `~/` is $HOME, an absolute
+  root is kept, and anything else is under the run's root."
+  [root r]
+  (let [r (str r)
+        home (System/getenv "HOME")]
+    (cond
+      (str/starts-with? r "{global}")
+      (some-> (layers/global-dir) (str (subs r (count "{global}"))))
+
+      (or (= r "~") (str/starts-with? r "~/"))
+      (some-> home (str (subs r 1)))
+
+      (str/starts-with? r "/") r
+
+      :else (str (io/file (str (or root ".")) r)))))
 
 (defn project-dirs
-  "Where a project's own skills live, under the RUN's root — not the
-  harness's cwd (karamazov-blt.33)."
+  "The directories a run's skills are read from, in precedence order: each
+  root resolved against the RUN's root — not the harness's cwd
+  (karamazov-blt.33) — except a `{global}`, `~/` or absolute one."
   [root]
-  (mapv #(str (io/file (str (or root ".")) (str %))) (skill-roots)))
+  (into [] (keep #(resolve-root root %)) (skill-roots)))
+
+(defn default-dirs
+  "project-dirs for the process cwd. A function, not a value, because the
+  person's config dir depends on the profile selected at runtime."
+  []
+  (project-dirs "."))
 
 (def ^:private skill-doc
   "The filename a skill DIRECTORY carries its instructions in. Every other
@@ -136,10 +158,10 @@
 
 (defn discover
   "skill-name -> {:path :description :body}. The shipped skills come off the
-  classpath; `dirs` overlay them in order, so a project's .samizdat/skills
-  wins over a bundled skill of the same name. Malformed files are skipped,
-  never fatal."
-  ([] (discover default-dirs))
+  classpath; `dirs` overlay them with the EARLIEST winning, so a project's
+  .samizdat/skills beats the person's {global} root and both beat a bundled
+  skill of the same name. Malformed files are skipped, never fatal."
+  ([] (discover (default-dirs)))
   ([dirs]
    (reduce
     (fn [acc dir]
@@ -153,13 +175,13 @@
                   (catch Throwable _ m)))
               acc (skill-files dir)))
     (shipped-entries)
-    dirs)))
+    (reverse dirs))))
 
 (defn catalog
   "The always-on catalogue the agent sees: [{:name :description} ...], sorted.
   A skill with no description is omitted (it can still be loaded by name), so
   the visible list stays high-signal."
-  ([] (catalog default-dirs))
+  ([] (catalog (default-dirs)))
   ([dirs]
    (->> (discover dirs)
         (keep (fn [[nm {:keys [description]}]]
@@ -170,7 +192,7 @@
 (defn render-catalog
   "The cheap, always-injected system-prompt block: names + trigger descriptions
   only, never bodies. Empty string when there are no skills."
-  ([] (render-catalog default-dirs))
+  ([] (render-catalog (default-dirs)))
   ([dirs]
    (let [cat (catalog dirs)]
      (if (empty? cat)
@@ -183,6 +205,6 @@
 
 (defn load-skill
   "The full body of a named skill (frontmatter stripped), or nil for a miss."
-  ([name] (load-skill default-dirs name))
+  ([name] (load-skill (default-dirs) name))
   ([dirs name]
    (get-in (discover dirs) [name :body])))
