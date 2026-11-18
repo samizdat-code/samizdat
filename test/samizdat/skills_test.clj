@@ -7,7 +7,8 @@
             [jolt.fs :as fs]
             [samizdat.agent.skills :as skills]
             [samizdat.agent.tools.base :as base]
-            [samizdat.agent.tools.skills]))
+            [samizdat.agent.tools.skills]
+            [samizdat.layers]))
 
 (deftest the-bundled-mycelium-skill-is-discovered
   (let [cat (skills/catalog)]
@@ -178,3 +179,50 @@
   (let [found (skills/discover (skills/project-dirs "."))]
     (is (contains? found "beads")
         "AGENTS.md names .agents/skills/beads/SKILL.md; it must be loadable")))
+
+;; --- per-person skills -------------------------------------------------------
+;; Every root was joined to the project root, so a skill could only live in a
+;; project. A `{global}` root resolves to the person's config dir
+;; (layers/global-dir), absolute and `~/` roots are kept as they are, and the
+;; earliest root wins, so a project's skill still beats the person's.
+
+(deftest roots-resolve-global-home-and-absolute-paths
+  (with-redefs [samizdat.layers/global-dir (constantly "/cfg/samizdat")]
+    (let [home (System/getenv "HOME")]
+      (with-redefs [skills/skill-roots (constantly [".samizdat/skills"
+                                                    "{global}/skills"
+                                                    "~/my-skills"
+                                                    "/abs/skills"])]
+        (is (= ["/proj/.samizdat/skills"
+                "/cfg/samizdat/skills"
+                (str home "/my-skills")
+                "/abs/skills"]
+               (skills/project-dirs "/proj"))))))
+  (with-redefs [samizdat.layers/global-dir (constantly nil)
+                skills/skill-roots (constantly [".samizdat/skills" "{global}/skills"])]
+    (is (= ["/proj/.samizdat/skills"] (skills/project-dirs "/proj"))
+        "no config dir means the global root is skipped, not joined to the project")))
+
+(deftest the-shipped-roots-include-the-persons-config-dir-last
+  (is (= "{global}/skills" (last (skills/skill-roots)))))
+
+(deftest the-earliest-root-wins-and-a-global-skill-is-found
+  (let [base (str "/tmp/samizdat-skills-" (random-uuid))
+        proj (str base "/proj")
+        cfg (str base "/cfg")]
+    (fs/create-dirs (str proj "/.samizdat/skills"))
+    (fs/create-dirs (str cfg "/skills/personal"))
+    (try
+      (spit (str proj "/.samizdat/skills/shared.md")
+            "---\ndescription: Use when project.\n---\nproject body")
+      (spit (str cfg "/skills/shared.md")
+            "---\ndescription: Use when person.\n---\nperson body")
+      (spit (str cfg "/skills/personal/SKILL.md")
+            "---\ndescription: Use when personal.\n---\npersonal body")
+      (with-redefs [samizdat.layers/global-dir (constantly cfg)]
+        (let [found (skills/discover (skills/project-dirs proj))]
+          (is (= "project body" (get-in found ["shared" :body]))
+              "the project's copy beats the person's")
+          (is (= "personal body" (get-in found ["personal" :body]))
+              "a skill only the person has is found from any project")))
+      (finally (fs/delete-tree base)))))

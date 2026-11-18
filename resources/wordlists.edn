@@ -572,9 +572,15 @@
  ;; .agents/skills/beads/SKILL.md, the one AGENTS.md tells the agent to use
  ;; (karamazov-15h). Adding a root costs nothing when the directory is
  ;; absent: a missing root is skipped, never an error.
+ ;;
+ ;; A root is under the project unless it starts with `{global}` (the
+ ;; person's config dir: the selected profile's, else
+ ;; $XDG_CONFIG_HOME/samizdat or ~/.config/samizdat), `~/` or `/`. The
+ ;; person's root comes last, so a project's skill of the same name wins.
  [".samizdat/skills"
   ".agents/skills"
-  ".claude/skills"]
+  ".claude/skills"
+  "{global}/skills"]
  ;; --- the exam (karamazov-fgsb) ----------------------------------------------
  ;;
  ;; What marks a file as part of the exam, and what marks an assertion inside

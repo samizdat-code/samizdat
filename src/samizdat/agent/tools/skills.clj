@@ -18,7 +18,7 @@
   ;; run working on another checkout reads THAT project's .samizdat/skills
   ;; (karamazov-blt.33). The shipped skills come off the classpath either way.
   (let [action (some-> (base/arg ctx :action) str str/trim str/lower-case not-empty)
-        dirs (if root (skills/project-dirs root) skills/default-dirs)]
+        dirs (if root (skills/project-dirs root) (skills/default-dirs))]
     (case action
       nil
       (base/malformed branch (str "`skill` needs an `action`. " usage))
