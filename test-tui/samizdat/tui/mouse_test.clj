@@ -399,3 +399,37 @@
                               40 20)]
     (is (some? (row-of frame "LASTWORD")) (str "a tool's long output line wraps rather than clips: " frame))
     (is (> (row-of frame "LASTWORD") (row-of frame "FIRSTWORD")))))
+
+;; ftxui's Menu answers a click with on_change, never on_enter, and both
+;; pickers listened only for Enter: the click moved the highlight, the next
+;; frame put it back, and the log never switched to the run or branch chosen.
+
+(deftest clicking-a-run-switches-the-log-to-it
+  (let [state (atom (assoc (st/initial "b")
+                           :runs [{:id "run-one" :problem "first"}
+                                  {:id "run-two" :problem "second"}]
+                           :run-id "run-one"))
+        app (fn [] (w/runs (assoc @state :on {:select-run #(swap! state st/select-run %)}) {}))]
+    (ui/with-screen [s app]
+      (let [frame (ui/render-text s 60 8)
+            y (row-of frame "run-two")]
+        (is (some? y) "the second run is listed")
+        (ui/send-mouse! s {:button :left :motion :pressed :x 4 :y y})
+        (ui/send-mouse! s {:button :left :motion :released :x 4 :y y})
+        (is (= "run-two" (:run-id @state)) "the click selected it")))))
+
+(deftest clicking-a-branch-switches-the-log-to-it
+  (let [state (atom (assoc (st/initial "b")
+                           :run-id "r1"
+                           :detail {:branches [{:id "B1" :status "active"}
+                                               {:id "W1" :status "active"}]}
+                           :branch-id "W1"))
+        app (fn [] (w/branches (assoc @state :on {:select-branch #(swap! state st/select-branch %)}) {}))]
+    (ui/with-screen [s app]
+      (let [frame (ui/render-text s 60 8)
+            y (row-of frame "B1")]
+        (is (some? y) "the other branch is listed")
+        (ui/send-mouse! s {:button :left :motion :pressed :x 4 :y y})
+        (ui/send-mouse! s {:button :left :motion :released :x 4 :y y})
+        (is (= "B1" (:branch-id @state)) "the click selected it")
+        (is (false? (:branch-auto? @state)) "as a person's choice, which auto-follow leaves alone")))))

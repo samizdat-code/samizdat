@@ -949,3 +949,75 @@
     (is (str/includes? said "◇ supervisor: Run the parser tests before shipping.") "its first line, under who said it")
     (is (not (str/includes? said "They fail on empty input.")) "the rest is a click away")
     (is (str/includes? said "Looking at the namespace first.") "the agent's own words stay open")))
+
+;; --- picking with the mouse ---------------------------------------------------
+;; ftxui's Menu answers a click with on_change and never on_enter, and both
+;; pickers listened only for Enter: a click moved the highlight, the next frame
+;; put it back from :run-id / :branch-id, and the log never switched.
+
+(deftest a-click-in-the-run-picker-switches-the-run
+  (let [picked (atom [])
+        state {:runs [{:id "r1" :problem "first"} {:id "r2" :problem "second"}]
+               :run-id "r1"
+               :on {:select-run #(swap! picked conj %)}}
+        menu (first (nodes-of :menu (render :widget/runs state {})))]
+    ((:on-change (props-of menu)) 1)
+    (is (= ["r2"] @picked) "a click is a choice")
+    ((:on-change (props-of menu)) 0)
+    (is (= ["r2"] @picked) "landing on the run already shown does not reset it")))
+
+(deftest a-click-in-the-beam-switches-the-branch
+  (let [picked (atom [])
+        state {:detail {:branches [{:id "B1" :status "active"} {:id "W1" :status "active"}]}
+               :branch-id "W1"
+               :on {:select-branch #(swap! picked conj %)}}
+        menu (first (nodes-of :menu (render :widget/branches state {})))]
+    ((:on-change (props-of menu)) 0)
+    (is (= ["B1"] @picked))
+    ((:on-change (props-of menu)) 1)
+    (is (= ["B1"] @picked) "the branch on screen is not re-selected")))
+
+;; --- the log outlives the run -------------------------------------------------
+;; Starting a new run from the compose box replaced the conversation, so what
+;; the last run said and did could no longer be read.
+
+(deftest a-new-run-keeps-the-last-runs-log-above-its-own
+  (let [s (-> (st/initial "b")
+              (assoc :settings conv-settings :run-id "r1" :branch-id "B1"
+                     :detail {:run {:id "r1" :problem "build a parser" :status "completed"}}
+                     :branch {:turns turns} :turn-text turn-text)
+              (st/apply-start {:ok true :body {:run_id "r2"}})
+              (assoc :detail {:run {:id "r2" :problem "now add tests" :status "running"}}))
+        said (texts (render :widget/conversation s {}))]
+    (is (= "r2" (:run-id s)))
+    (is (str/includes? said "build a parser") "the earlier run's problem is still there")
+    (is (str/includes? said "Looking at the namespace first.") "and what its agent said")
+    (is (str/includes? said "r1") "marked as the earlier run")
+    (is (< (str/index-of said "build a parser") (str/index-of said "now add tests"))
+        "above the new run's")
+    (testing "and it survives looking at another run and coming back"
+      (let [back (-> s (st/select-run "r1") (st/select-run "r2")
+                     (assoc :detail {:run {:id "r2" :problem "now add tests"}}))]
+        (is (str/includes? (texts (render :widget/conversation back {})) "build a parser"))))
+    (testing "but is not drawn on the earlier run itself"
+      (let [old (-> s (st/select-run "r1")
+                    (assoc :detail {:run {:id "r1" :problem "build a parser"}}
+                           :branch {:turns turns}))]
+        (is (= 1 (count (re-seq #"build a parser"
+                                (texts (render :widget/conversation old {}))))))))))
+
+(deftest the-carried-log-is-bounded-by-earlier-runs
+  (let [start (fn [s from to]
+                (-> s
+                    (assoc :run-id from :branch-id "B1"
+                           :detail {:run {:id from :problem (str "problem " from) :status "completed"}}
+                           :branch {:turns turns})
+                    (st/apply-start {:ok true :body {:run_id to}})))
+        settings (assoc-in conv-settings [:conversation :earlier-runs] 2)
+        s (-> (assoc (st/initial "b") :settings settings)
+              (start "r1" "r2") (start "r2" "r3") (start "r3" "r4")
+              (assoc :detail {:run {:id "r4" :problem "problem r4"}}))
+        said (texts (render :widget/conversation s {}))]
+    (is (not (str/includes? said "problem r1")) "the oldest run falls off")
+    (is (str/includes? said "problem r2"))
+    (is (str/includes? said "problem r3"))))

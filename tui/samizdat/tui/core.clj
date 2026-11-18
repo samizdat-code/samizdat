@@ -540,7 +540,7 @@
   "The conversation's entries as the widget draws them, for the keys that
   move through it."
   [s]
-  (tl/entries s (:conversation (layout/current))))
+  (tl/with-earlier s (tl/entries s (:conversation (layout/current)))))
 
 (defn- on-event
   "Global keys. Everything else — clicks, arrows, text — belongs to whichever

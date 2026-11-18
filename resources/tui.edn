@@ -193,7 +193,10 @@
            "read_digest" "path" "patch" "path" "shell" "command"
            "grep" "pattern" "glob" "pattern" "eval" "code"}
   ;; How many lines of a result show before the rest folds.
-  :result-lines 4}
+  :result-lines 4
+  ;; How many earlier runs a run started from the compose box carries above
+  ;; its own log, so starting the next one does not wipe what was said.
+  :earlier-runs 3}
 
  ;; SLASH COMMANDS, typed into the compose box; Tab completes a name, and
  ;; /help lists them. Each says what it DOES (an action the TUI implements),

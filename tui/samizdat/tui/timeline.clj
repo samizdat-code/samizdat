@@ -291,3 +291,41 @@
                     (fold-id e))
             nil))
         es))
+
+;; --- earlier runs ------------------------------------------------------------
+;; A run started from the compose box replaced the conversation, and what the
+;; run before it said and did could no longer be read. The log on screen is
+;; carried into the new run when it starts, and drawn above its own.
+
+(defn- run-label [run-id status]
+  (str "run " (subs (str run-id) 0 (min 8 (count (str run-id))))
+       (when-not (str/blank? (str status)) (str " · " status))))
+
+(defn carry
+  "The run on screen as a segment to keep: [run-id entries], its entries
+  re-keyed under the run so their folds and turn windows never collide with
+  the next run's, headed by a divider naming it. nil when there is nothing
+  to keep. The reply being streamed is left behind: it is not said yet."
+  [state settings]
+  (let [run-id (:run-id state)
+        es (remove :live? (entries state settings))]
+    (when (and run-id (seq es))
+      (let [k #(str "r" run-id "/" %)]
+        [run-id
+         (into [{:key (k "divider") :role :system :kind :divider
+                 :text (run-label run-id (get-in state [:detail :run :status]))}]
+               (map #(cond-> (update % :key k)
+                       (:turn-key %) (update :turn-key k)))
+               es)]))))
+
+(defn with-earlier
+  "The conversation `es` of the run on screen, under the runs that led to it
+  (:earlier, keyed by run) and a divider of its own when there are any."
+  [state es]
+  (if-let [segs (seq (get-in state [:earlier (:run-id state)]))]
+    (-> []
+        (into (mapcat second) segs)
+        (conj {:key "this-run/divider" :role :system :kind :divider
+               :text (run-label (:run-id state) (get-in state [:detail :run :status]))})
+        (into es))
+    es))

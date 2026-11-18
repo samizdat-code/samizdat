@@ -315,7 +315,8 @@
   BOUNDED: `:turns` in the layout, the newest that many."
   [state props]
   (let [cfg (get-in state [:settings :conversation])
-        es (shown-entries (tl/entries state cfg) (or (:turns props) default-turns-shown))
+        es (shown-entries (tl/with-earlier state (tl/entries state cfg))
+                          (or (:turns props) default-turns-shown))
         handles (:handles cfg)]
     (panel (assoc props :title (or (:title props)
                                    (some->> (:branch-id state) (str "BRANCH "))))
@@ -326,6 +327,7 @@
                            [:vbox {:key (:key e)}
                             (case (:kind e)
                               :say (say-entry e handles)
+                              :divider [:text {:class :panel-title} (str "── " (:text e) " ──")]
                               :thinking (thinking-entry state e)
                               :aside (aside-entry state e handles)
                               :tool (tool-entry state e cfg))])))
@@ -546,6 +548,16 @@
                       [:text (clip claim 20)]]))
              (empty-note "no claims yet")))))
 
+(defn- pick
+  "A picker's handler: the i-th row's id to `f`, unless it is the one
+  already on screen — re-selecting it would drop what is loaded and fetch it
+  all again."
+  [f rows current]
+  (fn [i]
+    (let [id (:id (nth rows i nil))]
+      (when (and f id (not= (str id) (str current)))
+        (f id)))))
+
 (defn runs
   "The run picker."
   [state props]
@@ -554,9 +566,11 @@
            (if (seq rs)
              [:menu {:entries (mapv #(clip (str (:id %) "  " (:problem %)) 40) rs)
                      :selected (max 0 (.indexOf (mapv :id rs) (:run-id state)))
-                     :on-enter (fn [i]
-                                 (when-let [f (get-in state [:on :select-run])]
-                                   (f (:id (nth rs i nil)))))}]
+                     ;; Both: ftxui's Menu answers a click with on_change
+                     ;; and never on_enter, so a picker that listened for
+                     ;; Enter alone moved its highlight and switched nothing.
+                     :on-change (pick (get-in state [:on :select-run]) rs (:run-id state))
+                     :on-enter (pick (get-in state [:on :select-run]) rs (:run-id state))}]
              (empty-note "no runs")))))
 
 (defn branches
@@ -574,9 +588,8 @@
                                            32)
                                     bs)
                      :selected (max 0 (.indexOf (mapv :id bs) (:branch-id state)))
-                     :on-enter (fn [i]
-                                 (when-let [f (get-in state [:on :select-branch])]
-                                   (f (:id (nth bs i nil)))))}]
+                     :on-change (pick (get-in state [:on :select-branch]) bs (:branch-id state))
+                     :on-enter (pick (get-in state [:on :select-branch]) bs (:branch-id state))}]
              (empty-note "no branches")))))
 
 ;; --- the modals --------------------------------------------------------------

@@ -30,7 +30,8 @@
   (:refer-clojure :exclude [newline])
   (:require [clojure.string :as str]
             [samizdat.api.sse :as sse]
-            [samizdat.approval-view :as approval-view]))
+            [samizdat.approval-view :as approval-view]
+            [samizdat.tui.timeline :as tl]))
 
 (def handler-keys
   "Every action a widget may ask the loop to take.
@@ -734,6 +735,19 @@
                 response)))))
       (swap! state note-error "type a problem statement first"))))
 
+(defn- carry-log
+  "Keep the log on screen for the run about to replace it: the new run's
+  :earlier is the old run's plus the old run itself, the newest
+  tui.edn `:conversation :earlier-runs` of them."
+  [s new-id]
+  (let [cfg (get-in s [:settings :conversation])
+        seg (tl/carry s cfg)
+        segs (cond-> (vec (get-in s [:earlier (:run-id s)])) seg (conj seg))
+        n (or (:earlier-runs cfg) 3)]
+    (if (seq segs)
+      (assoc-in s [:earlier new-id] (vec (take-last n segs)))
+      s)))
+
 (defn apply-start
   "Fold the answer to POST /v1/runs and release the in-flight start guard.
 
@@ -747,6 +761,7 @@
         s (assoc s :starting? false)]
     (if (and ok (not-empty (str id)))
       (-> s
+          (carry-log (str id))
           (select-run (str id))
           clear-input
           ;; The error too: a start that worked supersedes whatever the last
