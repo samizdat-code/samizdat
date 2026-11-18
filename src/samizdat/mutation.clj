@@ -569,7 +569,7 @@
                        (defer-fn {:kind :cell :name name :text body
                                   :probes (:results report)}
                                  (fn []
-                                   (let [v (userspace/save! :cell name body rationale)]
+                                   (let [v (userspace/save! :cell name body rationale {:run-id run-id})]
                                      (when (nil? v)
                                        (throw (ex-info "no project store is bound" {})))
                                      (reload-cells! nil)
@@ -581,7 +581,7 @@
                 (do (cell/undo! installed)
                     {:status :pending :probes (:results report)})
                 ;; COMMIT. The candidate is already live; save! makes it durable.
-                (let [v (userspace/save! :cell name body rationale)]
+                (let [v (userspace/save! :cell name body rationale {:run-id run-id})]
                   (if (nil? v)
                     (do (log/warn "cell" name "is live but UNSAVED — no project store is bound")
                         {:status :live-unsaved :reason :unbound

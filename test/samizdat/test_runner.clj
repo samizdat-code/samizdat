@@ -130,6 +130,8 @@
             [samizdat.supervisor-test]
             [samizdat.gitdiff-test]
             [samizdat.skills-test]
+            [samizdat.sim-test]
+            [samizdat.sim]
             [samizdat.source-test]
             [samizdat.security.secrets-test]
             [samizdat.config-test]
@@ -468,6 +470,7 @@
     samizdat.supervisor-test
     samizdat.gitdiff-test
     samizdat.skills-test
+    samizdat.sim-test
     samizdat.source-test
     samizdat.security.secrets-test
     samizdat.config-test
@@ -599,9 +602,14 @@
   ;; (karamazov-1gbh); keep them out of ~/.cache and drop them afterwards.
   (let [base (str (jolt.fs/create-temp-dir))]
     (samizdat.security.confine/set-confined-base! base)
+    ;; The self-improvement memory publishes to the person's config dir
+    ;; whenever a bound project's record changes; a test run must not write
+    ;; the real one.
+    (reset! samizdat.sim/path-override (str base "/sim.edn"))
     (try
       (apply t/run-tests namespaces)
       (finally
+        (reset! samizdat.sim/path-override nil)
         (samizdat.security.confine/set-confined-base! nil)
         (try (jolt.fs/delete-tree base) (catch Throwable _ nil))))))
 

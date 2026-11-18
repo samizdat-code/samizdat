@@ -43,7 +43,8 @@
             [samizdat.store.db :as db]
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
-            [samizdat.store.outcomes :as outcomes]))
+            [samizdat.store.outcomes :as outcomes]
+            [samizdat.store.sim :as sim]))
 
 (defn- new-id
   "Six hex chars, same scheme as tasks — readable in a transcript, cheap
@@ -1179,6 +1180,10 @@
         verdicts (half :verdicts []
                        #(when (seq experiments)
                           (distill-verdicts! conn experiments {:run-id run-id})))
+        ;; And the same experiments into the self-improvement memory, as
+        ;; history rather than a tally: each attempt keeps its own verdict
+        ;; (karamazov-amgk.2).
+        sim-settled (half :sim 0 #(sim/settle-experiments! conn experiments))
         ;; And what the run learned about the PROJECT, which is the half that
         ;; was missing entirely: everything else here is the harness watching
         ;; itself.
@@ -1199,6 +1204,7 @@
         result {:findings (vec written) :verdicts (vec verdicts) :project (vec project)
                 :steers (vec steers)
                 :patterns (vec pats)
+                :sim sim-settled
                 :consolidated consolidated
                 :aged aged :decayed decayed :evicted (vec evicted)
                 :errors @errors}]

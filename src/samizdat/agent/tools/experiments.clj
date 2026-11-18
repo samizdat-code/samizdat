@@ -21,6 +21,8 @@
             [samizdat.agent.tools.base :as base]
             [samizdat.prompt :as prompt]
             [samizdat.session :as session]
+            [samizdat.sim]
+            [samizdat.store.sim :as sim]
             [samizdat.userspace :as userspace]))
 
 (defn- msg [ctx] (prompt/render "experiment-tool" ctx))
@@ -52,6 +54,44 @@
 ;; How a verdict notices its target was edited again (karamazov-05z0.1).
 ;; Installed here because session is a leaf and this is where the target's
 ;; version is read in the first place.
+(defn- read-cases
+  "`fixes` as the battery case ids it names, in order: split on commas and
+  spaces."
+  [s]
+  (->> (str/split (str s) #"[,\s]+") (map str/trim) (remove str/blank?) distinct vec))
+
+(defn- sim-conn [ctx] (or (:conn ctx) (userspace/conn)))
+
+(defn- file-attempt!
+  "Put the experiment on the self-improvement memory (karamazov-amgk): under
+  the problem it cites by id or names, with what it predicts, before anything
+  is measured. {:problem {:id :name}} or nil with no store. Never throws into
+  the tool: a record that cannot be written is not a reason to refuse the
+  experiment."
+  [ctx name {:keys [change hypothesis target problem fixes]}]
+  (when-let [c (sim-conn ctx)]
+    (try
+      (let [run-id (:run-id ctx)
+            pid (when problem
+                  (or (sim/problem-by-ref c problem)
+                      (sim/problem-id! c problem run-id)))
+            pname (when pid (:name (first (filter #(= pid (:id %)) (sim/problems c)))))
+            id (sim/record-attempt! c {:problem-id pid :run-id run-id :experiment name
+                                       :change change :hypothesis hypothesis :target target
+                                       :project (userspace/project-root) :predicted fixes})]
+        (session/attempt! name id)
+        {:problem (when pid {:id pid :name pname})})
+      (catch Throwable _ nil))))
+
+(defn- settle-attempt!
+  "Write a verdict or a decision onto the experiment's attempt, if it has one."
+  [ctx name m]
+  (when-let [id (session/attempt-id name)]
+    (when-let [c (sim-conn ctx)]
+      (try (sim/settle-attempt! c id m)
+           (sim/settle-predictions! c id)
+           (catch Throwable _ nil)))))
+
 (session/set-version-lookup!
  (fn [kind name]
    (some-> (userspace/versions (keyword kind) name) last :version)))
@@ -63,7 +103,9 @@
         predicts (read-prediction (base/arg ctx :predicts))
         target (target-of (some-> (base/arg ctx :kind) str str/trim not-empty)
                           (some-> (base/arg ctx :target) str str/trim not-empty))
-        until (some-> (base/arg ctx :until) str str/trim not-empty)]
+        until (some-> (base/arg ctx :until) str str/trim not-empty)
+        problem (some-> (base/arg ctx :problem) str str/trim not-empty)
+        fixes (read-cases (base/arg ctx :fixes))]
     (cond
       (not (and name change hypothesis))
       (base/malformed branch (str (base/missing ctx :name :change :hypothesis)
@@ -78,6 +120,8 @@
       (try
         (session/experiment! name {:change change :hypothesis hypothesis
                                    :target target :predicts predicts})
+        (let [filed (file-attempt! ctx name {:change change :hypothesis hypothesis
+                                             :target target :problem problem :fixes fixes})]
         ;; When the edit should come out, on the version itself, where it
         ;; outlives this session (karamazov-05z0.7).
         (when (and until (:version target))
@@ -91,8 +135,12 @@
                               :until (when (and until (:version target)) until)
                               :predicts (when predicts
                                           (str (clojure.core/name (:signal predicts)) " "
-                                               (clojure.core/name (:direction predicts))))})
-                 :progress? true)
+                                               (clojure.core/name (:direction predicts))))
+                              :problem (when-let [{:keys [id name]} (:problem filed)]
+                                         (str "P" id " " name))
+                              :unfiled (and (nil? (:problem filed)) (nil? problem))
+                              :fixes (when (seq fixes) (str/join ", " fixes))})
+                 :progress? true))
         (catch clojure.lang.ExceptionInfo e
           (if (= :samizdat.session/too-many-open (:type (ex-data e)))
             ;; A refusal, not a crash: the supervisor made a well-formed call
@@ -141,6 +189,7 @@
         (if-let [v (session/verdict name)]
           (let [undo (when (= "reverted" action) (undo-target! ctx v))]
             (session/reverted! name (= "kept" action))
+            (settle-attempt! ctx name {:settled (keyword action)})
             (base/ok branch (str (msg {:settled true :name name :action action
                                        :why (base/arg ctx :why)})
                                  (when undo (str "\n\n" undo)))
@@ -149,7 +198,14 @@
 
       :else
       (if-let [v (session/verdict name)]
-        (base/ok branch
+        (do
+         (when-not (= :too-early (:verdict v))
+           (settle-attempt! ctx name (cond-> {:verdict (:verdict v)}
+                                       (:before v) (assoc :before (:before v))
+                                       (:after v) (assoc :after (:after v))
+                                       (some? (get-in v [:prediction :hit?]))
+                                       (assoc :prediction-hit (get-in v [:prediction :hit?])))))
+         (base/ok branch
                  (msg {:reported true :name name
                        :verdict (clojure.core/name (:verdict v))
                        :change (:change v) :hypothesis (:hypothesis v)
@@ -193,5 +249,5 @@
                        :branches
                        (when-let [br (:branches v)]
                          (when (pos? (:regressed br))
-                           {:regressed (:regressed br) :measured (:measured br)}))}))
+                           {:regressed (:regressed br) :measured (:measured br)}))})))
         (base/fail branch (msg {:no-experiment true :name name}))))))

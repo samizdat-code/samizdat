@@ -3172,6 +3172,17 @@
         the arena's live arms (heldout/live-verdict), read with :fitness
         :noise and :cost-rule."}
 
+ :sim
+ {:value {:problems 12 :attempts 6 :foreign 6 :chars 240}
+  :provenance ["karamazov-amgk"]
+  :kind :policy :capability-tunable? false
+  :doc "HOW MUCH OF THE SELF-IMPROVEMENT MEMORY THE SUPERVISOR READS. The
+        paper behind it put the whole record in the proposer's prompt; a run
+        here carries the brief for hours, so it is bounded: the :problems
+        most recently worked on, each with its last :attempts, every text cut
+        at :chars, and at most :foreign problems carried from other projects.
+        The record itself is never cut — only what one brief shows of it."}
+
  :pruning
  {:value {:min-runs 3 :limit 5}
   :provenance ["karamazov-na2k.10" "2609.24972v2"]

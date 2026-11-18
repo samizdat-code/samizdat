@@ -1281,7 +1281,56 @@
   that has none, which closes as it always did."
   ["ALTER TABLE tasks ADD COLUMN check_cmd TEXT NOT NULL DEFAULT ''"])
 
+(def v63
+  "SELF-IMPROVEMENT MEMORY (karamazov-amgk, after 'Self-Improvement Memory
+  Enables Continual Recursive Self-Improvement').
+
+  A userspace version says which run made it, and so which model it was made
+  under: an edit tuned on one model can hurt another, and after a switch the
+  supervisor has to know which edits to reassess.
+
+  sim_problems is one row per root cause the supervisor named; sim_attempts
+  one row per change made against it, never rewritten in place: what was
+  changed and why, the version it made, which battery cases it was predicted
+  to fix (EDN) and which it fixed or missed once replayed, its verdict and
+  settlement, and the run, model and project it was measured under. The
+  lever memory keeps a running score; this keeps the history."
+  ["ALTER TABLE userspace ADD COLUMN run_id TEXT"
+   "ALTER TABLE userspace ADD COLUMN model TEXT"
+   "CREATE TABLE IF NOT EXISTS sim_problems (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     name TEXT NOT NULL,
+     norm TEXT NOT NULL UNIQUE,
+     opened_run TEXT,
+     created_at TEXT NOT NULL)"
+   "CREATE TABLE IF NOT EXISTS sim_attempts (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     problem_id INTEGER REFERENCES sim_problems(id),
+     run_id TEXT,
+     experiment TEXT,
+     change TEXT NOT NULL,
+     hypothesis TEXT,
+     target_kind TEXT,
+     target_name TEXT,
+     target_version INTEGER,
+     model TEXT,
+     provider TEXT,
+     project TEXT,
+     predicted TEXT,
+     fixed TEXT,
+     missed TEXT,
+     unresolved TEXT,
+     verdict TEXT,
+     settled TEXT,
+     fitness_before REAL,
+     fitness_after REAL,
+     prediction_hit INTEGER,
+     created_at TEXT NOT NULL,
+     updated_at TEXT)"
+   "CREATE INDEX IF NOT EXISTS idx_sim_attempts_problem ON sim_attempts(problem_id)"
+   "CREATE INDEX IF NOT EXISTS idx_sim_attempts_target ON sim_attempts(target_kind, target_name)"])
+
 (def migrations
   "Ordered. Index 0 is migration 1; PRAGMA user_version holds the count applied."
   [v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24
-   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40 v41 v42 v43 v44 v45 v46 v47 v48 v49 v50 v51 v52 v53 v54 v55 v56 v57 v58 v59 v60 v61 v62])
+   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40 v41 v42 v43 v44 v45 v46 v47 v48 v49 v50 v51 v52 v53 v54 v55 v56 v57 v58 v59 v60 v61 v62 v63])

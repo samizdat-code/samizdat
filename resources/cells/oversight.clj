@@ -21,6 +21,8 @@
             [samizdat.store.knowledge :as knowledge]
             [samizdat.store.papercuts :as papercuts]
             [samizdat.store.runs :as runs]
+            [samizdat.store.sim :as store-sim]
+            [samizdat.sim :as sim]
             [samizdat.store.userspace :as store-us]
             [samizdat.userspace :as userspace]
             [samizdat.workflow :as wf]
@@ -50,6 +52,21 @@
   [s n]
   (let [t (str/replace (str s) #"\s+" " ")]
     (subs t 0 (min n (count t)))))
+
+(defn- sim-attempt
+  "One attempt from the self-improvement memory as the brief shows it."
+  [a chars]
+  {:change (clip (str (:change a)) chars)
+   :hypothesis (some-> (:hypothesis a) str not-empty (clip chars))
+   :target (when-let [{:keys [kind name version]} (:target a)]
+             (str kind " " name (when version (str " v" version))))
+   :model (:model a)
+   :verdict (some-> (:verdict a) str)
+   :settled (some-> (:settled a) str)
+   :predicted (when (seq (:predicted a)) (str/join ", " (:predicted a)))
+   :fixed (when (seq (:fixed a)) (str/join ", " (:fixed a)))
+   :missed (when (seq (:missed a)) (str/join ", " (:missed a)))
+   :unresolved (when (seq (:unresolved a)) (str/join ", " (:unresolved a)))})
 
 ;; --- gather -----------------------------------------------------------------
 
@@ -587,7 +604,8 @@
   The digest and the since-last-look block are not among them: the run's
   position is the news of every pass."
   [:learned :candidates :drift :offers :rejected :refused :retire :reviews
-   :inconclusive :prune :papercuts :removals :fallback :catalog :failing :plateau :past-steers])
+   :inconclusive :prune :papercuts :removals :fallback :catalog :failing :plateau :past-steers
+   :improvements :model-switch :foreign])
 
 (defn visible-sections
   "{section hash} for what the carried branch can still see: the sections
@@ -1029,6 +1047,46 @@
                                                           [])]
                                            (when (seq ps)
                                              (prompt/render "pruning" {:edits ps})))
+;; The self-improvement memory (karamazov-amgk):
+                                  ;; what was tried on each problem and what it
+                                  ;; did, the edits in force made on another
+                                  ;; model, and what other projects met on the
+                                  ;; same roles.
+                                  :improvements (let [{:keys [problems attempts chars]} (gates/threshold :sim)
+                                                      ps (safely :improvements #(store-sim/problems conn) [])
+                                                      ps (->> ps
+                                                              (filter (comp seq :attempts))
+                                                              (sort-by #(:id (last (:attempts %))) >)
+                                                              (take problems))]
+                                                  (when (seq ps)
+                                                    (safely :improvements-render (fn [] (prompt/render "improvement-record"
+                                                                   {:problems (mapv (fn [p]
+                                                                                      {:id (:id p) :name (clip (:name p) chars)
+                                                                                       :attempts (mapv #(sim-attempt % chars)
+                                                                                                       (take-last attempts (:attempts p)))})
+                                                                                    ps)})) nil)))
+                                  :model-switch (let [{:keys [attempts chars]} (gates/threshold :sim)
+                                                      model (:model (runs/get-run conn run-id))
+                                                      ms (safely :model-switch
+                                                                 #(store-sim/model-mismatches conn model) [])]
+                                                  (when (seq ms)
+                                                    (safely :model-switch-render (fn [] (prompt/render "model-switch"
+                                                                   {:model model
+                                                                    :edits (mapv (fn [m]
+                                                                                   (assoc m :rationale (some-> (:rationale m) (clip chars))
+                                                                                          :attempts (mapv #(sim-attempt % chars)
+                                                                                                          (take-last attempts (:attempts m)))))
+                                                                                 ms)})) nil)))
+                                  :foreign (let [{:keys [foreign attempts chars]} (gates/threshold :sim)
+                                                 fs (safely :foreign
+                                                            #(sim/foreign-here conn {:max-problems foreign}) [])]
+                                             (when (seq fs)
+                                               (safely :foreign-render (fn [] (prompt/render "foreign-improvements"
+                                                              {:problems (mapv (fn [p]
+                                                                                 {:project (:project p) :name (clip (:name p) chars)
+                                                                                  :attempts (mapv #(sim-attempt % chars)
+                                                                                                  (take-last attempts (:attempts p)))})
+                                                                               fs)})) nil)))
                                   :catalog (safely :catalog #(wf/render-catalog conn) "")})
              ;; THE BRIEF IS A DELTA (karamazov-rz7t.4). Every pass used to
              ;; append the whole brief to the carried branch, so the
