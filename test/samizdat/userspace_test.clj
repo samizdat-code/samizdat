@@ -1189,3 +1189,22 @@
     (store/save! *conn* :cell "beam" "b2" "project" "another cell")
     (is (= 1 (count (:churn (first (filter #(= "cell" (:kind %))
                                            (store/drift *conn* {:top-names 1})))))))))
+
+(deftest a-same-length-rewrite-in-the-same-millisecond-is-seen
+  ;; The file cache keyed a file by [lastModified length]. lastModified is in
+  ;; milliseconds, and a rewrite that keeps the length (VERDICT -> OUTCOME, a
+  ;; 3 -> 5 in gates.edn) inside the same millisecond as the read before it
+  ;; kept serving the old text: the edit was never validated, recorded or run.
+  ;; The millisecond is pinned here so the collision is not left to timing.
+  (let [f (java.io.File/createTempFile "samizdat-cache" ".md")
+        path (.getPath f)
+        read-text #(#'us/file-text path)]
+    (try
+      (spit f "VERDICT")
+      (let [ms (.lastModified f)]
+        (is (= "VERDICT" (read-text)))
+        (spit f "OUTCOME")
+        (.setLastModified f ms)
+        (is (= ms (.lastModified f)) "same millisecond, same length")
+        (is (= "OUTCOME" (read-text))))
+      (finally (.delete f)))))

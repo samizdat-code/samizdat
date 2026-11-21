@@ -17,7 +17,8 @@
             [samizdat.prompt :as prompt]
             [jolt-lsp.sdiff.text :as sdiff-text]
             [samizdat.lexicon :as lexicon]
-            [samizdat.security.secrets :as secrets]))
+            [samizdat.security.secrets :as secrets]
+            [samizdat.util :as util]))
 
 (defn change-groups-text
   "A grouping from jolt-lsp.sdiff.group/by-calls as the text
@@ -311,14 +312,14 @@
         (vec (distinct (concat (remove stale tracked) created)))))))
 
 (defn file-stamps
-  "{path [modified-ms size]} for the files the run has changed since `baseline`, or nil
+  "{path (util/file-stamp file)} for the files the run has changed since `baseline`, or nil
   when git cannot say. Comparing two of these tells which files a turn wrote, whatever
   tool wrote them."
   [root baseline]
   (when-let [paths (changed-files root baseline)]
     (into {} (keep (fn [p]
                      (let [f (java.io.File. (str root "/" p))]
-                       (when (.isFile f) [p [(.lastModified f) (.length f)]]))))
+                       (when (.isFile f) [p (util/file-stamp f)]))))
           paths)))
 
 (defn changed-lines

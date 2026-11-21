@@ -53,7 +53,8 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [samizdat.profiles :as profiles]))
+            [samizdat.profiles :as profiles]
+            [samizdat.util :as util]))
 
 ;; --- the merge ---------------------------------------------------------------
 
@@ -129,9 +130,7 @@
       (catch Throwable e
         {:error (str "did not parse: " (ex-message e))}))))
 
-;; {path {:stamp [mtime length] :body :value}}. Stamped by mtime AND length:
-;; lastModified is milliseconds and an edit saved inside one would otherwise
-;; not be seen. A layer that failed to parse is NOT cached — a torn read of a
+;; {path {:stamp [mtime length] :body :value}}, stamped by util/file-stamp. A layer that failed to parse is NOT cached — a torn read of a
 ;; file mid-save must not be remembered as the answer when the finished write
 ;; need not move the stamp again.
 (defonce ^:private file-cache (atom {}))
@@ -148,7 +147,7 @@
   [path]
   (let [f (io/file (str path))]
     (when (.isFile f)
-      (let [stamp [(.lastModified f) (.length f)]
+      (let [stamp (util/file-stamp f)
             c (get @file-cache path)]
         (if (= stamp (:stamp c))
           (select-keys c [:body :value])

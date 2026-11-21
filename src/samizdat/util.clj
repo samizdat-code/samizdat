@@ -26,6 +26,17 @@
             [clojure.main :as main]
             [clojure.string :as str]))
 
+(def ^:private no-link-options (make-array java.nio.file.LinkOption 0))
+
+(defn file-stamp
+  "What says a file changed without reading it: [modification time to the
+  nanosecond, length]. lastModified is in milliseconds, and a rewrite that
+  keeps the length inside the millisecond of the write before it (a 3 for a 5,
+  VERDICT for OUTCOME) compared equal, so a cache keyed on it kept the old
+  text."
+  [^java.io.File f]
+  [(str (java.nio.file.Files/getLastModifiedTime (.toPath f) no-link-options)) (.length f)])
+
 (defn sh-quote
   "`s` as a single-quoted shell word, safe to interpolate into `sh -c`.
 

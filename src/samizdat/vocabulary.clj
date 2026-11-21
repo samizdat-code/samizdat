@@ -27,7 +27,8 @@
             [jolt.fs :as fs]
             [rewrite-clj.node :as n]
             [rewrite-clj.parser :as p]
-            [samizdat.prompt :as prompt]))
+            [samizdat.prompt :as prompt]
+            [samizdat.util :as util]))
 
 ;; --- one file ----------------------------------------------------------------
 
@@ -161,7 +162,7 @@
 
 (defn- file-entry [f policy]
   (let [file (io/file f)
-        stamp [(.length file) (.lastModified file) (select-keys policy [:kinds :doc-chars])]
+        stamp [(util/file-stamp file) (select-keys policy [:kinds :doc-chars])]
         hit (get @parsed f)]
     (if (= stamp (:stamp hit))
       (:entry hit)

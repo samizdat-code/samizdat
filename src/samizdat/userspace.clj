@@ -56,7 +56,8 @@
             [clojure.tools.logging :as log]
             [samizdat.store.db :as db]
             [samizdat.store.outcomes :as outcomes]
-            [samizdat.store.userspace :as store]))
+            [samizdat.store.userspace :as store]
+            [samizdat.util :as util]))
 
 ;; --- the bound project -------------------------------------------------------
 
@@ -392,7 +393,7 @@
   [path]
   (let [f (io/file (str path))]
     (when (.isFile f)
-      (let [stamp [(.lastModified f) (.length f)]
+      (let [stamp (util/file-stamp f)
             c (get @file-cache path)]
         (if (= stamp (:stamp c))
           (:text c)
