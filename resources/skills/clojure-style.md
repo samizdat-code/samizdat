@@ -96,6 +96,30 @@ Do not use exceptions for control flow — a function that returns `nil` or a
 result map for the ordinary "not found" case is easier to compose than one that
 throws it.
 
+## Conventions
+
+Match the project's own style first; where it says nothing:
+
+- `:require` with `:as`, the alias the namespace's last segment
+  (`clojure.string` `str`, `clojure.set` `set`, `clojure.edn` `edn`), and one
+  alias per namespace across the project. `:refer` for a few names at most;
+  never `:refer :all` or `:use`.
+- Destructure at the boundary, `(defn handle [{:keys [id body]}] ...)`, so
+  the signature shows the shape it expects. Past three or four positional
+  parameters, take a map.
+- Predicates end in `?`, functions unsafe to retry in `!`, conversions read
+  `a->b`. Do not shadow `clojure.core` names (`name`, `type`, `key`, `count`,
+  `map`) with locals.
+- `when` over a one-armed `if`; `if-let`/`when-let` where they remove a
+  binding and a test; `cond` ends in `:else`.
+- Read data with `clojure.edn/read-string`, never `read-string`, `eval` or
+  `load-string` on input: the full reader runs code. A run that writes one of
+  those hears about it from the `:discouraged-code` gate.
+- On Jolt there is no Java interop beyond its `java.*` shims: use `jolt.fs`
+  or `babashka.fs`, `babashka.process`, and the built-in `clojure.data.json`.
+- Comments say what the code cannot: a constraint, the reason for an odd
+  choice. Not what the next line does.
+
 ## Recursion
 
 `recur` for loops, so the stack does not grow. But most manual recursion is
