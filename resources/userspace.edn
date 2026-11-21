@@ -377,6 +377,8 @@
    :time-last-call "prompts/time-last-call.md"
    :metric-finding "prompts/metric-finding.md"
    :metrics-worse "prompts/metrics-worse.md"
+   :discouraged-code "prompts/discouraged-code.md"
+   :lint-finding "prompts/lint-finding.md"
    :time-nothing-written "prompts/time-nothing-written.md"
    :time-whole-running "prompts/time-whole-running.md"
    :time-wind-down "prompts/time-wind-down.md"

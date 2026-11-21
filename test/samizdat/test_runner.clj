@@ -265,6 +265,7 @@
             [samizdat.review-wait-test]
             [samizdat.stream-path-test]
             [samizdat.native-history-test]
+            [samizdat.code-lint-test]
             [samizdat.code-metrics-test]
             [samizdat.shell-writes-test]
             [samizdat.repl-restart-test]
@@ -365,6 +366,7 @@
     samizdat.review-wait-test
     samizdat.stream-path-test
     samizdat.native-history-test
+    samizdat.code-lint-test
     samizdat.code-metrics-test
     samizdat.shell-writes-test
     samizdat.repl-restart-test

@@ -38,6 +38,7 @@
             [clojure.string :as str]
             [clojure.tools.logging :as log]
             [samizdat.agent.actions :as actions]
+            [samizdat.agent.code-lint :as code-lint]
             [samizdat.agent.code-metrics :as code-metrics]
             [samizdat.agent.tools.files :as files-tools]
             [samizdat.cancel :as cancel]
@@ -1615,10 +1616,15 @@
                      (let [policy (gates/threshold :code-metrics)
                            ;; Its gate is quiet against a clock, so that is not paid for.
                            found (when-not (get-in ctx [:config :run :time-limit-seconds])
-                                   (code-metrics/of-tree (:root ctx) (:git-baseline ctx) policy))]
+                                   (code-metrics/of-tree (:root ctx) (:git-baseline ctx) policy))
+                           ;; Not skipped against a clock: a call that runs its
+                           ;; input as code matters however little time is left.
+                           lint-policy (gates/threshold :code-lint)
+                           linted (code-lint/of-tree (:root ctx) (:git-baseline ctx) lint-policy)]
                        (-> branch
                            (state/note-lines (gitdiff/changed-lines (:root ctx) (:git-baseline ctx)))
-                           (state/note-metrics found (code-metrics/report policy found))))
+                           (state/note-metrics found (code-metrics/report policy found))
+                           (state/note-lint linted (code-lint/report lint-policy linted))))
                      (state/rebase-lines branch))
             limit (get-in ctx [:config :run :time-limit-seconds])
             now (System/currentTimeMillis)

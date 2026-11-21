@@ -86,6 +86,26 @@ rather than one bug that fell through it.
 - Keep the file compiling at each step — reload after each edit so a typo
   surfaces immediately, not three edits later.
 
+## Keep the session and the files in step
+
+The session drifts from the files: a redefinition made only in `eval`, a
+capture def, a var whose `defn` you since deleted or renamed (it stays
+interned and keeps answering). Each makes something work in the session that
+a fresh process will not reproduce. Before calling `done`:
+
+1. **Load cold.** Require each namespace you changed in a fresh process
+   through `shell` (`jolt -M:test -e "(require 'my.ns)"`), not the session.
+2. **Read the diff.** Check the files say what you tested.
+3. **Run the project's test task,** not only the test you were iterating on.
+
+## Make the running system reachable
+
+State a closure holds cannot be inspected from `eval`. Keep a running system
+in a top-level `(defonce system (atom nil))` that the start function
+`reset!`s, so the session can `(keys @system)`, snapshot a component with
+`(def snap @(:db @system))`, and test pure functions against the snapshot
+without touching the live system.
+
 ## Working discipline
 
 - **Plan as structure, not intention.** Before you touch files, name the exact

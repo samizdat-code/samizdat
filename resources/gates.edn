@@ -899,7 +899,7 @@
    {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
              :time-nothing-written :time-whole-running :wind-down :plan-wind-down
-             :human-directive :directive-notice :shell-roundtrips :metrics-worse :repeat-failing-action
+             :human-directive :directive-notice :shell-roundtrips :metrics-worse :discouraged-code :repeat-failing-action
              :review-deadline
              ;; Split-when-stuck (owner, 2026-11-10): left out of lean at its
              ;; start, so 74 lean benchmark trials saw no :stuck or
@@ -932,7 +932,7 @@
    {:phase-rules #{:outside-role-surface :planning-declares-a-plan :storm :storm-oscillation}
     :gates #{:last-call :plan-last-call :mechanics-streak :storm :time-last-call :time-wind-down
              :time-nothing-written :time-whole-running :wind-down :plan-wind-down
-             :human-directive :directive-notice :metrics-worse :repeat-failing-action
+             :human-directive :directive-notice :metrics-worse :discouraged-code :repeat-failing-action
              :review-deadline
              ;; Split-when-stuck (owner, 2026-11-10): left out of lean at its
              ;; start, so 74 lean benchmark trials saw no :stuck or
@@ -1025,6 +1025,19 @@
         function in ten by its own measure, and a steer that frequent is noise. Add
         :warning to ask for more."}
 
+ :code-lint
+ {:value {:presets [:security] :vars {} :level :warning :in-ns {}
+          :extensions [".clj" ".cljc" ".cljs"] :max-files 20 :max-shown 5}
+  :kind :policy :capability-tunable? true
+  :provenance ["jolt-lsp discouraged-var"]
+  :doc "What :discouraged-code counts: uses of the vars jolt-lsp's :discouraged-var linter
+        is given here, added by the run to files it changed. :presets names jolt-lsp's
+        rule sets (:security bans eval, read-string, load-file and the other vars that
+        evaluate or load code); :vars adds {ns/name {:message :level}} entries over them,
+        :level is the default for an entry without one, and :in-ns {ns {ns/name {...}}}
+        exempts or re-levels a var in one namespace. Read on each turn that writes a file.
+        The project's own lint config does not change this list."}
+
  :shell-roundtrips
  {:value 3 :kind :threshold :capability-tunable? true
   :provenance ["karamazov-92kq"]
@@ -1046,6 +1059,12 @@
   :provenance ["jolt-metrics"]
   :doc "How often :metrics-worse may speak on one branch. A lifetime count, because a
         write settles it as met, and a budget restarts at a met settlement."}
+
+ :max-lint-steers
+ {:value 3 :kind :re-fire-guard :capability-tunable? false
+  :provenance ["jolt-lsp discouraged-var"]
+  :doc "How often :discouraged-code may speak on one branch. A lifetime count, as for
+        :max-metric-steers."}
 
  :max-time-steers
  {:value 2 :kind :re-fire-guard :capability-tunable? false
@@ -2293,10 +2312,10 @@
  {:value {:max-requests 32 :max-changes 32 :max-files 8 :max-forms 64 :max-matches 100
           :max-edits 100 :max-candidate-files 256 :max-source-chars 1048576 :max-result-chars 65536
           :max-transform-matches 128 :max-transform-changed-characters 262144
-          :analysis-timeout-ms 120000 :basis-ttl-ms 300000}
+          :basis-ttl-ms 300000}
   :kind :policy :capability-tunable? false
   :provenance ["karamazov-p7c9.2" "karamazov-p7c9.8" "karamazov-p7c9.10" "karamazov-p7c9.11"]
-  :doc "Native Clojure inspection, transaction, computed-transform, and structural caller-evidence bounds for batches, per-file selection, source, candidate files, matches, changed characters, binding-analysis deadline, semantic basis lifetime, and rendered EDN."}
+  :doc "Native Clojure inspection, transaction, computed-transform, and structural caller-evidence bounds for batches, per-file selection, source, candidate files, matches, changed characters, semantic basis lifetime, and rendered EDN."}
 
  :debug
  {:value {:program nil :adapter-args [] :timeout-ms 10000
@@ -5111,6 +5130,7 @@
    :shell-roundtrips #{"eval" "done" "give_up"}
    :repeat-failing-action #{"write_file" "edit_file" "patch" "eval" "done" "give_up"}
    :metrics-worse    #{"write_file" "edit_file" "patch" "done" "give_up"}
+   :discouraged-code #{"write_file" "edit_file" "patch" "done" "give_up"}
    :time-nothing-written #{"write_file" "edit_file" "patch" "done" "give_up"}
    :time-wind-down   #{"write_file" "edit_file" "patch" "done" "give_up"}
    :time-last-call   #{"done" "give_up"}
@@ -6029,6 +6049,23 @@
                  (threshold :max-metric-steers)))
    :message-form (str (prompt "metrics-worse") "\n" (:metric-report branch))
    :prediction "the branch simplifies what it wrote or says why it is that shape"
+   :window 3}
+
+  {:gate :discouraged-code
+   :provenance ["jolt-lsp discouraged-var"]
+   :priority 10.46
+   :doc "The branch has written a call to a var gates.edn :code-lint discourages — by
+         default the ones that evaluate or load code, or read with the full reader. A
+         suggestion: the branch may need one and can say why. Ahead of :metrics-worse,
+         because a foothold for running untrusted input matters more than its shape."
+   :when (and (state/active? branch)
+              (roles/may-use? (:role branch) "write_file")
+              (seq (:lint-findings branch))
+              (< (count (filter (fn [f] (and (= :discouraged-code (:gate f)) (not (:settled f))))
+                                (:gate-history branch)))
+                 (threshold :max-lint-steers)))
+   :message-form (str (prompt "discouraged-code") "\n" (:lint-report branch))
+   :prediction "the branch replaces the discouraged call or says why it needs it"
    :window 3}
 
   {:gate :studying

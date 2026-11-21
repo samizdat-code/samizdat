@@ -7,51 +7,40 @@
 
 (ns samizdat.surgeon.binding-rename
   "Compile local binding renames from analysis of the same frozen source."
-  (:require [clojure.edn :as edn]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
+            [jolt-lsp.analyze :as analyze]
             [rewrite-clj.node :as n]
-            [rewrite-clj.zip :as z]
-            [samizdat.engine.proc :as proc]
-            [samizdat.security.secrets :as secrets]))
+            [rewrite-clj.zip :as z]))
 
 (defn- refuse!
   [error-type _ & [data]]
   (throw (ex-info (name error-type) (merge {:surgeon/error error-type} data))))
 
-(defn- source-language [file]
-  (or (some->> (re-find #"\.([^.]+)$" file) second) "clj"))
+(defn- position [{[row col end-row end-col] :range :keys [name] :as entry} id]
+  {:row row :col col :end-row end-row :end-col end-col
+   :name (symbol name) :id (get entry id)})
 
 (defn analyze-source
-  "Read clj-kondo local-binding analysis for one exact source snapshot."
+  "Local-binding analysis of one exact source snapshot, in process from
+  jolt-lsp: {:locals [...] :local-usages [...]}, each entry
+  {:row :col :end-row :end-col :name :id} with 1-based positions, end-col
+  exclusive, and a use carrying its binder's :id. Locals a macro generated
+  have no source to rename and are left out."
   ([file source] (analyze-source file source {}))
-  ([file source {:keys [root timeout-ms max-result-chars]}]
-   (let [config (pr-str {:output {:format :edn
-                                  :analysis {:locals true :keywords true}}})
-         result (try
-                  (proc/run {:input source
-                             :timeout-ms timeout-ms
-                             :env (secrets/scrubbed-process-env)
-                             :dir (or root ".")}
-                            "clj-kondo" "--lint" "-" "--filename" file
-                            "--lang" (source-language file) "--config" config)
-                  (catch Exception error
-                    (throw (ex-info "analyzer-authority-unverified"
-                                    {:surgeon/error :analyzer-authority-unverified
-                                     :file file :cause (.getMessage error)}
-                                    error))))
-         _ (when (or (:timeout result) (not= 0 (:exit result)))
-             (refuse! :binding-analysis-failed nil
-                      {:file file :exit (:exit result) :timeout (:timeout result)
-                       :diagnostic (str/trim (or (:err result) ""))}))
-         _ (when (and max-result-chars (> (count (:out result)) max-result-chars))
-             (refuse! :binding-analysis-failed nil
-                      {:file file :limit max-result-chars}))
-         parsed (try (edn/read-string (:out result)) (catch Exception _ nil))
-         analysis (:analysis parsed)]
-     (when-not (map? analysis)
+  ([file source _opts]
+   (let [result (try (analyze/analyze source file)
+                     (catch Exception error
+                       (refuse! :binding-analysis-failed nil
+                                {:file file :diagnostic (.getMessage error)})))]
+     (when-not (:parse-ok result)
        (refuse! :binding-analysis-failed nil
-                {:file file :diagnostic (str/trim (or (:err result) ""))}))
-     analysis)))
+                {:file file :diagnostic (str (:parse-error result))}))
+     (let [locals (remove :generated (:locals result))
+           ids (set (map :local-id locals))]
+       {:locals (mapv #(position % :local-id) locals)
+        :local-usages (into [] (comp (filter #(contains? ids (:local-id %)))
+                                     (map #(position % :local-id)))
+                            (:local-refs result))}))))
 
 (defn- line-offsets [source]
   (loop [offsets [0] index 0]

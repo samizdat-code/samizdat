@@ -174,8 +174,7 @@
    "resource"    {:reach :host-bytes}
    "inspect_clojure" {:reach :host-bytes}
    "edit_clojure" {:reach :host-bytes}
-   "apply_clojure_changes" {:reach :spawns-process
-                            :also "binding rename invokes fixed clj-kondo arguments with secrets/scrubbed-process-env before spawn"}
+   "apply_clojure_changes" {:reach :host-bytes}
    "transform_clojure" {:reach :host-bytes}
    "inference"   {:reach :spawns-process
                   :also "bounded provider calls; authorized exposure-checked resources; project-image SCI with the same scrubbed spawn as eval"}

@@ -99,8 +99,7 @@
                                             (when-let [c (:code h)] (str "```clojure\n" c "\n```"))]))}})))
 
 (defn diagnostics
-  "LSP Diagnostics for `path` from jolt-lsp's linters (and clj-kondo's, when
-  it is installed)."
+  "LSP Diagnostics for `path` from jolt-lsp's linters."
   [client path]
   (let [s (source-of path)
         r (api/diagnostics* (:root client) {:file (str path)})]
