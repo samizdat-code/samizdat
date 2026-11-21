@@ -9,6 +9,8 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [rewrite-clj.parser :as parser]
+            [samizdat.engine.proc :as proc]
+            [samizdat.surgeon.binding-rename :as binding-rename]
             [samizdat.surgeon.intent-transaction :as intent]))
 
 (defn- compile-changes
@@ -192,6 +194,35 @@
                 "(defn table [{:keys [] sort-field :sort-by}] (name sort-field))\n")
            (get-in result [:future-sources file])))
     (is (= 2 (get-in result [:changes 0 :binding-count])))))
+
+(deftest binding-analysis-is-in-process
+  ;; The analysis comes from jolt-lsp, not a clj-kondo binary on PATH: no
+  ;; process is spawned, and it carries the binders and uses the rename
+  ;; compiles against, in the shape compile-targets reads.
+  (let [file "src/binding.clj"
+        source (str "(ns demo)\n"
+                    "(defn feed [{:keys [sort-by] :or {sort-by :score}}] [sort-by :sort-by clojure.core/sort-by])\n"
+                    "(defn table [{:keys [sort-by]}] (name sort-by))\n")
+        analysis (with-redefs [proc/run (fn [& _] (throw (ex-info "spawned" {})))]
+                   (binding-rename/analyze-source file source))
+        positions (fn [xs] (set (map #(select-keys % [:row :col :end-row :end-col :name]) xs)))]
+    (is (= (positions (:locals binding-analysis)) (positions (:locals analysis))))
+    (is (= (positions (:local-usages binding-analysis)) (positions (:local-usages analysis))))
+    (testing "each use names its binder's id"
+      (let [id-at (into {} (map (juxt (juxt :row :col) :id) (:locals analysis)))]
+        (is (= #{(id-at [2 21])} (set (map :id (filter #(= 2 (:row %)) (:local-usages analysis))))))
+        (is (= #{(id-at [3 22])} (set (map :id (filter #(= 3 (:row %)) (:local-usages analysis))))))))
+    (testing "the rename compiled from it matches the fixture's"
+      (is (= "(ns demo)\n(defn feed [{:keys [] :or {sort-field :score} sort-field :sort-by}] [sort-field :sort-by clojure.core/sort-by])\n(defn table [{:keys [] sort-field :sort-by}] (name sort-field))\n"
+             (get-in (compile-changes
+                       {file source}
+                       {:changes [{:id :rename :in [file] :forms ['feed 'table]
+                                   :do [:rename-binding {:from 'sort-by :to 'sort-field
+                                                         :preserve-external-key true}]
+                                   :expect {:matches 5 :each-form 1}}]
+                        :expect {:changes 1 :edits 5 :files 1}}
+                       {:binding-analysis {file analysis}})
+                     [:future-sources file]))))))
 
 (deftest binding-rename-refuses-capture-and-comment-sensitive-destructuring
   (let [file "src/binding.clj"

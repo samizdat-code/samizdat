@@ -998,6 +998,12 @@
   [branch found report]
   (assoc branch :metric-findings (vec found) :metric-report report))
 
+(defn note-lint
+  "Record the discouraged calls the run has added, for the :discouraged-code gate,
+  whose :when reads them off the branch. nil means it could not tell, which clears it."
+  [branch found report]
+  (assoc branch :lint-findings (vec found) :lint-report report))
+
 (defn rebase-lines
   "The held task changed with no file written: start its count here. note-lines
   runs only on a write, so without this a split left the old task's total on the

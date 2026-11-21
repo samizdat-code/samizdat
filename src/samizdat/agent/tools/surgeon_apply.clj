@@ -90,14 +90,10 @@
                                   :limit (:max-source-chars policy)})))
       observations)))
 
-(defn- binding-analysis [ctx changes sources policy]
+(defn- binding-analysis [changes sources]
   (let [files (vec (distinct (mapcat :in (filter #(= :rename-binding (first (:do %))) changes))))]
     (into {} (map (fn [file]
-                    [file (binding-rename/analyze-source
-                            file (get sources file)
-                            {:root (:root ctx)
-                             :timeout-ms (:analysis-timeout-ms policy)
-                             :max-result-chars (:max-result-chars policy)})])
+                    [file (binding-rename/analyze-source file (get sources file))])
                   files))))
 
 (defn- observed! [observations file]
@@ -192,7 +188,7 @@
             observations (checked-observations ctx changes policy)
             sources (into {} (map (fn [[file observation]] [file (:content observation)]))
                           observations)
-            analysis (binding-analysis ctx changes sources policy)
+            analysis (binding-analysis changes sources)
             plan (intent/compile-changes sources {:changes changes :expect (base/arg ctx :expect)}
                                          {:binding-analysis analysis
                                           :max-candidate-files (:max-candidate-files policy)})]

@@ -96,10 +96,14 @@
         ;; of Clojure goes through, the project index the lsp tool answers
         ;; from, structural diff (sdiff) and the restructuring plans behind
         ;; the surgeon tools. Moved out of samizdat into its own library.
+        ;; Also the in-process local-binding analysis apply_clojure_changes
+        ;; renames from, and the :discouraged-var linter behind gates.edn
+        ;; :code-lint. Pinned past v0.5.1 to the or-default-refs branch, which
+        ;; carries discouraged-var and records :or keys as uses of their
+        ;; local; move to the release tag that includes both.
         io.github.jlt-commons/jolt-lsp
         {:git/url "https://github.com/jlt-commons/jolt-lsp"
-         :git/tag "v0.3.0"
-         :git/sha "924d786c99c5ce6b14c17ae1c5cc430d8b6b3f35"}
+         :git/sha "5d4ff672a7fe5665e36f963ced008fff660c5297"}
 
         io.github.jlt-commons/augur
         {:git/url "https://github.com/jlt-commons/augur"

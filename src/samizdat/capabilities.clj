@@ -151,6 +151,7 @@
             [samizdat.session]
             [samizdat.sim]
             [samizdat.memory]
+            [samizdat.agent.code-lint]
             [samizdat.agent.code-metrics]
             [samizdat.store.captures]
             [samizdat.store.knowledge]
