@@ -81,17 +81,22 @@
     (is (= ["glm-5.3"] (mapv :model (:fallback-llms llm))))))
 
 (deftest a-slow-primary-yields-to-the-next-fallback
+  ;; Under load the 1 ms slow-start fallback can answer before the primary's
+  ;; thread has even run, so the primary is waited for and the order of the
+  ;; two calls is not asserted.
   (let [calls (atom [])
+        started (promise)
         primary (assoc (cfg "a") :fallback-scope "R" :slow-start-ms 1
                        :fallbacks [{:adapter :b-adapter :config (cfg "b")}])]
     (with-redefs [client/chat-one
                   (fn [_ c _ _]
                     (swap! calls conj (:model c))
                     (if (= "a" (:model c))
-                      (do (Thread/sleep 30) {:content "late"})
+                      (do (deliver started true) (Thread/sleep 30) {:content "late"})
                       {:content "backup"}))]
       (is (= "backup" (:content (client/chat :a-adapter primary [{:role "user" :content "q"}]))))
-      (is (= ["a" "b"] @calls)))))
+      (is (deref started 5000 false) "the primary was asked")
+      (is (= #{"a" "b"} (set @calls))))))
 
 (deftest late-slow-start-deltas-are-suppressed-after-fallback
   ;; Under load the 1 ms slow-start fallback can answer before the primary's

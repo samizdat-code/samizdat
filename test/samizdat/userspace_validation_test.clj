@@ -27,6 +27,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
+            [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
             [samizdat.agent.tools]
             [samizdat.store.db :as db]
@@ -48,16 +49,20 @@
 
 (defmacro with-project
   "A bound, seeded project: the full shipped map, so the real validators have
-  the real cells and manifests to check against."
+  the real cells and manifests to check against. Bound as
+  system/bind-project! binds, with the gate table reloaded on the way in and
+  out, so a validator reading a threshold reads this project's."
   [[root] & body]
   `(let [~root (temp-dir)
          c# (db/open! ":memory:")
          prev-root# (us/bind-root! ~root)]
      (us/bind! c#)
      (try (us/seed-project!)
+          (gates/reload-config!)
           ~@body
           (finally (us/unbind!)
                    (us/bind-root! prev-root#)
+                   (gates/reload-config!)
                    (db/close c#)
                    (delete-recursively (io/file ~root))))))
 
@@ -169,6 +174,21 @@
           p (problem-for root :prompt "judge" "prompts/judge.md" text)]
       (is (= :format (:stage p)))
       (is (str/includes? (:message p) "VERDICT")))))
+
+(deftest the-gates-a-project-is-checked-against-are-its-own
+  ;; with-project binds as system/bind-project! does, reloading the gate table:
+  ;; the format check reads :reply-formats from it, and a table left cached by
+  ;; whatever ran before (one without :reply-formats) let a judge prompt that
+  ;; dropped VERDICT through unchecked, depending on test order.
+  (let [cache @#'gates/config-cache
+        was @cache]
+    (try
+      (reset! cache {})
+      (with-project [root]
+        (let [text (str/replace (us/body :prompt "judge") "VERDICT" "OUTCOME")
+              p (problem-for root :prompt "judge" "prompts/judge.md" text)]
+          (is (= :format (:stage p)))))
+      (finally (reset! cache was)))))
 
 (deftest every-shipped-side-call-prompt-asks-for-what-its-parser-reads
   (with-project [_root]

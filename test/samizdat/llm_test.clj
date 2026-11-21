@@ -956,19 +956,22 @@
       ;; provenance R3-14: chat-body consulted a private supports-prefill? while
       ;; the protocol method delegated to it — two paths deciding one
       ;; question, so a provider update touching one left the other behind.
-      ;; The protocol method is the only gate now: overriding it must change
-      ;; what chat-body sends, in BOTH directions, whatever the config says.
-      (let [v1 {:model "m" :base-url "https://api.deepseek.com/v1"}
-            a (registry/adapter-for :deepseek-chat)
-            opts {:messages [{:role "user" :content "go"}] :prefill "```tool-call\n"}]
-        (with-redefs [adapter/prefill-support? (fn [_ _] true)]
-          (is (some #(and (= "assistant" (:role %)) (true? (:prefix %)))
-                    (:messages (adapter/chat-body a v1 opts)))
-              "protocol says yes on a /v1 config → prefill is sent anyway"))
-        (with-redefs [adapter/prefill-support? (fn [_ _] false)]
-          (is (= [{:role "user" :content "go"}]
-                 (:messages (adapter/chat-body a v1 opts)))
-              "protocol says no → no trailing assistant message"))))
+      ;; The protocol method is the only gate now: whatever it answers for a
+      ;; config, chat-body sends, in BOTH directions. (Overriding the method
+      ;; with with-redefs cannot show this: a record that implements the
+      ;; protocol inline is called directly, on the JVM and on jolt 0.8.28.)
+      (let [a (registry/adapter-for :deepseek-chat)
+            opts {:messages [{:role "user" :content "go"}] :prefill "```tool-call\n"}
+            sent? (fn [config] (boolean (some #(and (= "assistant" (:role %)) (true? (:prefix %)))
+                                              (:messages (adapter/chat-body a config opts)))))]
+        (doseq [config [{:model "m" :base-url "https://api.deepseek.com/v1" :features #{:prefill}}
+                        {:model "m" :base-url "https://api.deepseek.com/beta" :features #{}}]]
+          (is (= (boolean (adapter/prefill-support? a config)) (sent? config))
+              (str "chat-body follows prefill-support? for " (:base-url config))))
+        (is (sent? {:model "m" :base-url "https://api.deepseek.com/v1" :features #{:prefill}})
+            "the protocol says yes on a /v1 config → prefill is sent anyway")
+        (is (not (sent? {:model "m" :base-url "https://api.deepseek.com/beta" :features #{}}))
+            "the protocol says no → no trailing assistant message")))
 
     (testing "the models listing does not follow chat onto the beta path"
       ;; /beta is a chat-completions variant: it serves prefix completion and
@@ -1269,17 +1272,19 @@
   ;; reply is not credited a fence it never emitted (karamazov-0r8s).
   (let [reply (json/write-str {:choices [{:message {:content "tail"}
                                           :finish_reason "stop"}]})]
+    ;; The gate is set through the config's features, which prefill-support?
+    ;; reads: with-redefs of a protocol fn does not reach a record that
+    ;; implements the protocol inline, on the JVM or on jolt since 0.8.28.
     (testing "a provider that continues the prefill reports it"
-      (with-redefs [adapter/prefill-support? (fn [_ _] true)
-                    http/post (fn [& _] {:status 200 :body reply})]
+      (with-redefs [http/post (fn [& _] {:status 200 :body reply})]
         (is (= "```tool-call\n"
-               (:prefilled (client/chat (registry/adapter-for :deepseek-chat) {:model "m"}
+               (:prefilled (client/chat (registry/adapter-for :deepseek-chat)
+                                        {:model "m" :features #{:prefill}}
                                         [{:role "user" :content "go"}]
                                         {:prefill "```tool-call\n"}))))))
     (testing "a provider that drops it reports nil, even though a prefill was asked for"
-      (with-redefs [adapter/prefill-support? (fn [_ _] false)
-                    http/post (fn [& _] {:status 200 :body reply})]
-        (is (nil? (:prefilled (client/chat (registry/adapter-for :glm) {:model "m"}
+      (with-redefs [http/post (fn [& _] {:status 200 :body reply})]
+        (is (nil? (:prefilled (client/chat (registry/adapter-for :glm) {:model "m" :features #{}}
                                            [{:role "user" :content "go"}]
                                            {:prefill "```tool-call\n"}))))))))
 
@@ -2488,13 +2493,26 @@
         before (accounting/estimate request policy)
         observed (* 2 (:input-tokens before))
         bodies (atom 0)
-        real-chat-body adapter/chat-body]
-    (with-redefs [adapter/chat-body
-                  (fn [& args]
-                    (when (= 2 (swap! bodies inc))
-                      (throw (ex-info "second body construction failed" {})))
-                    (apply real-chat-body args))
-                  http/post
+        ;; The adapter, with its second body construction failing. Wrapped
+        ;; rather than redefined: with-redefs of a protocol fn does not reach a
+        ;; record that implements the protocol inline.
+        a (let [real a]
+            (reify adapter/Adapter
+              (id [_] (adapter/id real))
+              (display-name [_] (adapter/display-name real))
+              (chat-url [_ c] (adapter/chat-url real c))
+              (models-url [_ c] (adapter/models-url real c))
+              (auth-headers [_ c] (adapter/auth-headers real c))
+              (chat-body [_ c r]
+                (when (= 2 (swap! bodies inc))
+                  (throw (ex-info "second body construction failed" {})))
+                (adapter/chat-body real c r))
+              (prefill-support? [_ c] (adapter/prefill-support? real c))
+              (parse-chat [_ b] (adapter/parse-chat real b))
+              (parse-models [_ b] (adapter/parse-models real b))
+              (error-message [_ b] (adapter/error-message real b))
+              (usage-cap? [_ st b] (adapter/usage-cap? real st b))))]
+    (with-redefs [http/post
                   (fn [_ _]
                     {:status 200
                      :body (json/write-str
