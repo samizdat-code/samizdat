@@ -71,6 +71,7 @@
             [samizdat.agent.handoff :as handoff]
             [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.agent.verify :as verify]
+            [samizdat.hooks :as hooks]
             [samizdat.security.flow :as flow]
             [samizdat.agent.run-state :as run-state]
             [samizdat.agent.loop :as branch-loop]
@@ -1383,6 +1384,8 @@
         ;; the ones this config names, in this root, sealed before any cell
         ;; sees the ctx it could otherwise rewrite (karamazov-3vu1.9).
         _ (verify/seal-run! run-id root config)
+        ;; config.edn's :run-start hooks; :run-end fires from run-ended!.
+        _ (hooks/run-started! {:conn conn :run-id run-id :root root})
         ctx {:conn conn :run-id run-id :config config :problem problem
              :llm-adapter llm-adapter :llm-config llm-config
              ;; The injected model call, when the caller supplied one

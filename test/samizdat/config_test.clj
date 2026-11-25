@@ -206,6 +206,11 @@
         (is (str/includes? (str (ex-message e)) "/.samizdat/config.edn"))
         (is (str/includes? (str (ex-message e)) (str "unrecognized key " k)))))))
 
+(deftest hooks-are-a-recognised-key
+  ;; karamazov-k7gl.10: a project's hooks live in config.edn :hooks.
+  (with-files [root nil "{:hooks [{:name \"fmt\" :trigger :after-write :command \"true\"}]}"]
+    (is (= "fmt" (get-in (config/load-config {:run {:root root}}) [:hooks 0 :name])))))
+
 (deftest a-global-config-sits-beneath-the-project-config
   (let [home (temp-config-home "{:http {:port 4100} :run {:max-turns 9 :beam-width 2}}")
         root (temp-project-root "{:run {:max-turns 7}}")]

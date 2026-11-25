@@ -51,6 +51,7 @@
             [samizdat.security.flow :as flow]
             [jolt.fs]
             [samizdat.config :as config]
+            [samizdat.hooks :as hooks]
             [samizdat.repl.route :as route]
             [samizdat.resource :as resource]
             [samizdat.security.sandbox :as sandbox]
@@ -382,6 +383,12 @@
                      ". This is a harness fault, not yours — the call was fine."))
                known))
           (do (journal-refusal! ctx r)
+              ;; The person's hooks on what this call did (samizdat.hooks):
+              ;; which tool fires which trigger is gates.edn :hooks. What
+              ;; they say reaches the branch through the directive queue at
+              ;; its next boundary, not in this result.
+              (try (hooks/after-tool! ctx r)
+                   (catch Throwable e (log/warn "hooks:" (ex-message e))))
               (redact-result (with-job-notice ctx r) known)))))))
 
 ;; Re-exports: loop.clj and the tests reach the tool surface through this

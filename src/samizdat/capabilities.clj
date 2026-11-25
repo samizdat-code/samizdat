@@ -82,6 +82,7 @@
             [samizdat.events]
             [samizdat.export]
             [samizdat.hashline]
+            [samizdat.hooks]
             [samizdat.leakage]
             [samizdat.heldout]
             [samizdat.layers]
