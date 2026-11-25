@@ -73,6 +73,15 @@
     re-fires the cap check — the re-entry can only grant extra explore turns,
     never fewer.
 
+  - delegated children (karamazov-k7gl.13), from each child's :delegate
+    start note and its branch row (samizdat.agent.tools.delegate/
+    resume-children!): an unfinished background child is rebuilt like any
+    branch and continued on its own sub-loop, under the registry, its report
+    still bound for the parent's mailbox; an unfinished foreground child is
+    continued in the background or closed abandoned per gates.edn :delegate
+    :resume-foreground, and its parent told which; a report a finished child
+    never delivered is delivered. Children are never handed to the beam.
+
   DOES NOT REPLAY (known limits, accepted):
   - Lean: a resumed branch gets no Lean session and its Lean tools report the
     session unavailable. Lean sessions are process memory with a heavy startup
@@ -135,6 +144,7 @@
             [samizdat.agent.plans :as plans]
             [samizdat.agent.state :as state]
             [samizdat.agent.storm :as storm]
+            [samizdat.agent.tools.delegate :as delegate-tool]
             [samizdat.agent.tools.jobs :as jobs-tool]
             [samizdat.agent.tools.tasks :as task-tool]
             [samizdat.cancel :as cancel]
@@ -444,6 +454,18 @@
           ;; verify calls exactly the way the live path never notes them.
           storm-pol (assoc (gates/storm-policy)
                            :verify-cmd (get-in config [:run :verify-cmd]))
+          rebuild (fn [row]
+                    (let [b (rebuild-branch run row turns artifacts
+                                            firings max-turns storm-pol
+                                            prompt-suffix
+                                            {(:id row) (journal/latest-plan conn run-id (:id row))})
+                          in-flight (handoff/after-crash conn run-id (:id b))]
+                      (cond-> b (seq in-flight) (update :messages into in-flight))))
+          ;; Delegated children are not the beam's: each runs on its own
+          ;; sub-loop, re-registered and continued here (karamazov-k7gl.13),
+          ;; and a parent whose call to one the crash cut short is told what
+          ;; became of it.
+          {child-ids :ids notices :notices} (delegate-tool/resume-children! ctx rebuild)
           branches (mapv (fn [row]
                            (let [b (rebuild-branch run row turns artifacts
                                                    firings max-turns storm-pol
@@ -471,10 +493,12 @@
                                                   :title (:title held)})
                                held (task-tool/task-statement held)
                                (seq in-flight) (update :messages into in-flight)
-                               recovery (update :messages conj {:role "user" :content recovery}))))
+                               recovery (update :messages conj {:role "user" :content recovery})
+                               (seq (notices (:id b))) (update :messages into (notices (:id b))))))
                          ;; Not the supervisor stream's branch: the stream
                          ;; carries it and re-opens it on its next pass.
-                         (remove #(= "supervisor" (:role %)) (runs/branches conn run-id)))
+                         (remove #(or (= "supervisor" (:role %)) (contains? child-ids (:id %)))
+                                 (runs/branches conn run-id)))
           ;; The anchor: rounds completed are the max turn in the journal, so
           ;; the loop continues one past it. max-turns is the ORIGINAL budget.
           start-turn (inc (reduce max 0 (map :turn turn-rows)))]

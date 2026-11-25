@@ -198,8 +198,24 @@ holds no `ask_human`, `task`, `split` or `message`; a foreground call returns
 within `:timeout-ms` (under `:turn-deadline-ms`); a background child is
 cancelled after `:background-timeout-ms` and its parent's mailbox told it
 timed out; `run-state/run-ended!`
-cancels every background child still running. Known gaps: a resumed run does
-not resume its children, and the background registry is in memory only.
+cancels every background child still running.
+
+The registry is memory; what a resume needs survives as the `:delegate` note
+each child starts with (mode, parent and parent turn, request, workflow,
+model, depth, wall-clock deadline) beside its branch row, and the messages
+table says whether a report was delivered (karamazov-k7gl.13). On resume
+(`delegate/resume-children!`) a child is never handed to the beam: an
+unfinished background child is rebuilt like any branch and continued on its
+sub-loop under the registry, so status, cancel, the background cap and the
+run-end cancel all hold, and its report still reaches the parent's mailbox.
+An unfinished foreground child, whose parent call the crash cut short, is
+continued in the background (`:resume-foreground :background`, the default —
+it keeps the child's work and the parent is told to wait for the report
+rather than delegate again) or closed with the parent told its outcome is
+unknown (`:abandon`). A continued child's wall clock is `:resume-budget`:
+what was left of its deadline when it last worked, or a fresh background
+budget. A finished child whose report never reached its parent has it
+delivered.
 
 ### Waiting on a background job
 
@@ -270,11 +286,25 @@ and is asked again. A tool the server does not list is refused. Which policy
 an entry without one gets, and whether `:yolo` runs prompted calls, is
 gates.edn `:mcp`.
 
-A server may send `elicitation/create` during a call. The schema becomes a
+A server may send `elicitation/create` during a call. The client declares
+`elicitation: {}`, which is form mode only. The schema becomes a
 questionnaire on the approvals queue, the shape ask_human uses, so every
 front end answers it; the answer goes back as accept with typed content,
 decline, or cancel (no answer within `:mcp :elicitation-wait-ms`, or nobody
 to ask). The call's own timeout is held while the person answers.
+
+The schema subset is 2025-11-25's form mode (karamazov-k7gl.12): strings
+with length, pattern and format (email, uri, date, date-time), numbers and
+integers with bounds, booleans, single enums (plain, `oneOf` const+title, or
+legacy `enumNames`) and multi-selects (an array of enum, asked as a `:multi`
+question), each with an optional default. Answers are checked before they
+are sent: a blank takes the default, and an answer that does not fit (a
+required field left blank included) is put back to the person with the
+problem marked, up to `:mcp :elicitation-re-asks` times, then answered
+decline — the person acted, so it is not cancel, and the content does not
+match, so it is not accept. URL mode and any schema outside the subset
+(nested objects, arrays of free text) are refused with -32602 before anyone
+is asked, as the spec answers a mode the client did not declare.
 
 ### The acceptance rung
 

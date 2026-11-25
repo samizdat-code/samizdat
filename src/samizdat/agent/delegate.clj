@@ -77,7 +77,9 @@
 
 (defn start!
   "Run `(task-fn)` as child `id` of run `run-id` on its own fiber and return
-  at once. `meta` ({:parent :request …}) is kept on the entry; `on-cancel` is
+  at once. `meta` ({:parent :request …}) is kept on the entry — a
+  :started-ms in it is kept too, so a child re-registered on resume counts
+  from when it first started; `on-cancel` is
   called once if the child is cancelled before it ends. The task's return
   value becomes the entry's :result, and its :status (default :done) the
   entry's status."
@@ -85,8 +87,8 @@
   (let [id (str id)]
     ;; On the books BEFORE it starts, so an ending can never land first.
     (swap! registry assoc-in [run-id id]
-           (merge meta {:id id :status :running :started-ms (System/currentTimeMillis)
-                        :cancel (fn [] nil) :on-cancel on-cancel}))
+           (merge {:started-ms (System/currentTimeMillis)} meta
+                  {:id id :status :running :cancel (fn [] nil) :on-cancel on-cancel}))
     (let [{:keys [cancel]}
           (cancel/start!
            (cancel/spawn

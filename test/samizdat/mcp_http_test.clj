@@ -79,14 +79,15 @@
           (put! (str "event: message\ndata: "
                      (json/write-str {:jsonrpc "2.0" :id 900 :method "elicitation/create"
                                       :params {:message "Which colour?"
-                                               :requestedSchema {:type "object"
-                                                                 :properties {:colour {:type "string" :enum ["red" "blue"]}
-                                                                              :count {:type "integer"}}
-                                                                 :required ["colour"]}}})
+                                               :requestedSchema (or (:schema @state)
+                                                                    {:type "object"
+                                                                     :properties {:colour {:type "string" :enum ["red" "blue"]}
+                                                                                  :count {:type "integer"}}
+                                                                     :required ["colour"]})}})
                      "\n\n"))
           (future
             (let [r (deref p 10000 nil)]
-              (put! (str "data: " (reply (:id msg) {:content [{:type "text" :text (json/write-str (:result r))}]}) "\n\n"))
+              (put! (str "data: " (reply (:id msg) {:content [{:type "text" :text (json/write-str (or (:result r) {:error (:error r)}))}]}) "\n\n"))
               (end!)))
           {:status 200 :headers {"content-type" "text/event-stream"} :body stream})
 
@@ -229,8 +230,8 @@
     (is (= {:action "accept" :content {:colour "red"}}
            (elicit/result schema {:decision :allow :answers ["red" "" nil]}))
         "an optional field left empty is left out")
-    (is (= {:action "cancel"} (elicit/result schema {:decision :allow :answers [nil]}))
-        "a required field left empty is no answer")
+    (is (= {:action "decline"} (elicit/result schema {:decision :allow :answers [nil]}))
+        "a required field still empty when the person submits is not accepted")
     (is (= {:action "decline"} (elicit/result schema {:decision :deny})))
     (is (= {:action "cancel"} (elicit/result schema {:decision :deny :timed-out true})))
     (is (nil? (elicit/questions {:type "object"})) "a bare confirmation has no questions")))
@@ -251,6 +252,70 @@
             (is (str/includes? (:result r) "\"action\":\"accept\""))
             (is (str/includes? (:result r) "\"colour\":\"blue\""))
             (is (str/includes? (:result r) "\"count\":2")))))
+      (finally (reset! stop true)))))
+
+(defn- answering-in-turn
+  "Answer the questions that appear with `decisions`, one each, in order."
+  [decisions asked stop]
+  (let [left (atom decisions)]
+    (future
+      (loop []
+        (when-not @stop
+          (doseq [q (approval/pending nil)]
+            (swap! asked conj q)
+            (approval/decide! (:id q) (or (first @left) {:decision :deny}))
+            (swap! left rest))
+          (Thread/sleep 20)
+          (recur))))))
+
+(deftest a-required-field-left-blank-is-asked-again-once
+  (let [schema {:type "object"
+                :properties {:name {:type "string" :title "Name"}
+                             :age {:type "integer" :minimum 18 :default 30}}
+                :required ["name"]}
+        go (fn [decisions]
+             (let [state (atom {:schema schema
+                                :tools [{:name "ask" :description "Asks." :inputSchema {:type "object"}}]})
+                   asked (atom [])
+                   stop (atom false)]
+               (try
+                 (with-fake state
+                   (with-redefs [config/mcp-servers (constantly {:servers {:web (assoc spec :policy :allow)}})
+                                 approval/policy (constantly {:mode :block :wait-ms 3000 :on-timeout :deny})]
+                     (answering-in-turn decisions asked stop)
+                     [(:result (run-tool {} {"action" "call" "server" "web" "tool" "ask"})) @asked]))
+                 (finally (reset! stop true)))))]
+    (testing "answered the second time"
+      (let [[r asked] (go [{:decision :allow :answers ["" "12"]} {:decision :allow :answers ["octo" ""]}])
+            [name age] (:questions (second asked))]
+        (is (= 2 (count asked)))
+        (is (str/includes? (:question (first (:questions (first asked)))) "(required)"))
+        (is (str/includes? (:question name) "required") "the problem is shown to the person")
+        (is (= "required" (get-in name [:problem :kind])))
+        (is (str/includes? (:question age) "at least 18"))
+        (is (str/includes? r "\"action\":\"accept\""))
+        (is (str/includes? r "\"name\":\"octo\""))
+        (is (str/includes? r "\"age\":30") "a blank answer took the default")))
+    (testing "still blank: decline, not cancel"
+      (let [[r asked] (go [{:decision :allow :answers [""]} {:decision :allow :answers [""]}])]
+        (is (= 2 (count asked)))
+        (is (str/includes? r "\"action\":\"decline\""))))))
+
+(deftest a-schema-outside-the-subset-is-refused-without-asking
+  (let [state (atom {:schema {:type "object"
+                              :properties {:addr {:type "object" :properties {:city {:type "string"}}}}}
+                     :tools [{:name "ask" :description "Asks." :inputSchema {:type "object"}}]})
+        asked (atom [])
+        stop (atom false)]
+    (try
+      (with-fake state
+        (with-redefs [config/mcp-servers (constantly {:servers {:web (assoc spec :policy :allow)}})
+                      approval/policy (constantly {:mode :block :wait-ms 3000 :on-timeout :deny})]
+          (answering {:decision :allow :answers []} asked stop)
+          (let [r (run-tool {} {"action" "call" "server" "web" "tool" "ask"})]
+            (is (empty? @asked) "nobody is asked")
+            (is (str/includes? (:result r) "-32602"))
+            (is (str/includes? (:result r) "addr")))))
       (finally (reset! stop true)))))
 
 (deftest an-elicitation-with-nobody-there-is-cancelled

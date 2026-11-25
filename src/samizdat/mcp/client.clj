@@ -63,7 +63,8 @@
                         (catch Throwable _ {:action "cancel"}))]
         (when-let [d (:deadline (get @calls rid))]
           (reset! d (+ (now) (:timeout-ms client))))
-        (reply! client (:id msg) {:result result})))))
+        ;; A handler answers {:error {...}} for a request it refuses.
+        (reply! client (:id msg) (if (:error result) (select-keys result [:error]) {:result result}))))))
 
 (defn- on-message
   "Route one message from the server."
@@ -149,7 +150,10 @@
       (let [r (request! client "initialize"
                         {:protocolVersion protocol-version
                          ;; Elicitation is always answered — by a person, or
-                         ;; with cancel when there is nobody to ask.
+                         ;; with cancel when there is nobody to ask. An empty
+                         ;; object is form mode only (2025-06-18, and
+                         ;; 2025-11-25's backwards-compatible reading): URL
+                         ;; mode is refused with -32602 (samizdat.mcp.elicit).
                          :capabilities {:elicitation {}}
                          :clientInfo {:name "samizdat" :version "1"}}
                         timeout-ms)]
