@@ -3547,6 +3547,28 @@
         sends a comment line — how a stream to a client that went away is
         noticed and its worker thread given back."}
 
+ :code-search
+ {:value {:chunk-lines 60 :overlap-lines 10 :max-file-bytes 1000000
+          :snippet-lines 8 :limit 10 :max-limit 50
+          :path-weight 4.0 :body-weight 1.0
+          :exclude ["**/*.min.js" "**/*.map" "**/*.lock" "**/package-lock.json"]}
+  :kind :cost-ceiling :capability-tunable? false
+  :provenance ["karamazov-k7gl.7"]
+  :doc "The code index code_search and GET /v1/harness/search rank from
+        (samizdat.code-index).
+
+        A file is cut into `chunk-lines`-line chunks, each starting
+        `overlap-lines` before the last ended, so a definition across a
+        boundary is whole in one. `max-file-bytes` leaves out what is too big
+        to be source. bm25 weighs a match in the PATH `path-weight` times one
+        in the body, so a file named for the term outranks one that mentions
+        it. A hit shows `snippet-lines` lines around its best line; `limit`
+        hits by default, never more than `max-limit`.
+
+        `exclude` are globs over the path relative to the project root, on
+        top of .gitignore in a git project; config.edn :code-search :exclude
+        adds the operator's own."}
+
  :step-ring
  {:value {:capacity 512 :max-runs 16 :pump-ms 250}
   :kind :cost-ceiling :capability-tunable? false
@@ -5140,7 +5162,7 @@
   ;; What a role that cannot write may quote figures from, beside what it
   ;; measured: for a question about the project, the source it read IS the
   ;; subject (karamazov-1wv9). A role that can write still has to measure.
-  :describing #{"read_file" "read_digest" "grep" "glob" "lsp" "doc"}
+  :describing #{"read_file" "read_digest" "grep" "code_search" "glob" "lsp" "doc"}
   ;; `patch` writes files exactly as `write_file` and `edit_file` do; it was
   ;; added to the loop and to none of these, so a branch editing by anchor
   ;; scored as having shipped NOTHING and drew studying nudges for work it

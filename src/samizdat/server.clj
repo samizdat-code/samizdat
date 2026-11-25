@@ -37,6 +37,7 @@
             [samizdat.api.runs :as api-runs]
             [samizdat.api.stream :as stream]
             [samizdat.approval :as approval]
+            [samizdat.code-index :as code-index]
             [samizdat.config :as config]
             [samizdat.contracts :as contracts]
             [samizdat.engine.proc :as proc]
@@ -300,6 +301,21 @@
 (defn- files-table [req]
   (json-response (files-body (query-param req "q") (long-param req "limit"))))
 
+(defn- code-search
+  "GET /v1/harness/search?q=&limit= — the project's source ranked by BM25,
+  what the code_search tool answers from (samizdat.code-index). The index is
+  built by the first search and refreshed before each one."
+  [req]
+  (let [q (some-> (query-param req "q") str/trim not-empty)
+        config (system/config)
+        opts (code-index/options config)
+        opts (assoc opts :limit (code-index/clamp-limit (query-param req "limit") opts))]
+    (if-not q
+      (json-response 400 {:error {:message "q is required"}})
+      (json-response {:query q
+                      :results (code-index/search (system/conn) (get-in config [:run :root] ".")
+                                                  q opts)}))))
+
 ;; --- routing ----------------------------------------------------------------
 ;;
 ;; ruuter route maps: {:method :path :response}. A path segment starting with
@@ -353,6 +369,9 @@
    {:method :get :path "/v1/harness/project" :response #(project-table %)}
    ;; The files an @-mention in the compose box can name (?q=, ?limit=).
    {:method :get :path "/v1/harness/files" :response #(files-table %)}
+   ;; The source ranked for a query of words (?q=, ?limit=): path, line
+   ;; range, snippet and score per hit. See samizdat.code-index.
+   {:method :get :path "/v1/harness/search" :response #(code-search %)}
    ;; The approval mode for this server session: {"mode": "block"} to have
    ;; the runs ask a person, "refuse" to not, null for the project's own.
    {:method :post :path "/v1/harness/approval-mode" :response
@@ -403,15 +422,17 @@
     (fn [req] (json-response (api-runs/journal-tail (system/conn)
                                                     (get-in req [:params :id])
                                                     (long-param req "since")
-                                                    (long-param req "limit"))))}
+                                                    (long-param req "limit")
+                                                    (stream/client-epoch req))))}
    ;; The run PUSHED: every journal event after the cursor (Last-Event-ID, or
    ;; ?since=), then each one as it lands, plus the steps and approvals that
    ;; are never journalled. See samizdat.api.stream.
    {:method :get :path "/v1/runs/:id/events" :response
     (fn [req] (stream/response (system/conn) (get-in req [:params :id])
-                               (stream/cursor req)))}
+                               (stream/cursor req) (stream/client-epoch req)))}
    {:method :get :path "/v1/events" :response
-    (fn [req] (stream/response (system/conn) nil (stream/cursor req)))}
+    (fn [req] (stream/response (system/conn) nil (stream/cursor req)
+                               (stream/client-epoch req)))}
    ;; The live manifest-state trace. No conn: steps are held in memory, not
    ;; journalled — see samizdat.steps.
    {:method :get :path "/v1/runs/:id/steps" :response

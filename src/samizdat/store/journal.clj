@@ -216,6 +216,52 @@
                   (:cache-hit-tokens usage) (:cache-miss-tokens usage)
                   (db/now)])))
 
+(defn run-usage-by-model
+  "`run-usage`'s tokens split by who served them, for pricing: one row per
+  {:provider :model} with :calls :prompt-tokens :completion-tokens
+  :cache-hit-tokens :cache-miss-tokens (each nil when no row reported it).
+
+  A turn is served by the run's provider and model — turns carry neither. A
+  side call names its model; one that names none is the run's, and one that
+  names another model has no provider on record (nil), since side_calls keeps
+  the model and not the endpoint."
+  [conn run-id]
+  (let [rows (concat
+              (db/fetch conn ["SELECT r.provider AS provider, r.model AS model,
+                                      count(*) AS calls,
+                                      coalesce(sum(t.prompt_tokens), 0) AS prompt_tokens,
+                                      coalesce(sum(t.completion_tokens), 0) AS completion_tokens,
+                                      sum(t.cache_hit_tokens) AS cache_hit_tokens,
+                                      sum(t.cache_miss_tokens) AS cache_miss_tokens
+                                 FROM turns t JOIN runs r ON r.id = t.run_id
+                                WHERE t.run_id = ? GROUP BY r.provider, r.model"
+                              run-id])
+              (db/fetch conn ["SELECT CASE WHEN t.model IS NULL OR t.model = '' OR t.model = r.model
+                                           THEN r.provider END AS provider,
+                                      coalesce(nullif(t.model, ''), r.model) AS model,
+                                      count(*) AS calls,
+                                      coalesce(sum(t.prompt_tokens), 0) AS prompt_tokens,
+                                      coalesce(sum(t.completion_tokens), 0) AS completion_tokens,
+                                      sum(t.cache_hit_tokens) AS cache_hit_tokens,
+                                      sum(t.cache_miss_tokens) AS cache_miss_tokens
+                                 FROM side_calls t JOIN runs r ON r.id = t.run_id
+                                WHERE t.run_id = ?
+                                GROUP BY 1, 2"
+                              run-id]))
+        add (fn [a b] (if (or a b) (+ (or a 0) (or b 0)) nil))]
+    (->> rows
+         (map (fn [r] {:provider (not-empty (str (:provider r))) :model (str (:model r))
+                       :calls (:calls r)
+                       :prompt-tokens (:prompt_tokens r)
+                       :completion-tokens (:completion_tokens r)
+                       :cache-hit-tokens (:cache_hit_tokens r)
+                       :cache-miss-tokens (:cache_miss_tokens r)}))
+         (group-by (juxt :provider :model))
+         vals
+         (mapv (fn [rs] (reduce (fn [a b]
+                                  (merge-with add a (dissoc b :provider :model)))
+                                rs))))))
+
 (defn run-usage
   "What a run has spent so far: {:turns :side-calls :prompt-tokens
   :completion-tokens :total-tokens :cache-hit-tokens :cache-miss-tokens
@@ -1036,6 +1082,47 @@
                                 ["SELECT MAX(id) AS id FROM events WHERE run_id = ?" run-id]
                                 ["SELECT MAX(id) AS id FROM events"])))
       0))
+
+(def event-epoch
+  "The shape of an event as a client reads it — the row projection GET
+  /v1/runs/:id/journal and the SSE streams serve. Bump it whenever that
+  projection changes, so a client written against the old shape is told to
+  reload rather than page on in a shape it misreads."
+  1)
+
+(defn event-floor
+  "The lowest cursor a resume of `run-id`'s events (every run's when nil) can
+  page from without missing a row that no longer exists: a cursor below
+  `floor - 1` has missed some.
+
+  Ids are AUTOINCREMENT, and a rolled-back insert rolls its id back with it,
+  so a hole in the ids is a DELETE — `prune-finished!` or
+  `prune-run-record!`, which take a finished run's rows whole. Hence:
+
+    every run   one past the highest hole, 1 when there is none; one past
+                the highest id ever assigned when the newest rows are gone
+    one run     1 while it holds any row (its rows go all at once or not at
+                all); one past the highest id ever assigned when it holds
+                none
+
+  The every-run case is an anti-join over the id index, paid once per
+  connection, not per page."
+  [conn run-id]
+  (let [assigned (or (:seq (db/fetch-one conn ["SELECT seq FROM sqlite_sequence
+                                                 WHERE name = 'events'"]))
+                     0)]
+    (if run-id
+      (if (:id (db/fetch-one conn ["SELECT MIN(id) AS id FROM events WHERE run_id = ?" run-id]))
+        1
+        (inc assigned))
+      (let [top (:id (db/fetch-one conn ["SELECT MAX(id) AS id FROM events"]))]
+        (if (or (nil? top) (< top assigned))
+          (inc assigned)
+          (or (:id (db/fetch-one conn ["SELECT MAX(e.id) AS id FROM events e
+                                         WHERE e.id > 1
+                                           AND NOT EXISTS (SELECT 1 FROM events p
+                                                            WHERE p.id = e.id - 1)"]))
+              1))))))
 
 (defn all-events-since
   "`events-since` across every run: what a stream following all of them

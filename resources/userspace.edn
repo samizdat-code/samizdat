@@ -380,6 +380,7 @@
    :watch-intervention "prompts/watch-intervention.md"
    :webfetch-tool "prompts/webfetch-tool.md"
    :websearch-tool "prompts/websearch-tool.md"
+   :code-search-tool "prompts/code-search-tool.md"
    :time-last-call "prompts/time-last-call.md"
    :metric-finding "prompts/metric-finding.md"
    :metrics-worse "prompts/metrics-worse.md"

@@ -194,47 +194,65 @@
     {:tls? tls? :host host :port (or (some-> port parse-long) (if tls? 443 80))
      :path (or path "/")}))
 
-(defn- request-text [{:keys [host port path]} last-id]
-  (str "GET " path " HTTP/1.1\r\n"
-       "Host: " host ":" port "\r\n"
-       ;; The harness's token, read again on each connection so a restarted
-       ;; server's new one is picked up (samizdat.security.token).
-       (when-let [t (and (#{"127.0.0.1" "localhost"} host) (token/read-for port))]
-         (str "Authorization: Bearer " t "\r\n"))
-       "Accept: text/event-stream\r\n"
-       "Cache-Control: no-cache\r\n"
-       (when last-id (str "Last-Event-ID: " last-id "\r\n"))
-       "\r\n"))
+(defn- request-text
+  ([target last-id] (request-text target last-id nil))
+  ([{:keys [host port path]} last-id epoch]
+   (str "GET " path " HTTP/1.1\r\n"
+        "Host: " host ":" port "\r\n"
+        ;; The harness's token, read again on each connection so a restarted
+        ;; server's new one is picked up (samizdat.security.token).
+        (when-let [t (and (#{"127.0.0.1" "localhost"} host) (token/read-for port))]
+          (str "Authorization: Bearer " t "\r\n"))
+        "Accept: text/event-stream\r\n"
+        "Cache-Control: no-cache\r\n"
+        (when last-id (str "Last-Event-ID: " last-id "\r\n"))
+        ;; The event shape this client last read, so a server that has
+        ;; changed it says resync rather than paging on (samizdat.api.stream).
+        (when epoch (str "X-Samizdat-Epoch: " epoch "\r\n"))
+        "\r\n")))
 
 (defn- timeout? [e] (str/includes? (str (ex-message e)) "timed out"))
 
+(defn- epoch-of
+  "The event shape a `hello` or `resync` names, as text, or nil."
+  [e]
+  (when (#{"hello" "resync"} (:event e))
+    (some-> (:data (parse-data (:data e))) :epoch str)))
+
 (defn- one-connection
   "Read one connection until it ends, `stop?` says so, or nothing (not even a
-  heartbeat) arrives for `dead-ms`. Returns the last event id seen."
-  [target last-id {:keys [on-event on-status stop? slice-ms dead-ms]}]
+  heartbeat) arrives for `dead-ms`. Returns {:last-id :epoch}: the last event
+  id seen and the event shape the server named."
+  [target {:keys [last-id epoch]} {:keys [on-event on-status on-resync stop? slice-ms dead-ms]}]
   (let [fd (net/connect (:host target) (:port target) 3000)]
     (try
       (net/set-read-timeout! fd slice-ms)
-      (net/send-bytes fd (.getBytes (request-text target last-id) "UTF-8"))
-      (loop [st (reader), last-id last-id, heard (System/currentTimeMillis)]
+      (net/send-bytes fd (.getBytes (request-text target last-id epoch) "UTF-8"))
+      (loop [st (reader), seen {:last-id last-id :epoch epoch}, heard (System/currentTimeMillis)]
         (if (stop?)
-          last-id
+          seen
           (let [got (try (net/recv-bytes fd)
                          (catch Throwable e (if (timeout? e) ::quiet (throw e))))]
             (cond
-              (nil? got) last-id
+              (nil? got) seen
               (= ::quiet got) (if (> (- (System/currentTimeMillis) heard) dead-ms)
-                                last-id
-                                (recur st last-id heard))
+                                seen
+                                (recur st seen heard))
               :else
               (let [{:keys [state events]} (feed st got)
-                    last-id (or (some :id (reverse events)) last-id)]
+                    seen {:last-id (or (some :id (reverse events)) (:last-id seen))
+                          :epoch (or (some epoch-of (reverse events))
+                                     (get-in state [:headers "x-samizdat-epoch"])
+                                     (:epoch seen))}]
                 (when (and (:status state) (not (:status st)) on-status)
                   (on-status (:status state)))
-                (run! on-event events)
+                (doseq [e events]
+                  (when (and on-resync (= "resync" (:event e)))
+                    (on-resync (:data (parse-data (:data e)))))
+                  (on-event e))
                 (if (:done? state)
-                  last-id
-                  (recur state last-id (System/currentTimeMillis))))))))
+                  seen
+                  (recur state seen (System/currentTimeMillis))))))))
       (finally (net/close fd)))))
 
 (defn follow!
@@ -245,18 +263,27 @@
   Reconnects when the connection ends or goes silent past `dead-ms`,
   sending the last id seen as Last-Event-ID so the server resumes after it;
   waits `retry-ms` between attempts. `on-status` hears each response's status
-  (200 when streaming) and `on-error` each failed attempt."
-  [url {:keys [last-event-id on-event on-status on-error stop? retry-ms slice-ms dead-ms]
+  (200 when streaming) and `on-error` each failed attempt.
+
+  RESYNC. The server names its event shape (`epoch`) in a header and its
+  opening `hello`; this sends back the one it last heard (`:epoch` to start
+  with one). When the client's shape differs, or its cursor is below what the
+  server still holds, the server sends `resync` and resumes from its head:
+  `on-resync` hears the event's data ({:reason :snapshot :resume ...}) — the
+  caller reloads the run snapshot rather than trusting what it has paged —
+  before `on-event` hears the event itself."
+  [url {:keys [last-event-id epoch on-event on-status on-resync on-error stop?
+               retry-ms slice-ms dead-ms]
         :or {retry-ms 1000 slice-ms 250 dead-ms 45000}}]
   (let [target (parse-url url)
-        opts {:on-event on-event :on-status on-status :stop? stop?
+        opts {:on-event on-event :on-status on-status :on-resync on-resync :stop? stop?
               :slice-ms slice-ms :dead-ms dead-ms}]
-    (loop [last-id last-event-id]
+    (loop [seen {:last-id last-event-id :epoch (some-> epoch str)}]
       (when-not (stop?)
-        (let [next-id (try (one-connection target last-id opts)
-                           (catch Throwable e
-                             (when on-error (on-error e))
-                             last-id))]
+        (let [seen (try (one-connection target seen opts)
+                        (catch Throwable e
+                          (when on-error (on-error e))
+                          seen))]
           (when-not (stop?)
             (Thread/sleep retry-ms)
-            (recur next-id)))))))
+            (recur seen)))))))

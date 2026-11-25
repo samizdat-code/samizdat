@@ -123,23 +123,77 @@
         (some-> since parse-long)
         0)))
 
+(defn client-epoch
+  "The event shape a client says it reads: its X-Samizdat-Epoch header, else
+  `epoch` in the query. nil when it says nothing."
+  [req]
+  (or (some-> (get-in req [:headers "x-samizdat-epoch"]) str str/trim not-empty)
+      (some->> (:query-string req) (re-find #"(?:^|&)epoch=([^&]+)") second)))
+
+(defn resync
+  "Why a client resuming at `cursor` must reload the run snapshot (GET
+  /v1/runs/:id) rather than page on, or nil when it can page:
+
+  \"epoch\"  it reads an event shape other than this server's
+  \"pruned\" rows after its cursor are gone (`floor`, journal/event-floor)
+
+  A cursor of 0 is a start, not a resume. A cursor that was never this
+  stream's — below a run's first event — also reads as pruned; reloading is
+  safe where paging would not be."
+  [{:keys [cursor floor client-epoch]}]
+  (cond
+    (and client-epoch (not= (str client-epoch) (str journal/event-epoch))) "epoch"
+    (and (pos? (or cursor 0)) floor (< cursor (dec floor))) "pruned"))
+
+(defn opening
+  "What a stream sends before its first row: a `hello` naming the epoch, the
+  floor and the head, and a `resync` when the client must reload. Returns
+  {:events [...] :since cursor-to-pump-from}. A resync carries the head as
+  its id, so the follower resumes past what the snapshot already holds."
+  [conn run-id since client-epoch]
+  (let [head (journal/last-event-id conn run-id)
+        since (if (= :now since) head (or since 0))
+        floor (journal/event-floor conn run-id)
+        why (resync {:cursor since :floor floor :client-epoch client-epoch})
+        hello {:event "hello"
+               :data (json/write-str {:kind "hello" :run_id run-id
+                                      :epoch journal/event-epoch :floor floor :head head})}]
+    (if why
+      ;; Ids are global, so the newest of any run's is a cursor past
+      ;; everything the snapshot holds — a pruned run's own head is 0.
+      (let [head (journal/last-event-id conn nil)]
+        {:since head
+         :events [hello
+                  {:id (str head) :event "resync"
+                   :data (json/write-str {:kind "resync" :run_id run-id :reason why
+                                          :epoch journal/event-epoch :floor floor
+                                          :resume head
+                                          :snapshot (if run-id (str "/v1/runs/" run-id) "/v1/runs")})}]})
+      {:since since :events [hello]})))
+
 (defn response
-  "The Ring response that streams `run-id`'s events after `since`. The pump
-  runs on a thread of its own and ends with the connection."
-  ([conn run-id since] (response conn run-id since (gates/threshold :event-stream)))
-  ([conn run-id since {:keys [poll-ms heartbeat-ms page]}]
+  "The Ring response that streams `run-id`'s events after `since`, for a
+  client that reads event shape `client-epoch` (nil: unsaid). The pump runs
+  on a thread of its own and ends with the connection."
+  ([conn run-id since] (response conn run-id since nil))
+  ([conn run-id since client-epoch]
+   (response conn run-id since client-epoch (gates/threshold :event-stream)))
+  ([conn run-id since client-epoch {:keys [poll-ms heartbeat-ms page]}]
    (let [ch (async/chan 64)
-         since (if (= :now since) (journal/last-event-id conn run-id) since)]
+         {:keys [since events]} (opening conn run-id since client-epoch)
+         emit! (fn [e]
+                 (if-let [c (:comment e)]
+                   (async/>!! ch (str ": " c "\r\n\r\n"))
+                   (sse/send! ch e)))]
      (future
        (try
-         (pump! {:conn conn :run-id run-id :since since
-                 :emit! (fn [e]
-                          (if-let [c (:comment e)]
-                            (async/>!! ch (str ": " c "\r\n\r\n"))
-                            (sse/send! ch e)))
-                 :stop? (constantly false)
-                 :poll-ms poll-ms :heartbeat-ms heartbeat-ms :page page})
+         (when (every? emit! events)
+           (pump! {:conn conn :run-id run-id :since since
+                   :emit! emit!
+                   :stop? (constantly false)
+                   :poll-ms poll-ms :heartbeat-ms heartbeat-ms :page page}))
          (catch Throwable e
            (log/warn "event stream for" (or run-id "every run") "ended:" (ex-message e)))
          (finally (async/close! ch))))
-     (sse/event-response ch))))
+     (assoc-in (sse/event-response ch) [:headers "X-Samizdat-Epoch"]
+               (str journal/event-epoch)))))
