@@ -279,7 +279,10 @@
                                   :expect {:matches 1 :max_changed_characters 100}})
             future (read-file fixture)]
         (is (= :success (:category result)) (pr-str result))
-        (is (str/includes? future "{:tag String}"))
+        ;; jolt 0.8.30 prints a lone :tag as the `^String` shorthand where
+        ;; earlier releases wrote `^{:tag String}`; both read back the same,
+        ;; which the meta check below pins.
+        (is (re-find #"\^(String|\{:tag String\})" future))
         (is (str/includes? future ":ready? true"))
         (let [settings (nth (second (edn/read-string (str "[" future "]"))) 2)]
           (is (= 'String (:tag (meta settings)))))))))
