@@ -234,10 +234,15 @@
   a local llama.cpp would otherwise read as half as well-cached as it is, since
   the reader's prompt tokens have no hit lane to match them. nil when nothing
   reported a lane — unknown, not zero, the same rule the adapter follows when
-  it declines to write a 0 it did not measure."
-  [conn run-id]
+  it declines to write a 0 it did not measure.
+
+  With `branch-id`, the same bill for that one branch: what a delegated child
+  spent, reported back to its parent beside the answer (karamazov-k7gl.9). The
+  run's own total already includes it, since the child is a branch of the run."
+  ([conn run-id] (run-usage conn run-id nil))
+  ([conn run-id branch-id]
   (let [q (fn [table]
-            (first (db/fetch conn [(str "SELECT count(*) AS calls,
+            (first (db/fetch conn (cond-> [(str "SELECT count(*) AS calls,
                                                 coalesce(sum(prompt_tokens), 0) AS prompt_tokens,
                                                 coalesce(sum(completion_tokens), 0) AS completion_tokens,
                                                 coalesce(sum(total_tokens), 0) AS total_tokens,
@@ -247,8 +252,10 @@
                                                                     OR cache_miss_tokens IS NOT NULL
                                                                   THEN prompt_tokens END), 0)
                                                   AS cached_prompt_tokens
-                                           FROM " table " WHERE run_id = ?")
-                                   run-id])))
+                                           FROM " table " WHERE run_id = ?"
+                                        (when branch-id " AND branch_id = ?"))
+                                   run-id]
+                                    branch-id (conj branch-id)))))
         t (q "turns")
         s (q "side_calls")
         both (fn [k] (+ (get t k) (get s k)))
@@ -261,7 +268,7 @@
      :cache-hit-tokens (both :cache_hit_tokens)
      :cache-miss-tokens (both :cache_miss_tokens)
      :cache-hit-rate (when (pos? reported)
-                       (double (/ (both :cache_hit_tokens) reported)))}))
+                       (double (/ (both :cache_hit_tokens) reported)))})))
 
 (defn record-dispatch!
   "What a branch is about to run, on record BEFORE it runs

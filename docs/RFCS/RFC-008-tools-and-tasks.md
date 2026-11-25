@@ -165,6 +165,7 @@ indistinguishable from work that is progressing.
 | shell | `shell` |
 | shipping | `done` `give_up` `thesis` `branch_theses` |
 | board | `task` `split` |
+| delegation | `delegate` |
 | coordination | `message` |
 | memory | `remember` `recall` `forget` `outcome` |
 | record | `fetch_turn` `fetch_artifact` |
@@ -177,6 +178,26 @@ Every dispatched tool **must** be documented in `prompts/system.md`, matched as
 a word at the start of a documentation line — a tool the model is not told about
 is unreachable, and `str/includes?` matching once counted `cell` as documented
 because the prompt contains `cells`.
+
+### Delegation
+
+`delegate({request, workflow?, model?, background?})` hands one request to a
+sub-agent (karamazov-k7gl.9). The child is a BRANCH of the caller's run, not a
+run of its own: `runs/open-branch!` with the caller as `parent_id`, run through
+a sub-loop manifest (gates.edn `:delegate :workflow`, one of `:workflows`) as
+the roles.edn `:delegate` role, the way team workers and feature's role
+sub-loops run. So its turns and side calls are the run's rows and its usage is
+the run's usage (`journal/run-usage` takes a branch id for the child's own
+share), a foreground child is cancelled with the caller's turn, and the run's
+mailbox carries a background child's report to its parent with the child's
+flow label. The child's done is advisory: the parent owns the change and its
+ship gate. Its instructions are `prompts/delegate-child.md`.
+
+Invariants: a branch at `:max-depth` cannot delegate; the `:delegate` role
+holds no `ask_human`, `task`, `split` or `message`; a foreground call returns
+within `:timeout-ms` (under `:turn-deadline-ms`); `run-state/run-ended!`
+cancels every background child still running. Known gaps: a resumed run does
+not resume its children, and the background registry is in memory only.
 
 ### Reads that return an answer
 

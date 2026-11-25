@@ -31,8 +31,8 @@
 
 (defn run-ended!
   "Forget run `run-id`'s seal, its branches' flow labels, the models it
-  retired, the file reads its branches made, where its branches last were, and its
-  background jobs, killed. Each is best effort: one
+  retired, the file reads its branches made, where its branches last were, its
+  background jobs, killed, and its delegated children, cancelled. Each is best effort: one
   failing must not keep the rest."
   [run-id]
   (doseq [f [verify/unseal-run! flow/forget-run! llm/forget-retired! reads/forget-reads!
@@ -41,5 +41,7 @@
              (requiring-resolve 'samizdat.inference.environment/forget-run!)
              (requiring-resolve 'samizdat.store.executions/forget-run!)
              (requiring-resolve 'samizdat.debug.sessions/close-run!)
-             (requiring-resolve 'samizdat.engine.jobs/forget-run!)]]
+             (requiring-resolve 'samizdat.engine.jobs/forget-run!)
+             ;; Its delegated children still running are cancelled.
+             (requiring-resolve 'samizdat.agent.delegate/forget-run!)]]
     (try (f run-id) (catch Throwable _ nil))))
