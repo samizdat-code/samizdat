@@ -59,6 +59,30 @@
             [samizdat.session :as session]))
 
 (def default-max-retries 2)
+
+(defn retry-budgets
+  "How many times the ladder retries each class of failure: gates.edn
+  :provider-retry, a provider's own :retry-budgets over it (config.edn
+  :providers, or a test). A class neither names gets default-max-retries; a
+  project whose gates.edn predates the entry gets that for every class,
+  which is the single shared count it had before (karamazov-k7gl.11)."
+  [config]
+  (merge (try (lexicon/policy :provider-retry) (catch Throwable _ nil))
+         (:retry-budgets config)))
+
+(defn retry-class
+  "Which budget a retryable result spends: :rate-limited (a 429, a retryable
+  business code, the shared latch), :empty-reply, :timeout (a read that
+  timed out), :partial-stream (a stream cut after content arrived),
+  :transport (a dropped or refused connection), else :server (a 5xx, a 408,
+  an error frame inside a 2xx)."
+  [result]
+  (or (:class result)
+      (case (:reason result)
+        (:rate-limited :rate-limit-latch) :rate-limited
+        :empty-reply :empty-reply
+        :timeout :timeout
+        :server)))
 (def default-timeout-ms 300000)
 
 (def default-max-response-ms
@@ -523,7 +547,7 @@
 
 (defn- continuation-eligible?
   [result config attempt]
-  (let [{:keys [enabled? min-chars max-attempts]} (:continuation config)
+  (let [{:keys [min-chars max-attempts]} (:continuation config)
         text (some-> result :partial-response :content message/answer)]
     (and (get-in config [:continuation :enabled?] true)
          (< (long attempt) (long (or max-attempts 1)))
@@ -637,9 +661,10 @@
          call-config (assoc config
                             :timeout-ms
                             (effective-read-timeout-ms config (:max-tokens request)))
-         retries (or max-retries (:max-retries config) default-max-retries)
+         explicit-retries (or max-retries (:max-retries config))
+         budgets (retry-budgets config)
          continuation-attempt (or continuation-attempt 0)]
-     (loop [attempt 0, errors []]
+     (loop [attempt 0, errors [], spent {}]
        ;; Before every attempt, not only between them: a cancel that landed
        ;; while the previous attempt or its backoff ran ends the ladder here
        ;; rather than being spent on one more request (RFC-013).
@@ -651,18 +676,34 @@
                               partial (:partial-response (ex-data e))
                               outcome
                               (if (re-find #"(?i)read timed out" m)
-                                {:outcome :fatal :reason :timeout
+                                ;; Retryable in kind, with its own budget —
+                                ;; 0 in the shipped gates, because a cut-off
+                                ;; generation re-sent is billed twice.
+                                {:outcome :retry :reason :timeout :class :timeout
                                  :error (str "read timeout: " m)}
                                 (cond
                                   (cancel/control-signal? e) (throw e)
                                   (transient-failure? e)
-                                  {:outcome :retry :error (str "transport: " m)}
+                                  {:outcome :retry :class :transport
+                                   :error (str "transport: " m)}
                                   :else
                                   {:outcome :fatal :reason :harness-error
                                    :error (str "harness: " m)}))]
                           (cond-> outcome
-                            partial (assoc :outcome :retry :partial-response partial)))))
-             errors (conj errors (:error result))]
+                            partial (assoc :outcome :retry :class :partial-stream
+                                           :partial-response partial)))))
+             errors (conj errors (:error result))
+             ;; PER CLASS (karamazov-k7gl.11). A shared count let two 503s
+             ;; spend the retries a rate limit then needed, and gave a read
+             ;; timeout no budget a provider could be given. An explicit
+             ;; :max-retries still caps every class alike.
+             klass (when (= :retry (:outcome result)) (retry-class result))
+             spent (if klass (update spent klass (fnil inc 0)) spent)
+             exhausted? (and klass
+                             (> (get spent klass)
+                                (long (or explicit-retries
+                                          (get budgets klass)
+                                          default-max-retries))))]
          (cond
            (= :ok (:outcome result))
            (let [response (cond-> (:response result)
@@ -684,7 +725,7 @@
                        response)
                true (assoc :attempts (inc attempt))))
 
-           (or (= :fatal (:outcome result)) (>= attempt retries))
+           (or (= :fatal (:outcome result)) exhausted?)
            (let [partial (:partial-response result)
                  seed (when partial
                         (if continuation-seed
@@ -741,7 +782,7 @@
              ;; (samizdat.model.ratelimit-teardown-test enumerates the race
              ;; the old sleep allowed).
              (cancel/sleep! wait)
-             (recur (inc attempt) errors))))))))
+             (recur (inc attempt) errors spent))))))))
 
 (defonce ^:private retired
   ;; #{[scope [provider model]]}: models a run gave up on.

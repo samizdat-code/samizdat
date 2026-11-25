@@ -203,6 +203,24 @@
         changes branch, journal, or durable tool-selection history and never
         reduces reserved output tokens."}
 
+ :provider-retry
+ {:value {:rate-limited 2 :server 2 :transport 2 :partial-stream 2 :empty-reply 2
+          :timeout 0}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-k7gl.11"]
+  :doc "Retries the client spends on ONE model call, per class of failure
+        (llm.client/retry-class), before the call fails up to the loop:
+        :rate-limited a 429 or a retryable business code, :server a 5xx or
+        408, :transport a dropped or refused connection, :partial-stream a
+        stream cut after content arrived, :empty-reply a reply with neither
+        content nor reasoning, :timeout a read that timed out. Each class
+        counts on its own, so two 503s do not spend the retries a rate limit
+        then needs. :timeout is 0 because a cut-off generation re-sent is
+        billed twice; raise it for an endpoint whose stalls are transient.
+        The loop's own waits sit above these (:rate-limit, :provider-outage,
+        :provider-error-limit). A provider's config.edn :retry-budgets
+        overrides a class; an explicit :max-retries caps every class."}
+
  :provider-error-limit
  {:value 5 :kind :threshold :capability-tunable? false
   :provenance ["karamazov-e8iw"]
