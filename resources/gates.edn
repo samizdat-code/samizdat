@@ -103,6 +103,7 @@
  :delegate
  {:value {:workflow "worker" :workflows #{"worker" "solver"} :role :delegate
           :max-depth 1 :max-turns 20 :timeout-ms 780000 :max-background 3
+          :background-timeout-ms 1800000
           :advisory? true :answer-chars 6000}
   :kind :threshold :capability-tunable? false
   :provenance ["karamazov-k7gl.9"]
@@ -115,7 +116,9 @@
         again). A child gets :max-turns turns. A foreground call waits at most
         :timeout-ms, under :turn-deadline-ms so the beam does not cancel the
         parent's turn first, then cancels the child. A run has at most
-        :max-background children working in the background at once.
+        :max-background children working in the background at once, and a
+        background child still working after :background-timeout-ms is
+        cancelled and the parent's mailbox told it timed out.
         :advisory? marks the child's done as a report rather than shippable
         work, so the ship gate's evidence rungs stay with the parent, which
         owns the change. The answer handed back is cut to :answer-chars."}

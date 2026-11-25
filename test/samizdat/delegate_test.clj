@@ -15,6 +15,7 @@
             [samizdat.agent.roles :as roles]
             [samizdat.agent.select :as select]
             [samizdat.agent.tools :as tools]
+            [samizdat.agent.tools.delegate]
             [samizdat.cancel :as cancel]
             [samizdat.cells :as cells]
             [samizdat.fake-done :as fake-done]
@@ -167,6 +168,25 @@
     (is (str/includes? (nth results 1) "running"))
     (is (str/includes? (nth results 2) "Cancelled sub-agent D1"))
     (is (wait-for #(= "abandoned" (:status (runs/get-branch c rid "D1"))) 5000))))
+
+(deftest a-background-child-past-its-deadline-is-cancelled-and-reported
+  (let [c (db/open! ":memory:")
+        real @#'samizdat.agent.tools.delegate/policy
+        to-b1 #(first (db/fetch c ["SELECT * FROM messages WHERE to_branch = 'B1'"]))
+        r (with-redefs-fn {#'samizdat.agent.tools.delegate/policy
+                           (fn [] (assoc (real) :background-timeout-ms 300))}
+            #(run! c (scripted-parent
+                      hangs
+                      [(fn [_] (fence {:name "delegate"
+                                       :args {:request "a long job" :background true}}))
+                       (fn [_] (wait-for (fn [] (some? (to-b1))) 10000)
+                         (done "the widgets count is 3"))])))
+        rid (:run-id r)]
+    (is (pos? (:background-timeout-ms (gates/threshold :delegate))))
+    (let [m (to-b1)]
+      (is (= "D1" (:from_branch m)))
+      (is (str/includes? (str (:body m)) "did not finish")))
+    (is (= "abandoned" (:status (runs/get-branch c rid "D1"))))))
 
 (deftest a-parent-run-ending-cancels-its-unfinished-children
   (let [c (db/open! ":memory:")
