@@ -39,6 +39,7 @@
             [jolt.fs :as fs]
             [samizdat.agent.source :as source]
             [samizdat.hashline :as hashline]
+            [samizdat.layers :as layers]
             [samizdat.escapes :as escapes]
             [jolt-lsp.syntax :as lisp]
             [samizdat.prompt :as prompt]
@@ -341,6 +342,23 @@
                    (assoc ctx :args {:path (first (policy/read-paths cmd))})
                    min-lines)))))
 
+(defn operator-config?
+  "Whether the resolved absolute path `abs` is one of the operator's
+  config.edn layers for the project at `root`: the file
+  SAMIZDAT_CONFIG_FILE names, the project's .samizdat/config.edn, or the
+  person's global file (the selected profile's, else ~/.config/samizdat).
+  The write tools are confined to the root, so this matters when one of
+  those lies under it — an env file kept in the checkout, a profile
+  directory inside the project. `opts` is samizdat.layers/candidates' (a
+  test hands it :getenv and :global-dir)."
+  ([root abs]
+   (operator-config? root abs {:global-dir (layers/global-dir)}))
+  ([root abs opts]
+   (let [canon (fn [p] (try (str (fs/canonicalize p)) (catch Throwable _ (str p))))
+         a (canon abs)]
+     (boolean (some #(= a (canon (:path %)))
+                    (layers/candidates "config" (assoc opts :root (or root "."))))))))
+
 (defn run-config?
   "Whether the resolved absolute path `abs` IS the root's run config. The
   write tools refuse it: run 671e8a99 rewrote its own :verify-cmd mid-run to
@@ -352,7 +370,11 @@
   protected list in agent-editable gates.edn could be unprotected by the
   party it protects against."
   [root abs]
-  (= abs (resolve-under-root (or root ".") run-config-path)))
+  (or (= abs (resolve-under-root (or root ".") run-config-path))
+      ;; Every config.edn layer is the operator's, not only the project's:
+      ;; the tool ceiling, the argument rules, the shell's :writable and the
+      ;; approval mode can live in any of them (karamazov-k7gl.5).
+      (operator-config? root abs)))
 
 (defn hidden?
   "Whether `abs` is in a tree of the project the agent may neither read nor

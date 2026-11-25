@@ -168,6 +168,8 @@
    :eval-terminates-process "prompts/eval-terminates-process.md"
    :experiment-line "prompts/experiment-line.md"
    :exposure-refused "prompts/exposure-refused.md"
+   :tool-ceiling "prompts/tool-ceiling.md"
+   :argument-rule "prompts/argument-rule.md"
    :experiment-tool "prompts/experiment-tool.md"
    :explore-cap "prompts/explore-cap.md"
    :failure-log "prompts/failure-log.md"

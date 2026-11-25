@@ -42,6 +42,7 @@
             [samizdat.approval :as approval]
             [samizdat.config :as config]
             [samizdat.engine.proc :as proc]
+            [samizdat.layers :as layers]
             [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
             [samizdat.security.confine :as confine]
@@ -462,8 +463,26 @@
   party it protects against. Not airtight — a segment can name the file
   without its full path — but the failure it exists to stop is a run drifting
   into rewriting its own gate, not a jailbreak; `eval` containment is its own
-  open problem (karamazov-zrq)."
-  [".samizdat/config.edn"])
+  open problem (karamazov-zrq).
+
+  The machine-wide layer is listed too (karamazov-k7gl.5): it can hold the
+  tool ceiling and the argument rules, and a shell run with `:shell :sandbox
+  :none` is not kept out of ~/.config/samizdat by the OS. `operator-paths`
+  adds the layers whose place is only known at run time."
+  [".samizdat/config.edn" ".config/samizdat/config.edn"])
+
+(defn- operator-paths
+  "The config.edn layers whose path depends on the environment: the file
+  SAMIZDAT_CONFIG_FILE names (as given, and absolute) and the selected
+  profile's global file. Mentioned under a head that can write, each denies
+  like a protected path."
+  []
+  (->> (layers/candidates "config" {:global-dir (layers/global-dir)})
+       (mapcat (fn [{:keys [path]}]
+                 [path (try (str (.getCanonicalPath (java.io.File. (str path))))
+                            (catch Throwable _ nil))]))
+       (remove str/blank?)
+       distinct))
 
 (def ^:private read-only-heads
   "Heads that cannot write their file arguments, so a protected path in their
@@ -478,10 +497,11 @@
   "The first protected path some candidate statement mentions under a head
   that can write, or nil."
   [candidates]
-  (some (fn [seg]
-          (when-not (contains? read-only-heads (command-head seg))
-            (some #(when (str/includes? seg %) %) protected-paths)))
-        candidates))
+  (let [paths (delay (concat protected-paths (operator-paths)))]
+    (some (fn [seg]
+            (when-not (contains? read-only-heads (command-head seg))
+              (some #(when (str/includes? seg %) %) @paths)))
+          candidates)))
 
 (defn- last-match
   "The last rule — [pattern effect] — whose pattern matches any of

@@ -1,0 +1,1 @@
+`{{tool}}` was refused by the operator's argument rule `{{rule}}` (config.edn `:tools :rules`){% if asked %}; a person was asked and did not allow it{% endif %}{% if note %}. The person said: {{note}}{% endif %}. Call it with different arguments, use another tool, or ask the operator.

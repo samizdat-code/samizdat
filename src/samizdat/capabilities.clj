@@ -145,6 +145,8 @@
             [samizdat.basis]
             [samizdat.claims]
             [samizdat.perturb]
+            [samizdat.security.argrules]
+            [samizdat.security.ceiling]
             [samizdat.security.exposure]
             [samizdat.security.policy]
             [samizdat.security.sandbox]

@@ -1,0 +1,1 @@
+`{{tool}}` is not available to this run: the operator's config.edn (`:tools :ceiling` / `:tools :deny`) does not include it, and no workflow or role edit can change that. Use the tools you were shown, or ask the operator.

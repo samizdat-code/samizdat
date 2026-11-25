@@ -57,6 +57,7 @@
   (:require [clojure.tools.logging :as log]
             [samizdat.agent.budget :as budget]
             [samizdat.agent.gates :as gates]
+            [samizdat.security.ceiling :as ceiling]
             [samizdat.agent.context-fit :as context-fit]
             [samizdat.agent.hydration :as hydration]
             [samizdat.events :as events]
@@ -402,11 +403,22 @@
         {:keys [grammar] forced-prefill :prefill forced-tool :force-tool}
         (force-mechanism ctx tape)
         reasoning-budget (reasoning-budget-for ctx tape)
+        ;; The operator's tool ceiling, applied to what is advertised: the
+        ;; specs are read off prompt prose the workflow may edit, and a
+        ;; signature line added there must not put a tool above the ceiling
+        ;; in front of the model (karamazov-k7gl.5). Dispatch refuses it
+        ;; anyway; this keeps the model from being offered it.
+        tool-ceiling (ceiling/of-ctx ctx)
+        forced-tool (when (or (nil? forced-tool)
+                              (ceiling/permits? tool-ceiling (:name forced-tool)))
+                      forced-tool)
         tools (when (config/supports? (:llm-config ctx) :native-tools)
-                (not-empty (toolspec/for-messages (:messages tape)
-                                                  (gates/threshold :forceable-tools)
-                                                  (gates/threshold :native-tool-description-chars)
-                                                  (:advertised-tool-docs tape))))
+                (not-empty (ceiling/filter-specs
+                            tool-ceiling
+                            (toolspec/for-messages (:messages tape)
+                                                   (gates/threshold :forceable-tools)
+                                                   (gates/threshold :native-tool-description-chars)
+                                                   (:advertised-tool-docs tape)))))
         base (or (:max-tokens (:llm-config ctx))
                  (when (> attempt 1)
                    (:retry-base-tokens (gates/threshold :context-budget))))
