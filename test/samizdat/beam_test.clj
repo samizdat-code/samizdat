@@ -420,7 +420,7 @@
   ;; either way would be worse than the docstring it replaced.
   (let [d (definition-of "beam")
         ;; Route around :directives, so :advance runs without it.
-        broken (assoc-in d [:edges :start :continue] :advance)]
+        broken (assoc-in d [:edges :hold :continue] :advance)]
     (is (thrown? Throwable (workflow/compile-loop broken))
         "advancing without draining directives compiles")))
 

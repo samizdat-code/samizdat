@@ -87,6 +87,7 @@
    :background-job "prompts/background-job.md"
    :jobs-tool "prompts/jobs-tool.md"
    :job-exited "prompts/job-exited.md"
+   :job-wait-woke "prompts/job-wait-woke.md"
    :worktree-conflict "prompts/worktree-conflict.md"
    :corrections-api "prompts/corrections-api.md"
    :corrections-block "prompts/corrections-block.md"

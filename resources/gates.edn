@@ -100,6 +100,24 @@
         its last :notice-tail-lines lines. Limits after ECA's (10 jobs, 2000
         lines)."}
 
+ :job-waits
+ {:value {:default-wait-ms 60000 :max-wait-ms 840000
+          :default-watch-ms 1800000 :max-watch-ms 7200000
+          :poll-ms 100 :tail-lines 20
+          :hold? true :hold-max-ms 1800000 :hold-poll-ms 500}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-k7gl.1"]
+  :doc "Waits on a background job's output (samizdat.engine.waits, the `jobs`
+        tool's wait and watch). A blocking wait lasts :default-wait-ms unless
+        it asks, and never past :max-wait-ms — fourteen minutes, under
+        :turn-deadline-ms like the `wait` tool's bound. A watch is registered
+        for :default-watch-ms, at most :max-watch-ms. Waits look at the job
+        every :poll-ms and show its last :tail-lines lines. The beam's hold
+        cell (cells/beam.clj :beam/hold): with :hold? a run whose shipped
+        branch holds a pending watch is not finished but held, looking every
+        :hold-poll-ms for up to :hold-max-ms, and the branch is woken with
+        what fired."}
+
  :mcp
  {:value {:timeout-ms 30000}
   :kind :threshold :capability-tunable? false

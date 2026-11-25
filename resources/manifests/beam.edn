@@ -32,6 +32,7 @@
  [:map [:branches :any] [:turn :int]]
 
  :cells {:start      :beam/round-open
+         :hold       :beam/hold
          :directives :beam/directives
          :advance    :beam/advance
          :score      :beam/score
@@ -45,8 +46,11 @@
          :completed  :beam/complete
          :exhausted  :beam/exhaust}
 
- :edges {;; The top of every round decides whether the round happens.
-         :start      {:continue  :directives
+ :edges {;; The top of every round decides whether the round happens, and
+         ;; :hold whether an ending waits for a watch the shipped branch
+         ;; registered (it may turn :completed back into :continue).
+         :start      :hold
+         :hold       {:continue  :directives
                       :aborted   :aborted
                       :completed :completed
                       :exhausted :exhausted}
@@ -66,7 +70,7 @@
          :completed  :end
          :exhausted  :end}
 
- :dispatches {:start [[:aborted   {:verdict :aborted}]
+ :dispatches {:hold  [[:aborted   {:verdict :aborted}]
                       [:completed {:verdict :completed}]
                       [:exhausted {:verdict :exhausted}]
                       [:continue  _]]}
@@ -88,6 +92,11 @@
    :protects "A branch that stopped is written down before the beam refills
               its slot — otherwise the record says a branch is running long
               after something else took its place."}
+
+  {:type :must-follow :if :start :then :hold :enforced true
+   :protects "An ending is decided and then held: a run whose shipped branch
+              has a watch pending on a job is not finished while the watch
+              can still fire (karamazov-k7gl.1)."}
 
   {:type :must-precede :cell :directives :before :advance :enforced true
    :protects "A human's instruction lands on a turn boundary. A branch

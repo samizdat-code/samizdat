@@ -41,8 +41,8 @@ edit_file({path, old_text, new_text, replace_all?})
     Replace text; old_text must match exactly once unless replace_all.
 {% if not no-shell %}shell({command, timeout_ms, background?})
     Run a shell command in the project; get output and exit code. timeout_ms gives a long build more time. `background: true` keeps it running (a server to test against) and returns first output and a job id; stopped when the run ends.
-jobs({action, id?})
-    Background jobs: "list"; "output" with `id` (new output since last read); "kill" with `id`.
+jobs({action, id?, pattern?, seconds?, quiet?, history?})
+    Background jobs: "list"; "output" with `id` (new output since last read); "kill" with `id`; "wait" with `id` blocks until a line matches the regex `pattern` or the job exits (up to `seconds`; `quiet` stops after that much silence); "watch" does the same without blocking and tells you later; "unwatch" cancels a watch.
 {% endif %}grep({pattern, paths?, offset?})
     Search file contents.
 glob({pattern, paths?, offset?})

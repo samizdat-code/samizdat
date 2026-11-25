@@ -245,6 +245,13 @@
     samizdat.agent.tools.base
     {:vars [phase-refusal]}
 
+    ;; Waits on background job output (karamazov-k7gl.1): the beam's hold
+    ;; cell blocks on a run's own watches and takes their wakes. Reads only
+    ;; this run's jobs and journals the waits' moves.
+    samizdat.agent.tools.jobs
+    {:vars [await-wake! wait-notice]
+     :effects #{:db :run}}
+
     ;; A task row as prose. Pure.
     samizdat.agent.tools.tasks
     {:vars [task-statement]}
@@ -363,7 +370,8 @@
     ;; Run and branch rows, through the store's own functions. get-branch replaced
     ;; a raw SELECT in cells/board.clj.
     samizdat.store.runs
-    {:vars [branches close-branch! extend-budget! finish-run! get-branch get-run nth-recent-start open-branch!]
+    {:vars [branches close-branch! extend-budget! finish-run! get-branch get-run nth-recent-start open-branch!
+            reopen-branch!]
      :effects #{:db}}
 
     ;; The task board, through its own functions.

@@ -42,6 +42,7 @@
             [samizdat.agent.critic :as critic]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.live :as live]
+            [samizdat.agent.tools.jobs :as jobs-tool]
             [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
             [samizdat.agent.state :as state]
@@ -409,6 +410,75 @@
                                    :spent spent :budget token-budget}
                      (> turn cap) {:reason :turn-cap :cap cap}
                      :else {:reason :nobody-active}))))))
+
+;; --- holding a finishing run open for a watch ---------------------------------
+
+(defn hold-for
+  "The branch ids whose pending watches may keep this round's ending from
+  happening, or nil when nothing may.
+
+  Only a run that is COMPLETING is held, and only for the branch that shipped:
+  it asked to hear from a job (`jobs watch`) and then said it was done, and
+  finishing the run now would throw away the very wake it asked for. An abort,
+  a spent budget or a turn cap is never held — those are limits, and a watch
+  is not a reason to exceed one. `:hold?` false (gates.edn :job-waits) turns
+  holding off."
+  [{:keys [verdict done-branch]} {:keys [hold?]}]
+  (when (and hold? (= :completed verdict) done-branch)
+    #{(:id done-branch)}))
+
+(defn wake-branch
+  "Branch `b`, which had shipped, back to active and told `notice`: the same
+  tape and turn counter, the wake appended as a user turn."
+  [b notice]
+  (-> b
+      (dissoc :final-answer :verdict :done? :inactive-reason)
+      (assoc :status :active)
+      (state/add-message "user" notice)))
+
+(cell/defcell :beam/hold
+  {:doc "Hold a finishing run open while the branch that shipped has a watch
+        pending on a background job's output, and wake that branch when the
+        watch fires.
+
+        The core reports and delivers (samizdat.engine.waits through the jobs
+        tool's await-wake! and wait-notice); THIS decides that a pending watch
+        is a reason not to finish (`hold-for`), how long to wait for it and how
+        often to look (gates.edn :job-waits :hold-max-ms, :hold-poll-ms), and
+        that a fired watch reopens the branch rather than being dropped. A
+        watch that expires, or a hold that runs out, lets the run finish as it
+        was going to. Blocks at the top of the round, as a pause does, and the
+        abort flag stops it."
+   :effects [:db :run]
+   :requires [:abort :conn :run-id]
+   :input  [:map [:verdict :keyword] [:branches :any] [:active :any]
+            [:done-branch :any]]
+   :output [:map [:verdict :keyword] [:branches :any] [:active :any]
+            [:done-branch :any] [:multi-candidate? :boolean]]}
+  (fn [{:keys [conn run-id abort]} {:keys [branches] :as data}]
+    (let [{:keys [hold-max-ms hold-poll-ms] :as policy} (gates/threshold :job-waits)
+          holders (hold-for data policy)
+          r (when (seq holders)
+              (jobs-tool/await-wake! conn run-id holders
+                                     {:max-ms hold-max-ms :poll-ms hold-poll-ms
+                                      :abort? #(boolean (and abort @abort))}))
+          woken (set (map :branch-id (:ready r)))
+          notices (into {} (keep (fn [id] (when-let [n (jobs-tool/wait-notice conn run-id id)]
+                                            [id n])))
+                        woken)]
+      (when (and r (not (:none r)))
+        (journal/note! conn run-id :run-held
+                       {:data {:branches (vec holders) :woken (vec woken)
+                               :outcome (cond (:ready r) :woken (:aborted r) :aborted
+                                              (:timeout r) :timeout :else :none)}}))
+      (if (empty? notices)
+        (assoc data :multi-candidate? (boolean (:multi-candidate? data)))
+        (let [branches' (mapv (fn [b] (if-let [n (get notices (:id b))] (wake-branch b n) b))
+                              branches)]
+          (doseq [id (keys notices)]
+            (runs/reopen-branch! conn run-id id #{"done"}))
+          (assoc data :branches branches' :active (filterv state/active? branches')
+                 :done-branch nil :multi-candidate? false :verdict :continue))))))
 
 ;; --- the round --------------------------------------------------------------
 

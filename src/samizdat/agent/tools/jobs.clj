@@ -27,6 +27,14 @@
   lists, reads and kills them, and `exit-notice` is what a branch is told at
   its next call when one of its jobs ended on its own.
 
+  `jobs` also waits on a job's output (samizdat.engine.waits): \"wait\" blocks
+  the call until the job prints a line matching `pattern` or exits, \"watch\"
+  registers the same wait and returns, and `wait-notice` is the wake a branch
+  gets at its next call — or, when the run is finishing, from the beam's hold
+  cell, which decides whether a pending watch keeps the run open. Every move
+  a wait makes is journalled as a :job-wait note, which is what
+  `restore-waits!` reads back on a resume.
+
   The process, its buffer and its lifetime are samizdat.engine.jobs'; the
   decision to run it is samizdat.security.policy's, through `start-shell`.
   Every line read back is redacted with the values the command's own gate
@@ -34,11 +42,14 @@
   (:require [clojure.string :as str]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.tools.base :as base]
+            [samizdat.cancel :as cancel]
             [samizdat.engine.jobs :as jobs]
+            [samizdat.engine.waits :as waits]
             [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
             [samizdat.security.policy :as policy]
             [samizdat.security.secrets :as secrets]
+            [samizdat.store.journal :as journal]
             [samizdat.util :as util]))
 
 (defn- policy-knobs [] (gates/threshold :background-jobs))
@@ -112,7 +123,119 @@
 
 (defn- status-name [s] (some-> s name))
 
-(defmethod base/run-tool "jobs" [{:keys [branch run-id] :as ctx}]
+;; --- waits on a job's output ----------------------------------------------------
+
+(defn- wait-knobs [] (gates/threshold :job-waits))
+
+(defn- record-of
+  "What the journal keeps of wait `w`: enough to restore it on a resume."
+  [w]
+  (select-keys w [:id :branch-id :job :condition :pattern :mode :state :outcome
+                  :from :scanned :created-ms :deadline-ms :quiet-ms :ended-ms :told?
+                  :job-status :exit]))
+
+(defn- recorder [conn run-id]
+  (fn [w]
+    (when conn
+      (journal/note! conn run-id :job-wait {:branch-id (:branch-id w) :data (record-of w)}))))
+
+(defn wait-env
+  "The effects a wait runs on: this process's jobs, the wall clock, a
+  cancellable sleep, and the journal."
+  [conn run-id]
+  {:snapshot jobs/snapshot :now #(System/currentTimeMillis) :sleep! cancel/sleep!
+   :poll-ms (:poll-ms (wait-knobs)) :record (recorder conn run-id)})
+
+(defn- seconds-arg [ctx k]
+  (let [v (base/arg ctx k)]
+    (if (number? v)
+      (double v)
+      (some-> v str str/trim not-empty parse-double))))
+
+(defn- bounded-ms
+  "`secs` as ms, or `default-ms`, never past `max-ms` nor under zero."
+  [secs default-ms max-ms]
+  (long (max 0 (min max-ms (if secs (* 1000 secs) default-ms)))))
+
+(defn- wait-vars
+  "What the model is told about wait `w`, with the job's last lines."
+  [run-id w]
+  (let [{:keys [lines known]} (jobs/peek-lines run-id (:job w))
+        j (jobs/job run-id (:job w))
+        n (:tail-lines (wait-knobs))]
+    {:wait (:id w) :job (:job w) :pattern (:pattern w)
+     :matched (= :matched (:outcome w)) :exited (= :exited (:outcome w))
+     :deadline (= :deadline (:outcome w)) :quiet (= :quiet (:outcome w))
+     :gone (= :job-gone (:outcome w)) :cancelled (= :cancelled (:state w))
+     :quiet-seconds (some-> (:quiet-ms w) (quot 1000))
+     :seconds (quot (- (or (:ended-ms w) (System/currentTimeMillis)) (or (:created-ms w) 0)) 1000)
+     :dropped (when (pos? (or (:dropped w) 0)) (:dropped w))
+     :matches (when (seq (:matches w)) (lines-text (:matches w) known))
+     :status (status-name (or (:status j) (:job-status w)))
+     :exit (or (:exit j) (:exit w))
+     :tail (when (and (seq lines) (not= :matched (:outcome w)))
+             (lines-text (take-last n lines) known))}))
+
+(defn- wait-call
+  "jobs wait/watch: register a wait on job `id`, and for wait, block on it."
+  [{:keys [branch run-id conn] :as ctx} id block?]
+  (let [{:keys [default-wait-ms max-wait-ms default-watch-ms max-watch-ms]} (wait-knobs)
+        pattern (some-> (base/arg ctx :pattern) str not-empty)
+        env (wait-env conn run-id)
+        secs (seconds-arg ctx :seconds)
+        r (waits/register! {:run-id run-id :branch-id (:id branch) :job id
+                            :pattern pattern
+                            :condition (if pattern :output-regex :exit)
+                            :history? (contains? #{true "true"} (base/arg ctx :history))
+                            :timeout-ms (if block?
+                                          (bounded-ms secs default-wait-ms max-wait-ms)
+                                          (bounded-ms secs default-watch-ms max-watch-ms))
+                            :quiet-ms (some-> (seconds-arg ctx :quiet) (* 1000) long)
+                            :mode (if block? :block :watch)}
+                           env)]
+    (cond
+      (= :bad-pattern (:error r))
+      (base/malformed branch (msg {:bad-pattern true :pattern pattern :why (:message r)}))
+
+      (:error r)
+      (base/malformed branch (msg {:unknown true :id id}))
+
+      (and (not block?) (= :pending (:state (:wait r))))
+      (let [w (:wait r)]
+        (base/ok branch (msg {:watching true :wait (:id w) :job id :pattern pattern
+                              :seconds (quot (- (:deadline-ms w) (:created-ms w)) 1000)
+                              :quiet-seconds (some-> (:quiet-ms w) (quot 1000))})
+                 :progress? true))
+
+      :else
+      ;; A wait blocks; a watch already satisfied is said now rather than at
+      ;; the next call.
+      (let [w (if block? (waits/await! run-id (:id (:wait r)) env) (:wait r))]
+        (waits/settle! run-id (:id w))
+        (base/ok branch (msg (assoc (wait-vars run-id w) :waited true))
+                 :progress? (= :ready (:state w)))))))
+
+(defn wait-notice
+  "What branch `branch-id` of run `run-id` is told about its watches that
+  became ready or expired since it was last told, or nil. Each is told once."
+  [conn run-id branch-id]
+  (when branch-id
+    (when-let [ws (seq (waits/take-wakes! run-id branch-id (wait-env conn run-id)))]
+      (prompt/render "job-wait-woke" {:waits (mapv #(wait-vars run-id %) ws)}))))
+
+(defn await-wake!
+  "Block until a watch of `branch-ids` is ready, none is pending, `max-ms`
+  pass or `abort?` says stop — samizdat.engine.waits/await-any!."
+  [conn run-id branch-ids {:keys [max-ms poll-ms abort?]}]
+  (waits/await-any! run-id branch-ids
+                    (assoc (wait-env conn run-id) :max-ms max-ms :poll-ms poll-ms :abort? abort?)))
+
+(defn restore-waits!
+  "A resumed run's waits, from its :job-wait notes (samizdat.engine.waits/restore!)."
+  [conn run-id]
+  (waits/restore! run-id (journal/notes conn run-id :job-wait) (wait-env conn run-id)))
+
+(defmethod base/run-tool "jobs"[{:keys [branch run-id] :as ctx}]
   (let [action (some-> (base/arg ctx :action) str str/trim str/lower-case)
         id (some-> (base/arg ctx :id) str str/trim not-empty)]
     (cond
@@ -121,9 +244,20 @@
                             :jobs (mapv (fn [j] {:id (:id j) :status (status-name (:status j))
                                                  :exit (:exit j) :seconds (seconds j)
                                                  :command (:command j)})
-                                        (jobs/jobs run-id))}))
+                                        (jobs/jobs run-id))
+                            :waits (mapv (fn [w] {:id (:id w) :job (:job w) :pattern (:pattern w)
+                                                  :state (status-name (:state w))
+                                                  :outcome (status-name (:outcome w))})
+                                         (waits/poll! run-id (wait-env (:conn ctx) run-id)))}))
 
-      (not (contains? #{"output" "kill"} action))
+      (= "unwatch" action)
+      (case (and id (waits/cancel! run-id id (System/currentTimeMillis)))
+        :cancelled (base/ok branch (msg {:unwatched true :wait id}) :progress? true)
+        :not-pending (base/ok branch (msg {:wait-ended true :wait id
+                                           :state (status-name (:state (waits/wait run-id id)))}))
+        (base/malformed branch (msg {:unknown-wait true :wait id})))
+
+      (not (contains? #{"output" "kill" "wait" "watch"} action))
       (base/malformed branch (msg {:usage true}))
 
       (nil? id)
@@ -131,6 +265,9 @@
 
       (nil? (jobs/job run-id id))
       (base/malformed branch (msg {:unknown true :id id}))
+
+      (#{"wait" "watch"} action)
+      (wait-call ctx id (= "wait" action))
 
       (= "output" action)
       (let [{:keys [lines dropped status exit known]} (jobs/read! run-id id)]

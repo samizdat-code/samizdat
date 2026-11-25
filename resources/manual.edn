@@ -486,7 +486,13 @@
    {:name samizdat.engine.jobs/start!
     :summary "The job registry, per run (after ECA's background tasks): at most gates.edn :background-jobs :max-jobs running, each keeping its last :buffer-lines lines with a read cursor, and a kill the exit monitor cannot overwrite. `jobs`, `read!`, `peek-lines`, `kill!`; run-state/run-ended! calls `forget-run!`, which kills them all."}
    {:name samizdat.agent.tools.jobs/exit-notice
-    :summary "The `jobs` tool (list, output since the last read, kill; prompts/jobs-tool.md), and the notice a branch gets at its next call when one of its jobs exits on its own, with its last :notice-tail-lines lines (prompts/job-exited.md)."}]}
+    :summary "The `jobs` tool (list, output since the last read, kill; prompts/jobs-tool.md), and the notice a branch gets at its next call when one of its jobs exits on its own, with its last :notice-tail-lines lines (prompts/job-exited.md)."}
+   {:name samizdat.engine.waits/register!
+    :summary "Waits on a job's output (karamazov-k7gl.1): a wait watches one job for a line matching a regex or its exit, from its own cursor (the job's end, or the retained history), under a deadline and an optional quiet timeout. pending -> ready -> delivered, or expired (deadline, quiet, job-gone) / cancelled. Pure `make`/`step` over a job snapshot; time, the job source, the sleep and the record are an injected env. `poll!`, `await!`, `await-any!`, `take-wakes!`, `cancel!`, `restore!`, `forget-run!` (run-state/run-ended!)."}
+   {:name samizdat.agent.tools.jobs/wait-notice
+    :summary "`jobs` wait (blocks up to `seconds`, returns the matched lines, a tail and the job's status), watch (registers and returns), unwatch; the wake a branch gets at its next call when a watch fires or expires (prompts/job-wait-woke.md). Every move is journalled as a :job-wait note; `restore-waits!` reads them back on a resume (pending ones expire as job-gone). Bounds in gates.edn :job-waits."}
+   {:name samizdat.agent.tools.jobs/await-wake!
+    :summary "What cells/beam.clj :beam/hold blocks on (beam.edn, after :start): a run COMPLETING while its shipped branch has a pending watch is held instead of finished, up to gates.edn :job-waits :hold-max-ms, looking every :hold-poll-ms; a fired watch reopens that branch (runs/reopen-branch! from done) with the wake as a user turn. Never holds an abort, a turn cap or a spent budget; :hold? false turns it off."}]}
 
  {:group "Evidence and diagnosis"
   :entries
