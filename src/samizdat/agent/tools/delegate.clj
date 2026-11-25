@@ -173,12 +173,25 @@
   (delegate/start!
    run-id id {:parent (:id branch) :request (:request spec)}
    (fn []
-     (let [r (run-child cctx id spec)
+     ;; Bounded by the wall clock as well as its turns: past
+     ;; :background-timeout-ms it is cancelled and the parent told so.
+     (let [limit (:background-timeout-ms (policy))
+           [tag v] (delegate/run-foreground #(run-child cctx id spec) limit)
+           r (case tag
+               :ok v
+               :timeout (do (close-child! conn run-id id :abandoned "timed out")
+                            {:status :timeout :verdict :timeout
+                             :usage (usage-of conn run-id id)})
+               (if (cancel/control-signal? v)
+                 (throw v)
+                 {:status :error :error (ex-message v)}))
            vars (report-vars id spec r)]
        ;; The report goes to the parent's mailbox, carrying the child's label.
        (messages/send! conn {:run-id run-id :from id :to (:id branch)
-                             :body (if (= :error (:status r))
-                                     (msg {:error true :id id :message (:error r)})
+                             :body (case (:status r)
+                                     :error (msg {:error true :id id :message (:error r)})
+                                     :timeout (msg (assoc vars :timeout true
+                                                          :seconds (quot limit 1000)))
                                      (msg (assoc vars :finished true)))
                              :flow (flow/carried-by-branch conn run-id id)})
        (note! ctx id {:mode "background" :status (name (:status r))

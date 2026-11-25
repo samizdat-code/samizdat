@@ -195,7 +195,9 @@ ship gate. Its instructions are `prompts/delegate-child.md`.
 
 Invariants: a branch at `:max-depth` cannot delegate; the `:delegate` role
 holds no `ask_human`, `task`, `split` or `message`; a foreground call returns
-within `:timeout-ms` (under `:turn-deadline-ms`); `run-state/run-ended!`
+within `:timeout-ms` (under `:turn-deadline-ms`); a background child is
+cancelled after `:background-timeout-ms` and its parent's mailbox told it
+timed out; `run-state/run-ended!`
 cancels every background child still running. Known gaps: a resumed run does
 not resume its children, and the background registry is in memory only.
 
