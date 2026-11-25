@@ -326,6 +326,8 @@
     :summary "Commands that cannot be undone — force push, remote branch delete, git reset --hard / clean -f, DROP/TRUNCATE through a database client, npm/cargo/gem/twine/docker publish, gh release create, terraform destroy / apply -auto-approve, kubectl delete, helm uninstall — are an ask only a PERSON answers: over a grant, and never by yolo, the auto classifier, an unattended timeout or an allow-always. The table is in src/ because it confines the agent; the refusal names the rule `irreversible <label>`."}
    {:name samizdat.security.flow/observe!*
     :summary "An mcp call lowers the branch's flow trust like webfetch (security/flow): a server returns what others wrote. A config.edn :mcp server entry with :output :trusted is the operator saying its output is theirs."}
+   {:name samizdat.llm.loop-guard/guard
+    :summary "A streamed reply that starts repeating itself is cut, not run to :max-tokens: an exact cycle at the stream's tail at every level, near-identical paragraphs (word-trigram Jaccard) at :semantic. The cut returns as finish_reason \"repetition\", steered as a loop and never retried. gates.edn :loop-guard holds the thresholds and the level per adapter (:levels, :default-level); a provider's :loop-guard :off|:exact|:semantic outranks them."}
    {:name samizdat.llm.windows/effective
     :summary "The window a request is sized against: :request-window, else :context-window, narrowed to what the endpoint said it takes. An overflow error that names the limit (wordlists.edn :context-window-numbers) teaches it per base-url and model for the process, so the next request fits instead of squeezing one failed call at a time."}
    {:name samizdat.llm.rejected/refused-in

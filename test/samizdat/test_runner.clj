@@ -206,6 +206,7 @@
             [samizdat.toolerr-test]
             [samizdat.handoff-test]
             [samizdat.repetition-test]
+            [samizdat.loop-guard-test]
             [samizdat.tape-test]
             [samizdat.image-test]
             [samizdat.infer-test]
@@ -560,6 +561,7 @@
     samizdat.toolerr-test
     samizdat.handoff-test
     samizdat.repetition-test
+    samizdat.loop-guard-test
     samizdat.tape-test
     samizdat.image-test
     samizdat.infer-test

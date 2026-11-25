@@ -24,9 +24,9 @@
   silence trips and the reply ends at the token cap. The loop read that as
   `truncated before any tool call` and retried at a doubled budget — which,
   for a loop, buys a loop twice as long. Floatboat runs a SimHash window
-  detector on the stream for this; samizdat does not stream, so the check
-  is over the finished reply, and its one job is to keep the retry honest
-  and word the complaint right.
+  detector on the stream for this. This check is over the finished reply,
+  and its one job is to keep the retry honest and word the complaint right;
+  samizdat.llm.loop-guard cuts a loop while it streams (karamazov-hgvj).
 
   Exact windows, not similarity hashing: a degenerate repeat is verbatim,
   and an exact match cannot flag two paragraphs that merely resemble each

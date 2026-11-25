@@ -49,6 +49,7 @@
             [samizdat.lexicon :as lexicon]
             [samizdat.llm.adapter :as adapter]
             [samizdat.llm.accounting :as accounting]
+            [samizdat.llm.loop-guard :as loop-guard]
             [samizdat.llm.message :as message]
             [samizdat.llm.ratelimit :as ratelimit]
             [samizdat.llm.rejected :as rejected]
@@ -423,111 +424,130 @@
                                          :max-response-ms (:max-response-ms config)
                                          :idle-ms (:stream-idle-ms config default-stream-idle-ms)
                                          :first-content-ms (:stream-first-content-ms config
-                                                                                      default-stream-first-content-ms))
+                                                                                      default-stream-first-content-ms)
+                                         ;; A reply that starts to loop is cut
+                                         ;; while it streams (karamazov-hgvj).
+                                         :guard (let [policy (lexicon/policy :loop-guard)]
+                                                  (loop-guard/guard
+                                                   (loop-guard/level (adapter/id adapter) (:loop-guard config) policy)
+                                                   policy)))
                               (:on-delta request))
                  (http/post url (assoc opts :throw-exceptions false)))
                (catch Throwable e
-                 (when-let [partial (:partial-body (ex-data e))]
-                   (when-let [r (partial-response adapter config request
-                                                  (- (System/currentTimeMillis) started)
-                                                  use-prefill? partial)]
-                     (throw (ex-info (or (ex-message e) "provider stream interrupted")
-                                     {:partial-response r} e))))
-                 (throw e)))
+                 (let [{why :loop partial :partial-body} (ex-data e)
+                       r (when partial
+                           (partial-response adapter config request
+                                             (- (System/currentTimeMillis) started)
+                                             use-prefill? partial))]
+                   (cond
+                     ;; A loop cut is the reply it was, finished as
+                     ;; `repetition`: fence/signals reads that as a periodic
+                     ;; truncation, so the no-call step steers it as a loop.
+                     ;; Retrying or continuing it would re-run the loop.
+                     (and why r)
+                     (do (log/warn (adapter/display-name adapter) "reply cut: the model looped:" why)
+                         (session/observe! [:provider :loop-cut])
+                         {::loop-cut (assoc r :finish-reason "repetition" :loop why)})
+                     r (throw (ex-info (or (ex-message e) "provider stream interrupted")
+                                       {:partial-response r} e))
+                     :else (throw e)))))
         elapsed (- (System/currentTimeMillis) started)
         status (:status resp)
         decoded (decode (:body resp))]
-    (log/debug (adapter/display-name adapter) "responded" status "in" elapsed "ms")
-    ;; A success is better evidence than our arithmetic about when the window
-    ;; would reopen, so it releases the latch outright.
-    (when (<= 200 status 299) (ratelimit/clear! url))
-    ;; And a DEFINITIVE signal — the provider stating when, by Retry-After or
-    ;; by a zero remaining-count with a reset — latches the host for everyone.
-    ;; A bare 429 does not: it may be a burst limit that clears in a second,
-    ;; and latching on it would stop every branch over one unlucky request.
-    (when-let [ms (ratelimit/definitive-signal status (:headers resp))]
-      (ratelimit/latch! url ms (System/currentTimeMillis))
-      (log/warn (adapter/display-name adapter) "rate-limited for"
-                (long (/ ms 1000)) "s — latched for every branch"))
-    (if (<= 200 status 299)
-      (if (or (adapter/error-message adapter decoded)
-              (and (false? (:success decoded)) (seq (business-codes decoded))))
-        ;; Some providers return 200 with an error object in the body — GLM
-        ;; with its business codes. Classified like any other failure, so a
-        ;; per-minute limit there is retried and a 1261 is an overflow
-        ;; rather than a flat "API error" (karamazov-jvdu).
-        (failure adapter config status decoded resp)
-        (if-let [parsed (adapter/parse-chat adapter decoded)]
-          (let [merged (message/merge-reasoning (:content parsed) (:reasoning parsed))]
-            (if (str/blank? merged)
-              ;; The REASON travels from where it is detected. Re-deriving it
-              ;; downstream by matching this sentence would make the counter a
-              ;; measurement of the wording — reword the message and the
-              ;; provider-trouble finding silently stops firing.
-              ;; Retried in the client unless the budget ran out (eca retries
-              ;; a premature empty stop): a reply cut at :max-tokens would
-              ;; come back as empty again.
-              {:outcome (if (= "length" (str (:finish-reason parsed))) :fatal :retry)
-               :reason :empty-reply
+    (if-let [cut (::loop-cut resp)]
+      {:outcome :ok :response (assoc cut :elapsed-ms elapsed)}
+      (do
+        (log/debug (adapter/display-name adapter) "responded" status "in" elapsed "ms")
+        ;; A success is better evidence than our arithmetic about when the window
+        ;; would reopen, so it releases the latch outright.
+        (when (<= 200 status 299) (ratelimit/clear! url))
+        ;; And a DEFINITIVE signal — the provider stating when, by Retry-After or
+        ;; by a zero remaining-count with a reset — latches the host for everyone.
+        ;; A bare 429 does not: it may be a burst limit that clears in a second,
+        ;; and latching on it would stop every branch over one unlucky request.
+        (when-let [ms (ratelimit/definitive-signal status (:headers resp))]
+          (ratelimit/latch! url ms (System/currentTimeMillis))
+          (log/warn (adapter/display-name adapter) "rate-limited for"
+                    (long (/ ms 1000)) "s — latched for every branch"))
+        (if (<= 200 status 299)
+          (if (or (adapter/error-message adapter decoded)
+                  (and (false? (:success decoded)) (seq (business-codes decoded))))
+            ;; Some providers return 200 with an error object in the body — GLM
+            ;; with its business codes. Classified like any other failure, so a
+            ;; per-minute limit there is retried and a 1261 is an overflow
+            ;; rather than a flat "API error" (karamazov-jvdu).
+            (failure adapter config status decoded resp)
+            (if-let [parsed (adapter/parse-chat adapter decoded)]
+              (let [merged (message/merge-reasoning (:content parsed) (:reasoning parsed))]
+                (if (str/blank? merged)
+                  ;; The REASON travels from where it is detected. Re-deriving it
+                  ;; downstream by matching this sentence would make the counter a
+                  ;; measurement of the wording — reword the message and the
+                  ;; provider-trouble finding silently stops firing.
+                  ;; Retried in the client unless the budget ran out (eca retries
+                  ;; a premature empty stop): a reply cut at :max-tokens would
+                  ;; come back as empty again.
+                  {:outcome (if (= "length" (str (:finish-reason parsed))) :fatal :retry)
+                   :reason :empty-reply
+                   :error (str (adapter/display-name adapter)
+                               " returned neither content nor reasoning. This usually means"
+                               " the model spent its entire output budget thinking; raise"
+                               " :max-tokens or shorten the context.")}
+                  {:outcome :ok
+                   :response {:content merged
+                              ;; Carried as well as folded. agent/loop stores this
+                              ;; as turns.reasoning_text, and dropping it here left
+                              ;; that column empty for every run ever recorded —
+                              ;; which reads as "nothing reasoned" rather than as
+                              ;; "nobody kept it".
+                              :reasoning (:reasoning parsed)
+                              :finish-reason (:finish-reason parsed)
+                              :usage (:usage parsed)
+                              ;; BOTH ids, never collapsed (karamazov-a28w):
+                              ;; what this call asked for, and what the provider
+                              ;; says answered — absent when the body does not
+                              ;; name one. Anything comparing two runs believing
+                              ;; they ran the same model reads the reported one.
+                              :model-requested (:model config)
+                              :model (:model parsed)
+                              ;; The prefill this reply CONTINUES, or nil when the
+                              ;; adapter did not send one. absorb reattaches the
+                              ;; opener iff this is non-nil, so a provider that
+                              ;; ignored the prefill (GLM) is not credited a fence
+                              ;; it never emitted (karamazov-0r8s).
+                              :prefilled (when use-prefill? (:prefill request))
+                              ;; The tool a native tool_choice named, or nil —
+                              ;; read off the body actually sent, the same way
+                              ;; :prefilled is, so a forced call the adapter
+                              ;; turned into a prefill is not recorded as a
+                              ;; force. GLM busts its prefix cache on this with
+                              ;; the bytes unchanged (karamazov-8jz), which is
+                              ;; why the turn row keeps it (karamazov-o4wm.1).
+                              :forced (or (get-in body [:tool_choice :function :name])
+                                          (when (or (:grammar body) use-prefill?)
+                                            (:name (:force-tool request))))
+                              ;; HOW it was forced, because they are different
+                              ;; findings on the cache: a native tool_choice
+                              ;; rewrites the prefix, a grammar or a prefill
+                              ;; leaves it byte-identical (karamazov-fp21.1). A
+                              ;; bare-fence prefill is a force with no name — the
+                              ;; no-call clamp. nil when nothing forced.
+                              :forced-via (cond
+                                            (get-in body [:tool_choice :function :name]) :native
+                                            (:grammar body) :grammar
+                                            use-prefill? :prefill)
+                              :first-content-ms (:first-content-ms resp)
+                              :elapsed-ms elapsed}}))
+              {:outcome :fatal
                :error (str (adapter/display-name adapter)
-                           " returned neither content nor reasoning. This usually means"
-                           " the model spent its entire output budget thinking; raise"
-                           " :max-tokens or shorten the context.")}
-              {:outcome :ok
-               :response {:content merged
-                          ;; Carried as well as folded. agent/loop stores this
-                          ;; as turns.reasoning_text, and dropping it here left
-                          ;; that column empty for every run ever recorded —
-                          ;; which reads as "nothing reasoned" rather than as
-                          ;; "nobody kept it".
-                          :reasoning (:reasoning parsed)
-                          :finish-reason (:finish-reason parsed)
-                          :usage (:usage parsed)
-                          ;; BOTH ids, never collapsed (karamazov-a28w):
-                          ;; what this call asked for, and what the provider
-                          ;; says answered — absent when the body does not
-                          ;; name one. Anything comparing two runs believing
-                          ;; they ran the same model reads the reported one.
-                          :model-requested (:model config)
-                          :model (:model parsed)
-                          ;; The prefill this reply CONTINUES, or nil when the
-                          ;; adapter did not send one. absorb reattaches the
-                          ;; opener iff this is non-nil, so a provider that
-                          ;; ignored the prefill (GLM) is not credited a fence
-                          ;; it never emitted (karamazov-0r8s).
-                          :prefilled (when use-prefill? (:prefill request))
-                          ;; The tool a native tool_choice named, or nil —
-                          ;; read off the body actually sent, the same way
-                          ;; :prefilled is, so a forced call the adapter
-                          ;; turned into a prefill is not recorded as a
-                          ;; force. GLM busts its prefix cache on this with
-                          ;; the bytes unchanged (karamazov-8jz), which is
-                          ;; why the turn row keeps it (karamazov-o4wm.1).
-                          :forced (or (get-in body [:tool_choice :function :name])
-                                      (when (or (:grammar body) use-prefill?)
-                                        (:name (:force-tool request))))
-                          ;; HOW it was forced, because they are different
-                          ;; findings on the cache: a native tool_choice
-                          ;; rewrites the prefix, a grammar or a prefill
-                          ;; leaves it byte-identical (karamazov-fp21.1). A
-                          ;; bare-fence prefill is a force with no name — the
-                          ;; no-call clamp. nil when nothing forced.
-                          :forced-via (cond
-                                        (get-in body [:tool_choice :function :name]) :native
-                                        (:grammar body) :grammar
-                                        use-prefill? :prefill)
-                          :first-content-ms (:first-content-ms resp)
-                          :elapsed-ms elapsed}}))
-          {:outcome :fatal
-           :error (str (adapter/display-name adapter)
-                       " reply had no completion in it: "
-                       (subs (str (:body resp)) 0 (min 300 (count (str (:body resp))))))}))
-      (let [refused (rejected/refused-in status body (:body resp))]
-        (if (and refused (rejected/learn! config refused))
-          (do (log/warn (adapter/display-name adapter) "refused" (str/join ", " (map name refused))
-                        "— sending without it, and leaving it off for" (:model config))
-              (post-once* adapter config request url))
-          (failure adapter config status decoded resp))))))
+                           " reply had no completion in it: "
+                           (subs (str (:body resp)) 0 (min 300 (count (str (:body resp))))))}))
+          (let [refused (rejected/refused-in status body (:body resp))]
+            (if (and refused (rejected/learn! config refused))
+              (do (log/warn (adapter/display-name adapter) "refused" (str/join ", " (map name refused))
+                            "— sending without it, and leaving it off for" (:model config))
+                  (post-once* adapter config request url))
+              (failure adapter config status decoded resp))))))))
 
 (defn- partial-response
   "Parse a cut stream at the adapter boundary, retaining only a completion
