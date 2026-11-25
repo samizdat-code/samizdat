@@ -132,5 +132,4 @@
       ;; predates the prompt still refuses, in plain words.
       (try (prompt/render "tool-ceiling" {:tool (str tool-name)})
            (catch Throwable _
-             (str "`" tool-name "` is not available: the operator's config.edn "
-                  ":tools ceiling does not include it."))))))
+             (pr-str {:refused (str tool-name) :by [:tools :ceiling]}))))))

@@ -143,5 +143,4 @@
                                                      (= :block (:mode (approval/policy (:run-id ctx)))))
                                          :note (:note d)})
                          (catch Throwable _
-                           (str "`" tool-name "` was refused by the operator's argument rule "
-                                (label rule) " (config.edn :tools :rules).")))})))))
+                           (pr-str {:refused (str tool-name) :by [:tools :rules] :rule rule})))})))))

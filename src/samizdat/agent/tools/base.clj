@@ -41,6 +41,7 @@
             [samizdat.agent.roles :as roles]
             [samizdat.agent.state :as state]
             [samizdat.agent.suggest :as suggest]
+            [samizdat.security.ceiling :as ceiling]
             [samizdat.prompt :as prompt]))
 
 (defmulti run-tool
@@ -317,7 +318,7 @@
 
 ;; --- unknown ----------------------------------------------------------------
 
-(defmethod run-tool :default [{:keys [branch tool-name]}]
+(defmethod run-tool :default [{:keys [branch tool-name] :as ctx}]
   ;; (fnil inc 0), not inc: the counter starts absent, and `inc` on nil throws.
   ;; state/new-branch seeds the tally so a production branch survived it, but
   ;; a resumed branch, a hand-built one, or any branch whose mechanics map has
@@ -326,7 +327,11 @@
   ;; exists to handle a bad call was itself the crash. The dispatch seam turns
   ;; a throw into a :mechanics result now (RFC-008), which would have masked
   ;; this rather than fixed it.
-  (let [known (sort (remove keyword? (keys (methods run-tool))))
+  ;; Only what the operator's ceiling permits: naming a tool above it here
+  ;; would advertise what dispatch then refuses (karamazov-k7gl.5).
+  (let [c (ceiling/of-ctx ctx)
+        known (sort (filter #(ceiling/permits? c %)
+                            (remove keyword? (keys (methods run-tool)))))
         ;; A NEAREST NAME first, when the miss is a typo. The list of every
         ;; tool is the fallback answer, not the useful one: it is 36 names the
         ;; model has already been shown, and reading it back is a turn spent

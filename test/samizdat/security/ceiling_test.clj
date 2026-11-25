@@ -90,6 +90,15 @@
         (is (not (str/includes? scoped "Run a command.")))
         (is (str/includes? scoped "read_file({path})"))))))
 
+(deftest an-unknown-tool-lists-only-what-the-ceiling-permits
+  (let [r (tools/run-tool {:branch {:id "B1"} :tool-name "read_fil" :args {}
+                           :config {:tools {:ceiling #{"grep" "done"}}}})
+        out (str (:result r))]
+    (is (str/includes? out "No tool named `read_fil`"))
+    (is (str/includes? out "grep"))
+    (is (not (str/includes? out "read_file")) "neither suggested nor listed")
+    (is (not (str/includes? out "shell")))))
+
 (deftest native-specs-above-the-ceiling-are-not-sent
   (let [c (ceiling/of-layers [{:ceiling #{"read_file"}}])
         specs [{:name "read_file"} {:name "shell"} {:name "eval"}]]
