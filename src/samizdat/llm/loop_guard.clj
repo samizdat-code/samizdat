@@ -70,16 +70,17 @@
   counts at the short or long floor; one with no letter only past the long
   floor; one of digits and whitespace never — padding and zero-filled dumps
   are ordinary output."
-  [text {:keys [max-unit short-unit short-repeated-chars long-repeated-chars]}]
+  [text {:keys [max-unit short-unit short-repeated-chars long-repeated-chars
+               short-min-repeats long-min-repeats]}]
   (let [text (str text)
         n (count text)]
     (when (>= n short-repeated-chars)
-      (let [max-unit (min max-unit (quot n 3))
+      (let [max-unit (min max-unit (quot n long-min-repeats))
             z (z-suffix text max-unit)]
         (some (fn [len]
                 (let [repeats (inc (quot (aget z len) len))
                       covered (* len repeats)]
-                  (when (>= repeats (if (<= len short-unit) 4 3))
+                  (when (>= repeats (if (<= len short-unit) short-min-repeats long-min-repeats))
                     (let [unit (subs text (- n len))]
                       (cond
                         (lettered? unit)
@@ -140,8 +141,7 @@
                      :recent (vec (take-last segment-window (conj (:recent d []) grams)))
                      :judged judged)]
         (if (and (>= judged segment-warmup) (>= cluster segment-cluster))
-          (assoc d :hit (str "wrote " cluster " near-identical paragraphs within its last "
-                             segment-window))
+          (assoc d :hit {:kind :paragraphs :cluster cluster :window segment-window})
           d)))))
 
 (defn- judge-paragraph [d text {:keys [segment-cap] :as policy}]
@@ -175,7 +175,8 @@
 
 (defn push
   "Feed `text`, the next streamed piece, to `d`. Answers `d`, with :hit — the
-  loop in words — once what it has seen ends in one."
+  loop as data, {:kind :exact :unit-chars :repeats} or {:kind :paragraphs
+  :cluster :window} — once what it has seen ends in one."
   [d text {:keys [tail-window check-stride] :as policy}]
   (let [text (str text)]
     (if (or (:hit d) (str/blank? text) (empty? text))
@@ -187,8 +188,8 @@
             cycle (when scan? (exact-suffix-cycle tail policy))
             d (assoc d :tail tail :unscanned (if scan? 0 unscanned))]
         (cond
-          cycle (assoc d :hit (str "repeated one " (count (:unit cycle)) "-character passage "
-                                   (:repeats cycle) " times back to back"))
+          cycle (assoc d :hit {:kind :exact :unit-chars (count (:unit cycle))
+                               :repeats (:repeats cycle)})
           (:semantic? d) (take-paragraphs (update d :pending str text) policy)
           :else d)))))
 
@@ -204,16 +205,17 @@
     (nil? policy) :off
     :else (get (:levels policy) (keyword adapter-id) (:default-level policy :off))))
 
-(def ^:private fence-open #"```tool-call|<tool-call>")
-
 (defn guard
   "One attempt's watch at `lvl`, or nil at :off: a function of a stream
-  delta ({:text} and/or {:reasoning}) answering what looped, in words, once
-  something has. Reasoning is watched until the answer's text starts; text
-  until a tool-call fence opens, since what follows is arguments."
-  [lvl policy]
+  delta ({:text} and/or {:reasoning}) answering the loop, `:hit` data with
+  the :channel it was in, once something has looped. Reasoning is watched
+  until the answer's text starts; text until one of `openers` (the strings
+  that open a fenced tool call) appears, since what follows is arguments."
+  [lvl policy openers]
   (when (and policy (#{:exact :semantic} lvl))
     (let [semantic? (= :semantic lvl)
+          fence-open (when (seq openers)
+                       (re-pattern (str/join "|" (map #(java.util.regex.Pattern/quote (str %)) openers))))
           state (atom {:reasoning (detector semantic?) :text (detector semantic?)
                        :answering? false :text-seen "" :in-call? false})]
       (fn [{:keys [text reasoning]}]
@@ -225,8 +227,8 @@
                            (if (or (empty? (str text)) (:in-call? s))
                              s
                              (let [seen (str (:text-seen s) text)
-                                   m (re-matcher fence-open seen)]
-                               (if (.find m)
+                                   m (when fence-open (re-matcher fence-open seen))]
+                               (if (and m (.find m))
                                  (-> s
                                      (assoc :answering? true :in-call? true :text-seen "")
                                      ;; the new text before the opener; an
@@ -239,5 +241,5 @@
                                             ;; enough to see an opener split across deltas
                                             :text-seen (let [k (count seen)] (subs seen (max 0 (- k 16)))))
                                      (update :text push text policy))))))))]
-          (or (some->> (get-in s [:reasoning :hit]) (str "its reasoning "))
-              (some->> (get-in s [:text :hit]) (str "its answer "))))))))
+          (or (some-> (get-in s [:reasoning :hit]) (assoc :channel :reasoning))
+              (some-> (get-in s [:text :hit]) (assoc :channel :text))))))))

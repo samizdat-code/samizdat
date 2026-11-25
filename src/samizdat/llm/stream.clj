@@ -168,7 +168,7 @@
   as jolt.http.platform's cap does for an unstreamed call. `on-delta`
   throwing does not fail the call: a watcher's trouble is not the model's.
 
-  `:guard`, a function of one delta answering a loop in words or nil
+  `:guard`, a function of one delta answering a loop (as data) or nil
   (samizdat.llm.loop-guard), cuts the stream once it answers: the call throws
   ex-info carrying `:loop` and the `:partial-body` so far.
 
@@ -249,7 +249,7 @@
                   (when-not @first-at (reset! first-at (System/currentTimeMillis))))]
           (reset! latest acc)
           (when-let [why @looped]
-            (throw (ex-info (str "provider stream cut: the model looped: " why)
+            (throw (ex-info (str "provider stream cut: the model looped " (pr-str why))
                             {:loop why :partial-body (json/write-str (completion acc))})))
           (cond
             (and (nil? got) (nil? (:status state)))

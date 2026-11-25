@@ -430,7 +430,8 @@
                                          :guard (let [policy (lexicon/policy :loop-guard)]
                                                   (loop-guard/guard
                                                    (loop-guard/level (adapter/id adapter) (:loop-guard config) policy)
-                                                   policy)))
+                                                   policy
+                                                   (lexicon/wordlist :tool-call-openers))))
                               (:on-delta request))
                  (http/post url (assoc opts :throw-exceptions false)))
                (catch Throwable e

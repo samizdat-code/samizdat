@@ -3780,6 +3780,7 @@
           :default-level :exact
           :tail-window 4096 :max-unit 1024 :check-stride 128
           :short-unit 60 :short-repeated-chars 180 :long-repeated-chars 1024
+          :short-min-repeats 4 :long-min-repeats 3
           :segment-cap 700 :segment-floor 60 :segment-window 16
           :segment-similarity 0.8 :segment-warmup 8 :segment-cluster 4}
   :kind :threshold :capability-tunable? false
@@ -3798,9 +3799,9 @@
         :default-level covers the rest; a provider's own :loop-guard key
         outranks both. :exact finds one unit repeated back to back at the end
         of the last :tail-window characters, scanned every :check-stride new
-        characters: a unit of at most :short-unit characters needs four
-        repeats and :short-repeated-chars covered, a longer one (or one
-        spanning a line break) three and :long-repeated-chars, so a status
+        characters: a unit of at most :short-unit characters needs
+        :short-min-repeats repeats and :short-repeated-chars covered, a longer one (or one
+        spanning a line break) :long-min-repeats and :long-repeated-chars, so a status
         line restated a few times is not a loop. Units of digits and
         whitespace never count. :semantic adds the paragraph check: a
         paragraph (code, headings and bold titles removed, at most
@@ -3809,7 +3810,8 @@
         :segment-window is at least :segment-similarity, after
         :segment-warmup paragraphs. DeepSeek and GLM drift a paragraph
         cosmetically rather than repeat it verbatim, which is why they get
-        it. Text inside a tool-call fence is not watched; the finished-reply
+        it. Text after a tool-call opener (wordlists.edn :tool-call-openers)
+        is not watched; the finished-reply
         check still covers it.
 
         The thresholds are oh-my-pi's thinking-loop guard as nodecode ported

@@ -37,6 +37,8 @@
 
 (def policy (lexicon/policy :loop-guard))
 
+(def openers (lexicon/wordlist :tool-call-openers))
+
 (defn- feed
   "Push `pieces` through a fresh detector; the first hit, or nil."
   [semantic? pieces]
@@ -55,6 +57,7 @@
 
 (deftest the-shipped-policy-is-there
   (is (map? policy) "gates.edn carries :loop-guard")
+  (is (contains? openers "```tool-call") "wordlists.edn carries the fence openers")
   (is (= :semantic (lg/level :deepseek nil policy)))
   (is (= :exact (lg/level :local nil policy)))
   (is (= :off (lg/level :deepseek :off policy)) "a provider's :loop-guard outranks the table")
@@ -115,23 +118,23 @@
 
 (deftest the-guard-watches-reasoning-and-text
   (testing "a reasoning loop"
-    (let [g (lg/guard :exact policy)]
-      (is (some #(g {:reasoning %}) (tokens loop-text)))))
+    (let [g (lg/guard :exact policy openers)]
+      (is (= :reasoning (:channel (some #(g {:reasoning %}) (tokens loop-text)))))))
   (testing "a text loop"
-    (let [g (lg/guard :exact policy)]
-      (is (some #(g {:text %}) (tokens loop-text)))))
+    (let [g (lg/guard :exact policy openers)]
+      (is (= :text (:channel (some #(g {:text %}) (tokens loop-text)))))))
   (testing "nil at :off"
-    (is (nil? (lg/guard :off policy)))))
+    (is (nil? (lg/guard :off policy openers)))))
 
 (deftest a-tool-call-s-arguments-are-not-watched
   ;; A file being written can repeat itself legitimately; the finished-reply
   ;; check still sees a loop inside a fence.
-  (let [g (lg/guard :exact policy)]
+  (let [g (lg/guard :exact policy openers)]
     (is (nil? (g {:text "Writing it.\n```tool-call\n{\"name\":\"write_file\",\"args\":{\"content\":\""})))
     (is (not-any? #(g {:text %}) (tokens loop-text)))))
 
 (deftest reasoning-stops-being-watched-once-the-answer-starts
-  (let [g (lg/guard :exact policy)]
+  (let [g (lg/guard :exact policy openers)]
     (is (nil? (g {:text "Here is the answer."})))
     (is (not-any? #(g {:reasoning %}) (tokens loop-text)))))
 
@@ -160,7 +163,7 @@
                    {:status 200 :headers {"Content-Type" "text/event-stream"} :body ch}))
     (fn [port]
       (let [t0 (System/currentTimeMillis)
-            g (lg/guard :exact policy)
+            g (lg/guard :exact policy openers)
             r (try (stream/post (str "http://127.0.0.1:" port "/v1/chat/completions")
                                 {:headers {} :body "{}" :socket-timeout 30000 :conn-timeout 2000
                                  :guard g}
@@ -168,7 +171,7 @@
                    (catch clojure.lang.ExceptionInfo e e))
             took (- (System/currentTimeMillis) t0)]
         (is (instance? clojure.lang.ExceptionInfo r) "a loop is not an answer")
-        (is (string? (:loop (ex-data r))) "the cut says why")
+        (is (= :exact (:kind (:loop (ex-data r)))) "the cut says what looped")
         (is (str/includes? (get-in (json/read-str (:partial-body (ex-data r)) :key-fn keyword)
                                    [:choices 0 :message :content])
                            "Verifying"))
@@ -186,14 +189,14 @@
     (with-redefs [stream/post (fn [_ opts _]
                                 (reset! guard-seen (:guard opts))
                                 (throw (ex-info "provider stream interrupted: looped"
-                                                {:partial-body body :loop "repeated a passage"})))]
+                                                {:partial-body body :loop {:kind :exact :repeats 12}})))]
       (let [r (#'client/post-once* a {:base-url "http://x" :features #{:stream}
                                       :model "m" :timeout-ms 1000}
                                    {:messages [] :on-delta (fn [_])} "http://x")]
         (is (fn? @guard-seen) "deepseek is guarded")
         (is (= :ok (:outcome r)) "not retried: a retry re-runs the loop")
         (is (= "repetition" (get-in r [:response :finish-reason])))
-        (is (= "repeated a passage" (get-in r [:response :loop])))
+        (is (= {:kind :exact :repeats 12} (get-in r [:response :loop])))
         (is (= loop-text (get-in r [:response :content])))))))
 
 (deftest a-repetition-finish-is-a-periodic-truncation

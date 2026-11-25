@@ -319,6 +319,11 @@
                     cannot spin a thread. Scheduling, not a policy: the bounds
                     it polls for come from the provider config."}}
 
+   "src/samizdat/llm/loop_guard.clj"
+   {:threshold {3 "The arity of a word trigram, which is what the paragraph
+                   check's Jaccard is over. The thresholds it decides by are
+                   gates.edn :loop-guard."}}
+
    "src/samizdat/api/stream.clj"
    {:vocabulary {:all "The query syntax of the stream's own cursor parameter
                        (?since=). The API's shape, not policy."}}
