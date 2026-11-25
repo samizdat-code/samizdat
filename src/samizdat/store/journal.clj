@@ -216,6 +216,52 @@
                   (:cache-hit-tokens usage) (:cache-miss-tokens usage)
                   (db/now)])))
 
+(defn run-usage-by-model
+  "`run-usage`'s tokens split by who served them, for pricing: one row per
+  {:provider :model} with :calls :prompt-tokens :completion-tokens
+  :cache-hit-tokens :cache-miss-tokens (each nil when no row reported it).
+
+  A turn is served by the run's provider and model — turns carry neither. A
+  side call names its model; one that names none is the run's, and one that
+  names another model has no provider on record (nil), since side_calls keeps
+  the model and not the endpoint."
+  [conn run-id]
+  (let [rows (concat
+              (db/fetch conn ["SELECT r.provider AS provider, r.model AS model,
+                                      count(*) AS calls,
+                                      coalesce(sum(t.prompt_tokens), 0) AS prompt_tokens,
+                                      coalesce(sum(t.completion_tokens), 0) AS completion_tokens,
+                                      sum(t.cache_hit_tokens) AS cache_hit_tokens,
+                                      sum(t.cache_miss_tokens) AS cache_miss_tokens
+                                 FROM turns t JOIN runs r ON r.id = t.run_id
+                                WHERE t.run_id = ? GROUP BY r.provider, r.model"
+                              run-id])
+              (db/fetch conn ["SELECT CASE WHEN t.model IS NULL OR t.model = '' OR t.model = r.model
+                                           THEN r.provider END AS provider,
+                                      coalesce(nullif(t.model, ''), r.model) AS model,
+                                      count(*) AS calls,
+                                      coalesce(sum(t.prompt_tokens), 0) AS prompt_tokens,
+                                      coalesce(sum(t.completion_tokens), 0) AS completion_tokens,
+                                      sum(t.cache_hit_tokens) AS cache_hit_tokens,
+                                      sum(t.cache_miss_tokens) AS cache_miss_tokens
+                                 FROM side_calls t JOIN runs r ON r.id = t.run_id
+                                WHERE t.run_id = ?
+                                GROUP BY 1, 2"
+                              run-id]))
+        add (fn [a b] (if (or a b) (+ (or a 0) (or b 0)) nil))]
+    (->> rows
+         (map (fn [r] {:provider (not-empty (str (:provider r))) :model (str (:model r))
+                       :calls (:calls r)
+                       :prompt-tokens (:prompt_tokens r)
+                       :completion-tokens (:completion_tokens r)
+                       :cache-hit-tokens (:cache_hit_tokens r)
+                       :cache-miss-tokens (:cache_miss_tokens r)}))
+         (group-by (juxt :provider :model))
+         vals
+         (mapv (fn [rs] (reduce (fn [a b]
+                                  (merge-with add a (dissoc b :provider :model)))
+                                rs))))))
+
 (defn run-usage
   "What a run has spent so far: {:turns :side-calls :prompt-tokens
   :completion-tokens :total-tokens :cache-hit-tokens :cache-miss-tokens
@@ -234,10 +280,15 @@
   a local llama.cpp would otherwise read as half as well-cached as it is, since
   the reader's prompt tokens have no hit lane to match them. nil when nothing
   reported a lane — unknown, not zero, the same rule the adapter follows when
-  it declines to write a 0 it did not measure."
-  [conn run-id]
+  it declines to write a 0 it did not measure.
+
+  With `branch-id`, the same bill for that one branch: what a delegated child
+  spent, reported back to its parent beside the answer (karamazov-k7gl.9). The
+  run's own total already includes it, since the child is a branch of the run."
+  ([conn run-id] (run-usage conn run-id nil))
+  ([conn run-id branch-id]
   (let [q (fn [table]
-            (first (db/fetch conn [(str "SELECT count(*) AS calls,
+            (first (db/fetch conn (cond-> [(str "SELECT count(*) AS calls,
                                                 coalesce(sum(prompt_tokens), 0) AS prompt_tokens,
                                                 coalesce(sum(completion_tokens), 0) AS completion_tokens,
                                                 coalesce(sum(total_tokens), 0) AS total_tokens,
@@ -247,8 +298,10 @@
                                                                     OR cache_miss_tokens IS NOT NULL
                                                                   THEN prompt_tokens END), 0)
                                                   AS cached_prompt_tokens
-                                           FROM " table " WHERE run_id = ?")
-                                   run-id])))
+                                           FROM " table " WHERE run_id = ?"
+                                        (when branch-id " AND branch_id = ?"))
+                                   run-id]
+                                    branch-id (conj branch-id)))))
         t (q "turns")
         s (q "side_calls")
         both (fn [k] (+ (get t k) (get s k)))
@@ -261,7 +314,7 @@
      :cache-hit-tokens (both :cache_hit_tokens)
      :cache-miss-tokens (both :cache_miss_tokens)
      :cache-hit-rate (when (pos? reported)
-                       (double (/ (both :cache_hit_tokens) reported)))}))
+                       (double (/ (both :cache_hit_tokens) reported)))})))
 
 (defn record-dispatch!
   "What a branch is about to run, on record BEFORE it runs
@@ -1030,6 +1083,47 @@
                                 ["SELECT MAX(id) AS id FROM events"])))
       0))
 
+(def event-epoch
+  "The shape of an event as a client reads it — the row projection GET
+  /v1/runs/:id/journal and the SSE streams serve. Bump it whenever that
+  projection changes, so a client written against the old shape is told to
+  reload rather than page on in a shape it misreads."
+  1)
+
+(defn event-floor
+  "The lowest cursor a resume of `run-id`'s events (every run's when nil) can
+  page from without missing a row that no longer exists: a cursor below
+  `floor - 1` has missed some.
+
+  Ids are AUTOINCREMENT, and a rolled-back insert rolls its id back with it,
+  so a hole in the ids is a DELETE — `prune-finished!` or
+  `prune-run-record!`, which take a finished run's rows whole. Hence:
+
+    every run   one past the highest hole, 1 when there is none; one past
+                the highest id ever assigned when the newest rows are gone
+    one run     1 while it holds any row (its rows go all at once or not at
+                all); one past the highest id ever assigned when it holds
+                none
+
+  The every-run case is an anti-join over the id index, paid once per
+  connection, not per page."
+  [conn run-id]
+  (let [assigned (or (:seq (db/fetch-one conn ["SELECT seq FROM sqlite_sequence
+                                                 WHERE name = 'events'"]))
+                     0)]
+    (if run-id
+      (if (:id (db/fetch-one conn ["SELECT MIN(id) AS id FROM events WHERE run_id = ?" run-id]))
+        1
+        (inc assigned))
+      (let [top (:id (db/fetch-one conn ["SELECT MAX(id) AS id FROM events"]))]
+        (if (or (nil? top) (< top assigned))
+          (inc assigned)
+          (or (:id (db/fetch-one conn ["SELECT MAX(e.id) AS id FROM events e
+                                         WHERE e.id > 1
+                                           AND NOT EXISTS (SELECT 1 FROM events p
+                                                            WHERE p.id = e.id - 1)"]))
+              1))))))
+
 (defn all-events-since
   "`events-since` across every run: what a stream following all of them
   reads. Ids are global, so one cursor serves."
@@ -1077,6 +1171,41 @@
                           WHERE run_id = ? AND kind = ?
                           ORDER BY id"
                         run-id (name kind)])))
+
+;; A branch's plan, one event per change (karamazov-k7gl.2): the whole plan
+;; and its delta from the one before, so the latest event IS the current plan
+;; and the run of them is its history. See samizdat.agent.plans.
+(defn plan-snapshot!
+  "Record a plan change on `branch-id` at `turn`: `{:plan <snapshot> :delta
+  <delta>}`. Returns the event id."
+  [conn run-id branch-id turn {:keys [plan delta]}]
+  (emit! conn run-id :plan-snapshot {:branch-id branch-id :turn turn
+                                     :data {:plan plan :delta delta}}))
+
+(defn- plan-row [{:keys [id turn data created_at]}]
+  (when-let [d (try (json/read-str (str data) :key-fn keyword)
+                    (catch Throwable _ nil))]
+    {:id id :turn turn :at created_at :plan (:plan d) :delta (:delta d)}))
+
+(defn plan-history
+  "Every plan snapshot of one branch, oldest first, each
+  `{:id :turn :at :plan :delta}`."
+  [conn run-id branch-id]
+  (into [] (keep plan-row)
+        (db/fetch conn ["SELECT id, turn, data, created_at FROM events
+                          WHERE run_id = ? AND branch_id = ? AND kind = 'plan-snapshot'
+                          ORDER BY id"
+                        run-id branch-id])))
+
+(defn latest-plan
+  "The newest plan snapshot of one branch, `{:id :turn :at :plan :delta}`, or
+  nil when it never declared one."
+  [conn run-id branch-id]
+  (some-> (db/fetch-one conn ["SELECT id, turn, data, created_at FROM events
+                                WHERE run_id = ? AND branch_id = ? AND kind = 'plan-snapshot'
+                                ORDER BY id DESC LIMIT 1"
+                              run-id branch-id])
+          plan-row))
 
 ;; Each branch's movement through its workflow, as samizdat.progress records it
 ;; (karamazov-rz7t.2): what the supervisor reads instead of the steps.

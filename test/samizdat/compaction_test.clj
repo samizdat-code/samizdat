@@ -790,7 +790,9 @@
     (is (zero? @calls))
     (is (some #(= "UNADDRESSED" (:content %)) remaining))
     (is (not-any? #(contains? #{2 3 4} (:turn %)) remaining)
-        "the fold window leaves history only as a projection; originals stay in the journal")))
+        "the fold window leaves history only as a projection; originals stay in the journal")
+    (is (= "sys" (:content (first remaining))) "the head is not part of the window")
+    (is (= (last msgs) (last remaining)) "nor is the live tail")))
 
 (deftest eviction-stamps-the-marker-it-inserts-not-an-older-one
   (let [msgs [{:role "system" :content "old" :compaction? true :evicted-turns [1]}

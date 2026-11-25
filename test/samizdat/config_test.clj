@@ -206,6 +206,11 @@
         (is (str/includes? (str (ex-message e)) "/.samizdat/config.edn"))
         (is (str/includes? (str (ex-message e)) (str "unrecognized key " k)))))))
 
+(deftest hooks-are-a-recognised-key
+  ;; karamazov-k7gl.10: a project's hooks live in config.edn :hooks.
+  (with-files [root nil "{:hooks [{:name \"fmt\" :trigger :after-write :command \"true\"}]}"]
+    (is (= "fmt" (get-in (config/load-config {:run {:root root}}) [:hooks 0 :name])))))
+
 (deftest a-global-config-sits-beneath-the-project-config
   (let [home (temp-config-home "{:http {:port 4100} :run {:max-turns 9 :beam-width 2}}")
         root (temp-project-root "{:run {:max-turns 7}}")]
@@ -557,3 +562,10 @@
   (is (= 1048576 (get-in (config/load-config {:roles {:default :deepseek}}) [:llm :context-window])))
   (is (= 128000 (get-in (config/load-config {:roles {:default :glm}}) [:llm :max-tokens])))
   (is (= 16384 (get-in (config/load-config {:roles {:default :openai}}) [:llm :max-tokens]))))
+
+(deftest pricing-is-a-recognised-key
+  ;; karamazov-k7gl.8: samizdat.pricing reads operator rates from config.edn
+  ;; :pricing, so a layer that sets it must load rather than be refused.
+  (with-files [root nil "{:pricing {:glm {\"glm-4.6\" {:input 1.0 :output 2.0}}}}"]
+    (is (= 1.0 (get-in (config/load-config {:run {:root root}})
+                       [:pricing :glm "glm-4.6" :input])))))

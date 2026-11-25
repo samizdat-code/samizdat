@@ -1,0 +1,25 @@
+;; THE PRICE TABLE — what a model's tokens cost, so GET /v1/runs/:id can put
+;; dollars (:cost) beside the tokens (:usage). Read by samizdat.pricing.
+;;
+;; US dollars per MILLION tokens, by model id as the run records it (the
+;; runs.model column, side_calls.model), and optionally by provider name as
+;; well, for one model priced differently by two endpoints:
+;;
+;;   {:models    {"model-id" {:input 0.0 :output 0.0
+;;                            :cache-read 0.0 :cache-write 0.0}}
+;;    :providers {"provider" {"model-id" {:input 0.0 :output 0.0}}}}
+;;
+;; :input and :output are required; a missing cache rate bills those tokens at
+;; :input. A provider's entry is the price whole, not merged with the model's.
+;;
+;; LAYERED like config.edn: $SAMIZDAT_PRICING_FILE > .samizdat/pricing.edn >
+;; the profile's or ~/.config/samizdat/pricing.edn > this file, deep-merged,
+;; and config.edn's :pricing (same shape) over all of them. Add your own
+;; providers' rates there.
+;;
+;; EMPTY ON PURPOSE. A price is a fact about a vendor's current rate card, and
+;; nothing in this repository records one; a number written here from memory
+;; would be a guess presented as a bill. A model without a price is listed
+;; under :cost :unpriced and never estimated.
+{:models {}
+ :providers {}}

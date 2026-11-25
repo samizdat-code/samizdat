@@ -323,14 +323,22 @@
 
 (defn reopen-branch!
   "An exhausted branch back to active — the budget-extension path. Branches
-  closed for cause (culled, abandoned, done) are never reopened; exhaustion
-  is the one closing reason that names the budget rather than the branch."
-  [conn run-id branch-id]
-  (db/with-writer
-    (db/execute! conn ["UPDATE branches SET status = 'active', inactive_reason = NULL
-                        WHERE run_id = ? AND id = ? AND status = 'exhausted'"
-                       run-id branch-id]))
-  (journal/note! conn run-id :branch-reopened {:branch-id branch-id}))
+  closed for cause (culled, abandoned, done) are not reopened by default;
+  exhaustion is the one closing reason that names the budget rather than the
+  branch. Returns rows written."
+  ([conn run-id branch-id] (reopen-branch! conn run-id branch-id #{"exhausted"}))
+  ;; `from` names the closed statuses the CALLER has decided may reopen — the
+  ;; beam's hold cell reopens a `done` branch to hear a watch it registered.
+  ([conn run-id branch-id from]
+   (let [n (reduce (fn [n status]
+                     (+ n (db/with-writer
+                            (db/execute! conn ["UPDATE branches SET status = 'active', inactive_reason = NULL
+                                                WHERE run_id = ? AND id = ? AND status = ?"
+                                               run-id branch-id (str status)])
+                            (db/change-count conn))))
+                   0 from)]
+     (journal/note! conn run-id :branch-reopened {:branch-id branch-id})
+     n)))
 
 (defn set-shape!
   "The width the run actually opens at and the digest of the prompt its

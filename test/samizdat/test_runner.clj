@@ -81,8 +81,10 @@
             [samizdat.corrections-test]
             [samizdat.wait-test]
             [samizdat.jobs-test]
+            [samizdat.job-waits-test]
             [samizdat.tui-onboarding-test]
             [samizdat.mcp-test]
+            [samizdat.mcp-http-test]
             [samizdat.role-output-test]
             [samizdat.worktree-test]
             [samizdat.findings-test]
@@ -91,6 +93,7 @@
             [samizdat.collab-test]
             [samizdat.acceptance-test]
             [samizdat.checklist-test]
+            [samizdat.plan-history-test]
             [samizdat.select-test]
             [samizdat.session-test]
             [samizdat.reflect-test]
@@ -148,6 +151,7 @@
             [samizdat.exposure-test]
             [samizdat.outline-test]
             [samizdat.hashline-test]
+            [samizdat.hooks-test]
             [samizdat.control-test]
             [samizdat.util-test]
             [samizdat.lsp-test]
@@ -214,6 +218,8 @@
             [samizdat.userspace-validation-test]
             [samizdat.userspace-adoption-test]
             [samizdat.event-stream-test]
+            [samizdat.pricing-test]
+            [samizdat.code-index-test]
             [samizdat.tui-theme-test]
             [samizdat.tui-markdown-test]
             [samizdat.tui-timeline-test]
@@ -228,6 +234,9 @@
             [samizdat.security.flow-handoff-test]
             [samizdat.security.replay-test]
             [samizdat.security.token-test]
+            [samizdat.security.ceiling-test]
+            [samizdat.security.argrules-test]
+            [samizdat.retry-budget-test]
             [samizdat.sdiff.address-test]
             [samizdat.sdiff.group-test]
             [samizdat.llm-fallback-test]
@@ -282,6 +291,7 @@
             [samizdat.mechanics-test]
             [samizdat.repair-test]
             [samizdat.split-test]
+            [samizdat.delegate-test]
             [samizdat.steps-test]
             [samizdat.storm-test]
             [samizdat.stubs-test]
@@ -383,6 +393,7 @@
     samizdat.mechanics-test
     samizdat.repair-test
     samizdat.split-test
+    samizdat.delegate-test
     samizdat.steps-test
     samizdat.storm-test
     samizdat.stubs-test
@@ -423,8 +434,10 @@
     samizdat.corrections-test
     samizdat.wait-test
     samizdat.jobs-test
+    samizdat.job-waits-test
     samizdat.tui-onboarding-test
     samizdat.mcp-test
+    samizdat.mcp-http-test
     samizdat.role-output-test
     samizdat.worktree-test
     samizdat.findings-test
@@ -433,6 +446,7 @@
     samizdat.collab-test
     samizdat.acceptance-test
     samizdat.checklist-test
+    samizdat.plan-history-test
     samizdat.select-test
     samizdat.session-test
     samizdat.reflect-test
@@ -489,6 +503,7 @@
     samizdat.exposure-test
     samizdat.outline-test
     samizdat.hashline-test
+    samizdat.hooks-test
     samizdat.control-test
     samizdat.util-test
    
@@ -556,6 +571,8 @@
     samizdat.userspace-validation-test
     samizdat.userspace-adoption-test
     samizdat.event-stream-test
+    samizdat.pricing-test
+    samizdat.code-index-test
     samizdat.tui-theme-test
     samizdat.tui-markdown-test
     samizdat.tui-timeline-test
@@ -570,6 +587,9 @@
     samizdat.security.flow-handoff-test
     samizdat.security.replay-test
     samizdat.security.token-test
+    samizdat.security.ceiling-test
+    samizdat.security.argrules-test
+    samizdat.retry-budget-test
    
     samizdat.sdiff.address-test
    

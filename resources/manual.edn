@@ -130,6 +130,14 @@
     :summary "Every workflow available to select or adapt, with its description."}
    {:name samizdat.agent.skills/catalog
     :summary "The on-demand skill catalogue: bundled skills under project overlays and the person's own {global}/skills (~/.config/samizdat/skills or the profile's), earliest root winning, including clj-debug for REPL inspection, clj-discover for Java/macro exploration, clj-replace for structural edits, and user-initiated clj-refactor for mechanism/policy review."}
+   {:name samizdat.agent.skills/registry
+    :summary "Every skill the roots in wordlists.edn :skill-roots reach (project, then the person's {global}, ~/.agents and ~/.claude skills, then shipped), flat <name>.md or an Agent Skills <name>/SKILL.md directory with YAML frontmatter (name, description, allowed-tools, license, metadata). Returns the winners, :shadowed (which path hides which) and :diagnostics (bad frontmatter, name not kebab-case or not the directory's, missing or over-long description; bounds in gates.edn :skills). allowed-tools is surfaced, not enforced. `skill list` shows it; GET /v1/harness/skills serves it without bodies."}
+   {:name samizdat.hooks/fire!
+    :summary "Run the hooks config.edn :hooks attaches to a trigger (:run-start, :after-write with SAMIZDAT_HOOK_PATH, :after-shell with SAMIZDAT_HOOK_COMMAND/EXIT, :run-end with SAMIZDAT_HOOK_STATUS) through the shell's own policy and sandbox, journal each as a :hook event with bounded output, and parse `###SAMIZDAT:<key> <value>` lines (ANSI stripped) into directives. Which tool fires which trigger and which directives reach the model (a `message`, as a notice from issuer `hook` at the next steer boundary) is gates.edn :hooks. config.edn is not agent-writable, so the agent cannot add a hook; a hook command the shell rules refuse is journalled as refused."}
+   {:name samizdat.hooks/directives
+    :summary "The `###SAMIZDAT:<key> <value>` lines of a hook's output, ANSI stripped, as [{:key :value}] in order."}
+   {:name samizdat.agent.skills/read-skill-file
+    :summary "A file bundled with a directory skill, relative to its root and confined to it (canonical paths, so `..` and symlinks out are refused). `skill load` names the root; `skill read {name} {path}` calls this."}
    {:name samizdat.heldout/defer!
     :summary "The held-out gate off the turn: after a save validates, the battery replays on a background lane and the edit is committed or refused there; the branch that made it is told by a message on a later turn. nil when the project has no battery, and the tool saves as before."}
    {:name samizdat.heldout/check-edit
@@ -198,6 +206,12 @@
     :summary "Copy the shipped role map (resources/userspace.edn) and every file it names into a project's .samizdat/ on its first run. From then on the project's map and files are its workflow and the store keeps their history. Older stored versions that differ are queued in .samizdat/adoption.edn for the supervisor."}
    {:name samizdat.api.stream/response
     :summary "A run's events pushed as server-sent events: GET /v1/runs/:id/events (GET /v1/events for every run). Each journal event after the cursor — Last-Event-ID, ?since=<id>, or ?since=now — with its kind as the event name and the row as JSON, then each one as it lands; plus the steps and approval changes that are never journalled. Numbers in gates.edn :event-stream. samizdat.api.sse/follow! is the client."}
+   {:name samizdat.code-index/search
+    :summary "BM25 code search over FTS5: the project's files (git ls-files in a git project, so not what .gitignore hides; gates.edn and config.edn :code-search :exclude globs on top) cut into overlapping line chunks, path weighted above body, indexed in the project db (code_files, code_chunks, code_chunks_fts) by the first search and refreshed by mtime, size and hash before each. Returns path, line range, best line, snippet and score. The `code_search` tool and GET /v1/harness/search?q=&limit= answer from it; numbers in gates.edn :code-search."}
+   {:name samizdat.pricing/cost
+    :summary "A run's spend in dollars: GET /v1/runs/:id carries :cost {:usd :by-model :unpriced} beside :usage, from journal/run-usage-by-model at the rates of the layered pricing.edn ($ per million input, output, cache-read, cache-write tokens, by model or by provider and model) with config.edn :pricing over it. A model with no rate is listed under :unpriced and never estimated; the shipped table is empty."}
+   {:name samizdat.api.stream/resync
+    :summary "When a client must reload a run rather than page its events: it names an event shape (X-Samizdat-Epoch header or ?epoch=) other than samizdat.store.journal/event-epoch — bump that when the event projection changes — or its cursor is below journal/event-floor, past rows pruning removed. A stream opens with a `hello` {epoch floor head} and the epoch header; a resync is a `resync` event {reason snapshot resume} with the head as its id, and GET /v1/runs/:id/journal answers the same with :resync and :next at the head. The TUI, the ACP agent and api.client/poll-step reload on it."}
    {:name samizdat.agent.live/apply-to
     :summary "What a person switched on a RUNNING run: the `model` and `effort` intervention kinds apply on arrival (POST /v1/runs/:id/interventions {kind: \"model\", payload: id}), and loop/call-model merges them over the run's llm config on every request, so every branch's next turn uses them. Each switch is journalled as :llm-switch. Forgotten when the run ends."}
    {:name samizdat.approval/set-mode!
@@ -329,7 +343,11 @@
    {:name samizdat.sim/foreign
     :summary "The record follows the person: each project's problems are published to sim.edn in the person's config dir (layers/global-dir, or $SAMIZDAT_SIM_FILE), and a project's brief shows other projects' problems on roles it also has, with the project and model each attempt came from (gates.edn :sim :foreign)."}
    {:name samizdat.mcp.client/call
-    :summary "MCP over stdio: config.edn :mcp {:servers {name {:command [argv] :env {VAR value|{:from VAR}} :policy :allow|:read-only|:prompt|:deny :trusted-tools [names]}} :trusted-roots [dirs]}. The `mcp` tool lists servers and tools and calls one under its policy; a project's own config.edn may name servers only for a root a person's config lists in :trusted-roots. One process per server, kept, re-listed when it says its tools changed, stopped with the system."}
+    :summary "MCP over stdio or Streamable HTTP: config.edn :mcp {:servers {name {:command [argv] :env {VAR value|{:from VAR}} | :url \"https://…/mcp\" :token-env \"VAR\", :policy :allow|:read-only|:prompt|:deny :trusted-tools [names] :timeout-ms n :output :trusted}} :trusted-roots [dirs]}. The `mcp` tool lists servers and tools and calls one under its policy (none named: gates.edn :mcp :default-policy); a project's own config.edn may name servers only for a root a person's config lists in :trusted-roots. One session per server (a process, or an HTTP session with its Mcp-Session-Id and a bearer token read from :token-env), kept, re-listed when it says its tools changed, stopped with the system."}
+   {:name samizdat.mcp.client/tool-digest
+    :summary "A :prompt MCP call is approved for the tool's DEFINITION: the ask is mcp:<server>/<tool>#<hash of name, description, input schema>, an allow-always is kept as a grant of that text (store.grants/mcp-grants, apart from the shell's), and a server that changes the tool is asked about again. A tool the server does not list is refused. gates.edn :mcp :yolo-allows? false refuses :prompt calls under :yolo; the :auto classifier never answers for one."}
+   {:name samizdat.mcp.elicit/questions
+    :summary "MCP elicitation: a server that asks for input mid-call (elicitation/create) has its schema turned into a questionnaire on the approvals queue, as ask_human's, when the run has a person to ask; the answers go back as accept with typed content, a refusal as decline, no answer within gates.edn :mcp :elicitation-wait-ms (or nobody to ask) as cancel. The call's own timeout is held while a person answers."}
    {:name samizdat.agent.gitdiff/tree-id
     :summary "The working tree's content as one id, untracked files included, without touching the tree. The configured checks the operator marked deterministic (config :run :verify-deterministic?, an acceptance :check's :deterministic? true) are answered from their last run on the same tree id instead of being rerun (gates.edn :verify-memo); the result says :reused?."}
    {:name samizdat.agent.worktree/isolated
@@ -486,7 +504,22 @@
    {:name samizdat.engine.jobs/start!
     :summary "The job registry, per run (after ECA's background tasks): at most gates.edn :background-jobs :max-jobs running, each keeping its last :buffer-lines lines with a read cursor, and a kill the exit monitor cannot overwrite. `jobs`, `read!`, `peek-lines`, `kill!`; run-state/run-ended! calls `forget-run!`, which kills them all."}
    {:name samizdat.agent.tools.jobs/exit-notice
-    :summary "The `jobs` tool (list, output since the last read, kill; prompts/jobs-tool.md), and the notice a branch gets at its next call when one of its jobs exits on its own, with its last :notice-tail-lines lines (prompts/job-exited.md)."}]}
+    :summary "The `jobs` tool (list, output since the last read, kill; prompts/jobs-tool.md), and the notice a branch gets at its next call when one of its jobs exits on its own, with its last :notice-tail-lines lines (prompts/job-exited.md)."}
+   {:name samizdat.engine.waits/register!
+    :summary "Waits on a job's output (karamazov-k7gl.1): a wait watches one job for a line matching a regex or its exit, from its own cursor (the job's end, or the retained history), under a deadline and an optional quiet timeout. pending -> ready -> delivered, or expired (deadline, quiet, job-gone) / cancelled. Pure `make`/`step` over a job snapshot; time, the job source, the sleep and the record are an injected env. `poll!`, `await!`, `await-any!`, `take-wakes!`, `cancel!`, `restore!`, `forget-run!` (run-state/run-ended!)."}
+   {:name samizdat.agent.tools.jobs/wait-notice
+    :summary "`jobs` wait (blocks up to `seconds`, returns the matched lines, a tail and the job's status), watch (registers and returns), unwatch; the wake a branch gets at its next call when a watch fires or expires (prompts/job-wait-woke.md). Every move is journalled as a :job-wait note; `restore-waits!` reads them back on a resume (pending ones expire as job-gone). Bounds in gates.edn :job-waits."}
+   {:name samizdat.agent.tools.jobs/await-wake!
+    :summary "What cells/beam.clj :beam/hold blocks on (beam.edn, after :start): a run COMPLETING while its shipped branch has a pending watch is held instead of finished, up to gates.edn :job-waits :hold-max-ms, looking every :hold-poll-ms; a fired watch reopens that branch (runs/reopen-branch! from done) with the wake as a user turn. Never holds an abort, a turn cap or a spent budget; :hold? false turns it off."}]}
+
+ {:group "Delegation"
+  :entries
+  [{:name samizdat.agent.tools.delegate/depth
+    :summary "delegate {request, workflow?, model?, background?}: a sub-agent on a child branch of this run (parent = the caller), run as roles.edn :delegate on gates.edn :delegate :workflow. Foreground waits up to :timeout-ms and returns its report with branch id, turns and tokens; background returns an id and the report lands in the caller's mailbox. {status: id or all} and {cancel: id}. Refused past :max-depth; no ask_human. Its turns are the run's, so its usage is the run's. Prose in prompts/delegate-tool.md and prompts/delegate-child.md."}
+   {:name samizdat.agent.delegate/start!
+    :summary "The per-run registry of background children: `start!`, `child`, `children`, `cancel!`, `running-count`; run-state/run-ended! calls `forget-run!`, which cancels every child still running."}
+   {:name samizdat.store.journal/run-usage
+    :summary "What a run has spent, turns and side calls; with a branch id, what that one branch spent (a delegated child's bill)."}]}
 
  {:group "Evidence and diagnosis"
   :entries
@@ -526,6 +559,17 @@
   :entries
   [{:name samizdat.security.exposure/refusal
     :summary "Why a read is refused: the project's .samizdat/config.edn :run :provider-deny keeps files matching a glob from a named provider, and read_file, read_digest (the reader's provider too), lsp and grep honour it. Operator policy, not yours to change."}]}
+
+ {:group "What the operator caps"
+  :entries
+  [{:name samizdat.security.ceiling/current
+    :summary "The tool ceiling: config.edn :tools {:ceiling #{...} :deny #{...}} across every config layer, intersected so a layer only narrows. A tool above it is refused at dispatch and left out of the catalogue and native specs whatever roles.edn or phases.edn say; editing them to enable it changes nothing. Operator policy, not yours to change."}
+   {:name samizdat.security.ceiling/permits?
+    :summary "Whether a ceiling lets a run call a tool; (permits? (current) \"shell\") answers for this project."}
+   {:name samizdat.security.argrules/decide
+    :summary "The operator's per-argument rules (config.edn :tools :rules, e.g. {:tool \"webfetch\" :args {:url \"^https?://\"} :decision :ask}) for any tool: last match wins within a layer, the strictest layer wins overall, and an :ask goes to the approval path. Operator policy, not yours to change."}
+   {:name samizdat.llm.client/retry-budgets
+    :summary "How many retries one model call gets per failure class (rate-limited, server, transport, partial-stream, empty-reply, timeout): gates.edn :provider-retry, which you may tune."}]}
 
  {:group "The project's instruction files"
   :entries
@@ -613,6 +657,10 @@
     :summary "What a run learned by trying: each command that kept failing (gates.edn :actions :min-failures) beside what worked instead. At run end each pair is written as a project fact (knowledge/distil-patterns!, wording gates.edn :project-facts :cmd-instead), corroborated across runs, and read by both roles on the next."}
    {:name samizdat.store.journal/search-turns
     :summary "Bounded literal search over one branch's journal: assistant text, arguments, results and tool names, never reasoning. fetch_turn({query, branch?, limit?, before?}) returns newest previews and a way to open each whole turn; deterministic eviction keeps cumulative turn references under gates.edn :compaction :strategy :evict."}
+   {:name samizdat.agent.plans/delta
+    :summary "A plan change as data (karamazov-k7gl.2): {:added {k [..]} :removed {k [..]} :changed {k {:from :to}}} over :files :tests :checklist and :goal :rfc, empty parts left out, so an unchanged plan is {}. plans/snapshot takes the plan off a branch, plans/restore puts one back. Every `plan` call that changes the plan journals the full snapshot plus this delta, and the model is shown the delta (prompts/plan-delta.md)."}
+   {:name samizdat.store.journal/latest-plan
+    :summary "A branch's current plan: its newest plan-snapshot event, {:id :turn :at :plan :delta}, or nil. journal/plan-history is every snapshot oldest first. A compaction fold carries the latest one as its own message after the summary (cmp/carry, prompts/compaction-plan.md; gates.edn :compaction :carry-plan? turns it off), resume restores it, and GET /v1/runs/:id/branches/:branch/plan serves it with the history."}
    {:name samizdat.store.journal/artifacts
     :summary "Every artifact this run banked, across all branches."}
    {:name samizdat.store.journal/branch-turns

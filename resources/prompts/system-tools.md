@@ -175,6 +175,14 @@ grep({pattern, paths?, offset?})
     most hits are noise.{% if reference-paths %} An ABSOLUTE prefix naming a reference
     path searches that tree instead — one call to sweep the examples, and the
     hits come back as absolute paths read_file takes directly.{% endif %}
+code_search({query, limit?})
+    Find where something is in the project by WORDS when you do not know the
+    exact pattern: identifiers, the words of a comment or an error message.
+    Ranks every source file in the project (not only Clojure, and not what
+    .gitignore hides) and returns the best chunks — path, line range, score
+    and the lines that matched best. A file whose path holds a word ranks
+    above one that only mentions it. `limit` hits (default 10). For an
+    exact regex use grep.
 read_digest({paths?, turns?, question, anchors?})
     Ask a question about one or more files and get bullets back, instead of
     paging the files through your context. A reader — a cheaper model, when
@@ -372,9 +380,15 @@ shell({command, timeout_ms, background?})
     against, a watcher). Returns once it is up, with first output and a job
     id; one that dies at once fails with its exit code. Stopped when the run
     ends; you are told if it exits. Do not use `&` or `nohup`.
-jobs({action, id?})
-    Background jobs: "list" (status, command); "output" with `id` (new
-    output since last read, stderr marked); "kill" with `id`.
+jobs({action, id?, pattern?, seconds?, quiet?, history?})
+    Background jobs: "list" (status, command, waits); "output" with `id`
+    (new output since last read, stderr marked); "kill" with `id`. "wait"
+    with `id`: block until the job prints a line matching the regex
+    `pattern` (or, with none, exits), for up to `seconds`; `quiet` stops
+    after that many seconds of silence; `history: true` searches lines
+    already written. Returns the matched line, a tail and the job's status.
+    "watch": the same, returning at once; you are told at a later call, and
+    a run is held open for a pending watch. "unwatch" with the watch's `id`.
 ```
 
 ### Discovering deferred tools
@@ -393,9 +407,10 @@ tool_search({query?, select?, limit?})
 {{skills}}
 
 ```
-skill({action, name?})
+skill({action, name?, path?})
     `load {name}`: a skill's full guidance, when a task matches its line
-    above. `list` reprints the catalogue.
+    above. `list` reprints the catalogue. `read {name} {path}`: a file a
+    directory skill bundles, relative to its root.
 ```
 
 ### Changing {% if self-hosting %}the harness itself{% else %}the loop you run in{% endif %}
@@ -634,6 +649,21 @@ split({reason, parts})
     you are woken, your job is to make YOUR task pass, and you may adjust
     what the parts delivered if they do not fit together the way you
     planned.
+delegate({request, workflow?, model?, background?})
+    Hand one self-contained request to a sub-agent: it works on its own
+    branch of this run with its own context and reports back. Use it for a
+    side investigation or a separable piece whose details you do not need
+    in your own context. The request is all it sees, so say everything it
+    needs: files, names, what to report.
+      delegate({request})                  waits and returns its report,
+                                           with its branch id, turns and
+                                           tokens.
+      delegate({request, background: true}) returns an id at once; the
+                                           report arrives in your inbox.
+      delegate({status: id | "all"})      how it is going.
+      delegate({cancel: id})              stop it.
+    Its report is a claim: check what matters before building on it. Its
+    usage counts against this run.
 ```
 
 {{split-decision}}

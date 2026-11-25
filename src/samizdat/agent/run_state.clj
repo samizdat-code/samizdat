@@ -24,6 +24,7 @@
   them (a serve process otherwise keeps one entry per run it ever ran)."
   (:require [samizdat.agent.context-edit :as context-edit]
             [samizdat.agent.verify :as verify]
+            [samizdat.hooks :as hooks]
             [samizdat.llm.client :as llm]
             [samizdat.progress :as progress]
             [samizdat.sdiff.reads :as reads]
@@ -31,15 +32,22 @@
 
 (defn run-ended!
   "Forget run `run-id`'s seal, its branches' flow labels, the models it
-  retired, the file reads its branches made, where its branches last were, and its
-  background jobs, killed. Each is best effort: one
+  retired, the file reads its branches made, where its branches last were, its
+  background jobs, killed, and its delegated children, cancelled. Each is best effort: one
   failing must not keep the rest."
   [run-id]
-  (doseq [f [verify/unseal-run! flow/forget-run! llm/forget-retired! reads/forget-reads!
+  ;; The :run-end hooks first, while every other piece of the run's state is
+  ;; still there for the shell gate to read.
+  (doseq [f [hooks/run-ended! verify/unseal-run! flow/forget-run! llm/forget-retired! reads/forget-reads!
              progress/forget-run! context-edit/forget-run!
              (requiring-resolve 'samizdat.agent.tools.resource/forget-run!)
              (requiring-resolve 'samizdat.inference.environment/forget-run!)
              (requiring-resolve 'samizdat.store.executions/forget-run!)
              (requiring-resolve 'samizdat.debug.sessions/close-run!)
-             (requiring-resolve 'samizdat.engine.jobs/forget-run!)]]
+             ;; Waits before jobs: a wait still pending is recorded cancelled
+             ;; rather than seeing its job vanish.
+             (requiring-resolve 'samizdat.engine.waits/forget-run!)
+             (requiring-resolve 'samizdat.engine.jobs/forget-run!)
+             ;; Its delegated children still running are cancelled.
+             (requiring-resolve 'samizdat.agent.delegate/forget-run!)]]
     (try (f run-id) (catch Throwable _ nil))))

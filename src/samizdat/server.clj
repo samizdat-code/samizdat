@@ -31,12 +31,14 @@
             [clojure.tools.logging :as log]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.gitdiff :as gitdiff]
+            [samizdat.agent.skills :as skills]
             [samizdat.api.control :as control]
             [samizdat.api.corrections :as api-corrections]
             [samizdat.api.openai :as openai]
             [samizdat.api.runs :as api-runs]
             [samizdat.api.stream :as stream]
             [samizdat.approval :as approval]
+            [samizdat.code-index :as code-index]
             [samizdat.config :as config]
             [samizdat.contracts :as contracts]
             [samizdat.engine.proc :as proc]
@@ -210,6 +212,31 @@
 (defn- layout-table [_req]
   (json-response (layout-body)))
 
+(defn skills-body
+  "The skills the bound project sees (samizdat.agent.skills/registry), for a
+  front end: each winner's description, where it lives, its declared
+  `allowed-tools`, license and metadata, and its diagnostics — never its
+  body, which is the model's to load — plus what shadows what."
+  []
+  (let [dirs (if-let [r (userspace/project-root)]
+               (skills/project-dirs r)
+               (skills/default-dirs))
+        {:keys [skills shadowed diagnostics]} (skills/registry dirs)
+        problem (fn [d] (update d :problem name))]
+    {:skills (vec (for [[nm e] (sort-by key skills)]
+                    (cond-> {:name nm :description (:description e) :path (:path e)
+                             :source (:source e) :format (name (:format e))
+                             :diagnostics (mapv problem (:diagnostics e))}
+                      (:root e) (assoc :root (:root e))
+                      (:allowed-tools e) (assoc :allowed_tools (:allowed-tools e))
+                      (:license e) (assoc :license (:license e))
+                      (:metadata e) (assoc :metadata (:metadata e)))))
+     :shadowed (vec shadowed)
+     :diagnostics (mapv problem diagnostics)}))
+
+(defn- skills-table [_req]
+  (json-response (skills-body)))
+
 ;; {:at ms :root path :snapshot m} — see gates.edn :git-snapshot-ttl-ms for why
 ;; a cache exists at all.
 (defonce ^:private git-cache (atom nil))
@@ -300,6 +327,21 @@
 (defn- files-table [req]
   (json-response (files-body (query-param req "q") (long-param req "limit"))))
 
+(defn- code-search
+  "GET /v1/harness/search?q=&limit= — the project's source ranked by BM25,
+  what the code_search tool answers from (samizdat.code-index). The index is
+  built by the first search and refreshed before each one."
+  [req]
+  (let [q (some-> (query-param req "q") str/trim not-empty)
+        config (system/config)
+        opts (code-index/options config)
+        opts (assoc opts :limit (code-index/clamp-limit (query-param req "limit") opts))]
+    (if-not q
+      (json-response 400 {:error {:message "q is required"}})
+      (json-response {:query q
+                      :results (code-index/search (system/conn) (get-in config [:run :root] ".")
+                                                  q opts)}))))
+
 ;; --- routing ----------------------------------------------------------------
 ;;
 ;; ruuter route maps: {:method :path :response}. A path segment starting with
@@ -353,6 +395,11 @@
    {:method :get :path "/v1/harness/project" :response #(project-table %)}
    ;; The files an @-mention in the compose box can name (?q=, ?limit=).
    {:method :get :path "/v1/harness/files" :response #(files-table %)}
+   ;; The source ranked for a query of words (?q=, ?limit=): path, line
+   ;; range, snippet and score per hit. See samizdat.code-index.
+   {:method :get :path "/v1/harness/search" :response #(code-search %)}
+   ;; The skills the project sees, what shadows what, and what is wrong.
+   {:method :get :path "/v1/harness/skills" :response #(skills-table %)}
    ;; The approval mode for this server session: {"mode": "block"} to have
    ;; the runs ask a person, "refuse" to not, null for the project's own.
    {:method :post :path "/v1/harness/approval-mode" :response
@@ -403,15 +450,17 @@
     (fn [req] (json-response (api-runs/journal-tail (system/conn)
                                                     (get-in req [:params :id])
                                                     (long-param req "since")
-                                                    (long-param req "limit"))))}
+                                                    (long-param req "limit")
+                                                    (stream/client-epoch req))))}
    ;; The run PUSHED: every journal event after the cursor (Last-Event-ID, or
    ;; ?since=), then each one as it lands, plus the steps and approvals that
    ;; are never journalled. See samizdat.api.stream.
    {:method :get :path "/v1/runs/:id/events" :response
     (fn [req] (stream/response (system/conn) (get-in req [:params :id])
-                               (stream/cursor req)))}
+                               (stream/cursor req) (stream/client-epoch req)))}
    {:method :get :path "/v1/events" :response
-    (fn [req] (stream/response (system/conn) nil (stream/cursor req)))}
+    (fn [req] (stream/response (system/conn) nil (stream/cursor req)
+                               (stream/client-epoch req)))}
    ;; The live manifest-state trace. No conn: steps are held in memory, not
    ;; journalled — see samizdat.steps.
    {:method :get :path "/v1/runs/:id/steps" :response
@@ -426,6 +475,12 @@
                                                  (parse-long (str turn)))]
                   (json-response t)
                   (json-response 404 {:error {:message "no such turn"}}))))}
+   ;; The branch's plan now and every change that made it (karamazov-k7gl.2).
+   {:method :get :path "/v1/runs/:id/branches/:branch/plan" :response
+    (fn [req] (let [{:keys [id branch]} (:params req)]
+                (if-let [p (api-runs/branch-plan (system/conn) id branch)]
+                  (json-response p)
+                  (json-response 404 {:error {:message "no such branch"}}))))}
    {:method :get :path "/v1/runs/:id/branches/:branch" :response
     (fn [req] (let [{:keys [id branch]} (:params req)]
                 (if-let [b (api-runs/branch-detail (system/conn) id branch

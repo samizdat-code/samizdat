@@ -58,9 +58,9 @@
   ;; excludes by absence, which is what made the sentinel need one.
   :tools #{"thesis" "branch_theses" "done" "give_up"
            "plan" "eval" "doc" "complete" "manual" "propose_cell"
-           "read_file" "read_digest" "inspect_clojure" "edit_clojure" "apply_clojure_changes" "transform_clojure" "grep" "glob" "lsp" "resource" "inference" "diagnosis" "execution" "structural" "debug" "write_file" "edit_file" "patch"
+           "read_file" "read_digest" "inspect_clojure" "edit_clojure" "apply_clojure_changes" "transform_clojure" "grep" "code_search" "glob" "lsp" "resource" "inference" "diagnosis" "execution" "structural" "debug" "write_file" "edit_file" "patch"
            "shell" "jobs" "websearch" "webfetch" "skill"
-           "task" "split"
+           "task" "split" "delegate"
            "remember" "recall" "outcome" "forget" "retire" "message"
            "fetch_artifact" "fetch_turn" "context_edit" "papercut" "finding" "mcp" "wait"
            "tool_search"}
@@ -134,7 +134,7 @@
   ;; Deliberately NO websearch. A reviewer judges the work against what was
   ;; asked, and going off to read the internet is how a review becomes a
   ;; second opinion about the domain instead of a check on the diff.
-  :tools #{"read_file" "read_digest" "inspect_clojure" "grep" "glob" "lsp" "resource" "inference" "doc" "complete" "fetch_artifact"
+  :tools #{"read_file" "read_digest" "inspect_clojure" "grep" "code_search" "glob" "lsp" "resource" "inference" "doc" "complete" "fetch_artifact"
            "fetch_turn" "recall" "done" "give_up"}
   :prompt "roles/reviewer"
   ;; ITS OUTPUT CONTRACT (karamazov-05z0.14): `done` takes a `result` that
@@ -145,6 +145,23 @@
            [:findings {:optional true} [:vector :string]]]
   :sees #{:requirement :diff :answer}}
 
+ :delegate
+ {:doc "A child another branch handed one request to with `delegate`
+        (karamazov-k7gl.9). Works the request on its own branch of the same
+        run and reports back: its done answer is the parent's tool result or
+        mailbox note. No person to ask and no board to grow — the parent owns
+        the task and any follow-up — so no `ask_human`, `task`, `split` or
+        `message`. `delegate` stays on the surface; gates.edn :delegate
+        :max-depth is what refuses it past the limit."
+  :tools #{"thesis" "done" "give_up"
+           "plan" "eval" "doc" "complete" "manual"
+           "read_file" "read_digest" "inspect_clojure" "edit_clojure" "apply_clojure_changes" "transform_clojure" "grep" "glob" "lsp" "resource" "inference" "diagnosis" "execution" "structural" "debug" "write_file" "edit_file" "patch"
+           "shell" "jobs" "websearch" "webfetch" "skill"
+           "recall" "fetch_artifact" "fetch_turn" "context_edit" "mcp" "wait"
+           "delegate" "tool_search"}
+  :prompt "delegate-child"
+  :sees #{:problem :skills}}
+
  :answerer
  {:doc "Answers a question about the project: reads what it needs and replies.
         The reply is the deliverable — nothing in the project changes, so it
@@ -154,7 +171,7 @@
   ;; listing, a build file's dependency tree. It is still under the approval
   ;; policy like every other shell call. `eval` is left off: an answer is
   ;; read, not run, and loading a project into the image is its own risk.
-  :tools #{"read_file" "read_digest" "inspect_clojure" "grep" "glob" "lsp" "resource" "inference" "diagnosis" "execution" "doc" "shell" "jobs"
+  :tools #{"read_file" "read_digest" "inspect_clojure" "grep" "code_search" "glob" "lsp" "resource" "inference" "diagnosis" "execution" "doc" "shell" "jobs"
            "websearch" "webfetch" "skill" "manual" "recall" "remember"
            "fetch_turn" "fetch_artifact" "mcp" "done" "give_up"}
   :prompt "roles/answerer"
@@ -196,7 +213,7 @@
  {:doc "One worker on one task in a fresh context. Writes the work, runs it, and
         ends with RESULT, NOTES, NEXT and STATUS sections in done's answer. No board,
         plan, memory or harness tools: the manager owns the tasks and the ledger."
-  :tools #{"read_file" "read_digest" "grep" "glob" "write_file" "edit_file" "patch"
+  :tools #{"read_file" "read_digest" "grep" "code_search" "glob" "write_file" "edit_file" "patch"
            "shell" "jobs" "run_check" "done" "give_up"}
   :prompt "roles/solver"
   :frame "solver-frame"

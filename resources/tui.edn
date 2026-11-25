@@ -191,7 +191,8 @@
   ;; The argument a tool call is known by in its chamber's header.
   :banner {"read_file" "path" "write_file" "path" "edit_file" "path"
            "read_digest" "path" "patch" "path" "shell" "command"
-           "grep" "pattern" "glob" "pattern" "eval" "code"}
+           "grep" "pattern" "glob" "pattern" "eval" "code"
+           "code_search" "query"}
   ;; How many lines of a result show before the rest folds.
   :result-lines 4
   ;; How many earlier runs a run started from the compose box carries above
@@ -334,6 +335,7 @@
           :done     "(^_^)"}
   :tools {"read_file" :reading "read_digest" :reading "grep" :reading
           "glob" :reading "lsp" :reading "fetch_turn" :reading
+          "code_search" :reading
           "write_file" :writing "edit_file" :writing "patch" :writing
           "shell" :shell "eval" :shell}}
 

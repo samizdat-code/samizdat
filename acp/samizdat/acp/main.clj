@@ -55,7 +55,12 @@
                      (or (get-in r [:body :id]) (get-in r [:body :run_id])
                          {:error (or (:error r) "the server did not start a run")})))
      :intervene! (fn [run-id text] (client/intervene! base run-id {:kind "message" :payload text}))
-     :journal (fn [run-id cursor] (or (ok-body (client/journal-since base run-id cursor)) {:events []}))
+     ;; The event shape heard last goes back with each page, so a server
+     ;; that changed it mid-session answers resync rather than a misread page.
+     :journal (fn [run-id cursor]
+                (let [b (ok-body (client/journal-since base run-id cursor 200 (:epoch @session)))]
+                  (when-let [e (:epoch b)] (swap! session assoc :epoch e))
+                  (or b {:events []})))
      :run-detail (fn [run-id] (or (some-> (ok-body (client/run-detail base run-id)) :run) {}))
      :approvals (fn [run-id] (or (some->> (ok-body (client/approvals base run-id)) :approvals
                                           (filter #(= "pending" (str (:status %)))))

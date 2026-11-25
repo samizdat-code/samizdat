@@ -100,13 +100,79 @@
         its last :notice-tail-lines lines. Limits after ECA's (10 jobs, 2000
         lines)."}
 
- :mcp
- {:value {:timeout-ms 30000}
+ :delegate
+ {:value {:workflow "worker" :workflows #{"worker" "solver"} :role :delegate
+          :max-depth 1 :max-turns 20 :timeout-ms 780000 :max-background 3
+          :background-timeout-ms 1800000
+          :advisory? true :answer-chars 6000}
   :kind :threshold :capability-tunable? false
-  :provenance ["karamazov-05z0.16"]
-  :doc "How long an MCP server has to answer one request — the handshake, a
-        tool listing, a call — before the `mcp` tool reports it unavailable.
-        A server entry's own :timeout-ms in config.edn wins."}
+  :provenance ["karamazov-k7gl.9"]
+  :doc "The `delegate` tool (samizdat.agent.tools.delegate). A child is a
+        branch of the caller's run, opened as :role (roles.edn) on :workflow
+        unless the call names another of :workflows — sub-loops that return
+        their verdict to the caller; a workflow with a finish would end the
+        parent's run. A branch at depth :max-depth may not delegate (the
+        run's own branches are depth 0, so 1 means children do not delegate
+        again). A child gets :max-turns turns. A foreground call waits at most
+        :timeout-ms, under :turn-deadline-ms so the beam does not cancel the
+        parent's turn first, then cancels the child. A run has at most
+        :max-background children working in the background at once, and a
+        background child still working after :background-timeout-ms is
+        cancelled and the parent's mailbox told it timed out.
+        :advisory? marks the child's done as a report rather than shippable
+        work, so the ship gate's evidence rungs stay with the parent, which
+        owns the change. The answer handed back is cut to :answer-chars."}
+
+ :job-waits
+ {:value {:default-wait-ms 60000 :max-wait-ms 840000
+          :default-watch-ms 1800000 :max-watch-ms 7200000
+          :poll-ms 100 :tail-lines 20 :max-matches 10
+          :hold? true :hold-max-ms 1800000 :hold-poll-ms 500}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-k7gl.1"]
+  :doc "Waits on a background job's output (samizdat.engine.waits, the `jobs`
+        tool's wait and watch). A blocking wait lasts :default-wait-ms unless
+        it asks, and never past :max-wait-ms — fourteen minutes, under
+        :turn-deadline-ms like the `wait` tool's bound. A watch is registered
+        for :default-watch-ms, at most :max-watch-ms. Waits look at the job
+        every :poll-ms and show its last :tail-lines lines; one scan keeps at
+        most :max-matches matching lines. The beam's hold
+        cell (cells/beam.clj :beam/hold): with :hold? a run whose shipped
+        branch holds a pending watch is not finished but held, looking every
+        :hold-poll-ms for up to :hold-max-ms, and the branch is woken with
+        what fired."}
+
+ :mcp
+ {:value {:timeout-ms 30000 :elicitation-wait-ms 300000
+          :default-policy :prompt :yolo-allows? true}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-05z0.16" "karamazov-k7gl.3"]
+  :doc "MCP servers (the `mcp` tool).
+
+        :timeout-ms is how long a server has to answer one request — the
+        handshake, a tool listing, a call — before the tool reports it
+        unavailable. A server entry's own :timeout-ms in config.edn wins.
+        The wait is held while the server's elicitation is with a person.
+
+        :elicitation-wait-ms bounds that person: a server that asks for
+        input mid-call (elicitation/create) has its question parked on the
+        approvals queue when :approval resolves to :block for the run, and
+        hears `cancel` when nobody answers in time — or at once, when
+        nobody is there to ask.
+
+        :default-policy is the policy of a server entry that names none:
+        :prompt (each call to a person), :read-only (only :trusted-tools)
+        or :deny. This file may only tighten, so :allow here is read as
+        :prompt; a server runs unasked only where the person's config.edn
+        entry says :policy :allow.
+
+        A :prompt call is approved for the tool's DEFINITION — a hash of its
+        name, description and input schema. An allow-always is kept as a
+        grant naming that hash, so a server that changes what a tool says
+        it does is asked about again. :yolo-allows? false refuses a :prompt
+        call under :yolo, where nobody is asked, rather than running it.
+        :auto's classifier never answers for an MCP call: it judges where a
+        shell command reaches, not what a server's tool does."}
 
  :papercut
  {:value {:window-ms 86400000 :overlap 0.6 :same-run-overlap 0.4 :min-word-chars 4
@@ -202,6 +268,24 @@
         in reverse canonical name order, while core and forced specs remain. Fitting never
         changes branch, journal, or durable tool-selection history and never
         reduces reserved output tokens."}
+
+ :provider-retry
+ {:value {:rate-limited 2 :server 2 :transport 2 :partial-stream 2 :empty-reply 2
+          :timeout 0}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-k7gl.11"]
+  :doc "Retries the client spends on ONE model call, per class of failure
+        (llm.client/retry-class), before the call fails up to the loop:
+        :rate-limited a 429 or a retryable business code, :server a 5xx or
+        408, :transport a dropped or refused connection, :partial-stream a
+        stream cut after content arrived, :empty-reply a reply with neither
+        content nor reasoning, :timeout a read that timed out. Each class
+        counts on its own, so two 503s do not spend the retries a rate limit
+        then needs. :timeout is 0 because a cut-off generation re-sent is
+        billed twice; raise it for an endpoint whose stalls are transient.
+        The loop's own waits sit above these (:rate-limit, :provider-outage,
+        :provider-error-limit). A provider's config.edn :retry-budgets
+        overrides a class; an explicit :max-retries caps every class."}
 
  :provider-error-limit
  {:value 5 :kind :threshold :capability-tunable? false
@@ -3341,7 +3425,7 @@
         codes, the supervisor's brief lists beside the answer."}
 
  :directive-notice-issuers
- {:value #{"execution" "heldout" "ship-review"}
+ {:value #{"execution" "heldout" "ship-review" "hook"}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-oi16.6"]
   :doc "Who writes to the directive queue to REPORT rather than to steer:
@@ -3481,6 +3565,28 @@
         one read. `heartbeat-ms` is how long a quiet stream goes before it
         sends a comment line — how a stream to a client that went away is
         noticed and its worker thread given back."}
+
+ :code-search
+ {:value {:chunk-lines 60 :overlap-lines 10 :max-file-bytes 1000000
+          :snippet-lines 8 :limit 10 :max-limit 50
+          :path-weight 4.0 :body-weight 1.0
+          :exclude ["**/*.min.js" "**/*.map" "**/*.lock" "**/package-lock.json"]}
+  :kind :cost-ceiling :capability-tunable? false
+  :provenance ["karamazov-k7gl.7"]
+  :doc "The code index code_search and GET /v1/harness/search rank from
+        (samizdat.code-index).
+
+        A file is cut into `chunk-lines`-line chunks, each starting
+        `overlap-lines` before the last ended, so a definition across a
+        boundary is whole in one. `max-file-bytes` leaves out what is too big
+        to be source. bm25 weighs a match in the PATH `path-weight` times one
+        in the body, so a file named for the term outranks one that mentions
+        it. A hit shows `snippet-lines` lines around its best line; `limit`
+        hits by default, never more than `max-limit`.
+
+        `exclude` are globs over the path relative to the project root, on
+        top of .gitignore in a git project; config.edn :code-search :exclude
+        adds the operator's own."}
 
  :step-ring
  {:value {:capacity 512 :max-runs 16 :pump-ms 250}
@@ -3725,6 +3831,46 @@
         off-value is what :reasoning-effort becomes once the breaker fires —
         for the rest of the TASK, because a model that just spent a whole
         budget deliberating will spend the next one the same way."}
+
+ :hooks
+ {:value {:default-timeout-ms 30000
+          :output-chars 4000
+          :tool-triggers {"write_file" :after-write "edit_file" :after-write
+                          "patch" :after-write "shell" :after-shell}
+          :deliver {:keys #{"message"}
+                    :triggers #{:run-start :after-write :after-shell}}}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-k7gl.10"]
+  :doc "HOOKS (samizdat.hooks): a person's commands in config.edn :hooks,
+        run through the shell's own policy and sandbox when a trigger fires.
+
+        :tool-triggers is which tool fires which trigger: a file tool that
+        succeeded fires :after-write with its path, the shell fires
+        :after-shell whenever its policy let the command run. A tool not
+        named fires nothing.
+
+        :deliver decides what of a hook's output reaches the MODEL. Only the
+        directive keys in :keys (a line `###SAMIZDAT:message <text>`), and
+        only from :triggers — :run-end is absent because nobody is left to
+        read it. Delivered as a directive from issuer `hook`, which
+        :directive-notice-issuers makes a notice that rides along rather
+        than an order. Everything else a hook prints is journalled on its
+        :hook event, bounded by :output-chars, and never shown to the model.
+
+        :default-timeout-ms is a hook's timeout when it names none; the
+        shell's own cap (policy/shell-timeout) bounds it either way."}
+
+ :skills
+ {:value {:name-max 64 :description-max 1024 :file-chars 60000}
+  :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-k7gl.4"]
+  :doc "THE AGENT SKILLS FORMAT's bounds, and how much of a skill's bundled
+        file `skill read` returns. A SKILL.md directory's `name` is
+        kebab-case of at most :name-max chars and its `description` at most
+        :description-max: what the format specifies, so a skill written for
+        another harness is judged by the same rule. A skill over either is
+        DIAGNOSED in the listing, never dropped. :file-chars caps one
+        `skill read`, cut in the middle like any long tool result."}
 
  :tool-retry
  {:value {:max-attempts 3 :base-backoff-ms 250}
@@ -4322,6 +4468,12 @@
               :write-tools #{"write_file" "edit_file" "patch" "edit_clojure"}
               :read-tools #{"read_file"}
               :command-tools #{"shell" "run_check"}}
+   ;; THE PLAN, carried past every fold on its own (karamazov-k7gl.2): the
+   ;; branch's latest journalled plan snapshot (prompts/compaction-plan.md),
+   ;; placed right after what the fold left, so what `done` holds the branch
+   ;; to never depends on the summary mentioning it. false leaves the plan to
+   ;; the summary, as before.
+   :carry-plan? true
    :rejected-preview-chars 400
    ;; A result shorter than this is left alone: summarising it costs more
    ;; than it saves and loses something readable at a glance.
@@ -5069,7 +5221,7 @@
   ;; What a role that cannot write may quote figures from, beside what it
   ;; measured: for a question about the project, the source it read IS the
   ;; subject (karamazov-1wv9). A role that can write still has to measure.
-  :describing #{"read_file" "read_digest" "grep" "glob" "lsp" "doc"}
+  :describing #{"read_file" "read_digest" "grep" "code_search" "glob" "lsp" "doc"}
   ;; `patch` writes files exactly as `write_file` and `edit_file` do; it was
   ;; added to the loop and to none of these, so a branch editing by anchor
   ;; scored as having shipped NOTHING and drew studying nudges for work it

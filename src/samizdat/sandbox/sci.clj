@@ -117,10 +117,10 @@
 
     ;; Context-window arithmetic over message vectors. Pure.
     samizdat.agent.compaction
-    {:vars [aggressive? apply-eviction apply-summary cap-oversized-results clip-write-bodies snapshot-facts snapshot-empty? compress-window
+    {:vars [aggressive? apply-eviction apply-summary carry cap-oversized-results clip-write-bodies snapshot-facts snapshot-empty? compress-window
             estimate-tokens evictable-turns evicted-turns fold-pays? fold-task fold? ladder-tokens pressure
             prune-options prune-tool-outputs result-cap results-of
-            snip-bought-enough? summary-budget task-span tier turn-range unpinned-in
+            snip-bought-enough? summary-budget task-span tier turn-range pinned-in unpinned-in
             validate-summary]}
 
     ;; Immutable context projections. Pure; no journal writes or live tool state.
@@ -245,6 +245,13 @@
     samizdat.agent.tools.base
     {:vars [phase-refusal]}
 
+    ;; Waits on background job output (karamazov-k7gl.1): the beam's hold
+    ;; cell blocks on a run's own watches and takes their wakes. Reads only
+    ;; this run's jobs and journals the waits' moves.
+    samizdat.agent.tools.jobs
+    {:vars [await-wake! wait-notice]
+     :effects #{:db :run}}
+
     ;; A task row as prose. Pure.
     samizdat.agent.tools.tasks
     {:vars [task-statement]}
@@ -325,8 +332,8 @@
 
     ;; The run journal: reads, and appending a note or a side call's usage.
     samizdat.store.journal
-    {:vars [branch-turns gate-firings gate-tally last-note last-turn minutes-since note! notes notes-since
-            progress record-side-call! retirement-candidates run-usage run-writes turns]
+    {:vars [branch-turns gate-firings gate-tally last-note last-turn latest-plan minutes-since note! notes notes-since
+            plan-history progress record-side-call! retirement-candidates run-usage run-writes turns]
      :effects #{:db}}
 
     ;; The paired-sample grader — the team-solve workflow's DETERMINISTIC
@@ -363,7 +370,8 @@
     ;; Run and branch rows, through the store's own functions. get-branch replaced
     ;; a raw SELECT in cells/board.clj.
     samizdat.store.runs
-    {:vars [branches close-branch! extend-budget! finish-run! get-branch get-run nth-recent-start open-branch!]
+    {:vars [branches close-branch! extend-budget! finish-run! get-branch get-run nth-recent-start open-branch!
+            reopen-branch!]
      :effects #{:db}}
 
     ;; The task board, through its own functions.

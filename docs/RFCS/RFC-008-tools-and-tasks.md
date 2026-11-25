@@ -165,6 +165,7 @@ indistinguishable from work that is progressing.
 | shell | `shell` |
 | shipping | `done` `give_up` `thesis` `branch_theses` |
 | board | `task` `split` |
+| delegation | `delegate` |
 | coordination | `message` |
 | memory | `remember` `recall` `forget` `outcome` |
 | record | `fetch_turn` `fetch_artifact` |
@@ -177,6 +178,59 @@ Every dispatched tool **must** be documented in `prompts/system.md`, matched as
 a word at the start of a documentation line — a tool the model is not told about
 is unreachable, and `str/includes?` matching once counted `cell` as documented
 because the prompt contains `cells`.
+
+### Delegation
+
+`delegate({request, workflow?, model?, background?})` hands one request to a
+sub-agent (karamazov-k7gl.9). The child is a BRANCH of the caller's run, not a
+run of its own: `runs/open-branch!` with the caller as `parent_id`, run through
+a sub-loop manifest (gates.edn `:delegate :workflow`, one of `:workflows`) as
+the roles.edn `:delegate` role, the way team workers and feature's role
+sub-loops run. So its turns and side calls are the run's rows and its usage is
+the run's usage (`journal/run-usage` takes a branch id for the child's own
+share), a foreground child is cancelled with the caller's turn, and the run's
+mailbox carries a background child's report to its parent with the child's
+flow label. The child's done is advisory: the parent owns the change and its
+ship gate. Its instructions are `prompts/delegate-child.md`.
+
+Invariants: a branch at `:max-depth` cannot delegate; the `:delegate` role
+holds no `ask_human`, `task`, `split` or `message`; a foreground call returns
+within `:timeout-ms` (under `:turn-deadline-ms`); a background child is
+cancelled after `:background-timeout-ms` and its parent's mailbox told it
+timed out; `run-state/run-ended!`
+cancels every background child still running. Known gaps: a resumed run does
+not resume its children, and the background registry is in memory only.
+
+### Waiting on a background job
+
+`shell {background: true}` starts a job the run owns (`samizdat.engine.jobs`);
+`jobs` lists, reads and kills them. `jobs wait {id, pattern?, seconds?,
+quiet?, history?}` blocks the call until the job prints a line matching
+`pattern`, or exits (with no pattern, only the exit counts), and returns the
+matched lines, a tail and the job's status. `jobs watch` makes the same wait
+and returns at once; `unwatch {id}` cancels it.
+
+The wait is `samizdat.engine.waits`: a cursor of its own (the job's end, or
+with `history` the oldest retained line), a deadline, an optional quiet
+timeout measured from the job's last line, and the states pending → ready →
+delivered, or expired (deadline, quiet, job-gone) / cancelled. `make` and
+`step` are pure over a job snapshot; the clock, the job source, the sleep and
+the record are injected. Bounds are `gates.edn :job-waits`.
+
+A watch's wake reaches its branch two ways. While the branch is working, the
+dispatch wrapper appends it to the branch's next tool result, once — as it
+does a job's exit notice. When the branch has shipped and the run is about to
+complete, the beam's `:beam/hold` cell (after `:start` in `beam.edn`) decides:
+a pending watch of the shipped branch holds the run open, up to
+`:hold-max-ms`, and a watch that fires reopens that branch (same tape, the wake
+as a user turn) instead of finishing. Aborts, turn caps and spent budgets are
+never held.
+
+Waits are durable as journal notes (`:job-wait`, one per state change), not a
+table: a wait cannot outlive its job, and a job does not outlive the process
+that ran it, so the only thing a resume needs is what each wait last was. On
+resume a pending wait expires as `job-gone` and its branch is told; a fired
+one never delivered is still owed its wake.
 
 ### Reads that return an answer
 
@@ -194,6 +248,33 @@ with a message naming the digest and the paged read. A read that names a
 section always passes. The compaction fold's summary call runs on the
 `:summarizer` role the same way. Pattern and numbers after Spotify's shunt;
 karamazov-b76m.
+
+### MCP servers
+
+`mcp` reaches the tools of the servers config.edn `:mcp :servers` names
+(karamazov-05z0.16; transports, pinning and elicitation karamazov-k7gl.3).
+`samizdat.mcp.client` holds one session per server over a
+`samizdat.mcp.transport/Transport`: stdio (`:command`, a child process, one
+message per line) or Streamable HTTP (`:url`, protocol 2025-06-18: a POST per
+message, answered with JSON or an event stream, the `Mcp-Session-Id` the
+server assigns sent back on every later request, a bearer token read from the
+variable `:token-env` names). Ids, waiting, list-changed and the server's own
+requests are the session's, the same over both.
+
+A `:prompt` server's call goes through `approval/resolve-ask` pinned to the
+tool's definition: the ask is `mcp:<server>/<tool>#<digest>`, the digest a
+hash of the tool's name, description and input schema. An allow covers that
+text for the run; an allow-always is a row in `grants` (kept out of what the
+shell policy reads); a server that changes the tool produces a different text
+and is asked again. A tool the server does not list is refused. Which policy
+an entry without one gets, and whether `:yolo` runs prompted calls, is
+gates.edn `:mcp`.
+
+A server may send `elicitation/create` during a call. The schema becomes a
+questionnaire on the approvals queue, the shape ask_human uses, so every
+front end answers it; the answer goes back as accept with typed content,
+decline, or cancel (no answer within `:mcp :elicitation-wait-ms`, or nobody
+to ask). The call's own timeout is held while the person answers.
 
 ### The acceptance rung
 
@@ -251,6 +332,57 @@ gets it or guesses and fails the criterion. Its counterpart at the other end
 is the `:asks-the-reader` ship rung: an answer whose last line asks its reader
 something is a run with a question left, and `done` refuses it naming
 `ask_human`.
+
+### Skills (karamazov-k7gl.4)
+
+A skill is either samizdat's flat `<root>/<name>.md` or an Agent Skills
+directory, `<root>/<name>/SKILL.md` plus whatever files it bundles. The
+frontmatter is read as the YAML subset skills use (`samizdat.agent.skills`
+parses it itself; there is no YAML dependency): `name`, `description`,
+`allowed-tools`, `license`, `metadata`. A directory skill is checked against
+the format — kebab-case `name` matching its directory, a `description`,
+both within gates.edn `:skills` — and a skill that fails is DIAGNOSED, not
+dropped.
+
+The roots are wordlists.edn `:skill-roots`, earliest wins: the project's
+(`.samizdat`, `.agents`, `.claude`), then the person's (`{global}`,
+`~/.agents`, `~/.claude`), then the shipped skills off the classpath.
+`skills/registry` returns the winners, `:shadowed` (which path hides which)
+and `:diagnostics`; `skill list` and `GET /v1/harness/skills` both show it.
+`allowed-tools` is surfaced and not enforced: a role's tools are roles.edn's
+business. `skill load` names a directory skill's root, and `skill read
+{name} {path}` reads a bundled file, confined to that root on canonical
+paths.
+
+### Hooks (karamazov-k7gl.10)
+
+config.edn `:hooks [{:name :trigger :command :timeout-ms}]` — a person's
+commands, in a file no tool the agent holds can write. Triggers and their
+seams:
+
+| trigger | seam | told |
+|---|---|---|
+| `:run-start` | the drivers, beside `verify/seal-run!` | `SAMIZDAT_HOOK_RESUMED` on a resume |
+| `:after-write` | `tools/run-tool`, a file tool that succeeded | `SAMIZDAT_HOOK_PATH` |
+| `:after-shell` | `tools/run-tool`, a command the policy let run | `SAMIZDAT_HOOK_COMMAND`, `_EXIT` |
+| `:run-end` | `run-state/run-ended!` | `SAMIZDAT_HOOK_STATUS` |
+
+Every hook also gets `SAMIZDAT_HOOK_TRIGGER`, `_NAME`, `_RUN_ID`,
+`_BRANCH_ID` and `_ROOT`. The command goes through `policy/run-shell` —
+rules, grants, approval, scrubbed environment, OS sandbox, redaction — with
+no branch on the ctx, so a hook can do nothing the shell tool could not and
+does not move a branch's flow label. A hook whose head the rules do not
+allow is refused like any command; allow it in the shell rules, not by
+special-casing hooks.
+
+Each hook is journalled as a `:hook` event (bounded output, exit, effect,
+directives). A line `###SAMIZDAT:<key> <value>` (ANSI stripped, at line
+start) is a directive. gates.edn `:hooks :deliver` decides what reaches the
+model: by default a `message`, from any trigger but `:run-end`, queued as a
+`message` directive from issuer `hook`. `hook` is in
+`:directive-notice-issuers`, so it rides along at the next steer boundary as
+a notice rather than an order. Which tool fires which trigger is
+`:hooks :tool-triggers`.
 
 ## Protocol
 

@@ -247,6 +247,21 @@
       (log/warn "compaction: reading the journal for a snapshot failed:" (ex-message e))
       nil)))
 
+(defn- plan-block
+  "The branch's current plan as the fold carries it, read from its latest
+  journal snapshot, or nil: when the policy says not to carry it (gates.edn
+  :compaction :carry-plan?), when the branch never declared one, or when the
+  plan it holds names nothing."
+  [conn run-id branch p]
+  (when (:carry-plan? p)
+    (try
+      (let [plan (:plan (journal/latest-plan conn run-id (:id branch)))]
+        (when (or (seq (:files plan)) (seq (:checklist plan)))
+          (prompt/render "compaction-plan" plan)))
+      (catch Throwable e
+        (log/warn "compaction: reading the latest plan failed:" (ex-message e))
+        nil))))
+
 (defn- summarize!
   "Ask the model for a structured summary of the folded region. Returns the
   text or nil, and nil is a legitimate answer the caller must handle by NOT
@@ -432,13 +447,27 @@
                            (if (or (nil? pol) (= :auto pol))
                              (or (:fold-role llm-config) "system")
                              (name pol)))
+                    pinned (cmp/pinned-in msgs [s e])
+                    ;; What an :edit fold leaves of the window. Only the
+                    ;; WINDOW is projected: the head and the tail stay as
+                    ;; they were. Handing back the projection alone dropped
+                    ;; the system prompt and every live turn.
+                    residue (when edit? (:messages (context-edit/fold folded)))
                     out (cond
                           refs (cmp/apply-eviction msgs [s e]
                                                    (prompt/prompt "compaction-marker") summary role refs)
-                          edit? (:messages (context-edit/fold folded))
+                          edit? (vec (concat (take s msgs) residue pinned (drop e msgs)))
                           :else (cmp/apply-summary msgs [s e]
                                                    (prompt/prompt "compaction-marker") summary
                                                    role))
+                    ;; The plan rides past the fold on its own, read from
+                    ;; the journal's latest snapshot rather than trusted to
+                    ;; the summary (karamazov-k7gl.2), right after what the
+                    ;; fold left in the window's place.
+                    out (if-let [block (plan-block conn run-id branch p)]
+                          (cmp/carry out (+ s (if edit? (count residue) 1) (count pinned))
+                                     {:role role :content block} :plan)
+                          out)
                     ;; The ladder's own measure, as :compaction/before was: its reply
                     ;; budget is capped, and a total with the whole of it made a fold
                     ;; free tens of thousands of tokens to count as progress.

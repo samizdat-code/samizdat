@@ -48,9 +48,12 @@
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
             [samizdat.approval :as approval]
+            [samizdat.security.argrules :as argrules]
+            [samizdat.security.ceiling :as ceiling]
             [samizdat.security.flow :as flow]
             [jolt.fs]
             [samizdat.config :as config]
+            [samizdat.hooks :as hooks]
             [samizdat.repl.route :as route]
             [samizdat.resource :as resource]
             [samizdat.security.sandbox :as sandbox]
@@ -59,6 +62,7 @@
             [samizdat.agent.tools.ask]
             [samizdat.agent.tools.repl]
             [samizdat.agent.tools.files]
+            [samizdat.agent.tools.code-search]
             [samizdat.agent.tools.intervene]
             [samizdat.agent.tools.plan]
             [samizdat.agent.tools.webfetch]
@@ -68,6 +72,7 @@
             [samizdat.agent.tools.jobs :as jobs]
             [samizdat.agent.tools.ship :as ship]
             [samizdat.agent.tools.split]
+            [samizdat.agent.tools.delegate]
             [samizdat.agent.tools.tasks]
             [samizdat.agent.tools.tool-search]
             [samizdat.agent.tools.messages]
@@ -281,7 +286,8 @@
         (when (:target-path metadata)
           (flow/wrote! ctx (:target-path metadata) true)))
 
-      (= "grep" t)
+      ;; code_search shows the same: paths, and lines out of them.
+      (contains? #{"grep" "code_search"} t)
       (let [out (str (:result r))
             base (str (try (jolt.fs/canonicalize (or root ".")) (catch Throwable _ root)) "/")
             hit (filter #(str/includes? out (str/replace % base "")) (flow/labelled-paths conn))]
@@ -321,32 +327,22 @@
   "`r` with the notice of any background job of this branch that ended on its
   own since its last call (samizdat.agent.tools.jobs), so the branch hears of
   it at its next turn whatever that turn called."
-  [{:keys [run-id branch]} r]
-  (if-let [notice (when (string? (:result r))
-                    (try (jobs/exit-notice run-id (:id branch))
-                         (catch Throwable e (log/warn "jobs: no exit notice:" (ex-message e)))))]
-    (update r :result str "\n\n" notice)
-    r))
+  [{:keys [conn run-id branch]} r]
+  ;; And the wake of any watch it registered that became ready or expired
+  ;; (`jobs watch`, samizdat.engine.waits), told once, the same way.
+  (let [notices (when (string? (:result r))
+                  (keep (fn [[what f]]
+                          (try (f)
+                               (catch Throwable e (log/warn (str "jobs: no " what ":") (ex-message e)))))
+                        [["exit notice" #(jobs/exit-notice run-id (:id branch))]
+                         ["wait notice" #(jobs/wait-notice conn run-id (:id branch))]]))]
+    (if (seq notices)
+      (update r :result str "\n\n" (str/join "\n\n" notices))
+      r)))
 
-(defn run-tool
-  "Dispatch one tool call and return a result the loop can always use.
-
-  The multimethod is still `base/run-tool` and is still resolved HERE, at call
-  time, so redefining a tool against a running process keeps working — that is
-  what RFC-008 says the multimethod is for, and a wrapper that captured the
-  method would have quietly cost it.
-
-  Three things happen to what comes back, and all three are about making the
-  next step's job possible rather than about the tool:
-
-  1. A throw becomes a result. A tool that explodes costs the turn, not the
-     branch, and the loop gets an envelope like any other.
-  2. A malformed envelope becomes a `:mechanics` complaint naming the tool.
-     `:mechanics` and not `:failure`: the branch produced no claim and tested
-     nothing, so there is no evidence here about its line of inquiry — the
-     same reasoning `base/malformed` makes, and the fifth-place-it-turned-up
-     mistake it exists to prevent.
-  3. The model-bound strings are redacted. See the note above the delay."
+(defn- dispatch
+  "`run-tool` past the operator's bounds: everything else that judges, runs
+  and cleans up a call."
   [{:keys [branch tool-name] :as ctx}]
   (let [known (known-values-for ctx)
         ;; A path the project keeps from this provider is refused before the
@@ -382,7 +378,58 @@
                      ". This is a harness fault, not yours — the call was fine."))
                known))
           (do (journal-refusal! ctx r)
+              ;; The person's hooks on what this call did (samizdat.hooks):
+              ;; which tool fires which trigger is gates.edn :hooks. What
+              ;; they say reaches the branch through the directive queue at
+              ;; its next boundary, not in this result.
+              (try (hooks/after-tool! ctx r)
+                   (catch Throwable e (log/warn "hooks:" (ex-message e))))
               (redact-result (with-job-notice ctx r) known)))))))
+
+(defn- operator-refusal
+  "A refusal for a call the operator's config.edn rules out, before anything
+  else looks at it: a tool above the ceiling (samizdat.security.ceiling), or
+  arguments a `:tools :rules` entry denies or asks about and nobody allowed
+  (samizdat.security.argrules). nil when the call may go on. Here and not in
+  phases.edn because phases.edn is the workflow's, and these are the bounds
+  the workflow cannot move."
+  [{:keys [branch tool-name] :as ctx}]
+  ;; A name no tool answers to is the :default method's to report, and it
+  ;; lists only what the ceiling permits; refusing it here as "above the
+  ;; ceiling" would hide the typo and the nearest real name.
+  (if-let [msg (when (contains? (methods base/run-tool) tool-name)
+                 (ceiling/refusal ctx))]
+    (base/refusal branch msg :refusal-rule :tool-ceiling)
+    (when-let [{:keys [message decision rule]} (argrules/refusal ctx)]
+      (base/refusal branch message :refusal-rule :argument-rule
+                    :policy {:effect decision :rule rule}))))
+
+(defn run-tool
+  "Dispatch one tool call and return a result the loop can always use.
+
+  The multimethod is still `base/run-tool` and is still resolved HERE, at call
+  time, so redefining a tool against a running process keeps working — that is
+  what RFC-008 says the multimethod is for, and a wrapper that captured the
+  method would have quietly cost it.
+
+  Three things happen to what comes back, and all three are about making the
+  next step's job possible rather than about the tool:
+
+  1. A throw becomes a result. A tool that explodes costs the turn, not the
+     branch, and the loop gets an envelope like any other.
+  2. A malformed envelope becomes a `:mechanics` complaint naming the tool.
+     `:mechanics` and not `:failure`: the branch produced no claim and tested
+     nothing, so there is no evidence here about its line of inquiry — the
+     same reasoning `base/malformed` makes, and the fifth-place-it-turned-up
+     mistake it exists to prevent.
+  3. The model-bound strings are redacted. See the note above the delay.
+
+  Before any of it, the operator's bounds (`operator-refusal`): the tool
+  ceiling and the per-argument rules, which no workflow edit can move."
+  [ctx]
+  (if-let [refused (operator-refusal ctx)]
+    (redact-result refused (known-values-for ctx))
+    (dispatch ctx)))
 
 ;; Re-exports: loop.clj and the tests reach the tool surface through this
 ;; namespace and keep working unchanged.

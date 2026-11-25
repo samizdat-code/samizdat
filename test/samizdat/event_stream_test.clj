@@ -21,8 +21,9 @@
   (karamazov-tq7m.1): the wire parser, the server's pump, and the two ends
   talking over a real socket."
   (:refer-clojure :exclude [chunk])
-  (:require [clojure.string :as str]
+  (:require [clojure.core.async :as async]
             [clojure.test :refer [deftest testing is]]
+            [samizdat.api.client :as client]
             [samizdat.api.runs :as api-runs]
             [samizdat.api.sse :as sse]
             [samizdat.api.stream :as stream]
@@ -220,7 +221,7 @@
   (let [conn (db/open! ":memory:")
         rid (runs/start-run! conn {:problem "p"})
         port (with-open [s (java.net.ServerSocket. 0)] (.getLocalPort s))
-        handler (fn [req] (stream/response conn rid (stream/cursor req)
+        handler (fn [req] (stream/response conn rid (stream/cursor req) nil
                                            {:poll-ms 10 :heartbeat-ms 200 :page 50}))
         server (adapter/run-server handler {:port port})
         got (atom [])
@@ -254,7 +255,7 @@
 (deftest the-server-routes-both-streams
   (require 'samizdat.server)
   (let [seen (atom [])]
-    (with-redefs [stream/response (fn [_conn run-id _cursor]
+    (with-redefs [stream/response (fn [_conn run-id _cursor & _]
                                     (swap! seen conj run-id)
                                     {:status 200})
                   api-runs/activity (fn [_conn _run-id] {:runs [] :cursor 0})
@@ -273,3 +274,158 @@
     (is (= :block (:mode (approval/policy))) "and the one in force stands")
     (finally (approval/set-mode! nil)))
   (is (not= :block (:mode (approval/policy))) "cleared, the project's own is back"))
+
+;; --- the resync floor and the shape epoch (karamazov-k7gl.6) -----------------
+
+(defn- prune-events! [conn rid]
+  (db/execute! conn ["DELETE FROM events WHERE run_id = ?" rid]))
+
+(deftest the-floor-is-the-lowest-id-still-held
+  (let [conn (db/open! ":memory:")]
+    (try
+      (is (= 1 (journal/event-floor conn nil)) "nothing ever written: from the start")
+      (let [a (runs/start-run! conn {:problem "a"})
+            b (runs/start-run! conn {:problem "b"})
+            _ (journal/note! conn a :one {})
+            _ (journal/note! conn a :two {})
+            _ (journal/note! conn b :three {})
+            ids (mapv :id (journal/all-events-since conn 0 50))]
+        (is (= 1 (journal/event-floor conn nil)) "no hole: anything resumes")
+        (is (= 1 (journal/event-floor conn b)))
+        (prune-events! conn a)
+        (is (= (:id (last (journal/events-since conn b 0))) (journal/event-floor conn nil))
+            "a pruned run interleaved with a live one: past the highest hole")
+        (is (= 1 (journal/event-floor conn b)) "a run that holds its rows lost none")
+        (is (= (inc (peek ids)) (journal/event-floor conn a))
+            "a run with nothing left resumes from nothing: past every id ever assigned")
+        (prune-events! conn b)
+        (is (= (inc (peek ids)) (journal/event-floor conn nil)) "everything gone"))
+      (finally (db/close conn)))))
+
+(deftest when-a-client-must-reload-rather-than-page
+  (is (nil? (stream/resync {:cursor 0 :floor 50})) "from the start is not a resume")
+  (is (nil? (stream/resync {:cursor 49 :floor 50})) "the next id is the first one held")
+  (is (= "pruned" (stream/resync {:cursor 10 :floor 50})))
+  (is (nil? (stream/resync {:cursor 10 :floor 5 :client-epoch (str journal/event-epoch)})))
+  (is (= "epoch" (stream/resync {:cursor 10 :floor 5 :client-epoch "0"}))
+      "an event shape this client was not written against")
+  (is (= "7" (stream/client-epoch {:headers {"x-samizdat-epoch" "7"} :query-string "epoch=3"})))
+  (is (= "3" (stream/client-epoch {:query-string "since=1&epoch=3"})))
+  (is (nil? (stream/client-epoch {}))))
+
+(defn- stream-events
+  "The first `n` SSE events `response` emits, and the response."
+  [conn rid cursor client-epoch n]
+  (let [resp (stream/response conn rid cursor client-epoch
+                              {:poll-ms 10 :heartbeat-ms 50 :page 50})
+        ch (:body resp)
+        text (loop [acc ""]
+               (let [evs (:events (feed-all [head (chunk acc)]))]
+                 (if (>= (count evs) n)
+                   acc
+                   (let [v (async/alt!! ch ([v] v) (async/timeout 2000) ([_] nil))]
+                     (if (nil? v) acc (recur (str acc v)))))))]
+    (async/close! ch)
+    {:resp resp
+     :events (vec (take n (:events (feed-all [head (chunk text)]))))}))
+
+(deftest a-stream-says-hello-and-names-its-epoch
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})]
+    (try
+      (let [{:keys [resp events]} (stream-events conn rid (journal/last-event-id conn rid) nil 1)
+            hello (first events)
+            _ (journal/note! conn rid :one {})
+            events (:events (stream-events conn rid (dec (journal/last-event-id conn rid)) nil 2))]
+        (is (= (str journal/event-epoch) (get-in resp [:headers "X-Samizdat-Epoch"])))
+        (is (= "hello" (:event hello)))
+        (is (nil? (:id hello)) "a hello moves no cursor")
+        (is (= journal/event-epoch (get-in (sse/parse-data (:data hello)) [:data :epoch])))
+        (is (= "one" (:event (second events)))))
+      (finally (db/close conn)))))
+
+(deftest a-cursor-below-the-floor-is-told-to-resync
+  (let [conn (db/open! ":memory:")
+        old (runs/start-run! conn {:problem "old"})
+        rid (runs/start-run! conn {:problem "p"})]
+    (try
+      (journal/note! conn old :gone {})
+      (let [stale (journal/last-event-id conn old)]
+        (journal/note! conn old :gone-too {})
+        (journal/note! conn rid :kept {})
+        (prune-events! conn old)
+        (testing "the global stream, resumed from before what was pruned"
+          (let [{:keys [events]} (stream-events conn nil stale nil 2)
+                rs (second events)
+                d (:data (sse/parse-data (:data rs)))]
+            (is (= ["hello" "resync"] (mapv :event events)))
+            (is (= "pruned" (:reason d)))
+            (is (= (str (journal/last-event-id conn nil)) (:id rs))
+                "a resync carries the head, so a reconnect resumes past it")))
+        (testing "a client written against another event shape"
+          (let [{:keys [events]} (stream-events conn rid 0 "0" 2)
+                d (:data (sse/parse-data (:data (second events))))]
+            (is (= "resync" (:event (second events))))
+            (is (= "epoch" (:reason d)))
+            (is (= (str "/v1/runs/" rid) (:snapshot d)) "where to reload from"))))
+      (finally (db/close conn)))))
+
+(deftest the-follower-hears-a-resync-and-adopts-the-epoch
+  (let [conn (db/open! ":memory:")
+        rid (runs/start-run! conn {:problem "p"})
+        port (with-open [s (java.net.ServerSocket. 0)] (.getLocalPort s))
+        sent-epochs (atom [])
+        handler (fn [req]
+                  (swap! sent-epochs conj (stream/client-epoch req))
+                  ;; A heartbeat slower than :dead-ms, so the follower
+                  ;; hears silence and reconnects.
+                  (stream/response conn rid (stream/cursor req) (stream/client-epoch req)
+                                   {:poll-ms 10 :heartbeat-ms 5000 :page 50}))
+        server (adapter/run-server handler {:port port})
+        resyncs (atom [])
+        stop (atom false)]
+    (try
+      (journal/note! conn rid :kept {})
+      (let [f (future (sse/follow! (str "http://127.0.0.1:" port "/events")
+                                   {:epoch "0"
+                                    :on-event (fn [_])
+                                    :on-resync #(swap! resyncs conj %)
+                                    :stop? #(deref stop)
+                                    :retry-ms 20 :dead-ms 100}))]
+        (is (wait-for #(seq @resyncs)))
+        (is (= "epoch" (:reason (first @resyncs))))
+        (is (wait-for #(< 1 (count @sent-epochs))) "it reconnects")
+        (reset! stop true)
+        (deref f 3000 :timeout)
+        (is (= "0" (first @sent-epochs)))
+        (is (= (str journal/event-epoch) (second @sent-epochs))
+            "the epoch the server named is the one sent back")
+        (is (= 1 (count @resyncs)) "and so it is told once"))
+      (finally (adapter/stop-server server) (db/close conn)))))
+
+(deftest a-journal-page-below-the-floor-says-resync
+  (let [conn (db/open! ":memory:")
+        old (runs/start-run! conn {:problem "old"})
+        rid (runs/start-run! conn {:problem "p"})]
+    (try
+      (journal/note! conn rid :one {})
+      (journal/note! conn old :x {})
+      (journal/note! conn old :y {})
+      (prune-events! conn old)
+      (let [ok (api-runs/journal-tail conn rid (journal/last-event-id conn rid) 50 nil)]
+        (is (= journal/event-epoch (:epoch ok)))
+        (is (nil? (:resync ok))))
+      (let [r (api-runs/journal-tail conn old 1 50 nil)]
+        (is (= "pruned" (get-in r [:resync :reason])))
+        (is (empty? (:events r)))
+        (is (= (journal/last-event-id conn nil) (:next r)) "the cursor jumps to the head")
+        (is (= (str "/v1/runs/" old) (get-in r [:resync :snapshot]))))
+      (is (= "epoch" (get-in (api-runs/journal-tail conn rid 0 50 "0") [:resync :reason])))
+      (finally (db/close conn)))))
+
+(deftest the-poller-jumps-to-the-head-on-a-resync
+  (let [s (client/poll-step {:cursor 3} {:ok true :body {:events [] :next 90
+                                                          :resync {:reason "pruned"}}})]
+    (is (= 90 (:cursor s)) "not stuck asking for the same gone rows")
+    (is (= "pruned" (get-in s [:resync :reason])) "and the caller hears it"))
+  (is (nil? (:resync (client/poll-step {:cursor 3} {:ok true :body {:events [{:id 4}]}})))))

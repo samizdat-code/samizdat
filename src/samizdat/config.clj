@@ -102,6 +102,16 @@
 (defn- canonical [p]
   (try (.getCanonicalPath (java.io.File. (str p))) (catch Throwable _ (str p))))
 
+(defn tool-layers
+  "Each config.edn layer's `:tools` block, lowest first — the env file, the
+  project's .samizdat/config.edn and the person's global file, as separate
+  maps rather than merged. The tool ceiling and the per-argument rules
+  (samizdat.security.ceiling, samizdat.security.argrules) combine them so a
+  layer can only narrow what another allows; a deep merge would let the
+  highest layer replace a lower one's set, widening it."
+  [root]
+  (vec (keep #(get-in % [:value :tools]) (reverse (file-layers root)))))
+
 (defn mcp-servers
   "The MCP servers this project may run, from config.edn :mcp :servers
   across the layers (karamazov-05z0.16): {:servers {name spec} :untrusted
@@ -649,7 +659,7 @@
   cells read their own :run keys, and a list of them here would be a
   decision about behaviour made in src."
   #{:http :nrepl :db :eval :run :providers :roles :shell :approval :userspace
-    :peripherals})
+    :peripherals :tools :hooks :pricing})
 
 (defn- refuse-unrecognized!
   "Throw naming the file and the key when a config layer sets a top-level

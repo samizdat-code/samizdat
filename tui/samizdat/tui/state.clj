@@ -836,6 +836,13 @@
                   #{}]
           "approval" [s #{:approvals}]
           "delta" [(live-delta s data) #{}]
+          ;; The stream opening: it names the event shape and changes nothing.
+          "hello" [s #{}]
+          ;; What was paged no longer adds up — rows after the cursor were
+          ;; pruned, or the server reads events another way now: reload
+          ;; everything from the snapshot and drop the half-written previews
+          ;; (samizdat.api.stream/resync).
+          "resync" [(assoc s :live {}) #{:detail :branch :approvals :steps :runs}]
           ;; A branch's turn row is in: it holds what the live preview showed.
           [(cond-> s (= "turn" event) (update :live dissoc (:branch_id data)))
            (cond-> (get refresh-for event #{:detail})

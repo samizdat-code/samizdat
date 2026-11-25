@@ -236,6 +236,19 @@
    ;; io/file was the escape this project already had (karamazov-blt.28). It
    ;; writes only task rows, never the tree.
    "split"       {:reach :host-bytes}
+   ;; Chunks of the project's own source, indexed from `git ls-files` (or a
+   ;; walk) under the run's root and filtered through exposure/visible before
+   ;; they are returned, recorded for flow like grep's matches
+   ;; (karamazov-k7gl.7). Same reach as grep.
+   "code_search" {:reach :host-bytes
+                  :also "an FTS5 index of the root's files in the harness db"}
+   ;; Opens a child BRANCH of the same run (karamazov-k7gl.9). It touches
+   ;; nothing itself; every tool the child calls is its own call through
+   ;; run-tool, under the same ceiling, policy and exposure as the parent's,
+   ;; with the :delegate role's narrower tool set. What comes back is the
+   ;; child's report, carrying the child's flow label to the parent.
+   "delegate"    {:reach :harness-only
+                  :also "a child branch whose own tool calls are each checked"}
    "message"     {:reach :harness-only}
    "remember"    {:reach :harness-only}
    "forget"      {:reach :harness-only}

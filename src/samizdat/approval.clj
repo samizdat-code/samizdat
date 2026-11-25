@@ -382,7 +382,11 @@
               ;; With no pattern to widen to, always is this exact text.
               exact (when (and (nil? pattern) (not irrev?) (not (str/blank? (str input))))
                       (str input))
-              id (request! {:run-id run-id :branch-id branch-id :kind :shell
+              id (request! {:run-id run-id :branch-id branch-id
+                            ;; What is asked about, for the front end: a
+                            ;; shell command unless the caller says (an
+                            ;; MCP tool call, karamazov-k7gl.3).
+                            :kind (or (:ask-kind decision) :shell)
                             :input input :details details :reason reason
                             :gaps gaps :always (or pattern exact)
                             :always-exact (some? exact)})
@@ -398,7 +402,10 @@
                 (when (and (:always answer) exact)
                   (swap! exact-allowed update run-id (fnil conj #{}) exact)
                   (log/info "approval: allowed exactly" (pr-str exact) "always, for this session, on run" run-id))
-                (assoc decision :effect :allow :note (:note answer)))
+                ;; :allowed-always? says the person chose always, for a
+                ;; caller that keeps it somewhere durable (an MCP grant).
+                (cond-> (assoc decision :effect :allow :note (:note answer))
+                  (and (:always answer) (or pattern exact)) (assoc :allowed-always? true)))
 
             ;; An expired wait leaves the ask as the refusal it always was,
             ;; and says that is why — so the refusal the model reads can
