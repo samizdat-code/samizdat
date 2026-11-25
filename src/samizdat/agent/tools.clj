@@ -377,8 +377,12 @@
   (samizdat.security.argrules). nil when the call may go on. Here and not in
   phases.edn because phases.edn is the workflow's, and these are the bounds
   the workflow cannot move."
-  [{:keys [branch] :as ctx}]
-  (if-let [msg (ceiling/refusal ctx)]
+  [{:keys [branch tool-name] :as ctx}]
+  ;; A name no tool answers to is the :default method's to report, and it
+  ;; lists only what the ceiling permits; refusing it here as "above the
+  ;; ceiling" would hide the typo and the nearest real name.
+  (if-let [msg (when (contains? (methods base/run-tool) tool-name)
+                 (ceiling/refusal ctx))]
     (base/refusal branch msg :refusal-rule :tool-ceiling)
     (when-let [{:keys [message decision rule]} (argrules/refusal ctx)]
       (base/refusal branch message :refusal-rule :argument-rule
