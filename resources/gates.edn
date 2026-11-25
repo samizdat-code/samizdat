@@ -121,12 +121,36 @@
         owns the change. The answer handed back is cut to :answer-chars."}
 
  :mcp
- {:value {:timeout-ms 30000}
+ {:value {:timeout-ms 30000 :elicitation-wait-ms 300000
+          :default-policy :prompt :yolo-allows? true}
   :kind :threshold :capability-tunable? false
-  :provenance ["karamazov-05z0.16"]
-  :doc "How long an MCP server has to answer one request — the handshake, a
-        tool listing, a call — before the `mcp` tool reports it unavailable.
-        A server entry's own :timeout-ms in config.edn wins."}
+  :provenance ["karamazov-05z0.16" "karamazov-k7gl.3"]
+  :doc "MCP servers (the `mcp` tool).
+
+        :timeout-ms is how long a server has to answer one request — the
+        handshake, a tool listing, a call — before the tool reports it
+        unavailable. A server entry's own :timeout-ms in config.edn wins.
+        The wait is held while the server's elicitation is with a person.
+
+        :elicitation-wait-ms bounds that person: a server that asks for
+        input mid-call (elicitation/create) has its question parked on the
+        approvals queue when :approval resolves to :block for the run, and
+        hears `cancel` when nobody answers in time — or at once, when
+        nobody is there to ask.
+
+        :default-policy is the policy of a server entry that names none:
+        :prompt (each call to a person), :read-only (only :trusted-tools)
+        or :deny. This file may only tighten, so :allow here is read as
+        :prompt; a server runs unasked only where the person's config.edn
+        entry says :policy :allow.
+
+        A :prompt call is approved for the tool's DEFINITION — a hash of its
+        name, description and input schema. An allow-always is kept as a
+        grant naming that hash, so a server that changes what a tool says
+        it does is asked about again. :yolo-allows? false refuses a :prompt
+        call under :yolo, where nobody is asked, rather than running it.
+        :auto's classifier never answers for an MCP call: it judges where a
+        shell command reaches, not what a server's tool does."}
 
  :papercut
  {:value {:window-ms 86400000 :overlap 0.6 :same-run-overlap 0.4 :min-word-chars 4

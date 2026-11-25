@@ -23,7 +23,7 @@
 
 (deftest the-client-lists-and-calls-a-server-s-tools
   (let [ts (mcp/tools "fake" fake)]
-    (is (= ["lookup" "boom"] (mapv :name ts)))
+    (is (= ["lookup" "boom" "ask"] (mapv :name ts)))
     (is (= ["word"] (get-in (first ts) [:inputSchema :required]))))
   (is (= {:error? false :text "a lookup result\nsecond part"}
          (mcp/call "fake" fake "lookup" {:word "x"})))
@@ -96,3 +96,25 @@
       (finally
         (layers/forget-files!)
         (doseq [f (reverse (file-seq tmp))] (.delete f))))))
+
+(deftest an-elicitation-over-stdio-reaches-a-person
+  ;; karamazov-k7gl.3: the server asks mid-call; the question waits on the
+  ;; approvals queue and the person's answer goes back to the server.
+  (let [stop (atom false)]
+    (try
+      (future (loop []
+                (when-not @stop
+                  (doseq [q (approval/pending nil)]
+                    (approval/decide! (:id q) {:decision :allow :answers ["Ada"]}))
+                  (Thread/sleep 20)
+                  (recur))))
+      (with-redefs [approval/policy (constantly {:mode :block :wait-ms 3000 :on-timeout :deny})]
+        (is (str/includes? (:result (run {:servers {:fake (assoc fake :policy :allow)}}
+                                         {"action" "call" "server" "fake" "tool" "ask"}))
+                           "accept Ada")))
+      (with-redefs [approval/policy (constantly {:mode :refuse})]
+        (is (str/includes? (:result (run {:servers {:fake (assoc fake :policy :allow)}}
+                                         {"action" "call" "server" "fake" "tool" "ask"}))
+                           "cancel")
+            "nobody to ask: the server hears cancel, and the call still ends"))
+      (finally (reset! stop true) (approval/reset!) (flow/forget-run! "r")))))

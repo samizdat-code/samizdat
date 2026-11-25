@@ -26,7 +26,8 @@
   model has no edge into the grants table. Enforced structurally by never
   exposing grant! through a tool; the model can only ever produce a
   needs-approval result that a person acts on."
-  (:require [samizdat.store.db :as db]))
+  (:require [clojure.string :as str]
+            [samizdat.store.db :as db]))
 
 (defn grant!
   "Record a human's allow-always for `pattern` on this run. Idempotent-ish: a
@@ -38,11 +39,27 @@
                        run-id pattern (db/now)]))
   pattern)
 
+(def mcp-prefix
+  "What starts an MCP tool's grant: `mcp:<server>/<tool>#<digest>`, the
+  digest of the tool's definition (samizdat.mcp.client/tool-digest), so the
+  grant stops applying when the server changes the tool (karamazov-k7gl.3).
+  Kept in the same table as the shell's, and out of what the shell reads."
+  "mcp:")
+
+(defn- patterns [conn run-id]
+  (mapv :pattern
+        (db/fetch conn ["SELECT pattern FROM grants WHERE run_id = ?
+                         ORDER BY id" run-id])))
+
 (defn for-run
-  "The grant patterns active for a run, as the shape the policy engine reads:
-  {:grants [pattern ...]}. Read once per decision so a fresh grant is seen on
-  the next command without re-plumbing."
+  "The shell grant patterns active for a run, as the shape the policy engine
+  reads: {:grants [pattern ...]}. Read once per decision so a fresh grant is
+  seen on the next command without re-plumbing. MCP grants are not shell
+  globs and are left out."
   [conn run-id]
-  {:grants (mapv :pattern
-                 (db/fetch conn ["SELECT pattern FROM grants WHERE run_id = ?
-                                  ORDER BY id" run-id]))})
+  {:grants (into [] (remove #(str/starts-with? % mcp-prefix)) (patterns conn run-id))})
+
+(defn mcp-grants
+  "The MCP tool grants active for a run, each `mcp:<server>/<tool>#<digest>`."
+  [conn run-id]
+  (into [] (filter #(str/starts-with? % mcp-prefix)) (patterns conn run-id)))

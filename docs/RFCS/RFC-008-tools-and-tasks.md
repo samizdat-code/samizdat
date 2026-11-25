@@ -216,6 +216,33 @@ section always passes. The compaction fold's summary call runs on the
 `:summarizer` role the same way. Pattern and numbers after Spotify's shunt;
 karamazov-b76m.
 
+### MCP servers
+
+`mcp` reaches the tools of the servers config.edn `:mcp :servers` names
+(karamazov-05z0.16; transports, pinning and elicitation karamazov-k7gl.3).
+`samizdat.mcp.client` holds one session per server over a
+`samizdat.mcp.transport/Transport`: stdio (`:command`, a child process, one
+message per line) or Streamable HTTP (`:url`, protocol 2025-06-18: a POST per
+message, answered with JSON or an event stream, the `Mcp-Session-Id` the
+server assigns sent back on every later request, a bearer token read from the
+variable `:token-env` names). Ids, waiting, list-changed and the server's own
+requests are the session's, the same over both.
+
+A `:prompt` server's call goes through `approval/resolve-ask` pinned to the
+tool's definition: the ask is `mcp:<server>/<tool>#<digest>`, the digest a
+hash of the tool's name, description and input schema. An allow covers that
+text for the run; an allow-always is a row in `grants` (kept out of what the
+shell policy reads); a server that changes the tool produces a different text
+and is asked again. A tool the server does not list is refused. Which policy
+an entry without one gets, and whether `:yolo` runs prompted calls, is
+gates.edn `:mcp`.
+
+A server may send `elicitation/create` during a call. The schema becomes a
+questionnaire on the approvals queue, the shape ask_human uses, so every
+front end answers it; the answer goes back as accept with typed content,
+decline, or cancel (no answer within `:mcp :elicitation-wait-ms`, or nobody
+to ask). The call's own timeout is held while the person answers.
+
 ### The acceptance rung
 
 `done` has one rung that is not the run's own evidence: the **acceptance

@@ -83,6 +83,7 @@
             [samizdat.jobs-test]
             [samizdat.tui-onboarding-test]
             [samizdat.mcp-test]
+            [samizdat.mcp-http-test]
             [samizdat.role-output-test]
             [samizdat.worktree-test]
             [samizdat.findings-test]
@@ -431,6 +432,7 @@
     samizdat.jobs-test
     samizdat.tui-onboarding-test
     samizdat.mcp-test
+    samizdat.mcp-http-test
     samizdat.role-output-test
     samizdat.worktree-test
     samizdat.findings-test
