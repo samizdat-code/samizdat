@@ -97,12 +97,14 @@ jobs:
       - name: Cache jolt gitlibs
         uses: actions/cache@v4
         with:
-          # mvnlibs too: an uncached job fetches every Maven jar from
-          # Maven Central, which answers a busy runner with HTTP 429.
+          # The Maven jars too: an uncached job fetches every one from Maven
+          # Central, which answers a busy runner with HTTP 429. jolt downloads
+          # them into ~/.m2/repository and extracts sources into mvnlibs.
           path: |
             ~/.jolt/gitlibs
             ~/.jolt/mvnlibs
-          key: jolt-deps-${{ hashFiles('deps.edn') }}
+            ~/.m2/repository
+          key: jolt-deps-v2-${{ hashFiles('deps.edn') }}
 
       - name: Fetch dependencies
         run: jolt -P
@@ -170,12 +172,14 @@ jobs:
       - name: Cache jolt gitlibs
         uses: actions/cache@v4
         with:
-          # mvnlibs too: an uncached job fetches every Maven jar from
-          # Maven Central, which answers a busy runner with HTTP 429.
+          # The Maven jars too: an uncached job fetches every one from Maven
+          # Central, which answers a busy runner with HTTP 429. jolt downloads
+          # them into ~/.m2/repository and extracts sources into mvnlibs.
           path: |
             ~/.jolt/gitlibs
             ~/.jolt/mvnlibs
-          key: jolt-deps-${{ hashFiles('deps.edn') }}
+            ~/.m2/repository
+          key: jolt-deps-v2-${{ hashFiles('deps.edn') }}
 
       - name: Fetch dependencies
         run: jolt -P
@@ -233,12 +237,14 @@ jobs:
       - name: Cache jolt gitlibs
         uses: actions/cache@v4
         with:
-          # mvnlibs too: an uncached job fetches every Maven jar from
-          # Maven Central, which answers a busy runner with HTTP 429.
+          # The Maven jars too: an uncached job fetches every one from Maven
+          # Central, which answers a busy runner with HTTP 429. jolt downloads
+          # them into ~/.m2/repository and extracts sources into mvnlibs.
           path: |
             ~/.jolt/gitlibs
             ~/.jolt/mvnlibs
-          key: jolt-deps-${{ hashFiles('deps.edn') }}
+            ~/.m2/repository
+          key: jolt-deps-v2-${{ hashFiles('deps.edn') }}
 
       - name: Probes
         # FTS5 through the FFI binding, serialized store access, HTTPS
@@ -292,12 +298,14 @@ jobs:
       - name: Cache jolt gitlibs
         uses: actions/cache@v4
         with:
-          # mvnlibs too: an uncached job fetches every Maven jar from
-          # Maven Central, which answers a busy runner with HTTP 429.
+          # The Maven jars too: an uncached job fetches every one from Maven
+          # Central, which answers a busy runner with HTTP 429. jolt downloads
+          # them into ~/.m2/repository and extracts sources into mvnlibs.
           path: |
             ~/.jolt/gitlibs
             ~/.jolt/mvnlibs
-          key: jolt-deps-${{ hashFiles('deps.edn') }}
+            ~/.m2/repository
+          key: jolt-deps-v2-${{ hashFiles('deps.edn') }}
 
       # `jolt build` embeds only what it can reach statically, so this job
       # guards against a dynamic require silently dropping a subtree from the
@@ -376,12 +384,14 @@ jobs:
       - name: Cache jolt gitlibs
         uses: actions/cache@v4
         with:
-          # mvnlibs too: an uncached job fetches every Maven jar from
-          # Maven Central, which answers a busy runner with HTTP 429.
+          # The Maven jars too: an uncached job fetches every one from Maven
+          # Central, which answers a busy runner with HTTP 429. jolt downloads
+          # them into ~/.m2/repository and extracts sources into mvnlibs.
           path: |
             ~/.jolt/gitlibs
             ~/.jolt/mvnlibs
-          key: jolt-deps-${{ hashFiles('deps.edn') }}
+            ~/.m2/repository
+          key: jolt-deps-v2-${{ hashFiles('deps.edn') }}
 
       - name: Build
         run: jolt build -m samizdat.core -o samizdat
