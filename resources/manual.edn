@@ -130,6 +130,10 @@
     :summary "Every workflow available to select or adapt, with its description."}
    {:name samizdat.agent.skills/catalog
     :summary "The on-demand skill catalogue: bundled skills under project overlays and the person's own {global}/skills (~/.config/samizdat/skills or the profile's), earliest root winning, including clj-debug for REPL inspection, clj-discover for Java/macro exploration, clj-replace for structural edits, and user-initiated clj-refactor for mechanism/policy review."}
+   {:name samizdat.agent.skills/registry
+    :summary "Every skill the roots in wordlists.edn :skill-roots reach (project, then the person's {global}, ~/.agents and ~/.claude skills, then shipped), flat <name>.md or an Agent Skills <name>/SKILL.md directory with YAML frontmatter (name, description, allowed-tools, license, metadata). Returns the winners, :shadowed (which path hides which) and :diagnostics (bad frontmatter, name not kebab-case or not the directory's, missing or over-long description; bounds in gates.edn :skills). allowed-tools is surfaced, not enforced. `skill list` shows it; GET /v1/harness/skills serves it without bodies."}
+   {:name samizdat.agent.skills/read-skill-file
+    :summary "A file bundled with a directory skill, relative to its root and confined to it (canonical paths, so `..` and symlinks out are refused). `skill load` names the root; `skill read {name} {path}` calls this."}
    {:name samizdat.heldout/defer!
     :summary "The held-out gate off the turn: after a save validates, the battery replays on a background lane and the edit is committed or refused there; the branch that made it is told by a message on a later turn. nil when the project has no battery, and the tool saves as before."}
    {:name samizdat.heldout/check-edit

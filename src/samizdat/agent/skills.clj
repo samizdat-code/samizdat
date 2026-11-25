@@ -25,8 +25,10 @@
   first match by directory order — the same layering as cells and config."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
+            [samizdat.agent.gates :as gates]
             [samizdat.layers :as layers]
-            [samizdat.lexicon :as lexicon]))
+            [samizdat.lexicon :as lexicon]
+            [samizdat.util :as util]))
 
 (def shipped-skills
   "Basenames of the skills that ship, ENUMERATED not globbed — a classpath has
@@ -115,67 +117,239 @@
                        (when (.isFile doc) [(.getName f) doc])))))
            (sort-by first)))))
 
+(defn- unquote-scalar
+  "A YAML scalar as a string: double quotes with their backslash escapes,
+  single quotes with '' for a quote, anything else trimmed as written."
+  [v]
+  (let [v (str/trim (str v))
+        n (count v)]
+    (cond
+      (and (>= n 2) (str/starts-with? v "\"") (str/ends-with? v "\""))
+      (str/replace (subs v 1 (dec n)) #"\\(.)"
+                   (fn [[_ c]] (case c "n" "\n" "t" "\t" c)))
+
+      (and (>= n 2) (str/starts-with? v "'") (str/ends-with? v "'"))
+      (str/replace (subs v 1 (dec n)) "''" "'")
+
+      :else v)))
+
+(defn- scalar-or-flow
+  "A value written on its key's own line: an inline `[a, b]` list, else a
+  scalar."
+  [v]
+  (if (and (str/starts-with? v "[") (str/ends-with? v "]"))
+    (into [] (comp (map str/trim) (remove str/blank?) (map unquote-scalar))
+          (str/split (subs v 1 (dec (count v))) #","))
+    (unquote-scalar v)))
+
+(defn- indented? [line] (boolean (re-find #"^\s+\S" line)))
+
+(defn- nested-value
+  "The value of a key with nothing after its colon, from the indented lines
+  under it: a `- item` list, a `k: v` map, or {:error ..}."
+  [block]
+  (let [lines (map str/trim (remove str/blank? block))]
+    (cond
+      (empty? lines) ""
+      (every? #(str/starts-with? % "- ") lines)
+      (mapv #(unquote-scalar (subs % 2)) lines)
+      :else
+      (let [pairs (map #(re-find #"^([^:\s][^:]*?)\s*:\s*(.*)$" %) lines)]
+        (if (every? some? pairs)
+          (into {} (map (fn [[_ k v]] [(unquote-scalar k) (scalar-or-flow v)])) pairs)
+          {:error (str "cannot read the block under it: " (first lines))})))))
+
+(defn- parse-yaml-subset
+  "The YAML a skill's frontmatter uses, without a YAML library: top-level
+  `key: value` scalars (plain, quoted, or continued on indented lines),
+  `>`/`|` block scalars, `- item` lists, inline `[a, b]` lists and one level
+  of `k: v` map (an Agent Skills `metadata`). Keys are lower-cased keywords.
+  Anything else is an ERROR naming its line, never silently dropped.
+  Returns {:meta :errors}."
+  [text]
+  (let [lines (vec (str/split-lines (str text)))
+        n (count lines)]
+    (loop [i 0 meta {} errors []]
+      (if (>= i n)
+        {:meta meta :errors errors}
+        (let [line (nth lines i)]
+          (if (or (str/blank? line) (str/starts-with? (str/triml line) "#"))
+            (recur (inc i) meta errors)
+            (if-let [[_ k v] (re-find #"^([A-Za-z_][A-Za-z0-9_-]*)\s*:(?:\s+(.*?))?\s*$" line)]
+              (let [block (vec (take-while #(or (str/blank? %) (indented? %))
+                                           (subvec lines (inc i))))
+                    nxt (+ i 1 (count block))
+                    more (map str/trim (remove str/blank? block))
+                    v (some-> v str/trim not-empty)
+                    value (cond
+                            (and v (re-matches #"[>|][+-]?" v))
+                            (str/join (if (str/starts-with? v ">") " " "\n") more)
+                            (and v (seq more))
+                            (unquote-scalar (str/join " " (cons v more)))
+                            v (scalar-or-flow v)
+                            :else (nested-value block))]
+                (if (and (map? value) (:error value))
+                  (recur nxt meta (conj errors (str "line " (inc i) ": `" k "` " (:error value))))
+                  (recur nxt (assoc meta (keyword (str/lower-case k)) value) errors)))
+              (recur (inc i) meta
+                     (conj errors (str "line " (inc i) ": not `key: value`: "
+                                       (str/trim line)))))))))))
+
 (defn parse-frontmatter
-  "Split a skill file into {:meta {..} :body ..}. A leading `---` fenced block
-  is parsed as simple `key: value` lines (name, description); the rest is the
-  body. No frontmatter -> empty meta and the whole file as body."
+  "Split a skill file into {:meta {..} :body .. :errors [..]}. A leading
+  `---` fenced block is read as the YAML subset skills use
+  (parse-yaml-subset); the rest is the body. No frontmatter -> empty meta and
+  the whole file as body. An opening fence with no closing one is an error,
+  and then the whole file is the body. :errors is absent when there are none."
   [content]
   (let [content (str content)]
-    (if-let [m (re-find #"(?s)\A---\s*\n(.*?)\n---\s*\n?(.*)\z" content)]
-      (let [meta (into {}
-                       (keep (fn [line]
-                               (when-let [[_ k v] (re-find #"^\s*([A-Za-z_-]+)\s*:\s*(.+?)\s*$" line)]
-                                 [(keyword (str/lower-case k)) v]))
-                             (str/split-lines (nth m 1))))]
-        {:meta meta :body (str/trim (nth m 2))})
-      {:meta {} :body (str/trim content)})))
+    (if-let [m (re-find #"(?s)\A---[ \t]*\r?\n(?:(.*?)\r?\n)?---[ \t]*(?:\r?\n(.*))?\z" content)]
+      (let [{:keys [meta errors]} (parse-yaml-subset (nth m 1))]
+        (cond-> {:meta meta :body (str/trim (str (nth m 2)))}
+          (seq errors) (assoc :errors errors)))
+      (if (re-find #"\A---[ \t]*\r?\n" content)
+        {:meta {} :body (str/trim content)
+         :errors ["the frontmatter opens with `---` and never closes"]}
+        {:meta {} :body (str/trim content)}))))
 
 (defn- describe
   "A skill's one-line catalogue description — its trigger. The frontmatter
   `description` (write it as \"Use when …\"), else the first non-heading line,
   else nil so the skill drops from the catalogue but stays loadable."
   [fm name]
-  (or (not-empty (str/trim (str (get-in fm [:meta :description]))))
+  (or (let [d (get-in fm [:meta :description])]
+        (when (string? d) (not-empty (str/trim d))))
       (some #(when-not (or (str/blank? %) (str/starts-with? (str/trim %) "#"))
                (str/trim %))
             (str/split-lines (:body fm)))))
+
+(defn- tool-list
+  "`allowed-tools` as a list: the Agent Skills spelling is one
+  space-separated string, where a pattern like `Bash(git add:*)` may hold
+  spaces of its own; a YAML list is taken as written."
+  [v]
+  (cond
+    (sequential? v) (mapv str v)
+    (string? v) (vec (re-seq #"[^\s(]+(?:\([^)]*\))?" v))
+    :else nil))
+
+(defn- limits [] (or (gates/threshold :skills) {}))
+
+(defn diagnose
+  "What is wrong with one skill, as [{:problem kw :detail str}]. Every skill
+  is checked for a frontmatter that reads; a DIRECTORY skill is held to the
+  Agent Skills format besides: a `name` that is kebab-case, at most
+  :name-max chars and its directory's own name, and a `description` of at
+  most :description-max chars (gates.edn :skills). A diagnostic never drops
+  the skill — the listing reports it and the skill still loads."
+  [{:keys [dir-name format]} fm]
+  (let [{:keys [name-max description-max]} (limits)
+        nm (get-in fm [:meta :name])
+        desc (get-in fm [:meta :description])]
+    (into (mapv (fn [e] {:problem :bad-frontmatter :detail e}) (:errors fm))
+          (when (= :directory format)
+            (cond-> []
+              (not (and (string? desc) (not (str/blank? desc))))
+              (conj {:problem :missing-description :detail "no `description`"})
+
+              (and (string? desc) description-max (> (count desc) description-max))
+              (conj {:problem :description-too-long
+                     :detail (str (count desc) " chars, over " description-max)})
+
+              (nil? nm)
+              (conj {:problem :missing-name
+                     :detail (str "no `name`; using `" dir-name "`")})
+
+              (and (some? nm)
+                   (or (not (string? nm))
+                       (not (re-matches #"[a-z0-9]+(-[a-z0-9]+)*" nm))
+                       (and name-max (> (count nm) name-max))))
+              (conj {:problem :bad-name
+                     :detail (str "`" nm "` is not kebab-case of at most "
+                                  name-max " chars")})
+
+              (and (some? nm) (not= (str nm) dir-name))
+              (conj {:problem :name-mismatch
+                     :detail (str "`" nm "` in directory `" dir-name "`")}))))))
+
+(defn- entry
+  "One skill file read into its registry entry, as [name {:path :root :source
+  :format :description :body :allowed-tools :license :metadata
+  :diagnostics}]."
+  [{:keys [path root source format dir-name] :as where} content]
+  (let [fm (parse-frontmatter content)
+        nm (get-in fm [:meta :name])
+        nm (or (when (string? nm) (not-empty nm)) dir-name)
+        meta (:meta fm)]
+    [nm (cond-> {:path path :source source :format format
+                 :description (describe fm nm)
+                 :body (:body fm)
+                 :diagnostics (diagnose where fm)}
+          root (assoc :root root)
+          (some? (:allowed-tools meta)) (assoc :allowed-tools (tool-list (:allowed-tools meta)))
+          (string? (:license meta)) (assoc :license (:license meta))
+          (map? (:metadata meta)) (assoc :metadata (:metadata meta)))]))
 
 (defn- shipped-entries
   "The bundled skills, read off the classpath so they resolve from a built
   binary and from any cwd."
   []
-  (into {}
+  (into []
         (keep (fn [nm]
                 (try
                   (when-let [r (io/resource (str "skills/" nm ".md"))]
-                    (let [fm (parse-frontmatter (slurp r))
-                          nm' (or (not-empty (str (get-in fm [:meta :name]))) nm)]
-                      [nm' {:path (str "classpath:skills/" nm ".md")
-                            :description (describe fm nm')
-                            :body (:body fm)}]))
+                    (entry {:path (str "classpath:skills/" nm ".md") :source "classpath"
+                            :format :flat :dir-name nm}
+                           (slurp r)))
                   (catch Throwable _ nil))))
         shipped-skills))
 
-(defn discover
-  "skill-name -> {:path :description :body}. The shipped skills come off the
-  classpath; `dirs` overlay them with the EARLIEST winning, so a project's
-  .samizdat/skills beats the person's {global} root and both beat a bundled
-  skill of the same name. Malformed files are skipped, never fatal."
-  ([] (discover (default-dirs)))
-  ([dirs]
-   (reduce
-    (fn [acc dir]
-      (reduce (fn [m [nm ^java.io.File f]]
+(defn- dir-entries
+  "The skills in one root, as registry entries, in stable name order. A file
+  that will not read is skipped, never fatal."
+  [dir]
+  (into []
+        (keep (fn [[nm ^java.io.File f]]
                 (try
-                  (let [fm (parse-frontmatter (slurp f))
-                        nm (or (not-empty (str (get-in fm [:meta :name]))) nm)]
-                    (assoc m nm {:path (.getPath f)
-                                 :description (describe fm nm)
-                                 :body (:body fm)}))
-                  (catch Throwable _ m)))
-              acc (skill-files dir)))
-    (shipped-entries)
-    (reverse dirs))))
+                  (let [directory? (= skill-doc (.getName f))]
+                    (entry (cond-> {:path (.getPath f) :source (str dir)
+                                    :format (if directory? :directory :flat)
+                                    :dir-name nm}
+                             directory? (assoc :root (.getParent f)))
+                           (slurp f)))
+                  (catch Throwable _ nil))))
+        (skill-files dir)))
+
+(defn registry
+  "Every skill visible from `dirs`, with what shadows what and what is wrong:
+  {:skills {name entry} :shadowed [{:name :path :shadows}] :diagnostics
+  [{:name :path :problem :detail}]}.
+
+  Lowest precedence first: the shipped skills, then `dirs` from LAST to
+  FIRST, so the earliest root wins — a project's .samizdat/skills beats the
+  person's roots, which beat a bundled skill of the same name. Each time a
+  later layer takes a name an earlier one had, :shadowed records the winner's
+  path and the path it hid."
+  ([] (registry (default-dirs)))
+  ([dirs]
+   (let [all (apply concat (shipped-entries) (map dir-entries (reverse dirs)))]
+     (reduce (fn [acc [nm e]]
+               (let [prior (get-in acc [:skills nm])]
+                 (cond-> (assoc-in acc [:skills nm] e)
+                   prior (update :shadowed conj {:name nm :path (:path e)
+                                                 :shadows (:path prior)}))))
+             {:skills {} :shadowed []
+              :diagnostics (into [] (for [[nm e] all
+                                          d (:diagnostics e)]
+                                      (assoc d :name nm :path (:path e))))}
+             all))))
+
+(defn discover
+  "skill-name -> entry (see `registry`): the winners only. The shipped skills
+  come off the classpath; `dirs` overlay them with the EARLIEST winning.
+  Malformed files are skipped, never fatal."
+  ([] (discover (default-dirs)))
+  ([dirs] (:skills (registry dirs))))
 
 (defn catalog
   "The always-on catalogue the agent sees: [{:name :description} ...], sorted.
@@ -208,3 +382,30 @@
   ([name] (load-skill (default-dirs) name))
   ([dirs name]
    (get-in (discover dirs) [name :body])))
+
+(defn skill-entry
+  "The registry entry of a named skill, or nil."
+  [dirs name]
+  (get (discover dirs) name))
+
+(defn read-skill-file
+  "A file bundled with a DIRECTORY skill, read relative to its root:
+  {:content :path} or {:error kw} — :no-skill, :no-root (a flat skill has no
+  directory of its own), :outside-skill (the path escapes the root, by `..`
+  or a symlink alike: judged on canonical paths), :not-found. Content past
+  gates.edn :skills :file-chars is cut in the middle."
+  [dirs name rel]
+  (let [e (skill-entry dirs name)]
+    (cond
+      (nil? e) {:error :no-skill}
+      (nil? (:root e)) {:error :no-root}
+      :else
+      (let [canon #(.getCanonicalPath (io/file (str %)))
+            root (canon (:root e))
+            path (canon (io/file (:root e) (str rel)))]
+        (cond
+          (not (str/starts-with? path (str root "/"))) {:error :outside-skill}
+          (not (.isFile (io/file path))) {:error :not-found}
+          :else {:path path
+                 :content (util/truncate-middle (slurp path)
+                                                (or (:file-chars (limits)) 60000))})))))

@@ -393,9 +393,10 @@ tool_search({query?, select?, limit?})
 {{skills}}
 
 ```
-skill({action, name?})
+skill({action, name?, path?})
     `load {name}`: a skill's full guidance, when a task matches its line
-    above. `list` reprints the catalogue.
+    above. `list` reprints the catalogue. `read {name} {path}`: a file a
+    directory skill bundles, relative to its root.
 ```
 
 ### Changing {% if self-hosting %}the harness itself{% else %}the loop you run in{% endif %}

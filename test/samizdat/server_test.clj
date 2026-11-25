@@ -21,6 +21,7 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.test :refer [deftest testing is]]
+            [jolt.fs]
             [jolt.process :as p]
             [ring-chez.http]
             [ring-chez.adapter :as adapter]
@@ -36,7 +37,8 @@
             [samizdat.server :as server]
             [samizdat.store.db :as db]
             [samizdat.system :as system]
-            [samizdat.userspace :as userspace]))
+            [samizdat.userspace :as userspace]
+            [samizdat.util]))
 
 (defn- call
   "The handler's answer to `method` `uri`, with the JSON body read back."
@@ -443,3 +445,25 @@
   (is (= (json/read-str (json/write-str (contracts/schema contracts/run-request-contract))
                         :key-fn keyword)
          (:json (call :get "/v1/harness/contracts/run")))))
+
+(deftest the-skills-route-lists-the-registry-without-bodies
+  ;; karamazov-k7gl.4: what a front end shows of the skills the bound project
+  ;; sees — every winner, what it shadows, and what is wrong with any of them.
+  (let [root (str "/tmp/samizdat-server-skills-" (random-uuid))
+        dir (str root "/.samizdat/skills/kit")]
+    (jolt.fs/create-dirs dir)
+    (try
+      (spit (str dir "/SKILL.md")
+            "---\nname: kit\ndescription: Use when kit.\nallowed-tools: Read Grep\n---\nsecret body")
+      (with-redefs [userspace/project-root (constantly root)]
+        (let [r (call :get "/v1/harness/skills")
+              kit (some #(when (= "kit" (:name %)) %) (get-in r [:json :skills]))]
+          (is (= 200 (or (:status r) 200)))
+          (is (= "Use when kit." (:description kit)))
+          (is (= ["Read" "Grep"] (:allowed_tools kit)))
+          (is (= dir (:root kit)))
+          (is (nil? (:body kit)) "bodies are not served")
+          (is (some #(= "mycelium" (:name %)) (get-in r [:json :skills])))
+          (is (vector? (get-in r [:json :shadowed])))
+          (is (vector? (get-in r [:json :diagnostics])))))
+      (finally (jolt.fs/delete-tree root)))))

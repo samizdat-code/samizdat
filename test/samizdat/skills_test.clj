@@ -3,7 +3,7 @@
 
 (ns samizdat.skills-test
   (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is]]
+            [clojure.test :refer [deftest is testing]]
             [jolt.fs :as fs]
             [samizdat.agent.skills :as skills]
             [samizdat.agent.tools.base :as base]
@@ -203,8 +203,12 @@
     (is (= ["/proj/.samizdat/skills"] (skills/project-dirs "/proj"))
         "no config dir means the global root is skipped, not joined to the project")))
 
-(deftest the-shipped-roots-include-the-persons-config-dir-last
-  (is (= "{global}/skills" (last (skills/skill-roots)))))
+(deftest the-shipped-roots-put-the-persons-config-dir-after-the-project
+  (let [roots (skills/skill-roots)
+        g (.indexOf ^java.util.List roots "{global}/skills")]
+    (is (<= 0 g))
+    (is (every? #(not (re-find #"^(\{global\}|~|/)" %)) (take g roots))
+        "every root before the person's is a project root")))
 
 (deftest the-earliest-root-wins-and-a-global-skill-is-found
   (let [base (str "/tmp/samizdat-skills-" (random-uuid))
@@ -226,3 +230,131 @@
           (is (= "personal body" (get-in found ["personal" :body]))
               "a skill only the person has is found from any project")))
       (finally (fs/delete-tree base)))))
+
+;; --- karamazov-k7gl.4: the Agent Skills format ------------------------------
+;; A directory holding SKILL.md with YAML frontmatter: `name` (kebab-case, at
+;; most 64 chars, the directory's own name), `description`, and optional
+;; `allowed-tools`, `license` and `metadata`. The listing says what shadows
+;; what and what is wrong with a skill rather than silently dropping it.
+
+(deftest the-frontmatter-reads-the-yaml-subset-skills-use
+  (let [fm (skills/parse-frontmatter
+            (str "---\n"
+                 "name: pdf-tools\n"
+                 "description: \"Use when a PDF: \\\"quoted\\\" too.\"\n"
+                 "license: 'Apache-2.0'\n"
+                 "allowed-tools: Bash(git add:*) Read\n"
+                 "metadata:\n"
+                 "  author: someone\n"
+                 "  version: \"1.0\"\n"
+                 "---\n"
+                 "body here"))]
+    (is (= "Use when a PDF: \"quoted\" too." (get-in fm [:meta :description]))
+        "a quoted scalar loses its quotes and its escapes")
+    (is (= "Apache-2.0" (get-in fm [:meta :license])))
+    (is (= {"author" "someone" "version" "1.0"} (get-in fm [:meta :metadata])))
+    (is (= "Bash(git add:*) Read" (get-in fm [:meta :allowed-tools])))
+    (is (= "body here" (:body fm)))
+    (is (empty? (:errors fm))))
+  (testing "block scalars and lists"
+    (let [fm (skills/parse-frontmatter
+              "---\ndescription: >\n  Use when folded\n  onto one line.\nallowed-tools:\n  - Read\n  - Grep\nnotes: |\n  a\n  b\n---\nx")]
+      (is (= "Use when folded onto one line." (get-in fm [:meta :description])))
+      (is (= ["Read" "Grep"] (get-in fm [:meta :allowed-tools])))
+      (is (= "a\nb" (get-in fm [:meta :notes])))))
+  (testing "a line that is not key: value is reported, not swallowed"
+    (let [fm (skills/parse-frontmatter "---\nname: x\nthis is not yaml\n---\nbody")]
+      (is (= "x" (get-in fm [:meta :name])))
+      (is (seq (:errors fm)))))
+  (testing "an unclosed fence is reported and the whole file is the body"
+    (let [fm (skills/parse-frontmatter "---\nname: x\nbody with no fence")]
+      (is (seq (:errors fm)))
+      (is (str/includes? (:body fm) "body with no fence")))))
+
+(defn- tmp-root [] (str "/tmp/samizdat-skills-" (random-uuid)))
+
+(deftest a-skill-directory-is-validated-and-its-fields-surface
+  (let [root (tmp-root)
+        dir (str root "/skills")]
+    (fs/create-dirs (str dir "/good-skill/scripts"))
+    (fs/create-dirs (str dir "/mismatch"))
+    (fs/create-dirs (str dir "/Bad_Name"))
+    (fs/create-dirs (str dir "/no-desc"))
+    (try
+      (spit (str dir "/good-skill/SKILL.md")
+            "---\nname: good-skill\ndescription: Use when good.\nallowed-tools: Read Grep\nlicense: MIT\nmetadata:\n  team: x\n---\nSee scripts/run.sh")
+      (spit (str dir "/good-skill/scripts/run.sh") "echo hi\n")
+      (spit (str dir "/mismatch/SKILL.md") "---\nname: other-name\ndescription: Use when m.\n---\nm")
+      (spit (str dir "/Bad_Name/SKILL.md") "---\nname: Bad_Name\ndescription: Use when b.\n---\nb")
+      (spit (str dir "/no-desc/SKILL.md") "---\nname: no-desc\n---\n# heading only")
+      (let [{:keys [skills diagnostics]} (skills/registry [dir])
+            good (get skills "good-skill")
+            problems (fn [nm] (set (keep #(when (= nm (:name %)) (:problem %)) diagnostics)))]
+        (is (= ["Read" "Grep"] (:allowed-tools good)) "allowed-tools is surfaced, as a list")
+        (is (= "MIT" (:license good)))
+        (is (= {"team" "x"} (:metadata good)))
+        (is (= (str dir "/good-skill") (:root good)) "a directory skill knows its root")
+        (is (empty? (problems "good-skill")))
+        (is (contains? (problems "other-name") :name-mismatch))
+        (is (contains? (problems "Bad_Name") :bad-name))
+        (is (contains? (problems "no-desc") :missing-description))
+        (is (contains? skills "other-name") "a diagnostic does not drop the skill"))
+      (finally (fs/delete-tree root)))))
+
+(deftest a-shadowed-skill-is-reported-with-the-winner
+  (let [base (tmp-root)
+        proj (str base "/proj")
+        glob (str base "/glob")]
+    (fs/create-dirs (str proj "/dup"))
+    (fs/create-dirs glob)
+    (try
+      (spit (str proj "/dup/SKILL.md") "---\nname: dup\ndescription: Use when p.\n---\nproject")
+      (spit (str glob "/dup.md") "---\ndescription: Use when g.\n---\nglobal")
+      (spit (str glob "/mycelium.md") "---\ndescription: Use when mine.\n---\nmine")
+      (let [{:keys [skills shadowed]} (skills/registry [proj glob])]
+        (is (= "project" (get-in skills ["dup" :body])))
+        (is (some #(and (= "dup" (:name %))
+                        (= (str proj "/dup/SKILL.md") (:path %))
+                        (= (str glob "/dup.md") (:shadows %)))
+                  shadowed))
+        (is (some #(and (= "mycelium" (:name %))
+                        (str/starts-with? (str (:shadows %)) "classpath:"))
+                  shadowed)
+            "a person's skill shadowing a shipped one says so"))
+      (finally (fs/delete-tree base)))))
+
+(deftest a-file-relative-to-a-skill-is-readable-and-confined
+  (let [root (tmp-root)
+        dir (str root "/skills")]
+    (fs/create-dirs (str dir "/kit/ref"))
+    (try
+      (spit (str dir "/kit/SKILL.md") "---\nname: kit\ndescription: Use when kit.\n---\nread ref/a.md")
+      (spit (str dir "/kit/ref/a.md") "reference text")
+      (spit (str root "/secret.txt") "nope")
+      (is (= "reference text" (:content (skills/read-skill-file [dir] "kit" "ref/a.md"))))
+      (is (= :outside-skill (:error (skills/read-skill-file [dir] "kit" "../../secret.txt"))))
+      (is (= :not-found (:error (skills/read-skill-file [dir] "kit" "ref/none.md"))))
+      (is (= :no-skill (:error (skills/read-skill-file [dir] "nope" "a"))))
+      (is (= :no-root (:error (skills/read-skill-file [dir] "mycelium" "a")))
+          "a flat skill has no directory of its own")
+      (with-redefs [skills/skill-roots (constantly ["skills"])]
+        (let [ld (base/run-tool {:branch {:id "B1"} :tool-name "skill" :root root
+                                 :args {:action "load" :name "kit"}})]
+          (is (str/includes? (:result ld) "read ref/a.md"))
+          (is (str/includes? (:result ld) (str dir "/kit")) "the load names the skill's root"))
+        (let [rd (base/run-tool {:branch {:id "B1"} :tool-name "skill" :root root
+                                 :args {:action "read" :name "kit" :path "ref/a.md"}})]
+          (is (= :neutral (:category rd)))
+          (is (str/includes? (:result rd) "reference text")))
+        (let [lst (base/run-tool {:branch {:id "B1"} :tool-name "skill" :root root
+                                  :args {:action "list"}})]
+          (is (str/includes? (:result lst) "kit"))))
+      (finally (fs/delete-tree root)))))
+
+(deftest the-person-roots-include-other-harnesses-after-samizdats-own
+  (let [roots (skills/skill-roots)
+        idx #(.indexOf ^java.util.List roots %)]
+    (is (some #{"~/.claude/skills"} roots))
+    (is (some #{"~/.agents/skills"} roots))
+    (is (< (idx ".samizdat/skills") (idx "{global}/skills") (idx "~/.agents/skills"))
+        "a project root beats the person's, and samizdat's own person root beats another harness's")))
