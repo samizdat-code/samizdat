@@ -8,7 +8,14 @@ while IFS= read -r line; do
     *'"method":"initialize"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id" ;;
     *'"method":"tools/list"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"lookup","description":"Look a word up.","inputSchema":{"type":"object","properties":{"word":{"type":"string"}},"required":["word"]}},{"name":"boom","description":"Always fails.","inputSchema":{"type":"object"}}]}}\n' "$id" ;;
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"lookup","description":"Look a word up.","inputSchema":{"type":"object","properties":{"word":{"type":"string"}},"required":["word"]}},{"name":"boom","description":"Always fails.","inputSchema":{"type":"object"}},{"name":"ask","description":"Asks a person.","inputSchema":{"type":"object"}}]}}\n' "$id" ;;
+    *'"method":"tools/call"'*'"name":"ask"'*)
+      # An elicitation in the middle of the call: ask, read the answer, echo it.
+      printf '{"jsonrpc":"2.0","id":"e1","method":"elicitation/create","params":{"message":"Your name?","requestedSchema":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}}}\n'
+      IFS= read -r answer
+      action=$(printf '%s' "$answer" | sed -n 's/.*"action":"\([a-z]*\)".*/\1/p')
+      who=$(printf '%s' "$answer" | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s %s"}]}}\n' "$id" "$action" "$who" ;;
     *'"method":"tools/call"'*'"name":"boom"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[{"type":"text","text":"it blew up"}]}}\n' "$id" ;;
     *'"method":"tools/call"'*)

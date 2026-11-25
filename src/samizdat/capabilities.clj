@@ -162,6 +162,7 @@
             [samizdat.store.interventions]
             [samizdat.store.journal]
             [samizdat.mcp.client]
+            [samizdat.mcp.elicit]
             [samizdat.store.papercuts]
             [samizdat.store.tasks]
             [samizdat.store.sim]

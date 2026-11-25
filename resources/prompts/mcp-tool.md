@@ -9,3 +9,4 @@ Not available: {{untrusted}} — named by this project's own config, which the p
   arguments: {{t.schema}}
 {% endfor %}{% endif %}{% if denied %}Refused: {{server}}/{{tool}} is not allowed under the server's {{policy}} policy.{% endif %}{% if declined %}{{server}}/{{tool}} was not approved, so it did not run.{% endif %}{% if failed %}{{server}}/{{tool}} failed:
 {{text}}{% endif %}{% if called %}{{text}}{% endif %}{% if ask-reason %}The agent wants to call MCP tool {{server}}/{{tool}}.{% endif %}
+{% if unlisted %}Refused: {{server}} does not list a tool `{{tool}}`, so there is no definition to approve — `mcp tools {server}` lists what it offers.{% endif %}{% if elicit-reason %}MCP server {{server}} asks, during {{tool}}: {{message}}{% endif %}
