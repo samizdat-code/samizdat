@@ -229,6 +229,9 @@
             [samizdat.security.flow-handoff-test]
             [samizdat.security.replay-test]
             [samizdat.security.token-test]
+            [samizdat.security.ceiling-test]
+            [samizdat.security.argrules-test]
+            [samizdat.retry-budget-test]
             [samizdat.sdiff.address-test]
             [samizdat.sdiff.group-test]
             [samizdat.llm-fallback-test]
@@ -572,6 +575,9 @@
     samizdat.security.flow-handoff-test
     samizdat.security.replay-test
     samizdat.security.token-test
+    samizdat.security.ceiling-test
+    samizdat.security.argrules-test
+    samizdat.retry-budget-test
    
     samizdat.sdiff.address-test
    

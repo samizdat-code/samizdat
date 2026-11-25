@@ -331,6 +331,49 @@ and the shell policy refuse to let a run write.
 | `(refusal ctx)` | The refusal text when a call's path argument (`:path`, `:file`, `:paths`) matches a pattern denied to a provider its result reaches: the branch's own, plus the `:reader` role's for `read_digest`. `run-tool` returns it as `:mechanics` before the tool runs. |
 | `(visible ctx hits)` | grep's hits without those in denied files. |
 
+### `samizdat.security.ceiling`
+
+The tool ceiling (karamazov-k7gl.5): the most a run may use. The workflow
+can hand a role any tool — roles.edn surfaces, phases.edn refusals and the
+prompt prose that documents each tool are all agent-editable — so the bound
+lives in config.edn, `:tools {:ceiling #{"read_file" "grep" …} :deny
+#{"webfetch"}}`. Absent, every tool. Each config.edn layer (the env file, the
+project's, the person's global or profile file) is read on its own and they
+INTERSECT: ceilings intersect, denies union, so no layer — a cloned project
+file included — can widen another's. The run's own config map narrows like
+one more layer. A `:ceiling` or `:deny` naming no tools fails closed.
+
+| fn | contract |
+|---|---|
+| `(of-layers blocks)` / `(for-root root extra)` / `(current)` / `(of-ctx ctx)` | The ceiling `{:allow set-or-nil :deny set}` from `:tools` blocks, a project's layers, the bound project, one call. |
+| `(permits? c tool)` | Whether the ceiling lets a run call `tool`. |
+| `(refusal ctx)` | The refusal text for a call above the ceiling. `tools/run-tool` checks it before anything else and returns a policy refusal (`:refusal-rule :tool-ceiling`). |
+| `(filter-specs c specs)` | Native tool specs without the tools above the ceiling. `infer/prepare*` applies it to the `tools` array (and drops a forced tool above it). |
+
+`roles/may-use?` and `roles/scope-catalogue` take the ceiling too, so a tool
+above it is neither offered by `tool_search`, nor shown in the catalogue, nor
+counted as a role's write surface. A userspace edit that enables such a tool
+validates and is stored — it narrows nothing — and the tool stays refused.
+
+### `samizdat.security.argrules`
+
+Per-argument rules for every tool (karamazov-k7gl.11), config.edn `:tools
+:rules`: `[{:tool "webfetch" :args {:url "^https?://"} :decision :ask} …]`.
+`:tool` is a name, a list of names, or `:all`; each `:args` value is a regex
+(a string — EDN has no regex literal) found in that argument, any element of
+a list. Within a layer the last match wins, as in the shell table; across
+layers the most restrictive wins (deny > ask > allow). The rules only add
+asks and denies: an `:allow` lifts an earlier ask in its own layer and never
+lets a call past the ceiling, the shell table, root confinement or the flow
+labels. An `:ask` goes through `approval/resolve-ask` (a person under
+`:block`, allowed under yolo, refused under `:refuse`). A pattern that does
+not compile makes its rule a deny.
+
+| fn | contract |
+|---|---|
+| `(decide layers tool args)` | `{:decision :rule}` or nil. |
+| `(refusal ctx)` | nil when the call may go on, else `{:message :decision :rule}`; `tools/run-tool` returns it as a policy refusal (`:refusal-rule :argument-rule`). |
+
 ## Rule tables
 
 **Secrets and redaction** (dirge `src/sandbox/mod.rs`):
@@ -392,6 +435,7 @@ and the shell policy refuse to let a run write.
 | 20 | What the harness hands between branches carries labels as invariant 19's rows do: artifacts (the ledger withholds a labelled claim's text and keeps its line; the shared and crossover samples and the failures block leave labelled rows out; `fetch_artifact` takes the label), directives (an `intervene` carries the supervisor's label to the branch it reaches; a person's carries none), and files (a file tool's write by a labelled branch labels the file in `file_flow`, across runs; `read_file`, `read_digest`, a `grep` hit and a shell command that prints it take the label; a clean whole rewrite clears it). A branch opened on a problem other than the run's own, and the supervisor at every pass, takes the run's label. The workflow-editing actions (`cell`, `manifest`, `prompt`, `policy`, `adopt`, and `propose_cell`, which offers branch-written code that `adopt` installs) and `eval` in the harness's own image need trust; `eval` in a project image with network needs the audience. | Migration v39; `loop/ledger-block`, `flow/unlabelled`, `flow/wrote!`, `flow/read!`; `runs/open-branch!`; `tools/sink-of` (karamazov-3vu1.14). `flow-handoff-test`, test/policy/workflow-edits.edn. |
 | 21 | A harness-image eval with effects outside itself — a process, a file write, move or delete, a request — runs only when a person allows it (`:block`) or under yolo; under `:refuse` it is refused toward the shell and file tools. | `guard/effects` read by `route/eval-for` before `repl/eval-code`, after the exit and kernel-write checks; static, so it sees literal calls, not a `resolve`d one (karamazov-0e2c.21). |
 | 22 | A tool called from inside a project-image eval (`tool/<name>`, or a callable cell's `callable/tool`) is a request the image queues and the harness collects; it runs through `tools/run-tool` after `phase-refusal` with the calling branch's ctx — role surface, exposure, flow and approval as for a turn's call — and only for a tool `gates.edn :eval-bridge :tools` lists. The image still opens no connection out. | `samizdat.bridge`, `repl.image/serve-bridge!`, `tools.repl/gated` (karamazov-xn0h.7, .8). `repl-project-test`, `eval-hint-test`, `callable-test`. |
+| 23 | No call runs a tool above the operator's ceiling, whatever the workflow says, and none is advertised to the model; the operator's argument rules judge every tool's arguments before dispatch. | `tools/run-tool`'s `operator-refusal`, ahead of exposure, flow and the tool itself — every call crosses it, batched ones and `structural`'s and the eval bridge's included; `roles/may-use?`, `roles/scope-catalogue`, `infer/prepare*`. Config only: every config.edn layer is refused to the file tools (`files/operator-config?`, through `run-config?`) and named in the shell's protected paths (`~/.config/samizdat/config.edn`, the env file, the profile's), and the layers combine so none widens another. `ceiling-test`, `argrules-test`. Known limit: harness-image `eval` runs in the harness process and is bounded by invariant 21, not this; an operator who wants it gone puts `eval` in `:deny`. |
 
 **A property is only as strong as the graph it is checked against.** Adding a
 model-reachable tool means adding a node to the diagram above and extending the

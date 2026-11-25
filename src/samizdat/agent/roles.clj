@@ -29,6 +29,7 @@
             [malli.transform :as mt]
             [malli.error :as me]
             [samizdat.config :as config]
+            [samizdat.security.ceiling :as ceiling]
             [samizdat.userspace :as userspace]))
 
 (defn table
@@ -163,9 +164,15 @@
   ([role tool]
    (may-use? role tool (config/eval-mode (userspace/project-root))))
   ([role tool mode]
+   (may-use? role tool mode (ceiling/current)))
+  ([role tool mode ceiling]
    (let [s (surface role mode)
          denied (set (map str (:denied (spec role))))]
      (and (not (contains? denied (str tool)))
+          ;; The operator's ceiling outranks everything roles.edn says, an
+          ;; unnamed role and an `:all` surface included: roles.edn is the
+          ;; workflow's to edit, the ceiling is not (karamazov-k7gl.5).
+          (ceiling/permits? ceiling tool)
           ;; The REPL toggle outranks "a role the table does not name is
           ;; unrestricted": an unnamed role is an unwritten policy, not a
           ;; licence to hold a tool the operator switched off.
@@ -258,16 +265,22 @@
   ([text role]
    (scope-catalogue text role (config/eval-mode (userspace/project-root))))
   ([text role mode]
+   (scope-catalogue text role mode (ceiling/current)))
+  ([text role mode ceiling]
    (if (and (or (nil? (spec role)) (= :all (surface role mode)))
-            (not= :off mode))
+            (not= :off mode)
+            (ceiling/unrestricted? ceiling))
      text
      (let [allowed (surface role mode)
-           allowed (if (= :all allowed)
-                     ;; A role with no declared surface still loses the REPL
-                     ;; entries; everything else in the catalogue stays.
-                     (complement repl-tools)
-                     allowed)]
-       (catalogue-with text allowed)))))
+           allowed (cond
+                     ;; An unnamed role, or one with no declared surface, is
+                     ;; unrestricted by the table and still loses the REPL
+                     ;; entries when the REPL is off; what else goes is the
+                     ;; operator's ceiling, below.
+                     (and (= :all allowed) (= :off mode)) (complement repl-tools)
+                     (= :all allowed) (constantly true)
+                     :else allowed)]
+       (catalogue-with text #(and (allowed %) (ceiling/permits? ceiling %)))))))
 
 (defn core-tools
   "The role's presentation-only core surface, as strings, confined the way
@@ -331,7 +344,8 @@
   ([text role]
    (presentation-catalogue text role (config/eval-mode (userspace/project-root))))
   ([text role mode]
-   (let [allowed #(may-use? role % mode)
+   (let [c (ceiling/current)
+         allowed #(may-use? role % mode c)
          full (catalogue-with text allowed)
          core (core-tools role)]
      (if (empty? core)

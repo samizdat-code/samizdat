@@ -527,6 +527,17 @@
   [{:name samizdat.security.exposure/refusal
     :summary "Why a read is refused: the project's .samizdat/config.edn :run :provider-deny keeps files matching a glob from a named provider, and read_file, read_digest (the reader's provider too), lsp and grep honour it. Operator policy, not yours to change."}]}
 
+ {:group "What the operator caps"
+  :entries
+  [{:name samizdat.security.ceiling/current
+    :summary "The tool ceiling: config.edn :tools {:ceiling #{...} :deny #{...}} across every config layer, intersected so a layer only narrows. A tool above it is refused at dispatch and left out of the catalogue and native specs whatever roles.edn or phases.edn say; editing them to enable it changes nothing. Operator policy, not yours to change."}
+   {:name samizdat.security.ceiling/permits?
+    :summary "Whether a ceiling lets a run call a tool; (permits? (current) \"shell\") answers for this project."}
+   {:name samizdat.security.argrules/decide
+    :summary "The operator's per-argument rules (config.edn :tools :rules, e.g. {:tool \"webfetch\" :args {:url \"^https?://\"} :decision :ask}) for any tool: last match wins within a layer, the strictest layer wins overall, and an :ask goes to the approval path. Operator policy, not yours to change."}
+   {:name samizdat.llm.client/retry-budgets
+    :summary "How many retries one model call gets per failure class (rate-limited, server, transport, partial-stream, empty-reply, timeout): gates.edn :provider-retry, which you may tune."}]}
+
  {:group "The project's instruction files"
   :entries
   [{:name samizdat.agent.instructions/opening-context

@@ -48,6 +48,8 @@
             [samizdat.prompt :as prompt]
             [samizdat.store.journal :as journal]
             [samizdat.approval :as approval]
+            [samizdat.security.argrules :as argrules]
+            [samizdat.security.ceiling :as ceiling]
             [samizdat.security.flow :as flow]
             [jolt.fs]
             [samizdat.config :as config]
@@ -328,25 +330,9 @@
     (update r :result str "\n\n" notice)
     r))
 
-(defn run-tool
-  "Dispatch one tool call and return a result the loop can always use.
-
-  The multimethod is still `base/run-tool` and is still resolved HERE, at call
-  time, so redefining a tool against a running process keeps working — that is
-  what RFC-008 says the multimethod is for, and a wrapper that captured the
-  method would have quietly cost it.
-
-  Three things happen to what comes back, and all three are about making the
-  next step's job possible rather than about the tool:
-
-  1. A throw becomes a result. A tool that explodes costs the turn, not the
-     branch, and the loop gets an envelope like any other.
-  2. A malformed envelope becomes a `:mechanics` complaint naming the tool.
-     `:mechanics` and not `:failure`: the branch produced no claim and tested
-     nothing, so there is no evidence here about its line of inquiry — the
-     same reasoning `base/malformed` makes, and the fifth-place-it-turned-up
-     mistake it exists to prevent.
-  3. The model-bound strings are redacted. See the note above the delay."
+(defn- dispatch
+  "`run-tool` past the operator's bounds: everything else that judges, runs
+  and cleans up a call."
   [{:keys [branch tool-name] :as ctx}]
   (let [known (known-values-for ctx)
         ;; A path the project keeps from this provider is refused before the
@@ -383,6 +369,47 @@
                known))
           (do (journal-refusal! ctx r)
               (redact-result (with-job-notice ctx r) known)))))))
+
+(defn- operator-refusal
+  "A refusal for a call the operator's config.edn rules out, before anything
+  else looks at it: a tool above the ceiling (samizdat.security.ceiling), or
+  arguments a `:tools :rules` entry denies or asks about and nobody allowed
+  (samizdat.security.argrules). nil when the call may go on. Here and not in
+  phases.edn because phases.edn is the workflow's, and these are the bounds
+  the workflow cannot move."
+  [{:keys [branch] :as ctx}]
+  (if-let [msg (ceiling/refusal ctx)]
+    (base/refusal branch msg :refusal-rule :tool-ceiling)
+    (when-let [{:keys [message decision rule]} (argrules/refusal ctx)]
+      (base/refusal branch message :refusal-rule :argument-rule
+                    :policy {:effect decision :rule rule}))))
+
+(defn run-tool
+  "Dispatch one tool call and return a result the loop can always use.
+
+  The multimethod is still `base/run-tool` and is still resolved HERE, at call
+  time, so redefining a tool against a running process keeps working — that is
+  what RFC-008 says the multimethod is for, and a wrapper that captured the
+  method would have quietly cost it.
+
+  Three things happen to what comes back, and all three are about making the
+  next step's job possible rather than about the tool:
+
+  1. A throw becomes a result. A tool that explodes costs the turn, not the
+     branch, and the loop gets an envelope like any other.
+  2. A malformed envelope becomes a `:mechanics` complaint naming the tool.
+     `:mechanics` and not `:failure`: the branch produced no claim and tested
+     nothing, so there is no evidence here about its line of inquiry — the
+     same reasoning `base/malformed` makes, and the fifth-place-it-turned-up
+     mistake it exists to prevent.
+  3. The model-bound strings are redacted. See the note above the delay.
+
+  Before any of it, the operator's bounds (`operator-refusal`): the tool
+  ceiling and the per-argument rules, which no workflow edit can move."
+  [ctx]
+  (if-let [refused (operator-refusal ctx)]
+    (redact-result refused (known-values-for ctx))
+    (dispatch ctx)))
 
 ;; Re-exports: loop.clj and the tests reach the tool surface through this
 ;; namespace and keep working unchanged.
