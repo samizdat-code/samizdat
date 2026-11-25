@@ -103,6 +103,7 @@ Never edit a migration that shipped. Append.
 | `(ledger conn run-id)` | The settled-state block: what is established **and what is ruled out**. |
 | `(gate-firings conn run-id)` / `(gate-tally conn run-id)` / `(unsettled-gates …)` | Steer observability (RFC-007). |
 | `(events-since conn run-id cursor [limit])` | One indexed range scan — all a polling UI needs. |
+| `(plan-snapshot! conn run-id branch-id turn {:plan :delta})` / `(plan-history …)` / `(latest-plan …)` | A branch's plan, one `plan-snapshot` event per change carrying the whole plan and its delta (`samizdat.agent.plans`). The latest event is the current plan: a compaction fold carries it apart from the summary (gates.edn `:compaction :carry-plan?`), a resume restores it, and `GET /v1/runs/:id/branches/:branch/plan` serves it with its history. |
 | `(prune-finished! conn cutoff)` | Delete the events of runs that ended before `cutoff`. |
 
 **Contract — the journal must not be able to destroy the work it records.** A

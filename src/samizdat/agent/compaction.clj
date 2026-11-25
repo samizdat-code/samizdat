@@ -536,6 +536,21 @@
                   (pinned-in messages [start end])
                   (drop end messages))))))
 
+(defn carry
+  "`messages` with `msg` inserted at `idx` (a position in `messages` as given)
+  and tagged `:carried kind`, and any message an earlier fold carried under
+  the same `kind` removed — so a block re-carried by every fold appears once,
+  where the latest fold put it, rather than stacking (karamazov-k7gl.2).
+
+  Mechanism only: what is carried, and whether, is the fold cell's decision."
+  [messages idx msg kind]
+  (let [v (vec messages)
+        idx (max 0 (min idx (count v)))
+        keep? #(not= kind (:carried %))]
+    (vec (concat (filter keep? (subvec v 0 idx))
+                 [(assoc msg :carried kind)]
+                 (filter keep? (subvec v idx))))))
+
 (defn evicted-turns
   "Every journal address carried by messages, including earlier evictions."
   [messages]

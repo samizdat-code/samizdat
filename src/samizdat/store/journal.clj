@@ -1078,6 +1078,41 @@
                           ORDER BY id"
                         run-id (name kind)])))
 
+;; A branch's plan, one event per change (karamazov-k7gl.2): the whole plan
+;; and its delta from the one before, so the latest event IS the current plan
+;; and the run of them is its history. See samizdat.agent.plans.
+(defn plan-snapshot!
+  "Record a plan change on `branch-id` at `turn`: `{:plan <snapshot> :delta
+  <delta>}`. Returns the event id."
+  [conn run-id branch-id turn {:keys [plan delta]}]
+  (emit! conn run-id :plan-snapshot {:branch-id branch-id :turn turn
+                                     :data {:plan plan :delta delta}}))
+
+(defn- plan-row [{:keys [id turn data created_at]}]
+  (when-let [d (try (json/read-str (str data) :key-fn keyword)
+                    (catch Throwable _ nil))]
+    {:id id :turn turn :at created_at :plan (:plan d) :delta (:delta d)}))
+
+(defn plan-history
+  "Every plan snapshot of one branch, oldest first, each
+  `{:id :turn :at :plan :delta}`."
+  [conn run-id branch-id]
+  (into [] (keep plan-row)
+        (db/fetch conn ["SELECT id, turn, data, created_at FROM events
+                          WHERE run_id = ? AND branch_id = ? AND kind = 'plan-snapshot'
+                          ORDER BY id"
+                        run-id branch-id])))
+
+(defn latest-plan
+  "The newest plan snapshot of one branch, `{:id :turn :at :plan :delta}`, or
+  nil when it never declared one."
+  [conn run-id branch-id]
+  (some-> (db/fetch-one conn ["SELECT id, turn, data, created_at FROM events
+                                WHERE run_id = ? AND branch_id = ? AND kind = 'plan-snapshot'
+                                ORDER BY id DESC LIMIT 1"
+                              run-id branch-id])
+          plan-row))
+
 ;; Each branch's movement through its workflow, as samizdat.progress records it
 ;; (karamazov-rz7t.2): what the supervisor reads instead of the steps.
 (defn progress

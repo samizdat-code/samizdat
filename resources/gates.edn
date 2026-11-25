@@ -4322,6 +4322,12 @@
               :write-tools #{"write_file" "edit_file" "patch" "edit_clojure"}
               :read-tools #{"read_file"}
               :command-tools #{"shell" "run_check"}}
+   ;; THE PLAN, carried past every fold on its own (karamazov-k7gl.2): the
+   ;; branch's latest journalled plan snapshot (prompts/compaction-plan.md),
+   ;; placed right after what the fold left, so what `done` holds the branch
+   ;; to never depends on the summary mentioning it. false leaves the plan to
+   ;; the summary, as before.
+   :carry-plan? true
    :rejected-preview-chars 400
    ;; A result shorter than this is left alone: summarising it costs more
    ;; than it saves and loses something readable at a glance.

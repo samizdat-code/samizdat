@@ -18,13 +18,50 @@
   The wording lives in prompts/plan-tool.md; the flow lives in the `repl`
   manifest. On a branch tagged `:planning?` (the board's design step) the
   call is also the branch's END — see state/finish-planning."
-  (:require [samizdat.agent.state :as state]
+  (:require [clojure.string :as str]
+            [clojure.tools.logging :as log]
+            [samizdat.agent.plans :as plans]
+            [samizdat.agent.state :as state]
             [samizdat.agent.tools.base :as base]
-            [samizdat.prompt :as prompt]))
+            [samizdat.prompt :as prompt]
+            [samizdat.store.journal :as journal]))
 
 (defn- msg [ctx] (prompt/render "plan-tool" ctx))
 
-(defmethod base/run-tool "plan" [{:keys [branch] :as ctx}]
+(defn- delta-text
+  "The delta as the model reads it (prompts/plan-delta.md). Lists joined
+  here so the template stays one line per kind of change."
+  [d]
+  (let [j #(some->> % seq (str/join ", "))]
+    (prompt/render "plan-delta"
+                   {:added-files (j (get-in d [:added :files]))
+                    :removed-files (j (get-in d [:removed :files]))
+                    :added-checklist (j (get-in d [:added :checklist]))
+                    :removed-checklist (j (get-in d [:removed :checklist]))
+                    :goal (get-in d [:changed :goal])
+                    :rfc (boolean (get-in d [:changed :rfc]))})))
+
+(defn- record-change
+  "A tool result whose branch changed the plan: the change journalled as a
+  snapshot (karamazov-k7gl.2) and, when there WAS a plan before it, its delta
+  appended to the result. An unchanged plan journals nothing. A journal that
+  refuses costs the record, never the declaration."
+  [{:keys [conn run-id turn] :as ctx} before result]
+  (let [b (:branch result)
+        after (plans/snapshot b)
+        d (plans/delta before after)]
+    (if (plans/delta-empty? d)
+      result
+      (do (when (and conn run-id)
+            (try (journal/plan-snapshot! conn run-id (:id b) (or turn (:turn (:branch ctx)))
+                                         {:plan after :delta d})
+                 (catch Throwable e
+                   (log/warn "plan: journalling the snapshot failed:" (ex-message e)))))
+          (cond-> result
+            before (update :result #(let [t (str/trim (str (delta-text d)))]
+                                      (if (str/blank? t) % (str % "\n\n" t)))))))))
+
+(defn- run-plan [{:keys [branch] :as ctx}]
   (let [coerce (fn [k]
                  (let [v (or (base/arg ctx k) (get (:args ctx) (name k)))
                        v (base/listed v)]
@@ -72,7 +109,7 @@
       (and (empty? (concat files tests)) (seq (state/unwritten branch)))
       (let [b (state/withdraw-unwritten branch goal)]
         (assoc (base/ok branch (msg {:withdrawn true
-                                     :files (clojure.string/join ", " (:files (state/plan b)))}))
+                                     :files (str/join ", " (:files (state/plan b)))}))
                :branch b))
 
       (empty? (concat files tests))
@@ -92,9 +129,16 @@
             planning? (state/planning? b)
             b (if planning? (state/finish-planning b) b)]
         (assoc (base/ok branch (msg {:declared true
-                                     :files (clojure.string/join ", "
+                                     :files (str/join ", "
                                                                  (:files (state/plan b)))
                                      :goal goal :rfc (boolean rfc)
                                      :checklist (count (state/checklist b))
                                      :planning planning?}))
                :branch b)))))
+
+(defmethod base/run-tool "plan" [{:keys [branch] :as ctx}]
+  (let [before (plans/snapshot branch)
+        result (run-plan ctx)]
+    (if (identical? (:branch result) branch)
+      result
+      (record-change ctx before result))))

@@ -51,6 +51,7 @@
             [samizdat.agent.orient]
             [samizdat.agent.outline]
             [samizdat.agent.phases]
+            [samizdat.agent.plans]
             [samizdat.agent.roles]
             [samizdat.agent.sections]
             [samizdat.eval.samples]

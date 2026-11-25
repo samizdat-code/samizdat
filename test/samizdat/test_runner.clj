@@ -91,6 +91,7 @@
             [samizdat.collab-test]
             [samizdat.acceptance-test]
             [samizdat.checklist-test]
+            [samizdat.plan-history-test]
             [samizdat.select-test]
             [samizdat.session-test]
             [samizdat.reflect-test]
@@ -433,6 +434,7 @@
     samizdat.collab-test
     samizdat.acceptance-test
     samizdat.checklist-test
+    samizdat.plan-history-test
     samizdat.select-test
     samizdat.session-test
     samizdat.reflect-test

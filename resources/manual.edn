@@ -613,6 +613,10 @@
     :summary "What a run learned by trying: each command that kept failing (gates.edn :actions :min-failures) beside what worked instead. At run end each pair is written as a project fact (knowledge/distil-patterns!, wording gates.edn :project-facts :cmd-instead), corroborated across runs, and read by both roles on the next."}
    {:name samizdat.store.journal/search-turns
     :summary "Bounded literal search over one branch's journal: assistant text, arguments, results and tool names, never reasoning. fetch_turn({query, branch?, limit?, before?}) returns newest previews and a way to open each whole turn; deterministic eviction keeps cumulative turn references under gates.edn :compaction :strategy :evict."}
+   {:name samizdat.agent.plans/delta
+    :summary "A plan change as data (karamazov-k7gl.2): {:added {k [..]} :removed {k [..]} :changed {k {:from :to}}} over :files :tests :checklist and :goal :rfc, empty parts left out, so an unchanged plan is {}. plans/snapshot takes the plan off a branch, plans/restore puts one back. Every `plan` call that changes the plan journals the full snapshot plus this delta, and the model is shown the delta (prompts/plan-delta.md)."}
+   {:name samizdat.store.journal/latest-plan
+    :summary "A branch's current plan: its newest plan-snapshot event, {:id :turn :at :plan :delta}, or nil. journal/plan-history is every snapshot oldest first. A compaction fold carries the latest one as its own message after the summary (cmp/carry, prompts/compaction-plan.md; gates.edn :compaction :carry-plan? turns it off), resume restores it, and GET /v1/runs/:id/branches/:branch/plan serves it with the history."}
    {:name samizdat.store.journal/artifacts
     :summary "Every artifact this run banked, across all branches."}
    {:name samizdat.store.journal/branch-turns

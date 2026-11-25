@@ -426,6 +426,12 @@
                                                  (parse-long (str turn)))]
                   (json-response t)
                   (json-response 404 {:error {:message "no such turn"}}))))}
+   ;; The branch's plan now and every change that made it (karamazov-k7gl.2).
+   {:method :get :path "/v1/runs/:id/branches/:branch/plan" :response
+    (fn [req] (let [{:keys [id branch]} (:params req)]
+                (if-let [p (api-runs/branch-plan (system/conn) id branch)]
+                  (json-response p)
+                  (json-response 404 {:error {:message "no such branch"}}))))}
    {:method :get :path "/v1/runs/:id/branches/:branch" :response
     (fn [req] (let [{:keys [id branch]} (:params req)]
                 (if-let [b (api-runs/branch-detail (system/conn) id branch

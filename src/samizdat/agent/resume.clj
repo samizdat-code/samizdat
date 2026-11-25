@@ -44,6 +44,12 @@
     and v24), so the system message is the role's prompt plus the text the
     cell appended. A row older than v24 takes the run manifest's :prompt,
     which is what every rebuild used before the column.
+  - the plan and its checklist, from the branch's latest plan-snapshot event
+    (karamazov-k7gl.2) — the whole plan as the last `plan` call left it, not
+    re-derived from turn args. Its written ledger is replayed from the
+    successful file-write turns' paths, and the session counts as fresh when
+    none landed after the snapshot. A run older than the events resumes with
+    no plan, as every resume did before them.
 
   REPLAYS CONSERVATIVELY, recomputed so no guard re-fires on its own past:
   - consecutive-failures, turns-since-progress, any-progress? from the turns
@@ -125,6 +131,7 @@
             [samizdat.security.flow :as flow]
             [samizdat.agent.run-state :as run-state]
             [samizdat.agent.loop :as branch-loop]
+            [samizdat.agent.plans :as plans]
             [samizdat.agent.state :as state]
             [samizdat.agent.storm :as storm]
             [samizdat.agent.tools.tasks :as task-tool]
@@ -185,8 +192,13 @@
   "Reconstruct one branch's working map from the journal rows for its run.
 
   The green snapshot is not journalled, so a resumed branch always starts
-  the safe-state rule from its 'otherwise' arm."
-  [run branch-row turns artifacts firings max-turns storm-pol prompt-suffix]
+  the safe-state rule from its 'otherwise' arm.
+
+  `plans` maps a branch id to its latest plan snapshot event
+  (journal/latest-plan), nil or absent for a branch that never planned."
+  ([run branch-row turns artifacts firings max-turns storm-pol prompt-suffix]
+   (rebuild-branch run branch-row turns artifacts firings max-turns storm-pol prompt-suffix {}))
+  ([run branch-row turns artifacts firings max-turns storm-pol prompt-suffix plans]
   (let [branch-id (:id branch-row)
         ;; The branch's OWN problem where it has one — a decompose unit's
         ;; contract, a team worker's sub-task — else the run's. Rebuilding
@@ -306,10 +318,20 @@
                       :notified-fractions (gates/crossed-fractions branch max-turns))
         advertised (when (some #(= "tool_search" (str (:tool_name %))) branch-turns)
                      ((requiring-resolve 'samizdat.agent.tools.tool-search/advertised-from-turns)
-                      role nil branch-turns))]
-    (cond-> branch
+                      role nil branch-turns))
+        ;; The plan, from its latest journalled snapshot (karamazov-k7gl.2),
+        ;; and the writes that discharge it replayed through the live loop's
+        ;; own rule: a file-write tool's successful call, at the paths its
+        ;; args name. Fresh when nothing has landed since the snapshot.
+        snap (get plans branch-id)
+        writes (filter #(and (contains? (set (gates/tool-vocab :file-write)) (:tool_name %))
+                             (= "success" (str (:category %))))
+                       branch-turns)
+        written (into #{} (mapcat #(storm/touched-paths (parse-json (:args %)))) writes)
+        fresh? (not-any? #(> (:turn %) (or (:turn snap) 0)) writes)]
+    (cond-> (plans/restore branch (:plan snap) written fresh?)
       advertised (assoc :advertised-tools (:tools advertised)
-                        :advertised-tool-docs (:docs advertised)))))
+                        :advertised-tool-docs (:docs advertised))))))
 
 (defn resumable?
   "A run can be resumed when it exists and has not reached a terminal state.
@@ -416,7 +438,8 @@
           branches (mapv (fn [row]
                            (let [b (rebuild-branch run row turns artifacts
                                                    firings max-turns storm-pol
-                                                   prompt-suffix)
+                                                   prompt-suffix
+                                                   {(:id row) (journal/latest-plan conn run-id (:id row))})
                                  ;; The task claim survives the crash on its
                                  ;; ROW; without restoring it here the branch
                                  ;; came back reading "No task claimed", could

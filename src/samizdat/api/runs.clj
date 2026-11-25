@@ -248,6 +248,19 @@
      :count (count steps)
      :dropped dropped}))
 
+(defn branch-plan
+  "A branch's current plan and how it got there (karamazov-k7gl.2): `:plan`
+  is the latest snapshot's plan (nil when the branch never declared one) and
+  `:history` every snapshot, oldest first, each `{:id :turn :at :plan
+  :delta}`. nil when the run has no such branch."
+  [conn run-id branch-id]
+  (when (runs/get-branch conn run-id branch-id)
+    (let [history (journal/plan-history conn run-id branch-id)]
+      {:run_id run-id
+       :branch_id branch-id
+       :plan (:plan (peek history))
+       :history history})))
+
 (defn branch-detail
   "A branch, its turns, and — when `note-kinds` names any — the journal notes
   of those kinds that belong to its story (journal/branch-notes), for a

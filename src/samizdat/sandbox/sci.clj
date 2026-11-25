@@ -117,10 +117,10 @@
 
     ;; Context-window arithmetic over message vectors. Pure.
     samizdat.agent.compaction
-    {:vars [aggressive? apply-eviction apply-summary cap-oversized-results clip-write-bodies snapshot-facts snapshot-empty? compress-window
+    {:vars [aggressive? apply-eviction apply-summary carry cap-oversized-results clip-write-bodies snapshot-facts snapshot-empty? compress-window
             estimate-tokens evictable-turns evicted-turns fold-pays? fold-task fold? ladder-tokens pressure
             prune-options prune-tool-outputs result-cap results-of
-            snip-bought-enough? summary-budget task-span tier turn-range unpinned-in
+            snip-bought-enough? summary-budget task-span tier turn-range pinned-in unpinned-in
             validate-summary]}
 
     ;; Immutable context projections. Pure; no journal writes or live tool state.
@@ -325,8 +325,8 @@
 
     ;; The run journal: reads, and appending a note or a side call's usage.
     samizdat.store.journal
-    {:vars [branch-turns gate-firings gate-tally last-note last-turn minutes-since note! notes notes-since
-            progress record-side-call! retirement-candidates run-usage run-writes turns]
+    {:vars [branch-turns gate-firings gate-tally last-note last-turn latest-plan minutes-since note! notes notes-since
+            plan-history progress record-side-call! retirement-candidates run-usage run-writes turns]
      :effects #{:db}}
 
     ;; The paired-sample grader — the team-solve workflow's DETERMINISTIC
