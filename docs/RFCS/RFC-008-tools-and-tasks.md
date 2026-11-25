@@ -302,6 +302,57 @@ is the `:asks-the-reader` ship rung: an answer whose last line asks its reader
 something is a run with a question left, and `done` refuses it naming
 `ask_human`.
 
+### Skills (karamazov-k7gl.4)
+
+A skill is either samizdat's flat `<root>/<name>.md` or an Agent Skills
+directory, `<root>/<name>/SKILL.md` plus whatever files it bundles. The
+frontmatter is read as the YAML subset skills use (`samizdat.agent.skills`
+parses it itself; there is no YAML dependency): `name`, `description`,
+`allowed-tools`, `license`, `metadata`. A directory skill is checked against
+the format — kebab-case `name` matching its directory, a `description`,
+both within gates.edn `:skills` — and a skill that fails is DIAGNOSED, not
+dropped.
+
+The roots are wordlists.edn `:skill-roots`, earliest wins: the project's
+(`.samizdat`, `.agents`, `.claude`), then the person's (`{global}`,
+`~/.agents`, `~/.claude`), then the shipped skills off the classpath.
+`skills/registry` returns the winners, `:shadowed` (which path hides which)
+and `:diagnostics`; `skill list` and `GET /v1/harness/skills` both show it.
+`allowed-tools` is surfaced and not enforced: a role's tools are roles.edn's
+business. `skill load` names a directory skill's root, and `skill read
+{name} {path}` reads a bundled file, confined to that root on canonical
+paths.
+
+### Hooks (karamazov-k7gl.10)
+
+config.edn `:hooks [{:name :trigger :command :timeout-ms}]` — a person's
+commands, in a file no tool the agent holds can write. Triggers and their
+seams:
+
+| trigger | seam | told |
+|---|---|---|
+| `:run-start` | the drivers, beside `verify/seal-run!` | `SAMIZDAT_HOOK_RESUMED` on a resume |
+| `:after-write` | `tools/run-tool`, a file tool that succeeded | `SAMIZDAT_HOOK_PATH` |
+| `:after-shell` | `tools/run-tool`, a command the policy let run | `SAMIZDAT_HOOK_COMMAND`, `_EXIT` |
+| `:run-end` | `run-state/run-ended!` | `SAMIZDAT_HOOK_STATUS` |
+
+Every hook also gets `SAMIZDAT_HOOK_TRIGGER`, `_NAME`, `_RUN_ID`,
+`_BRANCH_ID` and `_ROOT`. The command goes through `policy/run-shell` —
+rules, grants, approval, scrubbed environment, OS sandbox, redaction — with
+no branch on the ctx, so a hook can do nothing the shell tool could not and
+does not move a branch's flow label. A hook whose head the rules do not
+allow is refused like any command; allow it in the shell rules, not by
+special-casing hooks.
+
+Each hook is journalled as a `:hook` event (bounded output, exit, effect,
+directives). A line `###SAMIZDAT:<key> <value>` (ANSI stripped, at line
+start) is a directive. gates.edn `:hooks :deliver` decides what reaches the
+model: by default a `message`, from any trigger but `:run-end`, queued as a
+`message` directive from issuer `hook`. `hook` is in
+`:directive-notice-issuers`, so it rides along at the next steer boundary as
+a notice rather than an order. Which tool fires which trigger is
+`:hooks :tool-triggers`.
+
 ## Protocol
 
 ```

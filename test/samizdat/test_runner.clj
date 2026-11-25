@@ -150,6 +150,7 @@
             [samizdat.exposure-test]
             [samizdat.outline-test]
             [samizdat.hashline-test]
+            [samizdat.hooks-test]
             [samizdat.control-test]
             [samizdat.util-test]
             [samizdat.lsp-test]
@@ -500,6 +501,7 @@
     samizdat.exposure-test
     samizdat.outline-test
     samizdat.hashline-test
+    samizdat.hooks-test
     samizdat.control-test
     samizdat.util-test
    

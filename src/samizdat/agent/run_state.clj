@@ -24,6 +24,7 @@
   them (a serve process otherwise keeps one entry per run it ever ran)."
   (:require [samizdat.agent.context-edit :as context-edit]
             [samizdat.agent.verify :as verify]
+            [samizdat.hooks :as hooks]
             [samizdat.llm.client :as llm]
             [samizdat.progress :as progress]
             [samizdat.sdiff.reads :as reads]
@@ -35,7 +36,9 @@
   background jobs, killed, and its delegated children, cancelled. Each is best effort: one
   failing must not keep the rest."
   [run-id]
-  (doseq [f [verify/unseal-run! flow/forget-run! llm/forget-retired! reads/forget-reads!
+  ;; The :run-end hooks first, while every other piece of the run's state is
+  ;; still there for the shell gate to read.
+  (doseq [f [hooks/run-ended! verify/unseal-run! flow/forget-run! llm/forget-retired! reads/forget-reads!
              progress/forget-run! context-edit/forget-run!
              (requiring-resolve 'samizdat.agent.tools.resource/forget-run!)
              (requiring-resolve 'samizdat.inference.environment/forget-run!)

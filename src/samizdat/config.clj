@@ -659,7 +659,7 @@
   cells read their own :run keys, and a list of them here would be a
   decision about behaviour made in src."
   #{:http :nrepl :db :eval :run :providers :roles :shell :approval :userspace
-    :peripherals :tools})
+    :peripherals :tools :hooks})
 
 (defn- refuse-unrecognized!
   "Throw naming the file and the key when a config layer sets a top-level

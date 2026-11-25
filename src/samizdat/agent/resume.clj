@@ -128,6 +128,7 @@
             [samizdat.llm.message :as message]
             [samizdat.agent.gitdiff :as gitdiff]
             [samizdat.agent.verify :as verify]
+            [samizdat.hooks :as hooks]
             [samizdat.security.flow :as flow]
             [samizdat.agent.run-state :as run-state]
             [samizdat.agent.loop :as branch-loop]
@@ -410,6 +411,8 @@
           ;; The manifest's own instructions, as beam/run! seeds them.
           prompt-suffix (workflow/workflow-prompt loop-def)
           _ (verify/seal-run! run-id root config)
+          ;; A resumed run's :run-start hooks are told so (SAMIZDAT_HOOK_RESUMED).
+          _ (hooks/run-started! {:conn conn :run-id run-id :root root :resumed? true})
           ctx {:conn conn :run-id run-id :config config :problem (:problem run)
                :llm-adapter llm-adapter :llm-config llm-config
                :max-turns max-turns :beam? (> width 1) :beam-width width

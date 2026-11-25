@@ -3406,7 +3406,7 @@
         codes, the supervisor's brief lists beside the answer."}
 
  :directive-notice-issuers
- {:value #{"execution" "heldout" "ship-review"}
+ {:value #{"execution" "heldout" "ship-review" "hook"}
   :kind :policy :capability-tunable? true
   :provenance ["karamazov-oi16.6"]
   :doc "Who writes to the directive queue to REPORT rather than to steer:
@@ -3812,6 +3812,46 @@
         off-value is what :reasoning-effort becomes once the breaker fires —
         for the rest of the TASK, because a model that just spent a whole
         budget deliberating will spend the next one the same way."}
+
+ :hooks
+ {:value {:default-timeout-ms 30000
+          :output-chars 4000
+          :tool-triggers {"write_file" :after-write "edit_file" :after-write
+                          "patch" :after-write "shell" :after-shell}
+          :deliver {:keys #{"message"}
+                    :triggers #{:run-start :after-write :after-shell}}}
+  :kind :policy :capability-tunable? true
+  :provenance ["karamazov-k7gl.10"]
+  :doc "HOOKS (samizdat.hooks): a person's commands in config.edn :hooks,
+        run through the shell's own policy and sandbox when a trigger fires.
+
+        :tool-triggers is which tool fires which trigger: a file tool that
+        succeeded fires :after-write with its path, the shell fires
+        :after-shell whenever its policy let the command run. A tool not
+        named fires nothing.
+
+        :deliver decides what of a hook's output reaches the MODEL. Only the
+        directive keys in :keys (a line `###SAMIZDAT:message <text>`), and
+        only from :triggers — :run-end is absent because nobody is left to
+        read it. Delivered as a directive from issuer `hook`, which
+        :directive-notice-issuers makes a notice that rides along rather
+        than an order. Everything else a hook prints is journalled on its
+        :hook event, bounded by :output-chars, and never shown to the model.
+
+        :default-timeout-ms is a hook's timeout when it names none; the
+        shell's own cap (policy/shell-timeout) bounds it either way."}
+
+ :skills
+ {:value {:name-max 64 :description-max 1024 :file-chars 60000}
+  :kind :threshold :capability-tunable? true
+  :provenance ["karamazov-k7gl.4"]
+  :doc "THE AGENT SKILLS FORMAT's bounds, and how much of a skill's bundled
+        file `skill read` returns. A SKILL.md directory's `name` is
+        kebab-case of at most :name-max chars and its `description` at most
+        :description-max: what the format specifies, so a skill written for
+        another harness is judged by the same rule. A skill over either is
+        DIAGNOSED in the listing, never dropped. :file-chars caps one
+        `skill read`, cut in the middle like any long tool result."}
 
  :tool-retry
  {:value {:max-attempts 3 :base-backoff-ms 250}
