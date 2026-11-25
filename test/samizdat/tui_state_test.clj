@@ -567,6 +567,14 @@
       (is (= #{:detail} (second (st/apply-event s (ev "turn" 42 {:branch_id "B2" :kind "turn"}))))))
     (testing "a question for a person refreshes the questions"
       (is (= #{:approvals} (second (st/apply-event s {:event "approval" :data {:kind "approval"}})))))
+    (testing "a stream's hello changes nothing"
+      (is (= [s #{}] (st/apply-event s {:event "hello" :data {:kind "hello" :epoch 1}}))))
+    (testing "a resync reloads the whole run and moves the cursor to the head"
+      (let [[s' w] (st/apply-event (assoc-in s [:live "B1"] {:text "half"})
+                                   (ev "resync" 77 {:kind "resync" :reason "pruned" :resume 77}))]
+        (is (= #{:detail :branch :approvals :steps :runs} w))
+        (is (= 77 (:journal-cursor s')))
+        (is (empty? (:live s')) "a preview from before the gap is not trusted")))
     (testing "the run ending refreshes the run list too"
       (is (= #{:detail :runs} (second (st/apply-event s (ev "run-finished" 50 {:kind "run-finished"}))))))))
 

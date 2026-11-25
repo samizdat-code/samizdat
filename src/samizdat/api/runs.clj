@@ -33,6 +33,7 @@
             [samizdat.agent.activity :as activity]
             [samizdat.agent.gates :as gates]
             [samizdat.agent.live :as live]
+            [samizdat.api.stream :as stream]
             [samizdat.config :as config]
             [samizdat.store.db :as db]
             [samizdat.store.interventions :as interventions]
@@ -193,16 +194,33 @@
 
 (defn journal-tail
   "Everything after `since`. The `next` cursor is what the client sends back,
-  so a poller never has to reason about timestamps or ordering."
-  [conn run-id since limit]
-  (let [events (journal/events-since conn run-id (or since 0)
-                                     ;; provenance R3-12: as list-runs — a negative
-                                     ;; limit is LIMIT -1, i.e. no limit.
-                                     (max 0 (or limit 200)))]
-    {:run_id run-id
-     :events (mapv #(update % :data parse-json) events)
-     :next (or (:id (last events)) (or since 0))
-     :count (count events)}))
+  so a poller never has to reason about timestamps or ordering.
+
+  `epoch` is the event shape served (journal/event-epoch). When the client
+  named another one (`client-epoch`), or rows after `since` were pruned, the
+  page is empty and carries `resync`: reload the run from `snapshot` and
+  page on from `next`, the head (samizdat.api.stream/resync)."
+  ([conn run-id since limit] (journal-tail conn run-id since limit nil))
+  ([conn run-id since limit client-epoch]
+   (let [floor (journal/event-floor conn run-id)
+         why (stream/resync {:cursor (or since 0) :floor floor :client-epoch client-epoch})]
+     (if why
+       {:run_id run-id :events [] :count 0
+        ;; Ids are global: the newest of any run's is past everything the
+        ;; snapshot holds, where a pruned run's own newest is 0.
+        :next (journal/last-event-id conn nil)
+        :epoch journal/event-epoch :floor floor
+        :resync {:reason why :snapshot (str "/v1/runs/" run-id)}}
+       (let [events (journal/events-since conn run-id (or since 0)
+                                          ;; provenance R3-12: as list-runs — a negative
+                                          ;; limit is LIMIT -1, i.e. no limit.
+                                          (max 0 (or limit 200)))]
+         {:run_id run-id
+          :events (mapv #(update % :data parse-json) events)
+          :next (or (:id (last events)) (or since 0))
+          :count (count events)
+          :epoch journal/event-epoch
+          :floor floor})))))
 
 (defn turn-detail
   "One turn, whole — including the text `branch-detail` deliberately drops.

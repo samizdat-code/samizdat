@@ -128,7 +128,7 @@
 
   `io`: {:start-run! (fn [problem] -> run-id | {:error})
          :intervene! (fn [run-id text])
-         :journal (fn [run-id cursor] -> {:events [...] :next n})
+         :journal (fn [run-id cursor] -> {:events [...] :next n :resync {:reason}?})
          :run-detail (fn [run-id] -> {:final_answer :status})
          :approvals (fn [run-id] -> [pending…])
          :ask-permission! (fn [params] -> response)
@@ -159,7 +159,21 @@
           (do
             (swap! session assoc :run-id started :cursor 0 :ended? false :asked #{})
             (loop []
-              (let [{:keys [events next]} (journal started (:cursor @session))]
+              (let [{:keys [events next resync]} (journal started (:cursor @session))
+                    ;; The journal can no longer be paged from here — rows
+                    ;; were pruned, or the server reads events another way
+                    ;; now. The run's snapshot is what is true: say so, and
+                    ;; let its status end the prompt if the run has.
+                    events (if resync
+                             (let [{:keys [status]} (run-detail started)]
+                               (update! {:sessionUpdate "agent_message_chunk"
+                                         :content {:type "text"
+                                                   :text (str "(the run's journal was resynced: "
+                                                              (:reason resync) ")")}})
+                               (cond-> (vec events)
+                                 (and status (not= "running" (str status)))
+                                 (conj {:kind "run-finished" :data {:status status}})))
+                             events)]
                 (doseq [e events, u (updates e)] (update! u))
                 (swap! session assoc :cursor (or next (:cursor @session)))
                 ;; Questions the run is waiting on, put to the editor once each.

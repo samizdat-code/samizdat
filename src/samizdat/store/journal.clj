@@ -1030,6 +1030,47 @@
                                 ["SELECT MAX(id) AS id FROM events"])))
       0))
 
+(def event-epoch
+  "The shape of an event as a client reads it — the row projection GET
+  /v1/runs/:id/journal and the SSE streams serve. Bump it whenever that
+  projection changes, so a client written against the old shape is told to
+  reload rather than page on in a shape it misreads."
+  1)
+
+(defn event-floor
+  "The lowest cursor a resume of `run-id`'s events (every run's when nil) can
+  page from without missing a row that no longer exists: a cursor below
+  `floor - 1` has missed some.
+
+  Ids are AUTOINCREMENT, and a rolled-back insert rolls its id back with it,
+  so a hole in the ids is a DELETE — `prune-finished!` or
+  `prune-run-record!`, which take a finished run's rows whole. Hence:
+
+    every run   one past the highest hole, 1 when there is none; one past
+                the highest id ever assigned when the newest rows are gone
+    one run     1 while it holds any row (its rows go all at once or not at
+                all); one past the highest id ever assigned when it holds
+                none
+
+  The every-run case is an anti-join over the id index, paid once per
+  connection, not per page."
+  [conn run-id]
+  (let [assigned (or (:seq (db/fetch-one conn ["SELECT seq FROM sqlite_sequence
+                                                 WHERE name = 'events'"]))
+                     0)]
+    (if run-id
+      (if (:id (db/fetch-one conn ["SELECT MIN(id) AS id FROM events WHERE run_id = ?" run-id]))
+        1
+        (inc assigned))
+      (let [top (:id (db/fetch-one conn ["SELECT MAX(id) AS id FROM events"]))]
+        (if (or (nil? top) (< top assigned))
+          (inc assigned)
+          (or (:id (db/fetch-one conn ["SELECT MAX(e.id) AS id FROM events e
+                                         WHERE e.id > 1
+                                           AND NOT EXISTS (SELECT 1 FROM events p
+                                                            WHERE p.id = e.id - 1)"]))
+              1))))))
+
 (defn all-events-since
   "`events-since` across every run: what a stream following all of them
   reads. Ids are global, so one cursor serves."

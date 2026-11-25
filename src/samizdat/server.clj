@@ -403,15 +403,17 @@
     (fn [req] (json-response (api-runs/journal-tail (system/conn)
                                                     (get-in req [:params :id])
                                                     (long-param req "since")
-                                                    (long-param req "limit"))))}
+                                                    (long-param req "limit")
+                                                    (stream/client-epoch req))))}
    ;; The run PUSHED: every journal event after the cursor (Last-Event-ID, or
    ;; ?since=), then each one as it lands, plus the steps and approvals that
    ;; are never journalled. See samizdat.api.stream.
    {:method :get :path "/v1/runs/:id/events" :response
     (fn [req] (stream/response (system/conn) (get-in req [:params :id])
-                               (stream/cursor req)))}
+                               (stream/cursor req) (stream/client-epoch req)))}
    {:method :get :path "/v1/events" :response
-    (fn [req] (stream/response (system/conn) nil (stream/cursor req)))}
+    (fn [req] (stream/response (system/conn) nil (stream/cursor req)
+                               (stream/client-epoch req)))}
    ;; The live manifest-state trace. No conn: steps are held in memory, not
    ;; journalled — see samizdat.steps.
    {:method :get :path "/v1/runs/:id/steps" :response

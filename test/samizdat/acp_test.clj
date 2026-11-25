@@ -66,6 +66,27 @@
         (is (str/includes? @seen "now test it"))
         (is (str/includes? @seen "Built it."))))))
 
+(deftest a-resync-reloads-the-run-rather-than-paging
+  (testing "a run that ended in the gap ends the prompt from its snapshot"
+    (let [{:keys [io sent]} (fake-io {:answer "Done anyway."})
+          io (assoc io :journal (fn [_ _] {:events [] :next 40 :resync {:reason "pruned"}}))
+          session (atom {:id "s1"})]
+      (is (= {:stopReason "end_turn"} (agent/run-prompt! io session [{:type "text" :text "go"}])))
+      (is (str/includes? (get-in (first @sent) [:content :text]) "resynced: pruned"))
+      (is (= "Done anyway." (get-in (last @sent) [:content :text])))
+      (is (= 40 (:cursor @session)) "paging resumes from the head")))
+  (testing "a run still going keeps being followed"
+    (let [pages (atom [{:events [] :next 40 :resync {:reason "epoch"}}
+                       {:events [{:kind "run-finished" :data {:status "done"}}] :next 41}])
+          detail (atom {:status "running"})
+          {:keys [io]} (fake-io {})
+          io (assoc io
+                    :journal (fn [_ _] (let [p (first @pages)] (swap! pages rest) p))
+                    :run-detail (fn [_] (let [d @detail] (reset! detail {:status "done" :final_answer "ok"}) d)))
+          session (atom {:id "s2"})]
+      (is (= {:stopReason "end_turn"} (agent/run-prompt! io session [{:type "text" :text "go"}])))
+      (is (empty? @pages) "it went on to the next page"))))
+
 (deftest a-prompt-while-a-run-is-going-steers-it
   (let [{:keys [io steered]} (fake-io {})
         session (atom {:id "s1" :run-id "run-1" :ended? false})]

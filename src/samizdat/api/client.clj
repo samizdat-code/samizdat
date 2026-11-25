@@ -108,11 +108,16 @@
   (GET base "/v1/harness/models"))
 
 (defn journal-since
-  "Everything after `cursor`, the polling UI's one read."
+  "Everything after `cursor`, the polling UI's one read. `epoch` is the event
+  shape the client last read (the response's :epoch): a server that reads
+  events another way now, or no longer holds what follows `cursor`, answers
+  with :resync instead of a page (samizdat.api.stream/resync)."
   ([base run-id cursor] (journal-since base run-id cursor 200))
-  ([base run-id cursor limit]
+  ([base run-id cursor limit] (journal-since base run-id cursor limit nil))
+  ([base run-id cursor limit epoch]
    (GET base (str "/v1/runs/" run-id "/journal?since=" (or cursor 0)
-                  "&limit=" limit))))
+                  "&limit=" limit
+                  (when epoch (str "&epoch=" epoch))))))
 
 (defn steps-since
   "The live manifest-state trace after `cursor` — the implementer walking its
@@ -297,7 +302,12 @@
   (if ok
     (let [events (vec (:events body))]
       (assoc state
-             :cursor (or (:id (peek events)) cursor 0)
+             ;; A resync jumps to the head: what it skipped is in the run
+             ;; snapshot, which :resync tells the caller to reload.
+             :cursor (if (:resync body)
+                       (or (:next body) cursor 0)
+                       (or (:id (peek events)) cursor 0))
+             :resync (:resync body)
              :interval-ms base-interval-ms
              :connected? true
              :events events))
