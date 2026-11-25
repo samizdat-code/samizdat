@@ -143,10 +143,10 @@
         what fired."}
 
  :mcp
- {:value {:timeout-ms 30000 :elicitation-wait-ms 300000
+ {:value {:timeout-ms 30000 :elicitation-wait-ms 300000 :elicitation-re-asks 1
           :default-policy :prompt :yolo-allows? true}
   :kind :threshold :capability-tunable? false
-  :provenance ["karamazov-05z0.16" "karamazov-k7gl.3"]
+  :provenance ["karamazov-05z0.16" "karamazov-k7gl.3" "karamazov-k7gl.12"]
   :doc "MCP servers (the `mcp` tool).
 
         :timeout-ms is how long a server has to answer one request — the
@@ -159,6 +159,11 @@
         approvals queue when :approval resolves to :block for the run, and
         hears `cancel` when nobody answers in time — or at once, when
         nobody is there to ask.
+
+        :elicitation-re-asks is how many times an answer that does not
+        fit the server's schema (a required field left blank, a value
+        out of range or in the wrong format) is put back to the person
+        with the problems marked, before the server hears `decline`.
 
         :default-policy is the policy of a server entry that names none:
         :prompt (each call to a person), :read-only (only :trusted-tools)

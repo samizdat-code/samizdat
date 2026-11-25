@@ -106,24 +106,58 @@
           (if (= :allow (:effect r)) :allow :deny))))
     :unlisted))
 
+(defn- worded
+  "`qs` with each question's text as the person reads it: the property's
+  label with what it requires, its default and, on a re-ask, why the last
+  answer was not accepted (resources/prompts/mcp-tool.md)."
+  [qs]
+  (mapv (fn [{:keys [default limits problem] :as q}]
+          (assoc q :question
+                 (str/trim (msg (merge limits
+                                       {:elicit-field true :question (:question q)
+                                        :required (:required q)
+                                        :default (if (sequential? default) (str/join ", " default) default)
+                                        :problem (:kind problem) :limit (:limit problem)})))))
+        qs))
+
 (defn- elicit!
-  "Answer `server`'s elicitation during `tool`: the question goes to a
-  person on the approvals queue (a questionnaire, as ask_human's) when the
-  run has someone to ask, for up to gates.edn :mcp :elicitation-wait-ms;
-  with nobody there, the server hears cancel."
-  [{:keys [run-id branch]} server tool {:keys [message requestedSchema]}]
-  (let [{:keys [mode wait-ms]} (approval/policy run-id)]
-    (if (not= :block mode)
+  "Answer `server`'s elicitation during `tool`. A request outside what the
+  client declared (URL mode, a schema outside the subset) is refused with
+  -32602 before anyone is asked. Otherwise the question goes to a person
+  on the approvals queue (a questionnaire, as ask_human's) when the run
+  has someone to ask, for up to gates.edn :mcp :elicitation-wait-ms; an
+  answer that does not fit the schema is put back to them, with the
+  problems marked, up to :elicitation-re-asks times. With nobody there,
+  the server hears cancel."
+  [{:keys [run-id branch]} server tool {:keys [message requestedSchema] :as params}]
+  (let [{:keys [mode wait-ms]} (approval/policy run-id)
+        refused (elicit/refusal params)]
+    (cond
+      refused
+      {:error {:code -32602
+               :message (str/trim (msg {:elicit-refused true :mode (:mode refused)
+                                        :unsupported (str/join ", " (:unsupported refused))}))}}
+
+      (not= :block mode)
       {:action "cancel"}
-      (let [id (approval/request! {:run-id run-id :branch-id (:id branch) :kind :elicitation
-                                   :input (str server "/" tool)
-                                   :reason (str/trim (msg {:elicit-reason true :server server
-                                                           :tool tool :message (str message)}))
-                                   :details (pr-str requestedSchema)
-                                   :questions (elicit/questions requestedSchema)})]
-        (elicit/result requestedSchema
-                       (approval/await! id (or (:elicitation-wait-ms (gate)) wait-ms)
-                                        {:decision :deny}))))))
+
+      :else
+      (loop [re-asks (or (:elicitation-re-asks (gate)) 0)
+             earlier nil]
+        (let [id (approval/request! {:run-id run-id :branch-id (:id branch) :kind :elicitation
+                                     :input (str server "/" tool)
+                                     :reason (str/trim (msg {:elicit-reason true :server server
+                                                             :tool tool :message (str message)
+                                                             :again (some? earlier)}))
+                                     :details (pr-str requestedSchema)
+                                     :questions (worded (elicit/questions requestedSchema earlier))})
+              answer (approval/await! id (or (:elicitation-wait-ms (gate)) wait-ms)
+                                      {:decision :deny})
+              {:keys [content problems]} (elicit/check requestedSchema (:answers answer))]
+          (if (and problems (pos? re-asks) (= :allow (:decision answer))
+                   (not (:timed-out answer)) (not (:abandoned answer)))
+            (recur (dec re-asks) {:problems problems :prior content})
+            (elicit/result requestedSchema answer)))))))
 
 (defn- call! [{:keys [branch] :as ctx} server spec tool args]
   (let [{:keys [text error?]} (mcp/call server spec tool args

@@ -270,11 +270,25 @@ and is asked again. A tool the server does not list is refused. Which policy
 an entry without one gets, and whether `:yolo` runs prompted calls, is
 gates.edn `:mcp`.
 
-A server may send `elicitation/create` during a call. The schema becomes a
+A server may send `elicitation/create` during a call. The client declares
+`elicitation: {}`, which is form mode only. The schema becomes a
 questionnaire on the approvals queue, the shape ask_human uses, so every
 front end answers it; the answer goes back as accept with typed content,
 decline, or cancel (no answer within `:mcp :elicitation-wait-ms`, or nobody
 to ask). The call's own timeout is held while the person answers.
+
+The schema subset is 2025-11-25's form mode (karamazov-k7gl.12): strings
+with length, pattern and format (email, uri, date, date-time), numbers and
+integers with bounds, booleans, single enums (plain, `oneOf` const+title, or
+legacy `enumNames`) and multi-selects (an array of enum, asked as a `:multi`
+question), each with an optional default. Answers are checked before they
+are sent: a blank takes the default, and an answer that does not fit (a
+required field left blank included) is put back to the person with the
+problem marked, up to `:mcp :elicitation-re-asks` times, then answered
+decline — the person acted, so it is not cancel, and the content does not
+match, so it is not accept. URL mode and any schema outside the subset
+(nested objects, arrays of free text) are refused with -32602 before anyone
+is asked, as the spec answers a mode the client did not declare.
 
 ### The acceptance rung
 
