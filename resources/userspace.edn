@@ -89,6 +89,7 @@
    :job-exited "prompts/job-exited.md"
    :delegate-tool "prompts/delegate-tool.md"
    :delegate-child "prompts/delegate-child.md"
+   :job-wait-woke "prompts/job-wait-woke.md"
    :worktree-conflict "prompts/worktree-conflict.md"
    :corrections-api "prompts/corrections-api.md"
    :corrections-block "prompts/corrections-block.md"

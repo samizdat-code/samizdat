@@ -201,6 +201,37 @@ timed out; `run-state/run-ended!`
 cancels every background child still running. Known gaps: a resumed run does
 not resume its children, and the background registry is in memory only.
 
+### Waiting on a background job
+
+`shell {background: true}` starts a job the run owns (`samizdat.engine.jobs`);
+`jobs` lists, reads and kills them. `jobs wait {id, pattern?, seconds?,
+quiet?, history?}` blocks the call until the job prints a line matching
+`pattern`, or exits (with no pattern, only the exit counts), and returns the
+matched lines, a tail and the job's status. `jobs watch` makes the same wait
+and returns at once; `unwatch {id}` cancels it.
+
+The wait is `samizdat.engine.waits`: a cursor of its own (the job's end, or
+with `history` the oldest retained line), a deadline, an optional quiet
+timeout measured from the job's last line, and the states pending → ready →
+delivered, or expired (deadline, quiet, job-gone) / cancelled. `make` and
+`step` are pure over a job snapshot; the clock, the job source, the sleep and
+the record are injected. Bounds are `gates.edn :job-waits`.
+
+A watch's wake reaches its branch two ways. While the branch is working, the
+dispatch wrapper appends it to the branch's next tool result, once — as it
+does a job's exit notice. When the branch has shipped and the run is about to
+complete, the beam's `:beam/hold` cell (after `:start` in `beam.edn`) decides:
+a pending watch of the shipped branch holds the run open, up to
+`:hold-max-ms`, and a watch that fires reopens that branch (same tape, the wake
+as a user turn) instead of finishing. Aborts, turn caps and spent budgets are
+never held.
+
+Waits are durable as journal notes (`:job-wait`, one per state change), not a
+table: a wait cannot outlive its job, and a job does not outlive the process
+that ran it, so the only thing a resume needs is what each wait last was. On
+resume a pending wait expires as `job-gone` and its branch is told; a fired
+one never delivered is still owed its wake.
+
 ### Reads that return an answer
 
 `read_digest({paths, question, anchors?})` sends the files to a reader and

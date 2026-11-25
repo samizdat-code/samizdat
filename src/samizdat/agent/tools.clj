@@ -327,12 +327,18 @@
   "`r` with the notice of any background job of this branch that ended on its
   own since its last call (samizdat.agent.tools.jobs), so the branch hears of
   it at its next turn whatever that turn called."
-  [{:keys [run-id branch]} r]
-  (if-let [notice (when (string? (:result r))
-                    (try (jobs/exit-notice run-id (:id branch))
-                         (catch Throwable e (log/warn "jobs: no exit notice:" (ex-message e)))))]
-    (update r :result str "\n\n" notice)
-    r))
+  [{:keys [conn run-id branch]} r]
+  ;; And the wake of any watch it registered that became ready or expired
+  ;; (`jobs watch`, samizdat.engine.waits), told once, the same way.
+  (let [notices (when (string? (:result r))
+                  (keep (fn [[what f]]
+                          (try (f)
+                               (catch Throwable e (log/warn (str "jobs: no " what ":") (ex-message e)))))
+                        [["exit notice" #(jobs/exit-notice run-id (:id branch))]
+                         ["wait notice" #(jobs/wait-notice conn run-id (:id branch))]]))]
+    (if (seq notices)
+      (update r :result str "\n\n" (str/join "\n\n" notices))
+      r)))
 
 (defn- dispatch
   "`run-tool` past the operator's bounds: everything else that judges, runs

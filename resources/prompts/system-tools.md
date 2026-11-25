@@ -380,9 +380,15 @@ shell({command, timeout_ms, background?})
     against, a watcher). Returns once it is up, with first output and a job
     id; one that dies at once fails with its exit code. Stopped when the run
     ends; you are told if it exits. Do not use `&` or `nohup`.
-jobs({action, id?})
-    Background jobs: "list" (status, command); "output" with `id` (new
-    output since last read, stderr marked); "kill" with `id`.
+jobs({action, id?, pattern?, seconds?, quiet?, history?})
+    Background jobs: "list" (status, command, waits); "output" with `id`
+    (new output since last read, stderr marked); "kill" with `id`. "wait"
+    with `id`: block until the job prints a line matching the regex
+    `pattern` (or, with none, exits), for up to `seconds`; `quiet` stops
+    after that many seconds of silence; `history: true` searches lines
+    already written. Returns the matched line, a tail and the job's status.
+    "watch": the same, returning at once; you are told at a later call, and
+    a run is held open for a pending watch. "unwatch" with the watch's `id`.
 ```
 
 ### Discovering deferred tools

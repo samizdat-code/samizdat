@@ -58,12 +58,14 @@
   when it reaches twice that, so a long-lived chatty server costs an amortised
   constant per line instead of a copy of the buffer per line."
   [output cap stream text]
-  (swap! output (fn [{:keys [lines total]}]
-                  (let [lines (conj lines {:text text :stream stream})]
-                    {:lines (if (> (count lines) (* 2 cap))
-                              (vec (subvec lines (- (count lines) cap)))
-                              lines)
-                     :total (inc total)}))))
+  (let [t (now)]
+    (swap! output (fn [{:keys [lines total]}]
+                    (let [lines (conj lines {:text text :stream stream})]
+                      {:lines (if (> (count lines) (* 2 cap))
+                                (vec (subvec lines (- (count lines) cap)))
+                                lines)
+                       :total (inc total)
+                       :last-ms t})))))
 
 (defn- open-log
   "A stream's capture: the file its bytes are written to, up to `retain`
@@ -264,6 +266,19 @@
     (when (= run-id (:run-id j))
       (assoc (select-keys j [:status :exit :known])
              :lines (:lines (window @(:output j) (:buffer-lines j)))))))
+
+(defn snapshot
+  "Job `id`'s output as a waiter scans it, without moving its read cursor:
+  {:lines :start :total :last-ms :status :exit :known}, or nil. The status is
+  read BEFORE the output: the exit monitor drains the output before it
+  records an end, so an ended status here means the lines are complete."
+  [run-id id]
+  (let [j (get-in @registry [:jobs id])]
+    (when (and j (= run-id (:run-id j)))
+      (let [o @(:output j)]
+        (assoc (window o (:buffer-lines j))
+               :last-ms (:last-ms o) :status (:status j) :exit (:exit j)
+               :known (:known j))))))
 
 (defn read!
   "The lines job `id` wrote since the last read, moving its cursor:

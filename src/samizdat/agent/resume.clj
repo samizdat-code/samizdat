@@ -135,6 +135,7 @@
             [samizdat.agent.plans :as plans]
             [samizdat.agent.state :as state]
             [samizdat.agent.storm :as storm]
+            [samizdat.agent.tools.jobs :as jobs-tool]
             [samizdat.agent.tools.tasks :as task-tool]
             [samizdat.cancel :as cancel]
             [samizdat.prompt :as prompt]
@@ -380,6 +381,11 @@
     ;; The row said 'interrupted' (or 'failed'); it is about to be running
     ;; again, and stalled? only watches runs whose status says so.
     (runs/mark-running! conn run-id)
+    ;; The waits on background jobs the run had, from the journal. Their jobs
+    ;; died with the old process, so a pending one expires and its branch is
+    ;; told at its next call; a fired one never told is still owed.
+    (try (jobs-tool/restore-waits! conn run-id)
+         (catch Throwable _ nil))
     (let [current-root (atom nil)
           current-repl-session (atom nil)]
       (try

@@ -71,6 +71,7 @@
             [samizdat.agent.tools.tool-search]
             [samizdat.agent.tools.jobs]
             [samizdat.engine.jobs]
+            [samizdat.engine.waits]
             [samizdat.agent.tournament]
             [samizdat.agent.trajectory]
             [samizdat.agent.webfetch]

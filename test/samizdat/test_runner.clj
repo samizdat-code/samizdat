@@ -81,6 +81,7 @@
             [samizdat.corrections-test]
             [samizdat.wait-test]
             [samizdat.jobs-test]
+            [samizdat.job-waits-test]
             [samizdat.tui-onboarding-test]
             [samizdat.mcp-test]
             [samizdat.mcp-http-test]
@@ -433,6 +434,7 @@
     samizdat.corrections-test
     samizdat.wait-test
     samizdat.jobs-test
+    samizdat.job-waits-test
     samizdat.tui-onboarding-test
     samizdat.mcp-test
     samizdat.mcp-http-test

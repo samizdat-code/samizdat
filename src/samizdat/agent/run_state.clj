@@ -44,6 +44,9 @@
              (requiring-resolve 'samizdat.inference.environment/forget-run!)
              (requiring-resolve 'samizdat.store.executions/forget-run!)
              (requiring-resolve 'samizdat.debug.sessions/close-run!)
+             ;; Waits before jobs: a wait still pending is recorded cancelled
+             ;; rather than seeing its job vanish.
+             (requiring-resolve 'samizdat.engine.waits/forget-run!)
              (requiring-resolve 'samizdat.engine.jobs/forget-run!)
              ;; Its delegated children still running are cancelled.
              (requiring-resolve 'samizdat.agent.delegate/forget-run!)]]
