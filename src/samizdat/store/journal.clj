@@ -216,6 +216,52 @@
                   (:cache-hit-tokens usage) (:cache-miss-tokens usage)
                   (db/now)])))
 
+(defn run-usage-by-model
+  "`run-usage`'s tokens split by who served them, for pricing: one row per
+  {:provider :model} with :calls :prompt-tokens :completion-tokens
+  :cache-hit-tokens :cache-miss-tokens (each nil when no row reported it).
+
+  A turn is served by the run's provider and model — turns carry neither. A
+  side call names its model; one that names none is the run's, and one that
+  names another model has no provider on record (nil), since side_calls keeps
+  the model and not the endpoint."
+  [conn run-id]
+  (let [rows (concat
+              (db/fetch conn ["SELECT r.provider AS provider, r.model AS model,
+                                      count(*) AS calls,
+                                      coalesce(sum(t.prompt_tokens), 0) AS prompt_tokens,
+                                      coalesce(sum(t.completion_tokens), 0) AS completion_tokens,
+                                      sum(t.cache_hit_tokens) AS cache_hit_tokens,
+                                      sum(t.cache_miss_tokens) AS cache_miss_tokens
+                                 FROM turns t JOIN runs r ON r.id = t.run_id
+                                WHERE t.run_id = ? GROUP BY r.provider, r.model"
+                              run-id])
+              (db/fetch conn ["SELECT CASE WHEN t.model IS NULL OR t.model = '' OR t.model = r.model
+                                           THEN r.provider END AS provider,
+                                      coalesce(nullif(t.model, ''), r.model) AS model,
+                                      count(*) AS calls,
+                                      coalesce(sum(t.prompt_tokens), 0) AS prompt_tokens,
+                                      coalesce(sum(t.completion_tokens), 0) AS completion_tokens,
+                                      sum(t.cache_hit_tokens) AS cache_hit_tokens,
+                                      sum(t.cache_miss_tokens) AS cache_miss_tokens
+                                 FROM side_calls t JOIN runs r ON r.id = t.run_id
+                                WHERE t.run_id = ?
+                                GROUP BY 1, 2"
+                              run-id]))
+        add (fn [a b] (if (or a b) (+ (or a 0) (or b 0)) nil))]
+    (->> rows
+         (map (fn [r] {:provider (not-empty (str (:provider r))) :model (str (:model r))
+                       :calls (:calls r)
+                       :prompt-tokens (:prompt_tokens r)
+                       :completion-tokens (:completion_tokens r)
+                       :cache-hit-tokens (:cache_hit_tokens r)
+                       :cache-miss-tokens (:cache_miss_tokens r)}))
+         (group-by (juxt :provider :model))
+         vals
+         (mapv (fn [rs] (reduce (fn [a b]
+                                  (merge-with add a (dissoc b :provider :model)))
+                                rs))))))
+
 (defn run-usage
   "What a run has spent so far: {:turns :side-calls :prompt-tokens
   :completion-tokens :total-tokens :cache-hit-tokens :cache-miss-tokens

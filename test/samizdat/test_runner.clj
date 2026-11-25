@@ -214,6 +214,7 @@
             [samizdat.userspace-validation-test]
             [samizdat.userspace-adoption-test]
             [samizdat.event-stream-test]
+            [samizdat.pricing-test]
             [samizdat.tui-theme-test]
             [samizdat.tui-markdown-test]
             [samizdat.tui-timeline-test]
@@ -556,6 +557,7 @@
     samizdat.userspace-validation-test
     samizdat.userspace-adoption-test
     samizdat.event-stream-test
+    samizdat.pricing-test
     samizdat.tui-theme-test
     samizdat.tui-markdown-test
     samizdat.tui-timeline-test

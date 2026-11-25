@@ -35,6 +35,7 @@
             [samizdat.agent.live :as live]
             [samizdat.api.stream :as stream]
             [samizdat.config :as config]
+            [samizdat.pricing :as pricing]
             [samizdat.store.db :as db]
             [samizdat.store.interventions :as interventions]
             [samizdat.store.journal :as journal]
@@ -167,7 +168,13 @@
                                    ;; than the conversation. nil until a turn
                                    ;; has measured it.
                                    :context-block
-                                   (journal/context-block-stats conn run-id))))
+                                   (journal/context-block-stats conn run-id))
+                     ;; The same spend in dollars, at the rates
+                     ;; pricing.edn and config.edn :pricing give; a model
+                     ;; with no rate is :unpriced, never estimated
+                     ;; (karamazov-k7gl.8).
+                     :cost (pricing/cost (pricing/table config)
+                                         (journal/run-usage-by-model conn run-id))))
        ;; Reuses the rows already read for the active count above. Each row
        ;; carries its newest measured request as :context — how full THAT
        ;; branch is, which the run's summed usage cannot say — and a branch
