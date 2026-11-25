@@ -212,6 +212,17 @@
    {:threshold {:all "HTTP status codes and the response-body cap of a
                       transport. Protocol constants, not policy."}}
 
+   "src/samizdat/mcp/http.clj"
+   {:threshold {:all "HTTP status codes of the Streamable HTTP transport and
+                      how much of an error body its JSON-RPC error quotes.
+                      Protocol constants of a transport, as in server.clj."}}
+
+   "src/samizdat/mcp/client.clj"
+   {:threshold {1000 "The slice a call's wait is cut into so a deadline an
+                      elicitation moves is read again (karamazov-k7gl.3). Wait
+                      granularity, not a limit: the deadline itself is
+                      gates.edn :mcp."}}
+
    "src/samizdat/agent/sections.clj"
    {:vocabulary {"</?think>"
                  "The providers' reasoning tag on the wire, as in llm/message.clj: a
@@ -803,10 +814,6 @@
     " theses per call; you proposed "
     "Every thesis must be an object with a `goal` string."
     "`theses` must be a non-empty array of"
-    }
-   "src/samizdat/agent/tools/skills.clj"
-   #{
-    "Skills — load one with `skill load {name}` when it is"
     }
    "src/samizdat/agent/verify.clj"
    #{

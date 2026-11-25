@@ -206,6 +206,15 @@ flowchart LR
     split --> root
     root --> redact
 
+    codesearch[code_search: BM25 over the root's own source]
+    toolcall --> codesearch
+    codesearch --> root
+
+    delegate[delegate: a child branch of the same run]
+    toolcall --> delegate
+    delegate -->|each child call| toolcall
+    delegate --> redact
+
     ask[ask_human: parks on an operator's answer]
     operator[a person at a front end]
     toolcall --> ask

@@ -45,10 +45,6 @@
   layer journals."
   (:require [clojure.string :as str]))
 
-(def max-matches
-  "How many matching lines of one scan a wait keeps."
-  10)
-
 (defonce ^:private registry
   ;; {:next n :waits {id wait} :recorders {run-id f}}
   (atom {:next 1 :waits {} :recorders {}}))
@@ -65,12 +61,13 @@
   "A new pending wait, given the job's snapshot `snap` at `now`. `history?`
   starts the cursor at the oldest line the buffer still holds instead of its
   end."
-  [{:keys [id run-id branch-id job condition pattern history? timeout-ms quiet-ms mode]} snap now]
+  [{:keys [id run-id branch-id job condition pattern history? timeout-ms quiet-ms mode max-matches]} snap now]
   (let [from (if history? (or (:start snap) 0) (or (:total snap) 0))]
     {:id id :run-id run-id :branch-id branch-id :job job
      :condition (or condition (if pattern :output-regex :exit))
      :pattern (some-> pattern str)
      :mode (or mode :watch)
+     :max-matches max-matches
      :from from :scanned from :dropped 0
      :created-ms now :deadline-ms (+ now (long timeout-ms))
      :quiet-ms (when (and quiet-ms (pos? quiet-ms)) (long quiet-ms))
@@ -84,7 +81,7 @@
   longer pending is returned as it is; a nil snapshot means the job is gone.
   Only lines past the wait's own cursor are scanned, and lines that left the
   buffer before the scan are counted in :dropped."
-  [{:keys [state scanned condition pattern deadline-ms quiet-ms created-ms] :as w} snap now]
+  [{:keys [state scanned condition pattern deadline-ms quiet-ms created-ms max-matches] :as w} snap now]
   (cond
     (not= :pending state) w
     (nil? snap) (end w :expired :job-gone now)
@@ -98,9 +95,11 @@
           re (when (= :output-regex condition) (re-pattern pattern))
           hits (when re
                  (into []
-                       (comp (map-indexed (fn [i l] (assoc l :index (+ from i))))
-                             (filter #(re-find re (str (:text %))))
-                             (take max-matches))
+                       (cond-> (comp (map-indexed (fn [i l] (assoc l :index (+ from i))))
+                                     (filter #(re-find re (str (:text %)))))
+                         ;; gates.edn :job-waits :max-matches: how many
+                         ;; matching lines of one scan a wait keeps.
+                         max-matches (comp (take max-matches)))
                        fresh))
           w (assoc w :scanned (max scanned total)
                    :dropped (+ (or (:dropped w) 0) (max 0 (- start scanned)))

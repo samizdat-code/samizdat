@@ -28,7 +28,7 @@
         cat (skills/catalog dirs)]
     (if (empty? cat)
       "No skills available."
-      (str "Skills — load one with `skill load {name}` when it is relevant:\n"
+      (str (note "catalogue" {}) "\n"
            (str/join "\n" (for [{:keys [name description]} cat
                                 :let [tools (get-in skills [name :allowed-tools])]]
                             (str "  " name " — " description

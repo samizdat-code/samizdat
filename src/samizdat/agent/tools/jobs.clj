@@ -179,7 +179,7 @@
 (defn- wait-call
   "jobs wait/watch: register a wait on job `id`, and for wait, block on it."
   [{:keys [branch run-id conn] :as ctx} id block?]
-  (let [{:keys [default-wait-ms max-wait-ms default-watch-ms max-watch-ms]} (wait-knobs)
+  (let [{:keys [default-wait-ms max-wait-ms default-watch-ms max-watch-ms max-matches]} (wait-knobs)
         pattern (some-> (base/arg ctx :pattern) str not-empty)
         env (wait-env conn run-id)
         secs (seconds-arg ctx :seconds)
@@ -191,7 +191,8 @@
                                           (bounded-ms secs default-wait-ms max-wait-ms)
                                           (bounded-ms secs default-watch-ms max-watch-ms))
                             :quiet-ms (some-> (seconds-arg ctx :quiet) (* 1000) long)
-                            :mode (if block? :block :watch)}
+                            :mode (if block? :block :watch)
+                            :max-matches max-matches}
                            env)]
     (cond
       (= :bad-pattern (:error r))

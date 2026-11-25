@@ -29,6 +29,7 @@
             [clojure.tools.logging :as log]
             [samizdat.agent.gates :as gates]
             [samizdat.config :as config]
+            [samizdat.lexicon :as lexicon]
             [samizdat.prompt :as prompt]
             [samizdat.security.policy :as policy]
             [samizdat.store.interventions :as interventions]
@@ -50,7 +51,7 @@
   rest down. The timeout defaults to gates.edn :hooks :default-timeout-ms and
   never passes the shell's own cap (policy/shell-timeout), a security bound."
   [hooks]
-  (let [default (or (:default-timeout-ms (policy*)) 30000)
+  (let [default (or (:default-timeout-ms (policy*)) (:max-ms policy/shell-timeout))
         cap (:max-ms policy/shell-timeout)]
     (if-not (sequential? hooks)
       []
@@ -81,13 +82,19 @@
 
 (defn strip-ansi [s] (str/replace (str s) ansi ""))
 
+(def ^:private directive-re
+  ;; wordlists.edn :hook-directive — the marker a hook's output line carries
+  ;; to say something back. Data, so a project can pick its own marker.
+  (util/generation-cache lexicon/gen
+                         #(re-pattern (lexicon/wordlist :hook-directive))))
+
 (defn directives
   "The `###SAMIZDAT:<key> <value>` lines of `out`, ANSI stripped first, as
   [{:key :value}] in order. The marker must start its line."
   [out]
   (into []
         (keep (fn [line]
-                (when-let [[_ k v] (re-find #"^###SAMIZDAT:(\S+)(?:\s+(.*?))?\s*$" line)]
+                (when-let [[_ k v] (re-find (directive-re) line)]
                   {:key k :value (str v)})))
         (str/split-lines (strip-ansi out))))
 
@@ -123,7 +130,7 @@
              :effect effect}
       (= :allow effect)
       (assoc :exit exit :timeout? (boolean timeout?)
-             :output (util/truncate-middle text (or (:output-chars (policy*)) 4000))
+             :output (if-let [cap (:output-chars (policy*))] (util/truncate-middle text cap) text)
              :directives (directives out))
 
       (:error r) (assoc :error (:error r))

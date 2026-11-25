@@ -558,6 +558,13 @@
  #{"read_file" "read_digest" "grep" "lsp" "doc" "complete" "manual" "recall"
    "fetch_turn" "fetch_artifact" "cells" "introspect"}
 
+ :hook-directive
+ ;; A hook's output line that says something back to the harness
+ ;; (samizdat.hooks/directives): `###SAMIZDAT:<key> <value>`, the marker at
+ ;; the start of the line, matched after ANSI is stripped. Group 1 is the
+ ;; key, group 2 the value (karamazov-k7gl.10).
+ "^###SAMIZDAT:(\\S+)(?:\\s+(.*?))?\\s*$"
+
  :skill-roots
  ;; Project-relative directories a skill may live in, EARLIEST WINS. Two
  ;; shapes are read from each: `<root>/<name>.md` (samizdat's flat form) and

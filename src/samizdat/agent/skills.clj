@@ -157,7 +157,7 @@
       (let [pairs (map #(re-find #"^([^:\s][^:]*?)\s*:\s*(.*)$" %) lines)]
         (if (every? some? pairs)
           (into {} (map (fn [[_ k v]] [(unquote-scalar k) (scalar-or-flow v)])) pairs)
-          {:error (str "cannot read the block under it: " (first lines))})))))
+          {:error (first lines)})))))
 
 (defn- parse-yaml-subset
   "The YAML a skill's frontmatter uses, without a YAML library: top-level
@@ -209,7 +209,7 @@
           (seq errors) (assoc :errors errors)))
       (if (re-find #"\A---[ \t]*\r?\n" content)
         {:meta {} :body (str/trim content)
-         :errors ["the frontmatter opens with `---` and never closes"]}
+         :errors [:unclosed]}
         {:meta {} :body (str/trim content)}))))
 
 (defn- describe
@@ -246,7 +246,10 @@
   (let [{:keys [name-max description-max]} (limits)
         nm (get-in fm [:meta :name])
         desc (get-in fm [:meta :description])]
-    (into (mapv (fn [e] {:problem :bad-frontmatter :detail e}) (:errors fm))
+    (into (mapv (fn [e] (if (= :unclosed e)
+                         {:problem :unclosed-frontmatter :detail "---"}
+                         {:problem :bad-frontmatter :detail e}))
+                (:errors fm))
           (when (= :directory format)
             (cond-> []
               (not (and (string? desc) (not (str/blank? desc))))
@@ -265,8 +268,7 @@
                        (not (re-matches #"[a-z0-9]+(-[a-z0-9]+)*" nm))
                        (and name-max (> (count nm) name-max))))
               (conj {:problem :bad-name
-                     :detail (str "`" nm "` is not kebab-case of at most "
-                                  name-max " chars")})
+                     :detail (str "`" nm "` (" name-max ")")})
 
               (and (some? nm) (not= (str nm) dir-name))
               (conj {:problem :name-mismatch
@@ -407,5 +409,5 @@
           (not (str/starts-with? path (str root "/"))) {:error :outside-skill}
           (not (.isFile (io/file path))) {:error :not-found}
           :else {:path path
-                 :content (util/truncate-middle (slurp path)
-                                                (or (:file-chars (limits)) 60000))})))))
+                 :content (let [text (slurp path) cap (:file-chars (limits))]
+                            (cond-> text cap (util/truncate-middle cap)))})))))
