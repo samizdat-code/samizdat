@@ -193,6 +193,6 @@
       (db/execute! conn ["INSERT INTO diagnosis_cases
                           (id, run_id, branch_id, status, hypotheses, known, trace, created_at, updated_at)
                           VALUES ('case', 'run', 'B1', 'open', '[{\"id\":\"remaining\"}]', '[]', '[]', 'now', 'now')"])
-      (is (= 63 (db/migrate! conn)))
+      (is (= (count samizdat.store.migrations/migrations) (db/migrate! conn)))
       (is (= ["remaining"] (mapv :id (:open_hypotheses (diagnoses/diagnosis conn "case")))))
       (finally (db/close conn)))))

@@ -59,6 +59,7 @@
             [samizdat.agent.tools.ask]
             [samizdat.agent.tools.repl]
             [samizdat.agent.tools.files]
+            [samizdat.agent.tools.code-search]
             [samizdat.agent.tools.intervene]
             [samizdat.agent.tools.plan]
             [samizdat.agent.tools.webfetch]
@@ -281,7 +282,8 @@
         (when (:target-path metadata)
           (flow/wrote! ctx (:target-path metadata) true)))
 
-      (= "grep" t)
+      ;; code_search shows the same: paths, and lines out of them.
+      (contains? #{"grep" "code_search"} t)
       (let [out (str (:result r))
             base (str (try (jolt.fs/canonicalize (or root ".")) (catch Throwable _ root)) "/")
             hit (filter #(str/includes? out (str/replace % base "")) (flow/labelled-paths conn))]

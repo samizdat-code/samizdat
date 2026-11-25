@@ -1330,7 +1330,37 @@
    "CREATE INDEX IF NOT EXISTS idx_sim_attempts_problem ON sim_attempts(problem_id)"
    "CREATE INDEX IF NOT EXISTS idx_sim_attempts_target ON sim_attempts(target_kind, target_name)"])
 
+(def v65
+  "THE CODE INDEX (karamazov-k7gl.7): a project's source as BM25-ranked
+  chunks, for code_search and GET /v1/harness/search (samizdat.code-index).
+
+  Keyed by ROOT, because one database file can serve more than one checkout.
+  code_files is what a refresh compares against — mtime and size to skip a
+  file without reading it, the content hash to skip one only touched.
+  code_chunks_fts is standalone like failures_fts, its rowid the chunk's id,
+  with the path a column of its own so bm25 can weight it above the body.
+  Built lazily by the first search, not backfilled here."
+  ["CREATE TABLE IF NOT EXISTS code_files (
+      root       TEXT NOT NULL,
+      path       TEXT NOT NULL,
+      mtime      INTEGER NOT NULL,
+      size       INTEGER NOT NULL,
+      hash       TEXT NOT NULL,
+      indexed_at TEXT NOT NULL,
+      PRIMARY KEY (root, path))"
+   "CREATE TABLE IF NOT EXISTS code_chunks (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      root       TEXT NOT NULL,
+      path       TEXT NOT NULL,
+      start_line INTEGER NOT NULL,
+      end_line   INTEGER NOT NULL,
+      text       TEXT NOT NULL)"
+   "CREATE INDEX IF NOT EXISTS idx_code_chunks_file ON code_chunks(root, path)"
+   "CREATE VIRTUAL TABLE IF NOT EXISTS code_chunks_fts USING fts5(path, body)"])
+
 (def migrations
   "Ordered. Index 0 is migration 1; PRAGMA user_version holds the count applied."
   [v1 v2 v3 v4 v5 v6 v7 v8 v9 v10 v11 v12 v13 v14 v15 v16 v17 v18 v19 v20 v21 v22 v23 v24
-   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40 v41 v42 v43 v44 v45 v46 v47 v48 v49 v50 v51 v52 v53 v54 v55 v56 v57 v58 v59 v60 v61 v62 v63])
+   v25 v26 v27 v28 v29 v30 v31 v32 v33 v34 v35 v36 v37 v38 v39 v40 v41 v42 v43 v44 v45 v46 v47 v48 v49 v50 v51 v52 v53 v54 v55 v56 v57 v58 v59 v60 v61 v62 v63
+   ;; v64 is another change's; the integrator puts it in place before v65.
+   v65])

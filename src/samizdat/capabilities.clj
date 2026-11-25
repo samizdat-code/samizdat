@@ -86,6 +86,7 @@
             [samizdat.heldout]
             [samizdat.layers]
             [samizdat.pricing]
+            [samizdat.code-index]
             [samizdat.learned]
             [jolt-lsp.syntax]
             [samizdat.inference.budget]

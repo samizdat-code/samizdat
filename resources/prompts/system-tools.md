@@ -175,6 +175,14 @@ grep({pattern, paths?, offset?})
     most hits are noise.{% if reference-paths %} An ABSOLUTE prefix naming a reference
     path searches that tree instead — one call to sweep the examples, and the
     hits come back as absolute paths read_file takes directly.{% endif %}
+code_search({query, limit?})
+    Find where something is in the project by WORDS when you do not know the
+    exact pattern: identifiers, the words of a comment or an error message.
+    Ranks every source file in the project (not only Clojure, and not what
+    .gitignore hides) and returns the best chunks — path, line range, score
+    and the lines that matched best. A file whose path holds a word ranks
+    above one that only mentions it. `limit` hits (default 10). For an
+    exact regex use grep.
 read_digest({paths?, turns?, question, anchors?})
     Ask a question about one or more files and get bullets back, instead of
     paging the files through your context. A reader — a cheaper model, when
