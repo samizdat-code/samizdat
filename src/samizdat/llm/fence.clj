@@ -1001,7 +1001,10 @@
                    (repetition/periodic content (lexicon/policy :repetition)))]
     {:no-fence (and (nil? parsed) (not truncated))
      :truncated truncated
-     :periodic (some? periodic)
+     ;; A reply the stream's loop guard cut is a loop whatever the scan of
+     ;; its text finds: the paragraph check sees drift no exact scan does
+     ;; (karamazov-hgvj).
+     :periodic (or (some? periodic) (= "repetition" (str finish-reason)))
      :periodic-repeats (:repeats periodic)
      :parse-error (= "__parse_error__" (:name parsed))
      :auto-repaired (boolean (:auto-repaired? parsed))

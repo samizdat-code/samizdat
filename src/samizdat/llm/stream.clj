@@ -168,16 +168,28 @@
   as jolt.http.platform's cap does for an unstreamed call. `on-delta`
   throwing does not fail the call: a watcher's trouble is not the model's.
 
+  `:guard`, a function of one delta answering a loop (as data) or nil
+  (samizdat.llm.loop-guard), cuts the stream once it answers: the call throws
+  ex-info carrying `:loop` and the `:partial-body` so far.
+
   `:codec` is how the chunks fold ({:accumulate :completion :delta :end?}),
   `chat-codec` when absent."
-  [url {:keys [headers body socket-timeout conn-timeout max-response-ms idle-ms first-content-ms codec]} on-delta]
+  [url {:keys [headers body socket-timeout conn-timeout max-response-ms idle-ms first-content-ms codec guard]} on-delta]
   (let [{:keys [accumulate completion delta end?]} (or codec chat-codec)
         t (sse/parse-url url)
         started (System/currentTimeMillis)
         deadline (when (and max-response-ms (pos? max-response-ms)) (+ started max-response-ms))
         conn (open t socket-timeout conn-timeout)
         latest (atom nil)
-        hand-on (fn [d] (try (on-delta d) (catch Throwable _ nil)))
+        ;; `guard` (samizdat.llm.loop-guard) reads each delta and answers what
+        ;; looped once something has; the stream is cut there rather than run
+        ;; to the token cap (karamazov-hgvj). A guard that throws is no verdict.
+        looped (atom nil)
+        hand-on (fn [d]
+                  (when (and guard (nil? @looped))
+                    (when-let [why (try (guard d) (catch Throwable _ nil))]
+                      (reset! looped why)))
+                  (try (on-delta d) (catch Throwable _ nil)))
         ;; A read blocks for the whole socket timeout, so neither the deadline
         ;; nor a stall is noticed while one is pending. A watchdog closes the
         ;; connection when a STARTED stream has sent nothing for `idle-ms`, or
@@ -236,6 +248,9 @@
                   (reset! last-at (System/currentTimeMillis))
                   (when-not @first-at (reset! first-at (System/currentTimeMillis))))]
           (reset! latest acc)
+          (when-let [why @looped]
+            (throw (ex-info (str "provider stream cut: the model looped " (pr-str why))
+                            {:loop why :partial-body (json/write-str (completion acc))})))
           (cond
             (and (nil? got) (nil? (:status state)))
             (throw (jolt.host/throwable "java.net.SocketException"
@@ -259,6 +274,7 @@
             :else (recur state acc))))
       (catch Throwable e
         (cond
+          (:loop (ex-data e)) (throw e)
           @latest
           (throw (ex-info (str "provider stream interrupted"
                                (when-let [why @closed-why] (str ": " why)))

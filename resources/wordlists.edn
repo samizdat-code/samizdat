@@ -29,8 +29,15 @@
  ;; finish_reason values that mean the reply was cut short, not finished: the
  ;; fix is more tokens or a retry, never steering (fence/signals :truncated).
  ;; DeepSeek sends insufficient_system_resource when it stops generating
- ;; under load (karamazov-6uyv).
- #{"length" "insufficient_system_resource"}
+ ;; under load (karamazov-6uyv). `repetition` is the harness's own: the
+ ;; loop guard cut a reply that was repeating itself (karamazov-hgvj).
+ #{"length" "insufficient_system_resource" "repetition"}
+
+ :tool-call-openers
+ ;; What opens a fenced tool call in a reply's text. The stream's loop guard
+ ;; stops watching the text there, since a call's arguments (a file being
+ ;; written) may repeat legitimately (karamazov-hgvj).
+ #{"```tool-call" "<tool-call>"}
 
  :surviving-findings
  ;; The heading a verify pass puts over the findings it kept (karamazov-kdoj).

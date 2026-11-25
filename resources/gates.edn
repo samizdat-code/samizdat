@@ -3775,6 +3775,49 @@
         lands as a signal (mechanics :periodic, a :periodic-reply note) and
         a guard on one retry, not as a steer of its own."}
 
+ :loop-guard
+ {:value {:levels {:deepseek :semantic :glm :semantic}
+          :default-level :exact
+          :tail-window 4096 :max-unit 1024 :check-stride 128
+          :short-unit 60 :short-repeated-chars 180 :long-repeated-chars 1024
+          :short-min-repeats 4 :long-min-repeats 3
+          :segment-cap 700 :segment-floor 60 :segment-window 16
+          :segment-similarity 0.8 :segment-warmup 8 :segment-cluster 4}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-hgvj"]
+  :doc "WHEN A REPLY IS CUT WHILE IT STREAMS FOR REPEATING ITSELF
+        (samizdat.llm.loop-guard).
+
+        :repetition judges the finished reply, so a loop ran to :max-tokens
+        first: about nine minutes on a local model at 15 tok/s, billed on a
+        hosted one. The guard watches the stream and closes it on a loop; the
+        client returns what came as a reply with finish_reason \"repetition\",
+        which fence/signals reads as a periodic truncation, so the no-call
+        step steers it as a loop and nothing re-runs it at a bigger budget.
+
+        :levels maps an adapter id to :off, :exact or :semantic, and
+        :default-level covers the rest; a provider's own :loop-guard key
+        outranks both. :exact finds one unit repeated back to back at the end
+        of the last :tail-window characters, scanned every :check-stride new
+        characters: a unit of at most :short-unit characters needs
+        :short-min-repeats repeats and :short-repeated-chars covered, a longer one (or one
+        spanning a line break) :long-min-repeats and :long-repeated-chars, so a status
+        line restated a few times is not a loop. Units of digits and
+        whitespace never count. :semantic adds the paragraph check: a
+        paragraph (code, headings and bold titles removed, at most
+        :segment-cap characters, at least :segment-floor once normalised)
+        whose word-trigram Jaccard with :segment-cluster - 1 of the last
+        :segment-window is at least :segment-similarity, after
+        :segment-warmup paragraphs. DeepSeek and GLM drift a paragraph
+        cosmetically rather than repeat it verbatim, which is why they get
+        it. Text after a tool-call opener (wordlists.edn :tool-call-openers)
+        is not watched; the finished-reply
+        check still covers it.
+
+        The thresholds are oh-my-pi's thinking-loop guard as nodecode ported
+        it (MIT), calibrated there on 13.5k and 536k non-loop reasoning
+        blocks."}
+
  :context-pressure
  {:value {:window-fraction 0.75
           :operating-ceiling 24000

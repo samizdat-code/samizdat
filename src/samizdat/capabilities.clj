@@ -112,6 +112,7 @@
             [samizdat.llm.client]
             [samizdat.llm.rejected]
             [samizdat.llm.windows]
+            [samizdat.llm.loop-guard]
             [samizdat.llm.accounting]
             [samizdat.llm.grammar]
             [samizdat.llm.fence]
