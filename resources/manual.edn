@@ -518,6 +518,8 @@
     :summary "delegate {request, workflow?, model?, background?}: a sub-agent on a child branch of this run (parent = the caller), run as roles.edn :delegate on gates.edn :delegate :workflow. Foreground waits up to :timeout-ms and returns its report with branch id, turns and tokens; background returns an id and the report lands in the caller's mailbox. {status: id or all} and {cancel: id}. Refused past :max-depth; no ask_human. Its turns are the run's, so its usage is the run's. Prose in prompts/delegate-tool.md and prompts/delegate-child.md."}
    {:name samizdat.agent.delegate/start!
     :summary "The per-run registry of background children: `start!`, `child`, `children`, `cancel!`, `running-count`; run-state/run-ended! calls `forget-run!`, which cancels every child still running."}
+   {:name samizdat.agent.tools.delegate/resume-children!
+    :summary "On a resumed run, its delegated children from their :delegate start notes and branch rows: an unfinished background child is rebuilt and continued on its sub-loop, its report still bound for the parent's mailbox; an unfinished foreground child is continued in the background or abandoned per gates.edn :delegate :resume-foreground, and its parent told; a report never delivered is delivered. Wall clock per :resume-budget."}
    {:name samizdat.store.journal/run-usage
     :summary "What a run has spent, turns and side calls; with a branch id, what that one branch spent (a delegated child's bill)."}]}
 

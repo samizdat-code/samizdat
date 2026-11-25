@@ -104,9 +104,10 @@
  {:value {:workflow "worker" :workflows #{"worker" "solver"} :role :delegate
           :max-depth 1 :max-turns 20 :timeout-ms 780000 :max-background 3
           :background-timeout-ms 1800000
-          :advisory? true :answer-chars 6000}
+          :advisory? true :answer-chars 6000
+          :resume-foreground :background :resume-budget :remaining}
   :kind :threshold :capability-tunable? false
-  :provenance ["karamazov-k7gl.9"]
+  :provenance ["karamazov-k7gl.9" "karamazov-k7gl.13"]
   :doc "The `delegate` tool (samizdat.agent.tools.delegate). A child is a
         branch of the caller's run, opened as :role (roles.edn) on :workflow
         unless the call names another of :workflows — sub-loops that return
@@ -121,7 +122,18 @@
         cancelled and the parent's mailbox told it timed out.
         :advisory? marks the child's done as a report rather than shippable
         work, so the ship gate's evidence rungs stay with the parent, which
-        owns the change. The answer handed back is cut to :answer-chars."}
+        owns the change. The answer handed back is cut to :answer-chars.
+
+        On a resumed run (karamazov-k7gl.13) an unfinished background child
+        is continued. An unfinished FOREGROUND child, whose parent call the
+        crash cut short, is continued in the background with its report to
+        the parent's mailbox when :resume-foreground is :background (the
+        default: its work so far is kept, and the parent is told not to
+        delegate it again), or closed with the parent told its outcome is
+        unknown when :abandon. A continued child's wall clock is
+        :resume-budget — :remaining, what was left of its deadline when it
+        last worked (the outage is not charged), or :fresh, a whole
+        :background-timeout-ms."}
 
  :job-waits
  {:value {:default-wait-ms 60000 :max-wait-ms 840000

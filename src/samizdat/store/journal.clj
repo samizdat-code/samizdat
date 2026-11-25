@@ -1154,6 +1154,17 @@
     (try (json/read-str (str (:data row)) :key-fn keyword)
          (catch Throwable _ nil))))
 
+(defn last-activity-ms
+  "Epoch milliseconds of the newest event on `branch-id`, or nil when it has
+  none: when the branch last did anything, which is as close as the journal
+  comes to when a crashed process stopped working it."
+  [conn run-id branch-id]
+  (some-> (db/fetch-one conn ["SELECT CAST((julianday(MAX(created_at)) - 2440587.5) * 86400000
+                                       AS INTEGER) AS ms
+                                 FROM events WHERE run_id = ? AND branch_id = ?"
+                               run-id branch-id])
+          :ms long))
+
 (defn notes
   "Every note of `kind` on this run, oldest first, each parsed back from
   JSON; one that will not parse is skipped rather than failing the read.
