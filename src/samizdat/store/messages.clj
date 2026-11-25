@@ -67,6 +67,14 @@
             (recur (inc attempt))
             (throw (ex-info "could not allocate a message id" {}))))))))
 
+(defn sent?
+  "Whether branch `from` has sent `to` any message on this run."
+  [conn run-id from to]
+  (some? (db/fetch-one conn ["SELECT 1 AS x FROM messages
+                               WHERE run_id = ? AND from_branch = ? AND to_branch = ?
+                               LIMIT 1"
+                             (str run-id) (str from) (str to)])))
+
 (defn inbox
   "Unread messages visible to this branch: addressed to it or broadcast,
   excluding its own. Newest first. Reading the context block does not

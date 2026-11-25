@@ -12,6 +12,7 @@
             [clojure.test :refer [deftest testing is use-fixtures]]
             [samizdat.agent.delegate :as delegate]
             [samizdat.agent.gates :as gates]
+            [samizdat.agent.resume :as resume]
             [samizdat.agent.roles :as roles]
             [samizdat.agent.select :as select]
             [samizdat.agent.tools :as tools]
@@ -22,6 +23,7 @@
             [samizdat.llm.client :as llm]
             [samizdat.store.db :as db]
             [samizdat.store.journal :as journal]
+            [samizdat.store.messages :as messages]
             [samizdat.store.runs :as runs]
             [samizdat.workflow :as workflow]))
 
@@ -52,8 +54,16 @@
   [child-fn parent]
   (let [n (atom -1)]
     (fn [_ _ messages & _]
-      (if (child? messages)
+      (cond
+        (child? messages)
         (child-fn messages)
+
+        ;; A branch's distil side call, which can land between the parent's
+        ;; turns, is neither party's script.
+        (str/starts-with? (str (:content (first messages))) "You are recording")
+        (done "noted")
+
+        :else
         (let [i (swap! n inc)]
           ((nth parent i (constantly (done "the widgets count is 3"))) messages))))))
 
@@ -210,3 +220,166 @@
 (deftest ids-are-the-next-free-d-number
   (is (= "D1" (delegate/next-id [])))
   (is (= "D3" (delegate/next-id ["B1" "D1" "D2" "W0"]))))
+
+;; --- resume (karamazov-k7gl.13) ---------------------------------------------
+
+(defn- crash!
+  "What a process that died mid-run leaves: the run and the parent branch
+  still active, the parent's turns after `keep-turn` never written, and none
+  of the registry, which was memory."
+  [c rid keep-turn]
+  (db/execute! c ["UPDATE runs SET status = 'running' WHERE id = ?" rid])
+  (db/execute! c ["UPDATE branches SET status = 'active', inactive_reason = NULL
+                    WHERE run_id = ? AND id = 'B1'" rid])
+  (db/execute! c ["DELETE FROM turns WHERE run_id = ? AND branch_id = 'B1' AND turn > ?"
+                  rid keep-turn])
+  (swap! @#'delegate/registry dissoc rid))
+
+(defn- resume! [c rid chat]
+  (with-redefs [llm/chat chat]
+    (resume/resume! {:conn c :config {:run {}} :llm-adapter :a
+                     :llm-config {:max-tokens 16384} :run-id rid})))
+
+(defn- to-b1 [c rid]
+  (db/fetch c ["SELECT * FROM messages WHERE run_id = ? AND to_branch = 'B1'" rid]))
+
+(defn- waits-for-report [c rid]
+  (fn [_] (wait-for #(seq (to-b1 c rid)) 10000)
+    (fence {:name "message" :args {:action "inbox"}})))
+
+(defn- started-in-background
+  "Phase one: B1 starts D1 in the background and the process dies before D1
+  takes a turn."
+  [c]
+  (let [r (with-redefs [delegate/start! (fn [_ id & _] id)]
+            (run! c (scripted-parent
+                     (fn [_] (done "never"))
+                     [(fn [_] (fence {:name "delegate"
+                                      :args {:request "count widgets" :background true}}))])))]
+    (crash! c (:run-id r) 1)
+    (:run-id r)))
+
+(deftest a-resumed-run-continues-its-background-child
+  (let [c (db/open! ":memory:")
+        rid (started-in-background c)
+        _ (is (= "active" (:status (runs/get-branch c rid "D1"))))
+        inbox (atom nil)
+        r (resume! c rid (scripted-parent
+                          (fn [_] (done "widgets: 3"))
+                          [(waits-for-report c rid)
+                           (fn [messages] (reset! inbox (:content (last messages)))
+                             (done "the widgets count is 3"))]))]
+    (is (= :completed (:status r)))
+    (testing "the child ran on its own sub-loop, not as a beam branch"
+      (is (= "done" (:status (runs/get-branch c rid "D1"))))
+      (is (= ["done"] (mapv :tool_name (turns-of c rid "D1")))))
+    (testing "its report still reached the parent's mailbox"
+      (is (= "D1" (:from_branch (first (to-b1 c rid)))))
+      (is (str/includes? (:body (first (to-b1 c rid))) "widgets: 3"))
+      (is (str/includes? (str @inbox) "widgets: 3")))))
+
+(deftest a-resumed-child-answers-status-holds-the-cap-and-dies-with-the-run
+  (let [c (db/open! ":memory:")
+        rid (started-in-background c)
+        real @#'samizdat.agent.tools.delegate/policy
+        r (with-redefs-fn {#'samizdat.agent.tools.delegate/policy
+                           (fn [] (assoc (real) :max-background 1))}
+            #(resume! c rid (scripted-parent
+                             hangs
+                             [(fn [_] (fence {:name "delegate" :args {:status "D1"}}))
+                              (fn [_] (fence {:name "delegate"
+                                               :args {:request "another" :background true}}))])))
+        results (->> (turns-of c rid "B1")
+                     (filter #(= "delegate" (:tool_name %)))
+                     (mapv :result))]
+    (is (= :completed (:status r)))
+    (is (str/includes? (nth results 1) "D1  running"))
+    (is (str/includes? (nth results 2) "refused") "the cap counts the resumed child")
+    (is (nil? (runs/get-branch c rid "D2")))
+    (is (wait-for #(= "abandoned" (:status (runs/get-branch c rid "D1"))) 5000)
+        "the run ending cancelled the resumed child")))
+
+(deftest a-resumed-child-keeps-what-was-left-of-its-wall-clock
+  (let [c (db/open! ":memory:")
+        real @#'samizdat.agent.tools.delegate/policy
+        rid (with-redefs-fn {#'samizdat.agent.tools.delegate/policy
+                             (fn [] (assoc (real) :background-timeout-ms 400))}
+              #(started-in-background c))
+        _ (Thread/sleep 600)
+        r (resume! c rid (scripted-parent
+                          hangs
+                          [(waits-for-report c rid)
+                           (fn [_] (done "the widgets count is 3"))]))]
+    (is (= :remaining (:resume-budget (gates/threshold :delegate))))
+    (is (= :completed (:status r)))
+    (testing "the outage was not charged, but the time it had was all it got"
+      (is (str/includes? (str (:body (first (to-b1 c rid)))) "did not finish"))
+      (is (= "abandoned" (:status (runs/get-branch c rid "D1")))))))
+
+(defn- cut-off-in-the-foreground
+  "Phase one: B1's foreground call to D1 is in flight when the process dies —
+  a dispatch note, D1's row open, no turn row for the call."
+  [c]
+  (let [r (with-redefs [delegate/run-foreground (fn [_ _] (throw (ex-info "process died" {})))]
+            (run! c (scripted-parent
+                     (fn [_] (done "never"))
+                     [(fn [_] (fence {:name "delegate"
+                                      :args {:request "count widgets"}}))])))]
+    (crash! c (:run-id r) 0)
+    (:run-id r)))
+
+(deftest a-cut-off-foreground-child-is-continued-in-the-background-by-default
+  (let [c (db/open! ":memory:")
+        rid (cut-off-in-the-foreground c)
+        told (atom nil)
+        _ (is (= :background (:resume-foreground (gates/threshold :delegate))))
+        r (resume! c rid (scripted-parent
+                          (fn [_] (done "widgets: 3"))
+                          [(fn [messages]
+                             (reset! told (str/join "\n" (map :content messages)))
+                             ((waits-for-report c rid) messages))]))]
+    (is (= :completed (:status r)))
+    (is (str/includes? (str @told) "D1 has been resumed"))
+    (is (= "done" (:status (runs/get-branch c rid "D1"))))
+    (is (str/includes? (str (:body (first (to-b1 c rid)))) "widgets: 3"))))
+
+(deftest a-cut-off-foreground-child-is-abandoned-when-policy-says-so
+  (let [c (db/open! ":memory:")
+        rid (cut-off-in-the-foreground c)
+        told (atom nil)
+        real @#'samizdat.agent.tools.delegate/policy
+        r (with-redefs-fn {#'samizdat.agent.tools.delegate/policy
+                           (fn [] (assoc (real) :resume-foreground :abandon))}
+            #(resume! c rid (scripted-parent
+                             (fn [_] (done "should not run"))
+                             [(fn [messages]
+                                (reset! told (str/join "\n" (map :content messages)))
+                                (done "the widgets count is 3"))])))]
+    (is (= :completed (:status r)))
+    (is (str/includes? (str @told) "what it finished is unknown"))
+    (is (= "abandoned" (:status (runs/get-branch c rid "D1"))))
+    (is (empty? (turns-of c rid "D1")))))
+
+(deftest a-finished-report-never-delivered-is-delivered-on-resume
+  (let [c (db/open! ":memory:")
+        d1-done? #(= "done" (:status (first (db/fetch c ["SELECT status FROM branches
+                                                           WHERE id = 'D1'"]))))
+        r (with-redefs [messages/send! (fn [& _] (throw (ex-info "process died" {})))]
+            (run! c (scripted-parent
+                     (fn [_] (done "widgets: 3"))
+                     [(fn [_] (fence {:name "delegate"
+                                      :args {:request "count widgets" :background true}}))
+                      (fn [_] (wait-for d1-done? 10000)
+                        (done "the widgets count is 3"))])))
+        rid (:run-id r)]
+    (is (d1-done?))
+    (is (empty? (to-b1 c rid)))
+    (crash! c rid 1)
+    (let [r2 (resume! c rid (scripted-parent
+                             (fn [_] (done "should not run"))
+                             [(waits-for-report c rid)]))]
+      (is (= :completed (:status r2)))
+      (is (= 1 (count (to-b1 c rid))))
+      (is (str/includes? (str (:body (first (to-b1 c rid)))) "widgets: 3"))
+      (is (= ["done"] (mapv :tool_name (turns-of c rid "D1")))
+          "the child did not run again"))))

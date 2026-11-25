@@ -198,8 +198,24 @@ holds no `ask_human`, `task`, `split` or `message`; a foreground call returns
 within `:timeout-ms` (under `:turn-deadline-ms`); a background child is
 cancelled after `:background-timeout-ms` and its parent's mailbox told it
 timed out; `run-state/run-ended!`
-cancels every background child still running. Known gaps: a resumed run does
-not resume its children, and the background registry is in memory only.
+cancels every background child still running.
+
+The registry is memory; what a resume needs survives as the `:delegate` note
+each child starts with (mode, parent and parent turn, request, workflow,
+model, depth, wall-clock deadline) beside its branch row, and the messages
+table says whether a report was delivered (karamazov-k7gl.13). On resume
+(`delegate/resume-children!`) a child is never handed to the beam: an
+unfinished background child is rebuilt like any branch and continued on its
+sub-loop under the registry, so status, cancel, the background cap and the
+run-end cancel all hold, and its report still reaches the parent's mailbox.
+An unfinished foreground child, whose parent call the crash cut short, is
+continued in the background (`:resume-foreground :background`, the default —
+it keeps the child's work and the parent is told to wait for the report
+rather than delegate again) or closed with the parent told its outcome is
+unknown (`:abandon`). A continued child's wall clock is `:resume-budget`:
+what was left of its deadline when it last worked, or a fresh background
+budget. A finished child whose report never reached its parent has it
+delivered.
 
 ### Waiting on a background job
 
