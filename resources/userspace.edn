@@ -87,6 +87,8 @@
    :background-job "prompts/background-job.md"
    :jobs-tool "prompts/jobs-tool.md"
    :job-exited "prompts/job-exited.md"
+   :delegate-tool "prompts/delegate-tool.md"
+   :delegate-child "prompts/delegate-child.md"
    :worktree-conflict "prompts/worktree-conflict.md"
    :corrections-api "prompts/corrections-api.md"
    :corrections-block "prompts/corrections-block.md"

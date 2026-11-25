@@ -100,6 +100,26 @@
         its last :notice-tail-lines lines. Limits after ECA's (10 jobs, 2000
         lines)."}
 
+ :delegate
+ {:value {:workflow "worker" :workflows #{"worker" "solver"} :role :delegate
+          :max-depth 1 :max-turns 20 :timeout-ms 780000 :max-background 3
+          :advisory? true :answer-chars 6000}
+  :kind :threshold :capability-tunable? false
+  :provenance ["karamazov-k7gl.9"]
+  :doc "The `delegate` tool (samizdat.agent.tools.delegate). A child is a
+        branch of the caller's run, opened as :role (roles.edn) on :workflow
+        unless the call names another of :workflows — sub-loops that return
+        their verdict to the caller; a workflow with a finish would end the
+        parent's run. A branch at depth :max-depth may not delegate (the
+        run's own branches are depth 0, so 1 means children do not delegate
+        again). A child gets :max-turns turns. A foreground call waits at most
+        :timeout-ms, under :turn-deadline-ms so the beam does not cancel the
+        parent's turn first, then cancels the child. A run has at most
+        :max-background children working in the background at once.
+        :advisory? marks the child's done as a report rather than shippable
+        work, so the ship gate's evidence rungs stay with the parent, which
+        owns the change. The answer handed back is cut to :answer-chars."}
+
  :mcp
  {:value {:timeout-ms 30000}
   :kind :threshold :capability-tunable? false

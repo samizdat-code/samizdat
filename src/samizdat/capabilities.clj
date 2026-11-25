@@ -65,6 +65,8 @@
             [samizdat.agent.tools.digest]
             [samizdat.agent.tools.ship]
             [samizdat.agent.tools.split]
+            [samizdat.agent.tools.delegate]
+            [samizdat.agent.delegate]
             [samizdat.agent.tools.tool-search]
             [samizdat.agent.tools.jobs]
             [samizdat.engine.jobs]

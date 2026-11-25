@@ -634,6 +634,21 @@ split({reason, parts})
     you are woken, your job is to make YOUR task pass, and you may adjust
     what the parts delivered if they do not fit together the way you
     planned.
+delegate({request, workflow?, model?, background?})
+    Hand one self-contained request to a sub-agent: it works on its own
+    branch of this run with its own context and reports back. Use it for a
+    side investigation or a separable piece whose details you do not need
+    in your own context. The request is all it sees, so say everything it
+    needs: files, names, what to report.
+      delegate({request})                  waits and returns its report,
+                                           with its branch id, turns and
+                                           tokens.
+      delegate({request, background: true}) returns an id at once; the
+                                           report arrives in your inbox.
+      delegate({status: id | "all"})      how it is going.
+      delegate({cancel: id})              stop it.
+    Its report is a claim: check what matters before building on it. Its
+    usage counts against this run.
 ```
 
 {{split-decision}}

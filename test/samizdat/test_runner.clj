@@ -282,6 +282,7 @@
             [samizdat.mechanics-test]
             [samizdat.repair-test]
             [samizdat.split-test]
+            [samizdat.delegate-test]
             [samizdat.steps-test]
             [samizdat.storm-test]
             [samizdat.stubs-test]
@@ -383,6 +384,7 @@
     samizdat.mechanics-test
     samizdat.repair-test
     samizdat.split-test
+    samizdat.delegate-test
     samizdat.steps-test
     samizdat.storm-test
     samizdat.stubs-test
