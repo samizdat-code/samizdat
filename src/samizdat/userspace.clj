@@ -1149,6 +1149,16 @@
         (some-> (project-path kind name) file-text)
         (body kind name))))
 
+(defn size
+  "How much workflow the project carries: the characters of every manifest,
+  cell, prompt and policy its map names, summed. What the arena records per
+  run so stage 2 can credit a candidate that does the same with less (AAE's
+  simplicity criterion). A role with no body counts nothing."
+  []
+  (reduce + (for [kind [:manifest :cell :prompt :policy]
+                  n (roles kind)]
+              (count (or (try (body kind n) (catch Throwable _ nil)) "")))))
+
 (defn body!
   "`body`, failing loud when it is absent. For a caller whose whole operation
   is meaningless without it — a manifest node's cell, the system prompt."

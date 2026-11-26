@@ -239,8 +239,10 @@ model and scorer it was measured on.
 stage 2 — `heldout/live-verdict` over the arena's baseline and candidate
 arms, per task, in RRSI's order: floor (median fitness no lower than the best
 kept score less the baseline's own noise band), cost (a gain pays for its
-tokens by `:fitness :cost-rule`; inside the band only a cost cut or a declared
-structural change is admissible), guards (no acceptance criterion the baseline
+tokens by `:fitness :cost-rule`; inside the band only a cost cut, a declared
+structural change, or a workflow smaller by `:fitness :simplicity :min-cut`
+is admissible — the last is AAE's simplicity criterion, read off each arm's
+median `:userspace-chars`), guards (no acceptance criterion the baseline
 always met is lost, no suite goes red). The arena prints it with
 `ARENA_ACCEPT=<baseline>,<candidate>`.
 

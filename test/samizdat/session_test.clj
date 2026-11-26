@@ -291,6 +291,136 @@
   (is (contains? (set (session/signal-names)) :parse-error))
   (is (contains? (set (session/signal-names)) :gate-unmet)))
 
+(deftest a-prediction-can-say-how-far-and-hears-how-close-it-came
+  ;; After Agentic Algorithm Engineering: a hypothesis predicts a size as well
+  ;; as a direction, and a supervisor whose sizes keep missing is working from
+  ;; a wrong picture of the loop. "Down" alone is hit by any wobble.
+  (let [settle (fn [by direction before-n after-n]
+                 (#'session/prediction {:signal :parse-error :direction direction :by by}
+                                       {:turns 10 :signals {:parse-error before-n}}
+                                       {:turns 10 :signals {:parse-error after-n}}
+                                       (lexicon/policy :fitness)))]
+    (testing "the actual relative move is reported beside the predicted one"
+      (let [pr (settle 0.5 :down 10 5)]
+        (is (= 0.5 (:by pr)))
+        (is (< (Math/abs (+ 0.5 (:change pr))) 1e-9))
+        (is (= :close (:calibration pr)))))
+    (testing "predicted far more than happened"
+      (is (= :overshot (:calibration (settle 0.9 :down 10 8)))))
+    (testing "happened far more than predicted"
+      (is (= :undershot (:calibration (settle 0.1 :down 10 5)))))
+    (testing "the wrong way is not a size at all"
+      (is (= :wrong-way (:calibration (settle 0.5 :down 10 12)))))
+    (testing "a move from zero has no relative size"
+      (is (= :unmeasurable (:calibration (settle 0.5 :up 0 4)))))
+    (testing "no size predicted, no calibration"
+      (is (nil? (:calibration (settle nil :down 10 5)))))))
+
+(deftest the-tool-reads-a-predicted-size-and-the-verdict-says-how-close
+  (let [r (str (:result (base/run-tool {:tool-name "experiment"
+                                        :args {"name" "fence" "change" "c" "hypothesis" "h"
+                                               "predicts" "parse-error down 30%"}
+                                        :branch {:id "SUP"}})))]
+    (is (str/includes? r "parse-error down 30%")))
+  (is (= 0.3 (get-in (session/verdict "fence") [:prediction :by])))
+  (session/reverted! "fence" false)
+  (testing "a size that is not a percentage is refused"
+    (let [r (base/run-tool {:tool-name "experiment"
+                            :args {"name" "x" "change" "c" "hypothesis" "h"
+                                   "predicts" "parse-error down lots"}
+                            :branch {:id "SUP"}})]
+      (is (str/includes? (str (:result r)) "30%"))))
+  (testing "the verdict reports the size it moved and how close that was"
+    (session/reset!)
+    (turns! 6 "eval" :mechanics nil {:parse-error true})
+    (session/experiment! "half" {:change "c" :hypothesis "h"
+                                 :predicts {:signal :parse-error :direction :down :by 0.5}})
+    (turns! 4 "eval" :mechanics nil {:parse-error true})
+    (turns! 4 "eval" :success nil)
+    (let [r (str (:result (base/run-tool {:tool-name "verdict" :args {"name" "half"}
+                                          :branch {:id "SUP"}})))]
+      (is (str/includes? r "down 50%"))
+      (is (str/includes? r "-50%"))
+      (is (str/includes? r "close")))))
+
+(deftest repeated-misses-in-size-are-raised-in-the-block
+  ;; One miss is noise; the same miss twice is the supervisor's model of the
+  ;; loop being wrong, which is what AAE revises before the next hypothesis.
+  (let [run (fn [nm]
+              (turns! 6 "eval" :mechanics nil {:parse-error true})
+              (session/experiment! nm {:change nm :hypothesis "h"
+                                       :predicts {:signal :parse-error :direction :down :by 0.9}})
+              (turns! 7 "eval" :mechanics nil {:parse-error true})
+              (turns! 1 "eval" :success nil)
+              (session/reverted! nm false))]
+    (run "a")
+    (is (= {:overshot 1} (session/calibration)))
+    (run "b")
+    (is (= {:overshot 2} (session/calibration)))
+    (is (str/includes? (session/render nil) "overshot"))))
+
+(deftest a-run-of-unchanged-verdicts-asks-for-a-discarded-work-audit
+  ;; After AAE (KB 036 item 12): six micro-changes in a row were neutral, and
+  ;; the win came from asking which work was thrown away. Past the plateau the
+  ;; block stops inviting another constant.
+  (let [noop (fn [nm]
+               (turns! 6 "eval" :success nil)
+               (session/experiment! nm {:change nm :hypothesis "h"})
+               (turns! 8 "eval" :success nil)
+               (is (= :unchanged (:verdict (session/verdict nm))))
+               (session/reverted! nm false))
+        n (get-in (lexicon/policy :fitness) [:plateau :after])]
+    (dotimes [i (dec n)] (noop (str "n" i)))
+    (is (not (str/includes? (session/render nil) "thrown away")))
+    (noop "last")
+    (is (= n (session/plateau)))
+    (is (str/includes? (session/render nil) "thrown away"))
+    (testing "a change that moved something breaks the run"
+      (turns! 6 "eval" :mechanics nil {:parse-error true})
+      (session/experiment! "fix" {:change "fix" :hypothesis "h"})
+      (turns! 8 "eval" :success nil)
+      (session/reverted! "fix" true)
+      (is (zero? (session/plateau)))
+      (is (not (str/includes? (session/render nil) "thrown away"))))))
+
+(deftest a-settled-verdict-is-what-was-measured-when-it-was-settled
+  ;; distill-verdicts! reads (experiments) at the run's END, and a verdict
+  ;; recomputed then measures every turn since the change — including turns
+  ;; under the NEXT change — and credits them to this one.
+  (turns! 6 "eval" :mechanics nil {:parse-error true})
+  (session/experiment! "good" {:change "c" :hypothesis "h"})
+  (turns! 8 "eval" :success nil)
+  (is (= :better (:verdict (session/verdict "good"))))
+  (session/reverted! "good" true)
+  (session/experiment! "bad" {:change "c2" :hypothesis "h2"})
+  (turns! 40 "eval" :mechanics nil {:parse-error true})
+  (let [v (session/verdict "good")]
+    (is (= :better (:verdict v)) "later turns are the next change's")
+    (is (= 8 (:turns-since v))))
+  (is (= :better (:verdict (first (filter #(= "good" (:name %)) (session/experiments)))))))
+
+(deftest a-settled-verdict-carries-what-it-taught-into-memory
+  ;; After AAE's reflect step: the numbers say THAT a lever failed, and only
+  ;; the supervisor can say what that means about the loop. Without it the
+  ;; next run inherits a verdict with no reason and re-derives one.
+  (let [c (db/open! ":memory:")]
+    (try
+      (turns! 6 "eval" :success nil)
+      (session/experiment! "narrow" {:change "beam width 5 -> 2" :hypothesis "cheaper"})
+      (turns! 8 "eval" :mechanics nil {:parse-error true})
+      (let [r (str (:result (base/run-tool {:tool-name "verdict"
+                                            :args {"name" "narrow" "action" "reverted"
+                                                   "why" "worse"
+                                                   "learned" "width was not the cost; the parse errors were"}
+                                            :branch {:id "SUP"}})))]
+        (is (str/includes? r "settled")))
+      (is (= "width was not the cost; the parse errors were"
+             (:learned (first (session/experiments)))))
+      (let [w (knowledge/distill-verdicts! c (session/experiments) {:run-id "r1"})
+            row (knowledge/get-by-id c (:id (first w)))]
+        (is (str/includes? (:content row) "Learned: width was not the cost")))
+      (finally (db/close c)))))
+
 (deftest a-change-that-moved-nothing-is-unchanged-not-better
   (dotimes [_ 6] (session/observe-turn! {:tool "eval" :category :success :signals {}}))
   (session/experiment! "noop" {:change "reworded a prompt" :hypothesis "nothing"})

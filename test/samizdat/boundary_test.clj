@@ -285,6 +285,7 @@
    "run_check"   {:reach :spawns-process
                   :also "samples/grade's minimal env, or verify/run-configured's sealed commands"}
    "battery"     {:reach :spawns-process :also "heldout/draft! git update-ref under secrets/scrubbed-process-env"}
+   "tune"        {:reach :spawns-process :also "tools.tune/git: rev-parse and format-patch under secrets/scrubbed-process-env"}
    "fetch_turn"  {:reach :harness-only}
    "fetch_artifact" {:reach :harness-only}
    "context_edit" {:reach :harness-only}

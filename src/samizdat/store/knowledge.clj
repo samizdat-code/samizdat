@@ -664,7 +664,8 @@
   ;; call under the lazy seq's realization lock is a forbidden park when the
   ;; connection is contended (ADR-001 rule 1). Same as distill-findings!.
   (reduce
-   (fn [acc {:keys [name change hypothesis verdict before after regraded target prediction]}]
+   (fn [acc {:keys [name change hypothesis verdict before after regraded target prediction
+                    learned]}]
      (if-not (and change (not regraded) (not (#{:too-early :confounded :stale} verdict)))
        acc
        (let [pattern (lever-key change)
@@ -677,10 +678,19 @@
                           (when target
                             (str " Edit: " (:kind target) " " (:name target)
                                  (when (:version target) (str " v" (:version target))) "."))
-                          (when-let [{:keys [signal direction hit?]} prediction]
+                          (when-let [{:keys [signal direction hit? by change calibration]}
+                                     prediction]
                             (str " Predicted " (clojure.core/name signal) " "
-                                 (clojure.core/name direction) ": "
-                                 (if hit? "it did." "it did not."))))
+                                 (clojure.core/name direction)
+                                 (when by (format " %.0f%%" (* 100.0 by))) ": "
+                                 (if hit? "it did" "it did not")
+                                 (when (and by change)
+                                   (format " (%+.0f%%, %s)" (* 100.0 change)
+                                           (clojure.core/name calibration)))
+                                 "."))
+                          ;; AAE's reflect step: what the supervisor said the
+                          ;; result means, which the numbers cannot say.
+                          (when learned (str " Learned: " learned)))
              existing (by-pattern conn pattern)
              worked? (contains? #{:better :cheaper} verdict)]
          (conj acc

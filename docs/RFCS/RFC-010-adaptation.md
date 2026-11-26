@@ -145,7 +145,9 @@ before the change — is not a rule the harness's own observer gets to skip.
 | `(fitness-of tally)` / `(fitness)` | One scalar per turn. `nil` for an empty tally: no turns is the ABSENCE of a measurement, and `0.0` would read as neutral. |
 | `(experiment! name {:change :hypothesis})` | Bind a change to what it is expected to do. Throws `:samizdat.session/too-many-open` past the cap. |
 | `(verdict name)` / `(verdict name p)` | `:better` `:worse` `:unchanged` `:too-early` `:confounded`, with per-turn fitness before and after. Both sides are scored under ONE policy — the before-fitness stamped at `experiment!` is recomputed, not carried — and the verdict also carries `:health-blind` (the same two tallies with the provider's terms zeroed), `:regraded` (the stamped number differed, so the run moved its own scale), and `:branches` (how many measured branches went backwards). |
-| `(reverted! name kept?)` | Settle a verdict once acted on. |
+| `(reverted! name kept?)` / `(reverted! name kept? learned)` | Settle a verdict once acted on. The verdict is frozen as it stood then — turns after settling are the next change's — and `learned` (what the result says about the loop, after AAE's reflect step) rides into the lever memory beside the numbers. |
+| `(calibration)` | Settled size predictions by outcome: a `predicts` of `"<signal> down 30%"` settles `:close` within `:fitness :calibration :factor`, else `:overshot`, `:undershot` or `:wrong-way`. The block raises a miss repeated `:raise-after` times. |
+| `(plateau)` | How many of the most recently settled changes in a row measured `unchanged`. Past `:fitness :plateau :after` the block asks for an audit of discarded work instead of another constant (AAE KB 036). |
 | `(unsettled-losses)` | Measured-and-found-wanting changes nobody has acted on. |
 | `(findings)` | Patterns crossing `gates.edn :session-findings`. Reports successes too. |
 | `(render mark)` | The block the supervisor reads. |
@@ -244,6 +246,7 @@ the last run's memory was lost rather than empty; the run detail
 | A distillation that threw does not read as a run that learned nothing. | `distil-session!` names each failed half in `:errors` and journals `:distilled`; `knowledge-test/distil-session-reports-a-half-that-threw-rather-than-hiding-it`, `store-test/the-opening-block-says-when-the-last-run-failed-to-remember`. |
 | One bad half does not cost the run the halves after it. | Each half of `distil-session!` is guarded alone; `knowledge-test/a-half-that-throws-does-not-stop-the-halves-after-it`. |
 | The store surfaces graduation candidates; it never promotes one. | `graduation-candidates` is a read; `oversight-pass.md` hands the decision to the supervisor. |
+| A settled verdict measures only its own stretch. | `reverted!` freezes it; `session-test/a-settled-verdict-is-what-was-measured-when-it-was-settled`. |
 | An unfinished experiment teaches nothing. | `distill-verdicts!` skips `:too-early`; `session-test`. |
 | Nor does one the world ruined. | `distill-verdicts!` skips `:confounded`; `session-test/a-confounded-experiment-teaches-nothing-and-is-not-written`. |
 | A verdict the provider decided says so instead of picking a direction. | The health-blind reading is scored beside the full one and disagreement is `:confounded`; `session-test/a-window-the-provider-ruined-is-confounded-not-worse` and its mirror. |

@@ -48,6 +48,15 @@
       "an older version stays readable — that is what makes rollback possible")
   (is (= [1 2 3] (mapv :version (store/versions *conn* :cell "loop")))))
 
+(deftest size-is-every-role-the-map-names-summed
+  ;; Stage 2's simplicity credit reads this per arm; a role with no body
+  ;; counts nothing rather than throwing the run's row away.
+  (with-redefs [us/roles (fn [k] (get {:manifest ["loop"] :cell ["c"] :prompt ["p" "gone"]
+                                       :policy ["gates"]} k))
+                us/body (fn [k n] (get {[:manifest "loop"] "12345" [:cell "c"] "123"
+                                        [:prompt "p"] "12" [:policy "gates"] "1"} [k n]))]
+    (is (= 11 (us/size)))))
+
 (deftest an-edit-that-changed-nothing-is-still-recorded
   (store/save! *conn* :cell "loop" "same")
   (store/save! *conn* :cell "loop" "same")

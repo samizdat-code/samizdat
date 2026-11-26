@@ -97,6 +97,7 @@
             [samizdat.plan-history-test]
             [samizdat.select-test]
             [samizdat.session-test]
+            [samizdat.tune-test]
             [samizdat.reflect-test]
             [samizdat.reflex-test]
             [samizdat.symbolic-test]
@@ -452,6 +453,7 @@
     samizdat.plan-history-test
     samizdat.select-test
     samizdat.session-test
+    samizdat.tune-test
     samizdat.reflect-test
     samizdat.reflex-test
     samizdat.symbolic-test

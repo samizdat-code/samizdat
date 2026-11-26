@@ -635,17 +635,22 @@
        baseline's fitness on that task, never under min-band.
     2. cost — a gain beyond delta must pay for its tokens: relative token
        change dC <= base + per-fitness * dS. Inside the band only a cost cut
-       (dC < -base) or a change declared `structural?` (a new component) is
-       admissible — a neutral edit that adds tokens is refused.
+       (dC < -base), a change declared `structural?` (a new component), or a
+       SMALLER workflow is admissible — a neutral edit that adds tokens is
+       refused. Smaller is AAE's simplicity criterion: an equal result with
+       less to maintain is a win. It is the relative change dU in the rows'
+       median :userspace-chars, admissible at dU <= -(:simplicity :min-cut);
+       with no rule, or a side with no size measured, it earns nothing.
     3. guards — no acceptance criterion that passed in every baseline row
        fails in a candidate row, and no candidate row loses the suite where
        every baseline row had it green.
 
   Returns {:accept? bool :tasks {task {:accept? :refused [kw …] :dS :dC
-  :delta :floor}}}. A task either arm has no rows for is not judged."
-  [rows {:keys [baseline candidate best structural? cost-rule noise]}]
+  :dU :delta :floor}}}. A task either arm has no rows for is not judged."
+  [rows {:keys [baseline candidate best structural? cost-rule noise simplicity]}]
   (let [{:keys [z min-band]} noise
         {:keys [base per-fitness]} cost-rule
+        min-cut (:min-cut simplicity)
         tasks (into {}
                     (for [[task rs] (group-by :task rows)
                           :let [b (filter #(= baseline (:arm %)) rs)
@@ -660,12 +665,17 @@
                             s* (max (or sb 0.0) (or (get best task) Double/NEGATIVE_INFINITY))
                             ds (when (and sb sc) (- sc sb))
                             dc (when (and tb tc (pos? tb)) (/ (- tc tb) (double tb)))
+                            ub (median (keep :userspace-chars b))
+                            uc (median (keep :userspace-chars c))
+                            du (when (and ub uc (pos? ub)) (/ (- uc ub) (double ub)))
+                            simpler? (boolean (and du min-cut (<= du (- min-cut))))
                             floor? (and sc (< sc (- s* delta)))
                             cost? (and ds dc base
                                        (if (> ds delta)
                                          (> dc (+ base (* (or per-fitness 0.0) ds)))
                                          (and (<= (Math/abs (double ds)) delta)
                                               (not structural?)
+                                              (not simpler?)
                                               (>= dc (- base)))))
                             lost-criteria (seq (filter (criteria-failed c) (criteria-held b)))
                             lost-suite? (and (every? :green? b) (some #(false? (:green? %)) c))
@@ -675,7 +685,7 @@
                                       lost-criteria (conj :criterion)
                                       lost-suite? (conj :suite))]
                         [task {:accept? (empty? refused) :refused refused
-                               :dS ds :dC dc :delta delta :floor (- s* delta)
+                               :dS ds :dC dc :dU du :delta delta :floor (- s* delta)
                                :lost-criteria (vec (sort lost-criteria))}])))]
     {:accept? (boolean (and (seq tasks) (every? :accept? (vals tasks))))
      :tasks tasks}))

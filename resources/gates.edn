@@ -2070,6 +2070,19 @@
    ;; from its own counts, never under :min-band. :meaningful-delta above is
    ;; what stands in while either side is shorter than :min-turns-for-verdict.
    :noise {:z 2.0 :min-band 0.02}
+   ;; After Agentic Algorithm Engineering's predict-before-measuring step: a
+   ;; predicted size ("parse-error down 30%") is :close when the move came
+   ;; within :factor of it either way. The session block raises a kind of
+   ;; miss once :raise-after settled predictions have made it.
+   :calibration {:factor 2.0 :raise-after 2}
+   ;; After AAE (KB 036 item 12): once the last :after settled changes all
+   ;; measured unchanged, tuning constants has stopped paying, and the block
+   ;; tells the supervisor to audit work whose result is thrown away.
+   :plateau {:after 3}
+   ;; After AAE's simplicity criterion: inside the noise band, stage 2 admits
+   ;; a candidate whose workflow (userspace chars, median per arm) is at least
+   ;; :min-cut smaller, as it admits a cost cut.
+   :simplicity {:min-cut 0.05}
    :max-open-experiments 1}
   :kind :policy :capability-tunable? false
   :provenance ["RFC-012 F3"]
@@ -2121,6 +2134,18 @@
         the supervisor's digest shows for each branch — one scale for the
         selection step and the evaluation step, so retuning a weight here
         moves both.
+
+        :calibration — :factor is how far a predicted size may miss either
+        way and still count as close; :raise-after is how many settled
+        predictions must miss the same way before the session block says the
+        supervisor's picture of the loop is off.
+
+        :simplicity :min-cut — how much smaller, relative, a candidate's
+        workflow must be for stage 2 to admit it inside the noise band.
+
+        :plateau :after — how many settled changes in a row measuring
+        unchanged before the block stops asking for another constant and
+        asks for an audit of discarded work instead.
 
         :max-open-experiments — how many measured-but-unsettled changes may be
         in flight. One, because two changes measured over the same interval
@@ -3291,6 +3316,25 @@
         cannot change what the model says under replay. That is stage 2's —
         the arena's live arms (heldout/live-verdict), read with :fitness
         :noise and :cost-rule."}
+
+ :tune
+ {:value {:min-gain 0.01 :timeout-factor 2.0 :dir ".samizdat/tune"}
+  :kind :policy
+  :provenance ["Agentic Algorithm Engineering (CHSZLab/AgenticAlgorithmEngineering)"]
+  :doc "The `tune` workflow's bookkeeping (manifests/tune.edn, the `tune` tool).
+
+        :min-gain — how much better, relative and in the metric's own
+        direction, an experiment's geometric mean must be than the best kept
+        result to be kept. A change recorded as simpler is kept when it is no
+        worse than this.
+
+        :timeout-factor — a benchmark run longer than this multiple of its
+        budget is killed and recorded as a crash; what the tool tells the
+        model on start.
+
+        :dir — where the session, results.tsv and the numbered patches live,
+        relative to the project root. Added to .git/info/exclude so a reset
+        to the best commit never touches it."}
 
  :sim
  {:value {:problems 12 :attempts 6 :foreign 6 :chars 240}

@@ -672,6 +672,8 @@
      :turns-to-first-artifact first-art
      :fitness (session/fitness)
      :tokens (:total-tokens usage)
+     ;; how much workflow the run carried, for stage 2's simplicity credit
+     :userspace-chars (try (userspace/size) (catch Throwable _ nil))
      :prompt-tokens (:prompt-tokens usage)
      :completion-tokens (:completion-tokens usage)
      :cache-hit-rate (:cache-hit-rate usage)
@@ -1521,7 +1523,8 @@
          (heldout/live-verdict rows {:baseline b :candidate c
                                      :structural? (= "1" (System/getenv "ARENA_STRUCTURAL"))
                                      :cost-rule (:cost-rule fitness)
-                                     :noise (:noise fitness)}))))
+                                     :noise (:noise fitness)
+                                     :simplicity (:simplicity fitness)}))))
     (println "\n=== RECURRING EDITS ===")
     (clojure.pprint/pprint (recurring-edits rows))
     ;; Opt-in, because it spends a model call per task that has both a

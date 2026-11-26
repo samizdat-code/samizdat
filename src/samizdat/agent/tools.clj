@@ -81,6 +81,7 @@
             [samizdat.agent.tools.mutate]
             [samizdat.agent.tools.manifest]
             [samizdat.agent.tools.experiments]
+            [samizdat.agent.tools.tune]
             [samizdat.agent.tools.findings]
             [samizdat.agent.tools.mcp]
             [samizdat.agent.tools.wait]
