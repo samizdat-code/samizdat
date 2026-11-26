@@ -57,6 +57,8 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
+            ;; registers java.net.ServerSocket for a built binary (binary-test)
+            [jolt.socket]
             [samizdat.agent.gates :as gates]
             [samizdat.battery :as battery]
             [samizdat.engine.proc :as proc]

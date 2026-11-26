@@ -73,6 +73,7 @@
             [samizdat.classify-test]
             [samizdat.learned-test]
             [samizdat.base-test]
+            [samizdat.binary-test]
             [samizdat.boundary-test]
             [samizdat.accounting-test]
             [samizdat.context-fit-test]
@@ -429,6 +430,7 @@
     samizdat.classify-test
     samizdat.learned-test
     samizdat.base-test
+    samizdat.binary-test
     samizdat.boundary-test
     samizdat.accounting-test
     samizdat.context-fit-test
