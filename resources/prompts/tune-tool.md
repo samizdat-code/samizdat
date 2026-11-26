@@ -7,7 +7,7 @@
   benchmark:  {{command}}
   assertions: {{assertions}}
 
-Next: run the benchmark on the unmodified code, output to a log file, and `record` it with hypothesis "baseline". Kill any run that takes more than {{timeout-factor}}x its budget and record it as a crash.{% endif %}{% if recorded %}Experiment {{exp}}: {{verdict}}{% if metric %} — {{metric}}{% if unit %} {{unit}}{% endif %}{% endif %}{% if change %} ({{change}} against the best, {{best}}){% endif %}{% if prediction %}, predicted {{prediction}}{% endif %}.
+Next: run the benchmark on the unmodified code, piping its output to the metric line rather than into your context, and `record` it with hypothesis "baseline". Kill any run that takes more than {{timeout-factor}}x its budget and record it as a crash.{% endif %}{% if recorded %}Experiment {{exp}}: {{verdict}}{% if metric %} — {{metric}}{% if unit %} {{unit}}{% endif %}{% endif %}{% if change %} ({{change}} against the best, {{best}}){% endif %}{% if prediction %}, predicted {{prediction}}{% endif %}.
 {% if baseline %}
 The baseline is recorded. Every later experiment is judged against the best kept result, which is this until something beats it.{% endif %}{% if keep %}
 Kept{% if simpler %} on simplicity: no more than {{min-gain}} worse and less code{% endif %}.{% if patch %} Exported as {{patch-dir}}/patches/{{patch}}.{% endif %} The branch advances; the next hypothesis builds on this.{% endif %}{% if discard %}

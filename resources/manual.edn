@@ -768,7 +768,7 @@
  {:group "What the shell can reach"
   :entries
   [{:name samizdat.security.confine/shell-spec
-    :summary "The shell's OS confinement: writes only in the project, its scratch, /tmp and the build caches (~/.jolt, ~/.m2, ~/.cargo …); the project's .samizdat read-only; the secret regions unreadable; the harness's own ports unreachable. Operator settings in config.edn :shell {:sandbox :writable :pass-env :env-refs}."}
+    :summary "The shell's OS confinement: writes only in the project, its scratch, /tmp and the build caches (~/.jolt, ~/.m2, ~/.cargo …); the project's .samizdat read-only; the secret regions unreadable; the harness's own ports unreachable. Operator settings in config.edn :shell {:sandbox :writable :pass-env :env-refs :allow}; :allow lists command patterns allowed in advance, read as a person's grant (a hard deny or protected path still wins)."}
    {:name samizdat.security.policy/outside-reads
     :summary "The paths a shell command names outside the project, its reference roots and the build caches. Any at all turns the command into a question for a person — allowed by a grant, an approval, auto's classifier, or yolo."}
    {:name samizdat.agent.files/workflow-refused?
