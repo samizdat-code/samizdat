@@ -160,6 +160,7 @@
             [samizdat.security.sandbox]
             [samizdat.session]
             [samizdat.sim]
+            [samizdat.tune]
             [samizdat.memory]
             [samizdat.agent.code-lint]
             [samizdat.agent.code-metrics]

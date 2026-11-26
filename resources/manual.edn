@@ -149,7 +149,7 @@
    {:name samizdat.heldout/draft!
     :summary "Freeze a finished run as a battery case: its replay, the expectations battery/draft-case writes, its git baseline (pinned under refs/samizdat/battery/) as the fixture, its loop and model. Behind `battery add`. Cases are written once and never rewritten."}
    {:name samizdat.heldout/live-verdict
-    :summary "The held-out gate, stage 2, over arena rows: per task, floor (candidate median fitness >= S* - delta, delta from the baseline's own spread), cost (a gain pays for its tokens by :fitness :cost-rule; inside the band only a cost cut or a structural change is admissible), guards (no acceptance criterion the baseline always met is lost, no suite goes red). Refusals named per task."}
+    :summary "The held-out gate, stage 2, over arena rows: per task, floor (candidate median fitness >= S* - delta, delta from the baseline's own spread), cost (a gain pays for its tokens by :fitness :cost-rule; inside the band only a cost cut, a structural change, or a workflow smaller by :fitness :simplicity :min-cut — rows' :userspace-chars — is admissible), guards (no acceptance criterion the baseline always met is lost, no suite goes red). Refusals named per task."}
    {:name samizdat.manifests/read-definition
     :summary "A manifest's text as the whole graph that runs, its :extends resolved. manifests/turn.edn is the turn chain loop, worker, reviewer and supervisor extend; a child's :cells/:edges/:dispatches entries win key by key and a nil removes one, the base's :invariants hold and the child's are added, a key in :replaces is the child's alone. read-raw is the file's own part, which is what an edit rewrites."}
    {:name samizdat.manifests/validate-edit!
@@ -284,6 +284,12 @@
     :summary "Install a kind's validator — (fn [name text] -> nil | {:stage :message :line :column}). Manifests compile against the loaded cells, prompts must render, cells must read and load in a registry snapshot, policies must read and pass their table's own verification, the role map must name files that exist. Every read of a changed file goes through it."}
    {:name samizdat.userspace/roles
     :summary "Every role of a kind (:manifest :prompt :policy :cell) the project's map has — what the manifest, prompt and policy tools list."}
+   {:name samizdat.tune/geomean
+    :summary "The geometric mean of positive values, nil for none or any non-positive one — how the `tune` tool summarizes one experiment's per-input measurements."}
+   {:name samizdat.tune/judge
+    :summary "Keep or discard a value against the best kept one: relative gain in the metric's direction, kept at gates.edn :tune :min-gain, or when declared simpler and no worse than that (AAE's simplicity criterion). Behind `tune record`; the workflow is manifests/tune.edn with prompts/tune.md."}
+   {:name samizdat.userspace/size
+    :summary "Characters of every manifest, cell, prompt and policy the project's map names, summed — what an arena row records as :userspace-chars for stage 2's simplicity credit."}
    {:name samizdat.config/config-sources
     :summary "Which config files this process reads, lowest precedence first, and whether each exists — what the boot log and /health show so a surprising value can be traced to its file."}
    {:name samizdat.config/db-location
@@ -702,7 +708,11 @@
    {:name samizdat.session/verdict
     :summary "What an experiment measured, and every reason the number might not be a measurement of it: `confounded` when the reading with the provider's own failures discounted disagrees with the full one, `regraded` when the run moved the weights it is being scored by, and a count of the branches that went backwards under an aggregate that did not. The deadband is measured from each side's own spread (`:band`); a gain that added more tokens per turn than it earned is `costly`, a flat change that cut them is `cheaper`, and a result under the best a kept change reached is `below-best`. An experiment started with kind/target/predicts carries the version it tested and whether the predicted signal moved. If that target is edited again before the verdict, the verdict is `stale`: the stretch measured both edits, and it holds the slot until settled."}
    {:name samizdat.session/signal-names
-    :summary "The fitness signals an experiment may predict a move in — `predicts` takes one of them and up or down."}
+    :summary "The fitness signals an experiment may predict a move in — `predicts` takes one of them, up or down, and optionally the size expected (\"parse-error down 30%\"); the verdict then reports the relative move and whether it was close, overshot, undershot or the wrong way (:fitness :calibration :factor)."}
+   {:name samizdat.session/calibration
+    :summary "How this session's settled size predictions came out, {close n overshot n …}. The session block raises a miss repeated :fitness :calibration :raise-after times: the supervisor's picture of the loop is off."}
+   {:name samizdat.session/plateau
+    :summary "How many of the most recently settled changes in a row measured unchanged. Past :fitness :plateau :after the session block asks for an audit of work whose result is thrown away instead of another constant."}
    {:name samizdat.events/subscribe
     :summary "A channel of every event published from now on, for watching a run without polling."}]}
 

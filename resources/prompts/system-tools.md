@@ -497,7 +497,8 @@ experiment({name, change, hypothesis, problem?, kind?, target?, predicts?, fixes
     Bind a change you are making to what you expect it to do, so the next
     round can tell you whether it worked. Start one whenever you edit a cell,
     manifest, prompt or threshold; name the edit with kind and target, and
-    the one signal you expect to move with predicts ("parse-error down"). A change with no stated expectation cannot
+    the one signal you expect to move with predicts, and by how much
+    ("parse-error down 30%"). A change with no stated expectation cannot
     be wrong, and a change that cannot be wrong teaches nothing.
     `problem` files it under a root cause: an id from the improvement record
     ("P3") or a new name. `fixes` names the battery cases you expect it to
@@ -505,11 +506,21 @@ experiment({name, change, hypothesis, problem?, kind?, target?, predicts?, fixes
     `until` says when the edit should come out again ("remove once the
     provider fixes its tool-call echo"); later supervisors see it while the
     version is current.
-verdict({name})
+verdict({name, action?, why?, learned?})
     Read an experiment back: better / worse / unchanged / too early, with the
-    fitness per turn before and after. `worse` and `unchanged` both mean
-    revert — a change nobody can justify is debt, and "it did not hurt" is not
-    a reason to carry one.
+    fitness per turn before and after, and how close a predicted size came.
+    `worse` and `unchanged` both mean revert — a change nobody can justify is
+    debt, and "it did not hurt" is not a reason to carry one. Settle it with
+    action reverted|kept and why; `learned` is what the result says about the
+    loop, kept in memory beside the numbers.
+tune({action, metric?, direction?, command?, assertions?, hypothesis?, values?, status?, prediction?, simpler?, learned?})
+    The books of an optimisation loop over this project (the `tune`
+    workflow). start {metric, direction lower|higher, command, assertions}
+    records the baseline commit; record {hypothesis, values "3.48, 3.97" |
+    status crash} after committing a change and running the benchmark —
+    judged by geometric mean against the best kept result, kept as the next
+    numbered patch or discarded with the reset to run; `simpler: true` keeps
+    an equal result with less code; status shows the session.
 finding({action, id?, reason?, note?})
     Answer the reviewer's findings on the task you hold. Each finding sent
     back has an id. Actions: list; dispute {id, reason} when a finding is

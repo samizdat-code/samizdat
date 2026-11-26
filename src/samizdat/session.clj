@@ -399,8 +399,12 @@
                                                (clojure.core/name (:verdict e)) "]"))
                                         in-flight)}))))
   (let [before (snapshot)]
-    (swap! tally assoc-in [:experiments (str name)]
-           {:change (str change)
+    (swap! tally
+           (fn [t] (assoc-in t [:experiments (str name)]
+           {;; opening order: `plateau` reads the most recent run of them,
+            ;; and an Instant string does not sort (its fraction is trimmed)
+            :seq (inc (reduce max -1 (keep :seq (vals (:experiments t)))))
+            :change (str change)
             :hypothesis (str hypothesis)
             :at (str (java.time.Instant/now))
             :before before
@@ -413,7 +417,7 @@
             ;; the userspace version the change made, and one fitness signal
             ;; with the direction it is expected to go.
             :target target
-            :predicts predicts})
+            :predicts predicts})))
     (mark! name)
     nil))
 
@@ -523,20 +527,43 @@
     (when (and b a)
       {:before b :after a :change (/ (- a b) b)})))
 
+(defn- size-calibration
+  "How close a predicted size came, after Agentic Algorithm Engineering's
+  predict-before-measuring step: `:close` within gates.edn :fitness
+  :calibration :factor of it either way, `:overshot` when far less moved than
+  was predicted, `:undershot` when far more did, `:wrong-way` when it moved
+  against the stated direction, `:unmeasurable` when the rate started at zero
+  and so has no relative size. nil with no size predicted, or with no factor
+  in the policy (a project's gates.edn from before sizes were read)."
+  [by hit? change p]
+  (when-let [f (and by (get-in p [:calibration :factor]))]
+    (let [m (some-> change Math/abs)]
+      (cond
+        (nil? change) :unmeasurable
+        (not hit?) :wrong-way
+        (< m (/ by f)) :overshot
+        (> m (* by f)) :undershot
+        :else :close))))
+
 (defn- prediction
   "An experiment's predicted move, settled: the signal's per-turn rate before
-  and since, and whether it went the stated way. nil with no prediction."
-  [{:keys [signal direction]} before delta]
+  and since, whether it went the stated way, and — when a size `:by` was
+  predicted — the relative move it actually made and how close that came.
+  nil with no prediction."
+  [{:keys [signal direction by]} before delta p]
   (when signal
     (let [rate (fn [t] (let [n (or (:turns t) 0)]
                          (when (pos? n) (/ (double (get (named-counts t) signal 0)) n))))
           b (rate before)
-          a (rate delta)]
-      {:signal signal :direction direction :before b :after a
-       :hit? (boolean (and a b (case direction
-                                 :up (> a b)
-                                 :down (< a b)
-                                 false)))})))
+          a (rate delta)
+          hit? (boolean (and a b (case direction
+                                   :up (> a b)
+                                   :down (< a b)
+                                   false)))
+          change (when (and a b (pos? b)) (/ (- a b) b))]
+      (cond-> {:signal signal :direction direction :before b :after a :hit? hit?}
+        by (assoc :by by :change change
+                  :calibration (when (and a b) (size-calibration by hit? change p)))))))
 
 (defn- priced
   "A verdict with RRSI's cost rule applied (2609.24972 eq. 7, karamazov-na2k.3):
@@ -588,6 +615,11 @@
   ([name] (verdict name (lexicon/policy :fitness)))
   ([name p]
    (when-let [e (get-in @tally [:experiments (str name)])]
+     (if-let [frozen (:frozen e)]
+       ;; Settled: what was measured when the supervisor acted on it. Turns
+       ;; after that are the next change's, and a verdict recomputed at the
+       ;; run's end for distill-verdicts! credited them to this one.
+       frozen
      (let [delta (deep-diff (:before e) (snapshot))
            turns (or (:turns delta) 0)
            ;; The best fitness any OTHER experiment reached and was kept at.
@@ -603,7 +635,7 @@
            regraded? (boolean (and stamped (:before full)
                                    (not= (:before full) stamped)))
            stale (moved-target (:target e))]
-       (merge (select-keys e [:change :hypothesis :at])
+       (merge (select-keys e [:change :hypothesis :at :learned])
               (select-keys full [:before :after :delta :band])
               {:turns-since turns
                :full full
@@ -617,7 +649,7 @@
                :cost (cost (:before e) delta)
                :target (:target e)
                :stale stale
-               :prediction (prediction (:predicts e) (:before e) delta)
+               :prediction (prediction (:predicts e) (:before e) delta p)
                :verdict
                (cond
                  ;; First: no amount of waiting makes it a measurement again.
@@ -633,24 +665,33 @@
                  :else (priced (:verdict full)
                                {:cost (cost (:before e) delta) :delta (:delta full)}
                                (:cost-rule p)))
-               :best best})))))
+               :best best}))))))
 
 (defn reverted!
   "Record that the supervisor acted on a verdict — reverted the change, or
-  kept it deliberately.
+  kept it deliberately — and, optionally, what the result taught: AAE's
+  reflect step, carried into the lever memory beside the numbers, which can
+  say THAT a lever failed and never what that means about the loop.
 
   An experiment that returned `worse` and was never acted on is the failure
   mode this whole mechanism exists to prevent: the measurement happened, the
   answer was clear, and the change stayed anyway. Marking it settles it and
   stops the block nagging; NOT marking it is what makes the nagging escalate."
-  [name kept?]
-  (let [after (when kept? (:after (verdict name)))]
-    (swap! tally update-in [:experiments (str name)]
-           (fn [e] (when e (cond-> (assoc e :settled (if kept? :kept :reverted))
-                             ;; what a kept change reached: the floor later
-                             ;; changes are held to (karamazov-na2k.4)
-                             after (assoc :kept-after after))))))
-  nil)
+  ([name kept?] (reverted! name kept? nil))
+  ([name kept? learned]
+   (let [v (verdict name)
+         after (when kept? (:after v))
+         learned (some-> learned str str/trim not-empty)]
+     (swap! tally update-in [:experiments (str name)]
+            (fn [e] (when e (cond-> (assoc e :settled (if kept? :kept :reverted))
+                              ;; what a kept change reached: the floor later
+                              ;; changes are held to (karamazov-na2k.4)
+                              after (assoc :kept-after after)
+                              learned (assoc :learned learned)
+                              ;; the verdict as it stood when acted on: turns
+                              ;; after settling are not this change's
+                              v (assoc :frozen (cond-> v learned (assoc :learned learned))))))))
+   nil))
 
 (defn experiments
   "Every experiment this session, with its current verdict. What the supervisor
@@ -687,6 +728,30 @@
   (vec (filter #(and (nil? (:settled %))
                      (contains? #{:worse :unchanged :costly :below-best} (:verdict %)))
                (experiments))))
+
+(defn calibration
+  "How this session's settled size predictions came out: {calibration count}
+  over settled experiments that predicted a size and were measured. One miss
+  is noise; the same miss again is the supervisor's model of the loop being
+  wrong, which the block raises past gates.edn :fitness :calibration
+  :raise-after."
+  []
+  (->> (experiments)
+       (filter :settled)
+       (keep #(get-in % [:prediction :calibration]))
+       frequencies))
+
+(defn plateau
+  "How many changes settled most recently in a row had measured `unchanged`
+  when they were settled, in the order they were opened. What the block reads
+  against gates.edn :fitness :plateau :after."
+  []
+  (->> (vals (:experiments @tally))
+       (filter :frozen)
+       (sort-by :seq)
+       reverse
+       (take-while #(= :unchanged (get-in % [:frozen :verdict])))
+       count))
 
 (defn- detail
   "What a finding SAYS, from the policy beside the threshold that fires it.
@@ -930,6 +995,19 @@
          (when (seq exps)
            (str/join "\n" (map experiment-line exps)))
          :unsettled (let [n (count (unsettled-losses))] (when (pos? n) n))
+         :plateau (let [n (plateau)
+                        after (get-in (lexicon/policy :fitness) [:plateau :after])]
+                    (when (and after (>= n after)) n))
+         :miscalibrated (let [after (get-in (lexicon/policy :fitness)
+                                            [:calibration :raise-after])]
+                          (when after
+                            (some->> (calibration)
+                                     (keep (fn [[k n]]
+                                             (when (and (#{:overshot :undershot :wrong-way} k)
+                                                        (>= n after))
+                                               (str n " " (clojure.core/name k)))))
+                                     seq
+                                     (str/join ", "))))
          :findings (when (seq fs)
                      (str/join "\n"
                                (for [{:keys [kind severity detail evidence]} fs]

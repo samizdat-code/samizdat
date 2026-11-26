@@ -63,7 +63,7 @@
            "task" "split" "delegate"
            "remember" "recall" "outcome" "forget" "retire" "message"
            "fetch_artifact" "fetch_turn" "context_edit" "papercut" "finding" "mcp" "wait"
-           "tool_search"}
+           "tune" "tool_search"}
   ;; Evaluation-only dynamic presentation. The complete :tools set above is
   ;; still the authorization boundary; these are the entries documented on the
   ;; opening request. Other roles remain static unless they declare their own

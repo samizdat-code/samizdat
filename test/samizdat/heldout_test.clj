@@ -267,8 +267,8 @@
                             :args {:action "remove" :run_id "c1"}})]
       (is (= :mechanics (:category r)) "there is no remove"))))
 
-(defn- row [arm fit tok & {:keys [green? crit] :or {green? true}}]
-  {:arm arm :task :t :fitness fit :tokens tok :green? green?
+(defn- row [arm fit tok & {:keys [green? crit size] :or {green? true}}]
+  {:arm arm :task :t :fitness fit :tokens tok :green? green? :userspace-chars size
    :acceptance (when (some? crit) {:results [{:name "horizon fades" :passed? crit}]})})
 
 (def ^:private rules {:baseline :base :candidate :cand
@@ -290,6 +290,25 @@
       (is (= [:cost] (get-in (verdict [(row :cand 0.50 1000)]) [:tasks :t :refused])))
       (is (:accept? (verdict [(row :cand 0.50 800)])) "cheaper")
       (is (:accept? (verdict [(row :cand 0.50 1000)] {:structural? true})) "structural"))
+    (testing "within the band, a candidate whose workflow is smaller is admissible"
+      ;; After AAE's simplicity criterion: an equal result with less to
+      ;; maintain is a win, and removing code for the same result is the
+      ;; best outcome there is.
+      (let [simp {:simplicity {:min-cut 0.05}}
+            sized (map #(assoc % :userspace-chars 1000) base)
+            v (fn [cand & [opts]] (heldout/live-verdict (concat sized cand) (merge rules opts)))]
+        (is (:accept? (v [(row :cand 0.50 1000 :size 900)] simp)) "10% smaller")
+        (is (= [:cost] (get-in (v [(row :cand 0.50 1000 :size 980)] simp) [:tasks :t :refused]))
+            "2% smaller is not enough to count")
+        (is (= [:cost] (get-in (v [(row :cand 0.50 1000 :size 900)]) [:tasks :t :refused]))
+            "no rule, no simplicity credit")
+        (is (= [:cost] (get-in (verdict [(row :cand 0.50 1000 :size 900)] simp) [:tasks :t :refused]))
+            "a baseline with no size measured gives no credit")
+        (is (= [:floor] (get-in (v [(row :cand 0.40 1000 :size 500)] simp) [:tasks :t :refused]))
+            "smaller does not buy a loss")
+        (is (< (Math/abs (+ 0.1 (get-in (v [(row :cand 0.50 1000 :size 900)] simp) [:tasks :t :dU])))
+               1e-9)
+            "the relative size change is reported")))
     (testing "guards: a criterion the baseline always met, and the suite, may not be lost"
       (let [base [(row :base 0.5 1000 :crit true) (row :base 0.5 1000 :crit true)]
             v (heldout/live-verdict (concat base [(row :cand 0.9 1000 :crit false :green? false)]) rules)]

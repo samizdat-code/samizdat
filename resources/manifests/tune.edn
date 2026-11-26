@@ -1,0 +1,10 @@
+;; A tuning workflow, after Agentic Algorithm Engineering
+;; (CHSZLab/AgenticAlgorithmEngineering). The cells are the ordinary loop;
+;; :prompt frames it as the Algorithm Engineering cycle (prompts/tune.md),
+;; and the `tune` tool keeps the books — geometric mean, keep or discard
+;; against the best kept result by gates.edn :tune :min-gain, results.tsv,
+;; one numbered patch per kept change. Select with config :run :loop "tune",
+;; or let workflow selection pick it for a "make X faster" task.
+{:description "A tuning workflow: the base loop framed as the Algorithm Engineering cycle — falsifiable hypothesis, prediction, minimal committed change, benchmark, keep or discard against the best result, with correctness assertions checked after every change. Use to make existing code faster, smaller or better on a measured metric, not to add a feature."
+ :extends "loop"
+ :prompt "tune"}

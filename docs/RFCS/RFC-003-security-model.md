@@ -145,6 +145,12 @@ flowchart LR
     scrub --> heldout
     heldout --> redact
 
+    tune[tune tool: git rev-parse and format-patch in the project,
+         writes only under .samizdat/tune]
+    toolcall --> tune
+    scrub --> tune
+    tune --> redact
+
     plan[plan tool: records declared paths on the branch]
     toolcall --> plan
     plan --> redact

@@ -29,17 +29,43 @@
 
 (def ^:private usage (delay (msg {:usage true})))
 
+(defn- read-size
+  "\"30%\" as 0.3; nil for nothing given, :bad for anything else."
+  [s]
+  (when s
+    (if-let [[_ n] (re-matches #"(\d+(?:\.\d+)?)%" s)]
+      (let [v (/ (Double/parseDouble n) 100.0)]
+        (if (pos? v) v :bad))
+      :bad)))
+
 (defn- read-prediction
-  "`predicts` as {:signal :direction}: \"<signal> up\" or \"<signal> down\",
-  the signal one of the counts the fitness weighs. nil for nothing given,
-  :bad for something that is not that shape."
+  "`predicts` as {:signal :direction :by?}: \"<signal> up\" or \"<signal>
+  down\", optionally followed by the size expected, \"parse-error down 30%\"
+  (after Agentic Algorithm Engineering: a prediction with a size can be wrong
+  in more ways than one that only says which way). The signal is one of the
+  counts the fitness weighs. nil for nothing given, :bad for something that
+  is not that shape."
   [s]
   (when-let [t (some-> s str str/trim not-empty)]
-    (let [[sig dir] (str/split (str/lower-case t) #"\s+")
-          sig (keyword sig)]
-      (if (and (contains? (set (session/signal-names)) sig) (#{"up" "down"} dir))
-        {:signal sig :direction (keyword dir)}
+    (let [[sig dir size & more] (str/split (str/lower-case t) #"\s+")
+          sig (keyword sig)
+          by (read-size size)]
+      (if (and (contains? (set (session/signal-names)) sig) (#{"up" "down"} dir)
+               (not= :bad by) (empty? more))
+        (cond-> {:signal sig :direction (keyword dir)} by (assoc :by by))
         :bad))))
+
+(defn- pct
+  "0.3 as \"30%\", -0.5 as \"-50%\"."
+  [x]
+  (let [v (* 100.0 x)]
+    (str (if (== v (Math/rint v)) (long (Math/rint v)) (format "%.1f" v)) "%")))
+
+(defn- said
+  "A prediction as the supervisor wrote it."
+  [{:keys [signal direction by]}]
+  (str (clojure.core/name signal) " " (clojure.core/name direction)
+       (when by (str " " (pct by)))))
 
 (defn- target-of
   "The userspace version an experiment tests: the latest stored version of
@@ -133,9 +159,7 @@
                                         (str (:kind target) " " (:name target)
                                              (when (:version target) (str " v" (:version target)))))
                               :until (when (and until (:version target)) until)
-                              :predicts (when predicts
-                                          (str (clojure.core/name (:signal predicts)) " "
-                                               (clojure.core/name (:direction predicts))))
+                              :predicts (when predicts (said predicts))
                               :problem (when-let [{:keys [id name]} (:problem filed)]
                                          (str "P" id " " name))
                               :unfiled (and (nil? (:problem filed)) (nil? problem))
@@ -188,10 +212,12 @@
         (base/malformed branch (str "`action` is `reverted` or `kept`.\n\n" @usage))
         (if-let [v (session/verdict name)]
           (let [undo (when (= "reverted" action) (undo-target! ctx v))]
-            (session/reverted! name (= "kept" action))
+            (session/reverted! name (= "kept" action) (base/arg ctx :learned))
             (settle-attempt! ctx name {:settled (keyword action)})
             (base/ok branch (str (msg {:settled true :name name :action action
-                                       :why (base/arg ctx :why)})
+                                       :why (base/arg ctx :why)
+                                       :learned (some-> (base/arg ctx :learned) str str/trim
+                                                        not-empty)})
                                  (when undo (str "\n\n" undo)))
                      :progress? true))
           (base/fail branch (msg {:no-experiment true :name name}))))
@@ -219,12 +245,14 @@
                        :costly (= :costly (:verdict v))
                        :cheaper (= :cheaper (:verdict v))
                        :prediction (when-let [p (:prediction v)]
-                                     {:said (str (clojure.core/name (:signal p)) " "
-                                                 (clojure.core/name (:direction p)))
+                                     {:said (said p)
                                       :moved (if (and (:before p) (:after p))
-                                               (format "%.2f -> %.2f per turn" (:before p) (:after p))
+                                               (str (format "%.2f -> %.2f per turn" (:before p) (:after p))
+                                                    (when (and (:by p) (:change p))
+                                                      (str " (" (pct (:change p)) ")")))
                                                "not measurable yet")
-                                      :hit (:hit? p)})
+                                      :hit (:hit? p)
+                                      :calibration (some-> (:calibration p) clojure.core/name)})
                        :below-best (when (= :below-best (:verdict v))
                                      (format "%.2f" (double (:best v))))
                        :worse (= :worse (:verdict v))
