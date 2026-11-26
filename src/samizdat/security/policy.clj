@@ -367,6 +367,9 @@
    ["git commit **" :allow] ["git pull **" :allow] ["git fetch **" :allow]
    ["git remote **" :allow] ["git tag **" :allow] ["git blame **" :allow]
    ["git rev-parse **" :allow] ["git rev-list **" :allow] ["git ls-files **" :allow]
+   ;; a NEW branch: switch -c refuses a name that exists and carries the
+   ;; working tree's changes across, so it can lose nothing (checkout can)
+   ["git switch -c **" :allow]
    ;; filesystem mutators
    ["mkdir **" :allow] ["touch **" :allow] ["mv **" :allow] ["cp **" :allow]
    ["ln **" :allow] ["chmod **" :allow]
@@ -850,9 +853,12 @@
   [{:keys [conn run-id args root] :as ctx}]
   (let [command (str (:command args))
         env (or (:env ctx) (into {} (System/getenv)))
-        ;; The run's grants and what a person allowed always this session.
+        ;; The run's grants, what a person allowed always this session, and
+        ;; what the operator allowed in config.edn :shell :allow — a file no
+        ;; tool the agent holds can write, so it is a person's yes too.
         session (update (if (and conn run-id) (grants/for-run conn run-id) {:grants []})
-                        :grants into (approval/session-grants run-id))
+                        :grants into (concat (approval/session-grants run-id)
+                                             (:allow (config/shell-sandbox root))))
         {:keys [head complex? promoted? blocked-segment protected-path
                 malformed rule]
          :as decided}

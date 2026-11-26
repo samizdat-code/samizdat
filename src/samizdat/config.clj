@@ -252,7 +252,8 @@
 
 (defn shell-settings
   "The `:shell` block of a project config, normalised to
-  `{:sandbox … :writable [path …] :pass-env [name …] :env-refs [name …]}`.
+  `{:sandbox … :writable [path …] :pass-env [name …] :env-refs [name …]
+  :allow [pattern …]}`.
 
   `:sandbox` is `:auto` (the platform's backend), `:none`, or `:bwrap` by
   name. `:writable` adds trees the shell may write beyond the project, its
@@ -272,7 +273,12 @@
      ;; GITHUB_TOKEN for a project that needs gh (karamazov-3vu1.4).
      :pass-env (names (:pass-env m))
      ;; The names a command may reference as {{env/NAME}}; none by default.
-     :env-refs (names (:env-refs m))}))
+     :env-refs (names (:env-refs m))
+     ;; Command patterns the operator allows in advance, read as a person's
+     ;; grant for every run of the project: a benchmark the tune workflow
+     ;; runs unattended, a project script. A hard deny or a protected path
+     ;; still wins over one, as over any grant.
+     :allow (names (:allow m))}))
 
 (defn userspace-settings
   "The `:userspace` block of a config, normalised to `{:adopt … :mode …}`.

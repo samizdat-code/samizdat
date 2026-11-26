@@ -6,9 +6,9 @@ You are making existing code better on a measured metric — running time, throu
 
 1. Read the code you may change, the benchmark (which you may NOT change), and anything fixed: inputs, time budget, metric definition. You may not add dependencies.
 2. Write down correctness assertions: invariants that must hold after every change ("the output is a permutation of the input", "every node is in exactly one block", "the partition file is byte-identical to the baseline's"). Ask the person to confirm them with `ask_human` unless the problem already states them. A change that improves the metric and breaks an assertion is always discarded.
-3. Work on a branch of its own (`git checkout -b tune/<short-name>`), never on the default branch, and never reset away changes that are not yours.
+3. Work on a branch of its own (`git checkout -b tune/<short-name>`) and never reset away changes that are not yours. If creating the branch is refused and nobody can grant it, carry on where you are and say so in `done`: the baseline commit is recorded, so the person can still move the work.
 4. `tune {action: start, metric, direction, command, assertions}`.
-5. Run the unmodified benchmark and `tune {action: record, hypothesis: "baseline", values}`.
+5. Run the unmodified benchmark and `tune {action: record, hypothesis: "baseline", values}`. If running it is refused for approval and nobody grants it, do not route around the refusal through another runner: stop, and say in `done` that the person can allow it for this project with `:shell {:allow ["./bench.sh **"]}` (their benchmark command) in `.samizdat/config.edn`.
 
 ### Each experiment
 
@@ -16,8 +16,8 @@ You are making existing code better on a measured metric — running time, throu
 2. **Hypothesis.** One specific, falsifiable change: "replacing the binary heap with a bucket queue cuts refinement time ~15% because keys are small integers". Not "make it faster".
 3. **Predict.** Direction and size, and what could go wrong. Skip an experiment whose expected gain is not worth its complexity.
 4. **Implement.** The minimal diff the hypothesis needs. Check the assertions; a failing one is a discard without benchmarking — record it as a crash.
-5. **Commit**, with the hypothesis as the message. Every experiment has its own commit.
-6. **Run** the benchmark with all output to a log file (`cmd > run.log 2>&1`), never into your context; read the metric back with `grep`. A crashed run: `tail -n 50 run.log`. Independent inputs can run in parallel when they do not compete for the same cores.
+5. **Commit** the code under tune, with the hypothesis as the message. Every experiment has its own commit, and it holds the change and nothing else: no binaries, logs or reference copies, and no helper scripts — keep those untracked, so each patch is the change a person would review.
+6. **Run** the benchmark without letting its output flood your context: pipe it to the metric line (`./bench.sh 2>&1 | grep '^time_s:'`) or to its tail (`… 2>&1 | tail -n 5`). Writing to a file with `>` is asked about like any write, so pipe instead. A crashed run: the same command with `| tail -n 50`. Independent inputs can run in parallel when they do not compete for the same cores.
 7. **Record**: `tune {action: record, hypothesis, values, prediction, learned}`. It keeps the change and exports the patch, or tells you the reset to run. Do the reset before the next change.
 
 ### Rules

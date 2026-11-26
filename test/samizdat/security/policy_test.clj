@@ -235,6 +235,35 @@
         (grants/grant! c rid "rm -rf *")
         (is (= :deny (:effect (policy/decide (grants/for-run c rid) "rm -rf /"))))))))
 
+(deftest the-operator-can-allow-a-command-in-config
+  ;; The first live tune run was refused `./bench.sh` — the benchmark the
+  ;; person named — on every try, with nobody there to grant it, and routed
+  ;; it through a Makefile. config.edn :shell :allow is the operator saying
+  ;; yes in advance: config.edn is a file no tool the agent holds can write,
+  ;; so it carries a person's authority, the same as a grant.
+  (is (= ["./bench.sh **"] (:allow (samizdat.config/shell-settings {:shell {:allow ["./bench.sh **"]}}))))
+  (is (= [] (:allow (samizdat.config/shell-settings {:shell {:allow "./bench.sh"}})))
+      "only a list of patterns")
+  (let [call (fn [allow cmd]
+               (with-redefs [samizdat.config/shell-sandbox
+                             (constantly {:sandbox :none :allow allow})]
+                 (policy/run-shell {:args {:command cmd}})))]
+    (is (:needs-approval (call [] "./no-such-bench.sh --quick")) "unlisted, it asks")
+    (is (not (:needs-approval (call ["./no-such-bench.sh **"] "./no-such-bench.sh --quick")))
+        "listed, it runs")
+    (is (not (:needs-approval (call ["./no-such-bench.sh **"] "cd . && ./no-such-bench.sh")))
+        "inside a compound too, as a grant is")
+    (is (= :deny (get-in (call ["rm -rf **"] "rm -rf /") [:policy :effect]))
+        "and never over a hard deny")))
+
+(deftest a-new-branch-can-be-started-unattended
+  ;; `git switch -c` creates a branch and switches to it without touching the
+  ;; working tree's changes, so it can lose nothing; `checkout` can, and stays
+  ;; an ask.
+  (is (= :allow (:effect (policy/decide {} "git switch -c tune/sssp"))))
+  (is (= :ask (:effect (policy/decide {} "git checkout -b tune/sssp"))))
+  (is (= :ask (:effect (policy/decide {} "git switch main")))))
+
 ;; --- SPECIFICATION: the shell tool enforces the policy ----------------------
 
 (deftest spec-the-shell-tool-gates-every-command

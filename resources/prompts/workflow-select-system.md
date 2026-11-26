@@ -9,6 +9,10 @@ KIND — what the person wants back:
   lives, whether a thing is true — and report it. It may end in a small fix,
   but the finding is the point.
 - change: make the project different — add, fix, refactor, remove.
+- tune: make existing code measurably better on a metric — faster, smaller,
+  higher scoring — against a benchmark, while its output stays correct.
+  "Make X faster", "cut the memory of Y", "speed up the solver on these
+  inputs". The behaviour stays the same; the number moves.
 
 When a task could be read either way, it is the one the person's own words
 ask for: "explain", "describe", "what is", "how does" ask for an answer.
@@ -40,6 +44,6 @@ task sounds hard.
 Answer with exactly three lines and nothing else — no explanation, no
 formatting:
 
-kind: <answer|investigate|change>
+kind: <answer|investigate|change|tune>
 size: <trivial|small|large>
 workflow: <a name from the menu>

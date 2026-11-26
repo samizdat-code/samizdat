@@ -94,6 +94,10 @@
         (let [r (tune! dir {"action" "record" "hypothesis" "bucket queue cuts time ~20%"
                             "prediction" "down 20%" "values" "3.0, 7.5"})]
           (is (str/includes? (str (:result r)) "keep"))
+          (is (str/includes? (str (:result r)) "-20.9%")
+              "the metric's own change: a time that fell reads as a fall")
+          (is (str/includes? (str (:result r)) ".samizdat/tune/patches/0001-")
+              "the patch is named where it actually is")
           (is (.exists (java.io.File. (str dir "/.samizdat/tune/patches/0001-bucket-queue-cuts-time-20.patch"))))))
       (testing "a change that does not is discarded, with the reset to run"
         (let [best (git! dir "rev-parse" "--short" "HEAD")]

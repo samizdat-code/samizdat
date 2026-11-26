@@ -152,14 +152,20 @@
         (append-row! root {:commit commit :metric metric :status verdict :hypothesis hypothesis})
         (base/ok branch (msg {:recorded true :exp (:exp exp) :verdict (name verdict)
                               :metric (num6 metric) :unit (:unit s)
-                              :best (num6 (:best s)) :gain (pct gain)
+                              :best (num6 (:best s))
+                              ;; the metric's own move, so a time that fell
+                              ;; reads as a fall; `gain` is signed by which
+                              ;; way is better and read "+91%" for a speedup
+                              :change (when (and metric (:best s) (not baseline?))
+                                        (pct (/ (- metric (:best s)) (double (:best s)))))
+                              :patch-dir (or (:dir (policy)) ".samizdat/tune")
                               :simpler (= :simpler reason)
                               :patch patch
                               :keep (= :keep verdict) :baseline (= :baseline verdict)
                               :discard (= :discard verdict) :crash crash?
                               :reset (when-not kept? (:best-commit s))
                               :prediction (:prediction exp)
-                              :min-gain (pct (:min-gain (policy)))})
+                              :min-gain (some->> (:min-gain (policy)) (* 100.0) (format "%.1f%%"))})
                  :progress? true)))))
 
 (defn- status [{:keys [branch]} s]
