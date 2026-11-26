@@ -18,7 +18,7 @@ You are making existing code better on a measured metric — running time, throu
 4. **Implement.** The minimal diff the hypothesis needs. Check the assertions; a failing one is a discard without benchmarking — record it as a crash.
 5. **Commit** the code under tune, with the hypothesis as the message. Every experiment has its own commit, and it holds the change and nothing else: no binaries, logs or reference copies, and no helper scripts — keep those untracked, so each patch is the change a person would review.
 6. **Run** the benchmark without letting its output flood your context: pipe it to the metric line (`./bench.sh 2>&1 | grep '^time_s:'`) or to its tail (`… 2>&1 | tail -n 5`). Writing to a file with `>` is asked about like any write, so pipe instead. A crashed run: the same command with `| tail -n 50`. Independent inputs can run in parallel when they do not compete for the same cores.
-7. **Record**: `tune {action: record, hypothesis, values, prediction, learned}`. It keeps the change and exports the patch, or tells you the reset to run. Do the reset before the next change.
+7. **Record**: `tune {action: record, hypothesis, values, prediction, learned}`. It keeps the change and exports the patch, or tells you the revert to run. Run it before the next change; never `git reset --hard`, which only a person can approve.
 
 ### Rules
 

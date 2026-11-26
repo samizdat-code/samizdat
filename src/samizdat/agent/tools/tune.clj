@@ -14,9 +14,14 @@
 
   State lives under the project's `.samizdat/tune/` (gates.edn :tune :dir):
   session.edn, results.tsv and patches/. That directory is added to
-  .git/info/exclude on start, so the `git reset --hard` back to the best
-  commit after a discard never touches the record of the experiment that
-  caused it."
+  .git/info/exclude on start, so nothing git does to the tree after a
+  discard touches the record of the experiment that caused it.
+
+  A discard is undone with `git revert --no-edit <best>..HEAD`, not a reset:
+  `git reset --hard` is an irreversible ask only a person answers, so an
+  unattended run cannot take it, and a revert loses nothing. A kept change's
+  patch is therefore the diff from the best commit to HEAD — every commit of
+  the experiment, and any discard and its revert netting to nothing."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [samizdat.agent.gates :as gates]
@@ -39,6 +44,11 @@
       (str (:out r)))))
 
 (defn- head [root] (some-> (git root "rev-parse" "--short" "HEAD") str/trim not-empty))
+
+(defn- tree
+  "The tree `rev` names, so a revert back to the best reads as the best."
+  [root rev]
+  (some-> (git root "rev-parse" (str rev "^{tree}")) str/trim not-empty))
 
 (defn- dir-of [root] (str root "/" (or (:dir (policy)) ".samizdat/tune")))
 
@@ -70,12 +80,15 @@
   (spit (str (dir-of root) "/results.tsv") (str (tune/tsv-row row) "\n") :append true))
 
 (defn- export-patch!
-  "HEAD as patches/<name>; the name, or nil when git could not produce it."
-  [root n title]
+  "The change from `best` to HEAD as patches/<name>, headed by the
+  hypothesis (git apply and patch skip text before the diff); the name, or
+  nil when git could not produce it."
+  [root best n title]
   (let [nm (tune/patch-name n title)]
-    (when-let [p (git root "format-patch" "-1" "HEAD" "--stdout")]
+    (when-let [d (not-empty (git root "diff" "--no-ext-diff" "--no-color" "--no-textconv" "--binary" best "HEAD"))]
       (mkdirs! (str (dir-of root) "/patches"))
-      (spit (str (dir-of root) "/patches/" nm) p)
+      (spit (str (dir-of root) "/patches/" nm)
+            (str title "\n\n" (git root "log" "--format=%h %s" (str best "..HEAD")) "\n" d))
       nm)))
 
 (defn- arg [ctx k] (some-> (base/arg ctx k) str str/trim not-empty))
@@ -128,7 +141,9 @@
       (and (not crash?) (or (nil? values) (= :bad values) (nil? metric)))
       (base/malformed branch (msg {:bad-values true}))
 
-      (and (not crash?) (not baseline?) (= commit (:best-commit s)))
+      (and (not crash?) (not baseline?)
+           (or (= commit (:best-commit s))
+               (= (tree root "HEAD") (tree root (:best-commit s)))))
       (base/refusal branch (msg {:uncommitted true :commit commit}))
 
       :else
@@ -139,7 +154,7 @@
                                      :min-gain (:min-gain (policy)) :simpler? simpler?}))
             kept? (#{:keep :baseline} verdict)
             n (when (= :keep verdict) (inc (:kept s 0)))
-            patch (when n (export-patch! root n hypothesis))
+            patch (when n (export-patch! root (:best-commit s) n hypothesis))
             exp {:exp (inc (count (:experiments s))) :commit commit :metric metric
                  :values values :status verdict :gain gain :hypothesis hypothesis
                  :prediction (arg ctx :prediction) :learned (arg ctx :learned)
@@ -163,7 +178,7 @@
                               :patch patch
                               :keep (= :keep verdict) :baseline (= :baseline verdict)
                               :discard (= :discard verdict) :crash crash?
-                              :reset (when-not kept? (:best-commit s))
+                              :revert-to (when-not kept? (:best-commit s))
                               :prediction (:prediction exp)
                               :min-gain (some->> (:min-gain (policy)) (* 100.0) (format "%.1f%%"))})
                  :progress? true)))))
