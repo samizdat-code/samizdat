@@ -99,13 +99,19 @@
           (is (str/includes? (str (:result r)) ".samizdat/tune/patches/0001-")
               "the patch is named where it actually is")
           (is (.exists (java.io.File. (str dir "/.samizdat/tune/patches/0001-bucket-queue-cuts-time-20.patch"))))))
-      (testing "a change that does not is discarded, with the reset to run"
+      (testing "a change that does not is discarded, with the revert to run"
         (let [best (git! dir "rev-parse" "--short" "HEAD")]
           (commit! dir "worse\n" "unrolled")
           (let [r (str (:result (tune! dir {"action" "record" "hypothesis" "unrolling helps"
                                             "values" "5.0, 9.0"})))]
             (is (str/includes? r "discard"))
-            (is (str/includes? r (str "git reset --hard " best))))))
+            (is (str/includes? r (str "git revert --no-edit " best "..HEAD"))
+                "a reset --hard is an ask only a person answers; a revert loses nothing")
+            (is (not (str/includes? r "reset --hard"))))
+          (git! dir "revert" "--no-edit" (str best "..HEAD"))
+          (is (= :mechanics (:category (tune! dir {"action" "record" "hypothesis" "again"
+                                                   "values" "3.0, 7.5"})))
+              "the revert alone is the best again, so there is nothing to measure")))
       (testing "a crash is logged and needs no values"
         (let [r (str (:result (tune! dir {"action" "record" "hypothesis" "doubling the table"
                                           "status" "crash"})))]
@@ -119,6 +125,23 @@
         (let [r (str (:result (tune! dir {"action" "status"})))]
           (is (str/includes? r "1 kept"))
           (is (str/includes? r "4 experiments"))))
+      (finally (proc/run {:timeout-ms 15000} "rm" "-rf" dir)))))
+
+(deftest a-kept-patch-carries-every-commit-since-the-best
+  (let [dir (repo!)]
+    (try
+      (tune! dir {"action" "start" "metric" "time" "direction" "lower" "command" "c"
+                  "assertions" "a"})
+      (tune! dir {"action" "record" "hypothesis" "baseline" "values" "4.0"})
+      (commit! dir "fast\n" "first half")
+      (spit (str dir "/extra.c") "helper\n")
+      (git! dir "add" "extra.c")
+      (git! dir "commit" "-qm" "second half")
+      (tune! dir {"action" "record" "hypothesis" "two step change" "values" "3.0"})
+      (let [patch (slurp (str dir "/.samizdat/tune/patches/0001-two-step-change.patch"))]
+        (is (str/includes? patch "+fast"))
+        (is (str/includes? patch "+helper")
+            "an experiment committed in two steps exports both"))
       (finally (proc/run {:timeout-ms 15000} "rm" "-rf" dir)))))
 
 (deftest the-tool-refuses-what-it-cannot-measure

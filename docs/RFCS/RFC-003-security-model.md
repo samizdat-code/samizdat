@@ -145,7 +145,7 @@ flowchart LR
     scrub --> heldout
     heldout --> redact
 
-    tune[tune tool: git rev-parse and format-patch in the project,
+    tune[tune tool: git rev-parse, diff and log in the project,
          writes only under .samizdat/tune]
     toolcall --> tune
     scrub --> tune

@@ -261,6 +261,8 @@
   ;; working tree's changes, so it can lose nothing; `checkout` can, and stays
   ;; an ask.
   (is (= :allow (:effect (policy/decide {} "git switch -c tune/sssp"))))
+  ;; a revert adds a commit that undoes others: the history keeps both
+  (is (= :allow (:effect (policy/decide {} "git revert --no-edit abc123..HEAD"))))
   (is (= :ask (:effect (policy/decide {} "git checkout -b tune/sssp"))))
   (is (= :ask (:effect (policy/decide {} "git switch main")))))
 

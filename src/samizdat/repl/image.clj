@@ -49,6 +49,9 @@
             [ebb.core :as ebb]
             [jolt.fs :as fs]
             [jolt.process :as process]
+            ;; registers java.net.(Server)Socket: a built binary has only
+            ;; what is required (binary-test)
+            [jolt.socket]
             [nrepl.transport :as transport]
             [samizdat.agent.gates :as gates]
             [samizdat.bridge :as bridge]

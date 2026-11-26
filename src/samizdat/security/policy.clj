@@ -370,6 +370,8 @@
    ;; a NEW branch: switch -c refuses a name that exists and carries the
    ;; working tree's changes across, so it can lose nothing (checkout can)
    ["git switch -c **" :allow]
+   ;; a revert adds a commit undoing others; the history keeps both
+   ["git revert **" :allow]
    ;; filesystem mutators
    ["mkdir **" :allow] ["touch **" :allow] ["mv **" :allow] ["cp **" :allow]
    ["ln **" :allow] ["chmod **" :allow]
