@@ -11,6 +11,7 @@
             [samizdat.store.runs :as runs]
             [samizdat.store.knowledge :as knowledge]
             [samizdat.lexicon :as lexicon]
+            [samizdat.prompt]
             [samizdat.workflow :as workflow]))
 
 (deftest the-menu-is-narrowed-to-what-policy-admits
@@ -110,6 +111,28 @@
     (is (= {:kind :investigate :size :small :workflow "loop"}
            (triage "kind: investigate\nsize: small\nworkflow: loop"))
         "a workflow policy does not restrict serves every kind")))
+
+(deftest a-task-to-make-code-measurably-better-takes-the-tune-workflow
+  ;; The first live tune run ("make src/sssp.cpp faster. Benchmark:
+  ;; ./bench.sh") triaged as a small change, and the :change row forces
+  ;; team-solve whatever the chooser said, so the tune workflow could never
+  ;; be reached by selection. Tuning is its own kind, at width 1: parallel
+  ;; benchmark runs compete for the cores and distort what they measure.
+  (let [triage (fn [reply]
+                 (with-redefs [llm/chat (fn [& _] {:content reply :finish-reason "stop"})]
+                   (select/triage! {:conn nil :llm-adapter :fake :llm-config {}}
+                                   "make src/sssp.cpp faster; benchmark ./bench.sh")))
+        t (triage "kind: tune\nsize: small\nworkflow: tune")
+        e (select/effort t)]
+    (is (= :tune (:kind t)))
+    (is (= "tune" (select/chosen-workflow t e)))
+    (is (= 1 (:beam-width e)))
+    (testing "tune is for tuning, and a tuning task is not driven by another shape"
+      (is (nil? (:workflow (triage "kind: change\nsize: small\nworkflow: tune"))))
+      (is (= "tune" (select/chosen-workflow (triage "kind: tune\nsize: large\nworkflow: team")
+                                            (select/effort {:kind :tune :size :large})))))
+    (testing "the triage prompt names the kind"
+      (is (str/includes? (samizdat.prompt/render "workflow-select-system" {}) "tune:")))))
 
 (deftest a-triage-reply-is-three-lines-each-held-to-its-menu
   (let [cands [{:name "loop"} {:name "team"}]]

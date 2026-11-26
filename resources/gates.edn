@@ -2658,11 +2658,11 @@
  :workflow-selection
  {:value
   {:enabled?          true
-   :candidates        #{"loop" "team-solve" "decompose" "team" "critic" "answer"}
+   :candidates        #{"loop" "team-solve" "decompose" "team" "critic" "answer" "tune"}
    :fallback          "loop"
    :min-problem-chars 0
    ;; What the triage call may say a task IS, and how big.
-   :kinds             #{"answer" "change" "investigate"}
+   :kinds             #{"answer" "change" "investigate" "tune"}
    :sizes             #{"trivial" "small" "large"}
    ;; The kinds a workflow is FOR, when it is not for every kind. Chosen for
    ;; a kind not listed, the choice is dropped and the run takes :fallback.
@@ -2670,7 +2670,9 @@
    ;; change the project — or find something out and maybe fix it — cannot
    ;; be done under it: run de04432c spent 117 turns on "finish the port"
    ;; and changed nothing.
-   :serves            {"answer" #{"answer"}}
+   ;; `tune` keeps the books of a benchmark loop; on any other kind of task it
+   ;; has nothing to measure.
+   :serves            {"answer" #{"answer"} "tune" #{"tune"}}
    ;; kind x size -> the run's shape. :any is every size of that kind. A
    ;; request's own :beam-width / :max-turns win over a row, and the config's
    ;; :run numbers are a ceiling a row does not raise. :reasoning-effort only
@@ -2679,6 +2681,9 @@
    :effort
    {:answer      {:any     {:beam-width 1 :max-turns 40 :workflow "answer"}}
     :investigate {:any     {:beam-width 1 :max-turns 120}}
+    ;; Width 1 whatever the size: parallel benchmark runs compete for the
+    ;; cores and distort what each one measures (AAE).
+    :tune        {:any     {:beam-width 1 :max-turns 200 :workflow "tune"}}
     :change      {:trivial {:beam-width 1 :max-turns 60 :reasoning-effort "low" :workflow "loop"}
                   :small   {:beam-width 1 :max-turns 200 :workflow "team-solve"}
                   :large   {:beam-width 5 :reasoning-effort "high" :workflow "team-solve"}}}}

@@ -7,10 +7,10 @@
   benchmark:  {{command}}
   assertions: {{assertions}}
 
-Next: run the benchmark on the unmodified code, output to a log file, and `record` it with hypothesis "baseline". Kill any run that takes more than {{timeout-factor}}x its budget and record it as a crash.{% endif %}{% if recorded %}Experiment {{exp}}: {{verdict}}{% if metric %} — {{metric}}{% if unit %} {{unit}}{% endif %}{% endif %}{% if gain %} ({{gain}} against the best, {{best}}){% endif %}{% if prediction %}, predicted {{prediction}}{% endif %}.
+Next: run the benchmark on the unmodified code, output to a log file, and `record` it with hypothesis "baseline". Kill any run that takes more than {{timeout-factor}}x its budget and record it as a crash.{% endif %}{% if recorded %}Experiment {{exp}}: {{verdict}}{% if metric %} — {{metric}}{% if unit %} {{unit}}{% endif %}{% endif %}{% if change %} ({{change}} against the best, {{best}}){% endif %}{% if prediction %}, predicted {{prediction}}{% endif %}.
 {% if baseline %}
 The baseline is recorded. Every later experiment is judged against the best kept result, which is this until something beats it.{% endif %}{% if keep %}
-Kept{% if simpler %} on simplicity: no worse than {{min-gain}} and less code{% endif %}.{% if patch %} Exported as patches/{{patch}}.{% endif %} The branch advances; the next hypothesis builds on this.{% endif %}{% if discard %}
+Kept{% if simpler %} on simplicity: no more than {{min-gain}} worse and less code{% endif %}.{% if patch %} Exported as {{patch-dir}}/patches/{{patch}}.{% endif %} The branch advances; the next hypothesis builds on this.{% endif %}{% if discard %}
 Discarded: not {{min-gain}} better than the best. Run `git reset --hard {{reset}}` before the next change. Say what the result tells you about where the time actually goes, and let that pick the next hypothesis.{% endif %}{% if crash %}
 Logged as a crash. Fix it only if the cause is trivial (a typo, a missing include); otherwise{% if reset %} run `git reset --hard {{reset}}` and{% endif %} move on to the next hypothesis.{% endif %}{% endif %}{% if status %}Tune session: {{metric}} ({{direction}} is better), {{n}} experiments — {{kept}} kept, {{discarded}} discarded, {{crashed}} crashed.{% if baseline %}
   baseline {{baseline}}, best {{best}}{% if best-commit %} at {{best-commit}}{% endif %}{% if speedup %} ({{speedup}}){% endif %}{% endif %}{% if recent %}
