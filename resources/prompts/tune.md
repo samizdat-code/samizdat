@@ -6,7 +6,7 @@ You are making existing code better on a measured metric — running time, throu
 
 1. Read the code you may change, the benchmark (which you may NOT change), and anything fixed: inputs, time budget, metric definition. You may not add dependencies.
 2. Write down correctness assertions: invariants that must hold after every change ("the output is a permutation of the input", "every node is in exactly one block", "the partition file is byte-identical to the baseline's"). Ask the person to confirm them with `ask_human` unless the problem already states them. A change that improves the metric and breaks an assertion is always discarded.
-3. Work on a branch of its own (`git checkout -b tune/<short-name>`) and never reset away changes that are not yours. If creating the branch is refused and nobody can grant it, carry on where you are and say so in `done`: the baseline commit is recorded, so the person can still move the work.
+3. Work on a branch of its own (`git switch -c tune/<short-name>`, issued on its own) and never reset away changes that are not yours. If creating the branch is refused and nobody can grant it, carry on where you are and say so in `done`: the baseline commit is recorded, so the person can still move the work.
 4. `tune {action: start, metric, direction, command, assertions}`.
 5. Run the unmodified benchmark and `tune {action: record, hypothesis: "baseline", values}`. If running it is refused for approval and nobody grants it, do not route around the refusal through another runner: stop, and say in `done` that the person can allow it for this project with `:shell {:allow ["./bench.sh **"]}` (their benchmark command) in `.samizdat/config.edn`.
 
