@@ -2733,6 +2733,44 @@
         (is (= 2 @calls))
         (is (= :outage (:reason d)))))))
 
+(deftest a-server-error-frame-after-content-keeps-the-partial
+  ;; A dropped connection kept what had streamed and continued from it; a
+  ;; server error frame arriving after the same content threw it away, so
+  ;; the turn was regenerated from nothing on every hiccup.
+  (let [a (registry/adapter-for :deepseek-chat)
+        calls (atom [])
+        cut (json/write-str {:choices [{:message {:role "assistant" :content "partial "}}]
+                             :error {:message "Internal server error"}})
+        done (json/write-str {:choices [{:message {:role "assistant" :content "finished"}
+                                         :finish_reason "stop"}]})]
+    (with-redefs [http/post (fn [_ opts]
+                              (swap! calls conj (:body opts))
+                              {:status 200 :body (if (= 1 (count @calls)) cut done)})
+                  samizdat.cancel/sleep! (fn [& _] nil)]
+      (let [r (client/chat a {:model "m" :max-retries 0
+                              :continuation {:enabled? true :min-chars 1 :max-attempts 1}}
+                           [{:role "user" :content "x"}])]
+        (is (= "partial finished" (:content r)))
+        (is (= 2 (count @calls)))
+        (is (str/includes? (second @calls) "partial")
+            "the continuation carries what streamed before the error")))))
+
+(deftest a-fatal-error-frame-does-not-continue
+  ;; Only a frame that passes keeps the partial: a cap mid-stream is a wall.
+  (let [a (registry/adapter-for :glm)
+        calls (atom 0)]
+    (with-redefs [http/post (fn [& _]
+                              (swap! calls inc)
+                              {:status 200
+                               :body (json/write-str {:choices [{:message {:role "assistant" :content "partial "}}]
+                                                      :error {:message "bad request: invalid parameter"}})})
+                  samizdat.cancel/sleep! (fn [& _] nil)]
+      (is (thrown? Exception
+                   (client/chat a {:model "m" :max-retries 0
+                                   :continuation {:enabled? true :min-chars 1 :max-attempts 1}}
+                                [{:role "user" :content "x"}])))
+      (is (= 1 @calls)))))
+
 (deftest an-empty-reply-is-retried-unless-it-hit-the-budget
   ;; eca retries a premature empty stop on a small budget of its own; samizdat
   ;; made every empty reply fatal at the client, spending a loop turn and a

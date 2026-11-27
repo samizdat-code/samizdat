@@ -477,7 +477,15 @@
             ;; with its business codes. Classified like any other failure, so a
             ;; per-minute limit there is retried and a 1261 is an overflow
             ;; rather than a flat "API error" (karamazov-jvdu).
-            (failure adapter config status decoded resp)
+            ;; An error frame that ends a stream after content is a cut like
+            ;; a dropped connection, and keeps what streamed the same way, so
+            ;; the ladder can continue from it rather than regenerate the turn.
+            ;; Only one that passes: a wall mid-stream is not continued.
+            (let [f (failure adapter config status decoded resp)
+                  partial (when (= :retry (:outcome f))
+                            (partial-response adapter config request elapsed
+                                              use-prefill? (:body resp)))]
+              (cond-> f partial (assoc :partial-response partial)))
             (if-let [parsed (adapter/parse-chat adapter decoded)]
               (let [merged (message/merge-reasoning (:content parsed) (:reasoning parsed))]
                 (if (str/blank? merged)
